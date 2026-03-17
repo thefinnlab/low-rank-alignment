@@ -127,7 +127,7 @@ def get_data(
     if len(datas) == 0:
         raise ValueError("No valid events found within data time bounds")
 
-    datas = np.concatenate(datas, ax
+    datas = np.concatenate(datas, axis=0)
 
     return datas, selected_targets, selected_rows_df
 
