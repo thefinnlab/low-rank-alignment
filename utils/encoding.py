@@ -372,7 +372,7 @@ def load_all_subject_correlations(output_dir: str, subjects=None):
         subjects: Optional list of subject IDs to load; loads all found if None.
 
     Returns:
-        corrs_all: np.ndarray of shape (n_total_elecs, n_folds, n_lags).
+        corrs_all: np.ndarray of shape (n_folds, n_total_elecs, n_lags).
         metadata_df: pd.DataFrame with columns ['subject', 'electrode'], one row per electrode.
 
     Raises:
@@ -383,10 +383,10 @@ def load_all_subject_correlations(output_dir: str, subjects=None):
     for sub_id, results in _iter_subject_results(output_dir, subjects):
         corrs = results["corrs"]  # (n_folds, n_elecs, n_lags)
         elec_names = results["elec_names"]
-        corrs_list.append(corrs.transpose(1, 0, 2))  # (n_elecs, n_folds, n_lags)
+        corrs_list.append(corrs)
         for name in elec_names:
             rows.append({"subject": sub_id, "electrode": name})
-    corrs_all = np.concatenate(corrs_list, axis=0)
+    corrs_all = np.concatenate(corrs_list, axis=1)  # (n_folds, n_total_elecs, n_lags)
     metadata_df = pd.DataFrame(rows, columns=["subject", "electrode"])
     return corrs_all, metadata_df
 
@@ -399,7 +399,7 @@ def load_all_subject_coefficients(output_dir: str, subjects=None):
         subjects: Optional list of subject IDs to load; loads all found if None.
 
     Returns:
-        coefficients_all: list of np.ndarray, one per fold, each shape (n_total_elecs, n_lags, n_features).
+        coefficients_all: np.ndarray of shape (n_folds, n_total_elecs, n_lags, n_features).
         intercepts_all: list of np.ndarray, one per fold, each shape (n_total_elecs * n_lags,).
         metadata_df: pd.DataFrame with columns ['subject', 'electrode'], one row per electrode.
 
@@ -420,10 +420,11 @@ def load_all_subject_coefficients(output_dir: str, subjects=None):
             rows.append({"subject": sub_id, "electrode": name})
 
     n_folds = len(all_subject_coefs[0])
-    coefficients_all = [
+    # Stack per-fold concatenations into a single (n_folds, n_total_elecs, n_lags, n_features) array
+    coefficients_all = np.stack([
         np.concatenate([subj_coefs[fold] for subj_coefs in all_subject_coefs], axis=0)
         for fold in range(n_folds)
-    ]
+    ])
     intercepts_all = [
         np.concatenate([subj_intercepts[fold] for subj_intercepts in all_subject_intercepts], axis=0)
         for fold in range(n_folds)

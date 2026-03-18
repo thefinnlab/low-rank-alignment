@@ -333,7 +333,7 @@ class TestLoadAllSubjectCorrelations:
         n_folds = args1["corrs"].shape[0]
         n_lags = args1["corrs"].shape[2]
         corrs_all, _ = load_all_subject_correlations(str(output_dir))
-        assert corrs_all.shape == (5, n_folds, n_lags)
+        assert corrs_all.shape == (n_folds, 5, n_lags)
 
     def test_metadata_order(self, two_subject_dir):
         output_dir, args1, args2 = two_subject_dir
@@ -344,9 +344,8 @@ class TestLoadAllSubjectCorrelations:
     def test_values(self, two_subject_dir):
         output_dir, args1, _ = two_subject_dir
         corrs_all, _ = load_all_subject_correlations(str(output_dir))
-        # First 3 rows should be sub_1's corrs transposed from (n_folds, 3, n_lags) -> (3, n_folds, n_lags)
-        expected = args1["corrs"].transpose(1, 0, 2)
-        np.testing.assert_array_equal(corrs_all[:3], expected)
+        # First 3 electrodes should be sub_1's corrs: corrs_all[:, :3, :] == args1["corrs"]
+        np.testing.assert_array_equal(corrs_all[:, :3, :], args1["corrs"])
 
     def test_no_subjects_raises(self, tmp_path):
         with pytest.raises(FileNotFoundError):
@@ -355,7 +354,7 @@ class TestLoadAllSubjectCorrelations:
     def test_subject_filter(self, two_subject_dir):
         output_dir, args1, _ = two_subject_dir
         corrs_all, meta = load_all_subject_correlations(str(output_dir), subjects=[1])
-        assert corrs_all.shape[0] == 3
+        assert corrs_all.shape[1] == 3
         assert list(meta["subject"]) == [1, 1, 1]
 
     def test_subject_filter_missing_raises(self, two_subject_dir):
@@ -375,10 +374,8 @@ class TestLoadAllSubjectCoefficients:
         n_lags = args1["coefficients"][0].shape[1]
         n_feat = args1["coefficients"][0].shape[2]
         coefs_all, intercepts_all, _ = load_all_subject_coefficients(str(output_dir))
-        assert len(coefs_all) == n_folds
+        assert coefs_all.shape == (n_folds, 5, n_lags, n_feat)
         assert len(intercepts_all) == n_folds
-        for fold_arr in coefs_all:
-            assert fold_arr.shape == (5, n_lags, n_feat)
 
     def test_metadata_order(self, two_subject_dir):
         output_dir, args1, args2 = two_subject_dir
@@ -389,9 +386,9 @@ class TestLoadAllSubjectCoefficients:
     def test_values(self, two_subject_dir):
         output_dir, args1, args2 = two_subject_dir
         coefs_all, intercepts_all, _ = load_all_subject_coefficients(str(output_dir))
-        # First 3 rows of each fold should match sub_1's coefficients
-        for fold_idx, fold_arr in enumerate(coefs_all):
-            np.testing.assert_array_equal(fold_arr[:3], args1["coefficients"][fold_idx])
+        # First 3 electrodes of each fold should match sub_1's coefficients
+        for fold_idx in range(coefs_all.shape[0]):
+            np.testing.assert_array_equal(coefs_all[fold_idx, :3], args1["coefficients"][fold_idx])
         # First n_elec1*n_lags entries of intercepts should match sub_1's intercepts
         n_elec1_lags = len(args1["intercepts"][0])
         for fold_idx, fold_arr in enumerate(intercepts_all):
@@ -406,8 +403,8 @@ class TestLoadAllSubjectCoefficients:
         coefs_all, intercepts_all, meta = load_all_subject_coefficients(str(output_dir), subjects=[2])
         assert len(meta) == 2
         assert list(meta["subject"]) == [2, 2]
-        for fold_idx, fold_arr in enumerate(coefs_all):
-            assert fold_arr.shape[0] == 2
-            np.testing.assert_array_equal(fold_arr, args2["coefficients"][fold_idx])
+        assert coefs_all.shape[1] == 2
+        for fold_idx in range(coefs_all.shape[0]):
+            np.testing.assert_array_equal(coefs_all[fold_idx], args2["coefficients"][fold_idx])
         for fold_idx, fold_arr in enumerate(intercepts_all):
             np.testing.assert_array_equal(fold_arr, args2["intercepts"][fold_idx])
