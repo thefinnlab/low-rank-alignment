@@ -477,11 +477,7 @@ def _(get_model_coefficients, np, torch):
 
         return all_predictions, get_all_targets_test_set(test_idxs, Y, num_electrodes, num_timepoints)
 
-    return (
-        absorb_scaler,
-        get_all_predictions_and_targets_test_set,
-        get_all_targets_test_set,
-    )
+    return absorb_scaler, get_all_predictions_and_targets_test_set
 
 
 @app.cell
@@ -1229,7 +1225,7 @@ def _(os, torch):
             target_dir = os.path.join(*end_path_directory)
         return target_dir
 
-    return (get_partial_cluster_filepath,)
+    return get_correlation_gpu, get_partial_cluster_filepath
 
 
 @app.cell
@@ -1575,7 +1571,7 @@ def _(get_partial_cluster_filepath, joblib, np, os):
 
         return X, Y, all_mean_cluster_dirs, partialed_dirs, scalers
 
-    return
+    return (partial_out_direction,)
 
 
 @app.cell
@@ -1641,6 +1637,47 @@ def _(
 
 
 @app.cell
+def _(read_electrode_file, read_subject_mapping):
+    new_subject_sig = read_electrode_file("mid_gpt2-0/all_subject_sig.csv")
+    old_subject_mapping = read_subject_mapping("data/participants.tsv")
+    old_sig_elecs = read_electrode_file("all_subject_sig.csv", old_subject_mapping)
+    num_new, num_old = sum([len(x) for x in new_subject_sig.values()]), sum([len(x) for x in old_sig_elecs.values()])
+    num_new, num_old
+    return new_subject_sig, num_old, old_sig_elecs
+
+
+@app.cell
+def _(np, pd):
+    def get_detailed_sig_results(subject_sig_elecs, run_name):
+        detailed_sig = pd.read_csv(f"{run_name}/significance_detailed.csv")
+        detailed_sig = detailed_sig.set_index(["subject", "electrode"])
+        all_sig = []
+        all_p_vals = []
+        all_q_vals = []
+        for subject, elecs in subject_sig_elecs.items():
+            for elec in elecs:
+                correct_row = detailed_sig.loc[(subject, elec)]
+                all_sig.append(correct_row["sig"].to_numpy())
+                all_p_vals.append(correct_row["p_value"].to_numpy())
+                all_q_vals.append(correct_row["q_value"].to_numpy())
+        return np.stack(all_sig), np.stack(all_p_vals), np.stack(all_q_vals)
+
+    return (get_detailed_sig_results,)
+
+
+@app.cell
+def _(new_subject_sig, num_old, old_sig_elecs):
+    total_shared = 0
+    for sub, elecs in old_sig_elecs.items():
+        for elec in elecs:
+            if elec in new_subject_sig[sub]:
+                total_shared += 1
+
+    total_shared / num_old
+    return
+
+
+@app.cell
 def _(mo):
     mo.md("""
     ## Setup
@@ -1649,17 +1686,48 @@ def _(mo):
 
 
 @app.cell
-def _(np):
+def _(mo):
+    layer_dropdown = mo.ui.dropdown(options={"mid": 24, "final": 48}, value="mid")
+    offsets_to_train_dropdown = mo.ui.dropdown(options=[0], value=0)
+    subjects_to_include_multiselect = mo.ui.multiselect(options=list(range(1, 10)), label="subjects")
+    mo.hstack([layer_dropdown, offsets_to_train_dropdown, subjects_to_include_multiselect])
+    return (
+        layer_dropdown,
+        offsets_to_train_dropdown,
+        subjects_to_include_multiselect,
+    )
+
+
+@app.cell
+def _(layer_dropdown, np, offsets_to_train_dropdown):
     bids_root = "data/"  # if using a local dataset, set this variable accordingly
-    modelname, layer = 'gpt2-xl', 24
+    modelname, layer = 'gpt2-xl', layer_dropdown.value
 
     # For generating predictions if necessary
     MODEL = "gpt2-xl"
     MAX_CTX = 1024
     STRIDE = 512
 
+    word_offset_to_train = offsets_to_train_dropdown.value
+    run_name = f"{layer_dropdown.selected_key}_gpt2-{word_offset_to_train}"
+
     lags = np.arange(-2 * 512, 2 * 512, 16) / 512 # specify the lags
-    return MAX_CTX, MODEL, STRIDE, bids_root, lags, layer
+    return (
+        MAX_CTX,
+        MODEL,
+        STRIDE,
+        bids_root,
+        lags,
+        layer,
+        run_name,
+        word_offset_to_train,
+    )
+
+
+@app.cell
+def _():
+    # Set data
+    return
 
 
 @app.cell(hide_code=True)
@@ -1680,10 +1748,11 @@ def _(
     os,
     pd,
     read_electrode_file,
-    read_subject_mapping,
+    run_name,
     save_distributions,
     set_backend,
     start,
+    subjects_to_include_multiselect,
     token_probs,
     torch,
     urllib,
@@ -1830,20 +1899,20 @@ def _(
 
     gpt2_word_kl_divergence = kl_divergence(aligned_gpt2_probs)
 
-    subject_mapping = read_subject_mapping("data/participants.tsv")
-    sig_elecs = read_electrode_file("all_subject_sig.csv", subject_mapping)
-    # raws = load_raws([i for i in sig_elecs.keys()], "data/", per_subject_electrodes=sig_elecs, use_high_gamma=True)
+    # subject_mapping = read_subject_mapping("data/participants.tsv")
+    sig_elecs = read_electrode_file(f"{run_name}/all_subject_sig.csv")
+    raws = load_raws([i for i in subjects_to_include_multiselect.value], "data/", per_subject_electrodes=sig_elecs, use_high_gamma=True)
 
-    raws = load_raws(
-        list(range(1, 10)),
-        "data/",
-        use_high_gamma=True,
-        target_sr=None,
-        do_drop_bads=False,
-        signal_unit=None,
-        per_subject_electrodes=None,
-        channel_reg_ex=None,
-    )
+    # raws = load_raws(
+    #     list(range(1, 10)),
+    #     "data/",
+    #     use_high_gamma=True,
+    #     target_sr=None,
+    #     do_drop_bads=False,
+    #     signal_unit=None,
+    #     per_subject_electrodes=None,
+    #     channel_reg_ex=None,
+    # )
 
     events = np.zeros((len(df_word), 3), dtype=int)
     events[:, 0] = (df_word.start * raws[0].info['sfreq']).astype(int)
@@ -1882,7 +1951,15 @@ def _(
     averaged_embeddings = aligned_embeddings[epochs.selection]
     final_layer_averaged_embeddings = final_layer_aligned_embeddings[epochs.selection]
     print("Averaged embeddings:", averaged_embeddings.shape, "Final layer embeddings:", final_layer_averaged_embeddings.shape)
-    return averaged_embeddings, datas, df_word, epochs, epochs_data, raws
+    return (
+        averaged_embeddings,
+        datas,
+        df_word,
+        epochs,
+        epochs_data,
+        raws,
+        sig_elecs,
+    )
 
 
 @app.cell
@@ -1895,10 +1972,9 @@ def _(mo):
 
 @app.cell
 def _():
-    word_offsets_to_train = [0] # list(range(-1, 2))
-    run_name = "mid_gpt2"
+    # list(range(-1, 2))
     skip_sigs = False
-    return run_name, skip_sigs, word_offsets_to_train
+    return (skip_sigs,)
 
 
 @app.cell(hide_code=True)
@@ -1910,18 +1986,18 @@ def _(
     datas,
     encode_ecog,
     epochs_data,
-    get_all_targets_test_set,
     get_backend,
+    get_detailed_sig_results,
     get_encoding_result_filepath,
-    get_sig_results,
     load_encoding_results,
     make_pipeline,
     np,
     os,
     run_name,
     save_encoding_results,
+    sig_elecs,
     skip_sigs,
-    word_offsets_to_train,
+    word_offset_to_train,
 ):
     def get_ridge_model_constructor():
             alphas = np.logspace(1, 10, 10) # specify alpha values
@@ -1935,42 +2011,47 @@ def _(
     embed_dim, num_electrodes, num_lags = averaged_embeddings.shape[1], datas.shape[1], datas.shape[2]
 
     per_offset_results = {}
-    for word_offset in word_offsets_to_train:
-        if word_offset < 0:
-            X, Y = averaged_embeddings[:word_offset], epochs_data[-word_offset:]
-        elif word_offset > 0:
-            X, Y = averaged_embeddings[word_offset:], epochs_data[:-word_offset]
-        else:
-            X, Y = averaged_embeddings, epochs_data
-        # Make them into a list partially because we may want different lists per fold later but also an annoying holdover
-        X = [X, X]
+    if word_offset_to_train < 0:
+        X, Y = averaged_embeddings[:word_offset_to_train], epochs_data[-word_offset_to_train:]
+    elif word_offset_to_train > 0:
+        X, Y = averaged_embeddings[word_offset_to_train:], epochs_data[:-word_offset_to_train]
+    else:
+        X, Y = averaged_embeddings, epochs_data
+    # Make them into a list partially because we may want different lists per fold later but also an annoying holdover
+    X = [X, X]
 
-        if "torch" in get_backend().__name__:
-            X = [t.astype(np.float32) for t in X]
-            Y = Y.astype(np.float32)
+    if "torch" in get_backend().__name__:
+        X = [t.astype(np.float32) for t in X]
+        Y = Y.astype(np.float32)
 
 
-        result_dir = f"{run_name}-{word_offset}"
-        os.makedirs(result_dir, exist_ok=True)
-        results_file = get_encoding_result_filepath(result_dir)
-        if os.path.exists(results_file):
-            result = load_encoding_results(results_file)
-            # Generate significant results if they're not already saved
-            if "sig" not in result and not skip_sigs:
-                sig, p_values, q_values = get_sig_results(result["model_predictions"], get_all_targets_test_set(result["test_idxs"], Y, num_electrodes, num_lags))
-                result["sig"] = {
-                    "sig_bool": sig,
-                    "p_values": p_values,
-                    "q_values": q_values,
-                }
-                save_encoding_results(result, results_file)
-
-            per_offset_results[word_offset] = result
-            continue
-
-        encode_cluster_results = encode_ecog(X, Y, num_electrodes, num_lags, get_ridge_model_constructor(), result_dir=result_dir, folds=None, epochs_shape=(num_electrodes, num_lags), skip_sigs=skip_sigs)
+    result_dir = run_name
+    os.makedirs(result_dir, exist_ok=True)
+    results_file = get_encoding_result_filepath(result_dir)
+    if os.path.exists(results_file):
+        encode_cluster_results = load_encoding_results(results_file)
+        # Generate significant results if they're not already saved
+        # if "sig" not in encode_cluster_results and not skip_sigs:
+        #     sig, p_values, q_values = get_sig_results(encode_cluster_results["model_predictions"], get_all_targets_test_set(result["test_idxs"], Y, num_electrodes, num_lags))
+        #     encode_cluster_results["sig"] = {
+        #         "sig_bool": sig,
+        #         "p_values": p_values,
+        #         "q_values": q_values,
+        #     }
+        #     save_encoding_results(result, results_file)
+    else:
+        encode_cluster_results = encode_ecog(X, Y, num_electrodes, num_lags, get_ridge_model_constructor(), result_dir=result_dir, folds=None, epochs_shape=(num_electrodes, num_lags), skip_sigs=True)
         save_encoding_results(encode_cluster_results, results_file)
-        per_offset_results[word_offset] = encode_cluster_results
+    
+    if not skip_sigs:
+        sig, p_vals, q_vals = get_detailed_sig_results(sig_elecs, run_name)
+        
+        encode_cluster_results["sig"] = {
+            "sig_bool": sig,
+            "p_values": p_vals,
+            "q_values": q_vals,
+        }
+    per_offset_results[word_offset_to_train] = encode_cluster_results
     return (
         X,
         Y,
@@ -3463,6 +3544,28 @@ def _(rand_results):
 
 
 @app.cell
+def _():
+    import seaborn as sns
+
+    return (sns,)
+
+
+@app.cell
+def _(X, all_Vt, get_correlation_gpu, n_folds, sns):
+    # projected_X_list = [X[f] @ all_Vt[f, :7].T for f in range(n_folds)]
+    projected_X_all = [X[f] @ all_Vt[f].T for f in range(n_folds)]
+    projection_corrs = get_correlation_gpu(projected_X_all[0], projected_X_all[0])
+    sns.heatmap(projection_corrs)
+    return (projection_corrs,)
+
+
+@app.cell
+def _(plt, projection_corrs):
+    plt.hist(projection_corrs.flatten())
+    return
+
+
+@app.cell
 def _(
     LinearRegression,
     StandardScaler,
@@ -3497,7 +3600,27 @@ def _(
 
     # svd_transformed_xs = project_x(projected_X_list, all_Vt[:, :3], target_result["test_idxs"])
     corrs_svd, _, _, _, _ = train_encoding(projected_X_list, epochs_data, get_ols_model_constructor(), epochs_shape=(num_electrodes, num_lags), provided_idxs=original_folds)
-    return (corrs_svd,)
+    return corrs_svd, projected_X_list
+
+
+@app.cell
+def _(
+    X,
+    all_Vt,
+    epochs_data,
+    original_folds,
+    partial_out_direction,
+    per_offset_results,
+    projected_X_list,
+):
+    partial_X_dir = partial_out_direction(X, epochs_data, all_Vt[:, :10], projected_X_list, original_folds, per_offset_results[0]["Y_scalers"])
+
+    # project_x(X, all_Vt[:, :3], target_result["test_idxs"])
+
+    # svd_transformed_xs = project_x(projected_X_list, all_Vt[:, :3], target_result["test_idxs"])
+    # corrs_svd, _, _, _, _ = train_encoding(projected_X_list, epochs_data, get_ols_model_constructor(), epochs_shape=(num_electrodes, num_lags), provided_idxs=original_folds)
+    partial_X_dir
+    return
 
 
 @app.cell
