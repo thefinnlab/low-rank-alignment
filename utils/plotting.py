@@ -1,4 +1,101 @@
 import numpy as np
+from utils.analysis import find_best_k
+
+
+def plot_svd_truncation_results(results, threshold=0.95, save_path=None):
+    """4-panel figure summarizing SVD truncation performance.
+
+    Panel 1 (top-left): Mean correlation vs k, split by sig/non-sig, with best_k marker.
+    Panel 2 (top-right): Retention ratio (trunc_sig / full_sig) with threshold line + best_k.
+    Panel 3 (bottom-left): Per-electrode fractional drop at best_k, colored by frac sig lags.
+    Panel 4 (bottom-right): Per-lag drop at best_k with sig-fraction overlay.
+
+    Args:
+        results: dict from compute_truncated_correlations.
+        threshold: performance retention threshold (default 0.95).
+        save_path: if given, save figure here; otherwise call plt.show().
+    """
+    import matplotlib.pyplot as plt
+
+    k_values = results["k_values"]
+    full_corrs = results["full_corrs"]          # (n_elecs, n_lags)
+    trunc_corrs = results["truncated_corrs"]    # (n_k, n_elecs, n_lags)
+    sig_mask = results["sig_mask"]              # (n_elecs, n_lags)
+
+    best_k = find_best_k(results, threshold)
+    best_ki = int(np.where(k_values == best_k)[0][0])
+
+    sig_mean = np.array([t[sig_mask].mean() for t in trunc_corrs])
+    nonsig_mean = np.array([t[~sig_mask].mean() for t in trunc_corrs])
+    full_sig = full_corrs[sig_mask].mean()
+    full_nonsig = full_corrs[~sig_mask].mean()
+    ratios = sig_mean / full_sig
+
+    fig, axes = plt.subplots(2, 2, figsize=(13, 10))
+
+    # Panel 1: mean correlation vs k
+    ax = axes[0, 0]
+    ax.semilogx(k_values, sig_mean, "o-", color="steelblue", label="Sig")
+    ax.semilogx(k_values, nonsig_mean, "o-", color="gray", label="Non-sig")
+    ax.axhline(full_sig, color="steelblue", linestyle="--", alpha=0.5, label="Full sig")
+    ax.axhline(full_nonsig, color="gray", linestyle="--", alpha=0.5, label="Full non-sig")
+    ax.axvline(best_k, color="red", linestyle=":", label=f"best_k={best_k}")
+    ax.set_xlabel("k (SVD components)")
+    ax.set_ylabel("Mean Pearson r")
+    ax.set_title("Mean correlation vs k")
+    ax.legend(fontsize=8)
+
+    # Panel 2: retention ratio
+    ax = axes[0, 1]
+    ax.semilogx(k_values, ratios, "o-", color="steelblue")
+    ax.axhline(threshold, color="orange", linestyle="--", label=f"Threshold {threshold:.0%}")
+    ax.axvline(best_k, color="red", linestyle=":", label=f"best_k={best_k}")
+    ax.set_xlabel("k (SVD components)")
+    ax.set_ylabel("Retention ratio")
+    ax.set_title("Sig performance retention vs k")
+    ax.legend(fontsize=8)
+    ax.set_ylim(0, 1.05)
+
+    # Panel 3: per-electrode fractional drop at best_k
+    ax = axes[1, 0]
+    full_elec = full_corrs.mean(axis=1)   # (n_elecs,)
+    trunc_elec = trunc_corrs[best_ki].mean(axis=1)  # (n_elecs,)
+    drop_elec = (full_elec - trunc_elec) / np.maximum(np.abs(full_elec), 1e-12)
+    frac_sig_elec = sig_mask.mean(axis=1)  # (n_elecs,)
+    sc = ax.scatter(np.arange(len(drop_elec)), drop_elec, c=frac_sig_elec,
+                    cmap="viridis", s=10, vmin=0, vmax=1)
+    plt.colorbar(sc, ax=ax, label="Frac sig lags")
+    ax.axhline(0, color="black", linewidth=0.5)
+    ax.set_xlabel("Electrode index")
+    ax.set_ylabel("Fractional drop at best_k")
+    ax.set_title(f"Per-electrode drop at k={best_k}")
+
+    # Panel 4: per-lag drop at best_k with sig-fraction overlay
+    ax = axes[1, 1]
+    full_lag = full_corrs.mean(axis=0)   # (n_lags,)
+    trunc_lag = trunc_corrs[best_ki].mean(axis=0)  # (n_lags,)
+    drop_lag = (full_lag - trunc_lag) / np.maximum(np.abs(full_lag), 1e-12)
+    lags = np.arange(len(drop_lag))
+    ax.plot(lags, drop_lag, color="steelblue")
+    ax.axhline(0, color="black", linewidth=0.5)
+    ax.set_xlabel("Lag index")
+    ax.set_ylabel("Fractional drop at best_k")
+    ax.set_title(f"Per-lag drop at k={best_k}")
+
+    ax2 = ax.twinx()
+    frac_sig_lag = sig_mask.mean(axis=0)  # (n_lags,)
+    ax2.bar(lags, frac_sig_lag, alpha=0.2, color="coral", label="Frac sig elecs")
+    ax2.set_ylim(0, 1)
+    ax2.set_ylabel("Frac sig electrodes", color="coral")
+    ax2.tick_params(axis="y", labelcolor="coral")
+
+    fig.tight_layout()
+
+    if save_path is not None:
+        fig.savefig(save_path, dpi=150)
+        plt.close(fig)
+    else:
+        plt.show()
 
 
 def add_masked_corrs(corrs, mask, lags, ax=None, color="blue", label=None, linestyle=None):

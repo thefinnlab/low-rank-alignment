@@ -34,3 +34,17 @@ class SignificanceConfig:
     n_permutations: int = 5000
     fdr_q: float = 0.01
     save_weights: bool = False
+
+
+@dataclass
+class SVDConfig:
+    """Parameters for SVD decomposition analysis (run_svd_analysis.py)."""
+
+    encoding: EncodingConfig = field(default_factory=EncodingConfig)
+    output_dir: str | None = None        # Root results dir; auto-generated if None
+    svd_output_dir: str | None = None    # Override for SVD subdir; defaults to {output_dir}/svd
+    n_directions: int = 1600             # Max singular vectors to compute
+    k_values: list[int] = field(
+        default_factory=lambda: [1, 2, 5, 10, 20, 50, 100, 200, 400, 800, 1600]
+    )
+    threshold: float = 0.95              # Performance retention threshold for best_k

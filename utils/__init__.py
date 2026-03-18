@@ -1,7 +1,7 @@
 # Public API for the utils package.
 # Import the most commonly used functions for convenience.
 
-from utils.config import EncodingConfig, SignificanceConfig, get_results_dir
+from utils.config import EncodingConfig, SignificanceConfig, SVDConfig, get_results_dir
 from utils.config_utils import (
     parse_override_args,
     get_nested_value,
@@ -35,7 +35,7 @@ from utils.encoding import (
     load_all_subject_correlations,
     load_all_subject_coefficients,
 )
-from utils.plotting import add_corrs, plot_corrs_vs_arbitrary
+from utils.plotting import add_corrs, plot_corrs_vs_arbitrary, plot_svd_truncation_results
 from utils.significance import (
     batch_corrcoef,
     significant_lags_all_electrodes_gpu,
@@ -50,6 +50,9 @@ from utils.analysis import (
     load_partial_results,
     run_comparative_analysis_on_folds,
     get_method_mapping,
+    find_dominant_directions,
+    compute_truncated_correlations,
+    find_best_k,
 )
 from utils.examples import (
     _make_context,
@@ -63,6 +66,7 @@ __all__ = [
     # config
     "EncodingConfig",
     "SignificanceConfig",
+    "SVDConfig",
     "get_results_dir",
     "parse_override_args",
     "get_nested_value",
@@ -96,6 +100,7 @@ __all__ = [
     # plotting
     "add_corrs",
     "plot_corrs_vs_arbitrary",
+    "plot_svd_truncation_results",
     # significance
     "batch_corrcoef",
     "significant_lags_all_electrodes_gpu",
@@ -109,6 +114,9 @@ __all__ = [
     "load_partial_results",
     "run_comparative_analysis_on_folds",
     "get_method_mapping",
+    "find_dominant_directions",
+    "compute_truncated_correlations",
+    "find_best_k",
     # examples
     "_make_context",
     "_sample",
