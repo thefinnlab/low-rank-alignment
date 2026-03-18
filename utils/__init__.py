@@ -32,6 +32,8 @@ from utils.encoding import (
     load_encoding_results,
     apply_offset,
     save_subject_results,
+    load_all_subject_correlations,
+    load_all_subject_coefficients,
 )
 from utils.plotting import add_corrs, plot_corrs_vs_arbitrary
 from utils.significance import (
@@ -89,6 +91,8 @@ __all__ = [
     "load_encoding_results",
     "apply_offset",
     "save_subject_results",
+    "load_all_subject_correlations",
+    "load_all_subject_coefficients",
     # plotting
     "add_corrs",
     "plot_corrs_vs_arbitrary",

@@ -9,6 +9,8 @@ from utils.encoding import (
     get_all_targets_test_set,
     get_ridge_model_constructor,
     load_encoding_results,
+    load_all_subject_correlations,
+    load_all_subject_coefficients,
     save_encoding_results,
     save_subject_results,
 )
@@ -284,3 +286,121 @@ class TestSaveSubjectResults:
         save_subject_results(str(tmp_path), sub_id=2, corrs_arb=corrs_arb, **minimal_args)
         sub_dir = tmp_path / "subjects" / "sub_2"
         assert (sub_dir / "arbitrary_corrs.npy").exists()
+
+
+# ---------------------------------------------------------------------------
+# Helpers for multi-subject tests
+# ---------------------------------------------------------------------------
+
+def _make_subject_args(rng, n_elec, n_folds=2, n_lags=3, n_feat=5):
+    corrs = rng.standard_normal((n_folds, n_elec, n_lags)).astype(np.float32)
+    coefficients = [rng.standard_normal((n_elec, n_lags, n_feat)) for _ in range(n_folds)]
+    intercepts = [rng.standard_normal((n_elec * n_lags,)) for _ in range(n_folds)]
+    lags = np.linspace(-2.0, 2.0, n_lags, endpoint=False)
+    return dict(
+        corrs=corrs,
+        coefficients=coefficients,
+        intercepts=intercepts,
+        models=[None] * n_folds,
+        tr_idxs=[np.arange(10)] * n_folds,
+        test_idxs=[np.arange(10)] * n_folds,
+        scalers=[None] * n_folds,
+        elec_names=[f"S{n_elec}E{i}" for i in range(n_elec)],
+        offset=0,
+        layer_int=0,
+        lags=lags,
+    )
+
+
+@pytest.fixture()
+def two_subject_dir(tmp_path):
+    """Write two subjects (3 and 2 electrodes) into tmp_path."""
+    rng = np.random.default_rng(42)
+    args1 = _make_subject_args(rng, n_elec=3)
+    args2 = _make_subject_args(rng, n_elec=2)
+    save_subject_results(str(tmp_path), sub_id=1, **args1)
+    save_subject_results(str(tmp_path), sub_id=2, **args2)
+    return tmp_path, args1, args2
+
+
+# ---------------------------------------------------------------------------
+# TestLoadAllSubjectCorrelations
+# ---------------------------------------------------------------------------
+
+class TestLoadAllSubjectCorrelations:
+    def test_shape(self, two_subject_dir):
+        output_dir, args1, args2 = two_subject_dir
+        n_folds = args1["corrs"].shape[0]
+        n_lags = args1["corrs"].shape[2]
+        corrs_all, _ = load_all_subject_correlations(str(output_dir))
+        assert corrs_all.shape == (5, n_folds, n_lags)
+
+    def test_metadata_order(self, two_subject_dir):
+        output_dir, args1, args2 = two_subject_dir
+        _, meta = load_all_subject_correlations(str(output_dir))
+        assert list(meta["subject"]) == [1, 1, 1, 2, 2]
+        assert list(meta["electrode"]) == args1["elec_names"] + args2["elec_names"]
+
+    def test_values(self, two_subject_dir):
+        output_dir, args1, _ = two_subject_dir
+        corrs_all, _ = load_all_subject_correlations(str(output_dir))
+        # First 3 rows should be sub_1's corrs transposed from (n_folds, 3, n_lags) -> (3, n_folds, n_lags)
+        expected = args1["corrs"].transpose(1, 0, 2)
+        np.testing.assert_array_equal(corrs_all[:3], expected)
+
+    def test_no_subjects_raises(self, tmp_path):
+        with pytest.raises(FileNotFoundError):
+            load_all_subject_correlations(str(tmp_path))
+
+    def test_subject_filter(self, two_subject_dir):
+        output_dir, args1, _ = two_subject_dir
+        corrs_all, meta = load_all_subject_correlations(str(output_dir), subjects=[1])
+        assert corrs_all.shape[0] == 3
+        assert list(meta["subject"]) == [1, 1, 1]
+
+    def test_subject_filter_missing_raises(self, two_subject_dir):
+        output_dir, _, _ = two_subject_dir
+        with pytest.raises(FileNotFoundError):
+            load_all_subject_correlations(str(output_dir), subjects=[99])
+
+
+# ---------------------------------------------------------------------------
+# TestLoadAllSubjectCoefficients
+# ---------------------------------------------------------------------------
+
+class TestLoadAllSubjectCoefficients:
+    def test_shape(self, two_subject_dir):
+        output_dir, args1, _ = two_subject_dir
+        n_folds = len(args1["coefficients"])
+        n_lags = args1["coefficients"][0].shape[1]
+        n_feat = args1["coefficients"][0].shape[2]
+        coefs_all, _ = load_all_subject_coefficients(str(output_dir))
+        assert len(coefs_all) == n_folds
+        for fold_arr in coefs_all:
+            assert fold_arr.shape == (5, n_lags, n_feat)
+
+    def test_metadata_order(self, two_subject_dir):
+        output_dir, args1, args2 = two_subject_dir
+        _, meta = load_all_subject_coefficients(str(output_dir))
+        assert list(meta["subject"]) == [1, 1, 1, 2, 2]
+        assert list(meta["electrode"]) == args1["elec_names"] + args2["elec_names"]
+
+    def test_values(self, two_subject_dir):
+        output_dir, args1, _ = two_subject_dir
+        coefs_all, _ = load_all_subject_coefficients(str(output_dir))
+        # First 3 rows of each fold should match sub_1's coefficients
+        for fold_idx, fold_arr in enumerate(coefs_all):
+            np.testing.assert_array_equal(fold_arr[:3], args1["coefficients"][fold_idx])
+
+    def test_no_subjects_raises(self, tmp_path):
+        with pytest.raises(FileNotFoundError):
+            load_all_subject_coefficients(str(tmp_path))
+
+    def test_subject_filter(self, two_subject_dir):
+        output_dir, _, args2 = two_subject_dir
+        coefs_all, meta = load_all_subject_coefficients(str(output_dir), subjects=[2])
+        assert len(meta) == 2
+        assert list(meta["subject"]) == [2, 2]
+        for fold_idx, fold_arr in enumerate(coefs_all):
+            assert fold_arr.shape[0] == 2
+            np.testing.assert_array_equal(fold_arr, args2["coefficients"][fold_idx])
