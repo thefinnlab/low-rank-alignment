@@ -7,7 +7,6 @@ Writes:
   {output_dir}/all_subject_sig.csv         — electrodes with ≥1 significant lag
 """
 
-import argparse
 import gc
 import os
 
@@ -28,34 +27,8 @@ from utils import (
     get_models_coefficients,
     save_subject_results,
 )
-
-
-# ---------------------------------------------------------------------------
-# CLI
-# ---------------------------------------------------------------------------
-
-def parse_args():
-    parser = argparse.ArgumentParser(description="Per-subject encoding + significance testing")
-    parser.add_argument("--data-root", default="data/", help="Root of BIDS dataset")
-    parser.add_argument("--output-dir", default="results/", help="Directory for output CSVs")
-    parser.add_argument("--layer", type=int, default=24, help="GPT-2-XL layer index")
-    parser.add_argument(
-        "--subjects",
-        nargs="+",
-        default=None,
-        help="Subject BIDS IDs to process (default: 1–9). E.g. --subjects 1 3 5",
-    )
-    parser.add_argument("--n-permutations", type=int, default=5000)
-    parser.add_argument("--fdr-q", type=float, default=0.01)
-    parser.add_argument(
-        "--offset", type=int, default=0,
-        help="Word offset to apply when aligning embeddings to neural data",
-    )
-    parser.add_argument(
-        "--save-weights", action="store_true",
-        help="If set, save model weights for electrodes with ≥1 significant lag",
-    )
-    return parser.parse_args()
+from utils.config import SignificanceConfig, get_results_dir
+from utils.config_utils import parse_args, load_config
 
 
 # ---------------------------------------------------------------------------
@@ -63,12 +36,12 @@ def parse_args():
 # ---------------------------------------------------------------------------
 
 def main():
-    args = parse_args()
+    args, overrides = parse_args("Per-subject encoding + significance testing")
+    config: SignificanceConfig = load_config(args.config, overrides, SignificanceConfig)
+    enc = config.encoding
 
-    if args.subjects is None:
-        subject_ids = list(range(1, 10))
-    else:
-        subject_ids = [int(s) for s in args.subjects]
+    subject_ids = enc.subjects or list(range(1, 10))
+    output_dir = config.output_dir or get_results_dir(enc.model, enc.layer, enc.offset)
 
     # Use GPU backend if available
     if torch.cuda.is_available():
@@ -77,10 +50,11 @@ def main():
     else:
         print("CUDA not available, using CPU.")
 
-    os.makedirs(args.output_dir, exist_ok=True)
+    os.makedirs(output_dir, exist_ok=True)
+    print(f"Results directory: {output_dir}")
 
     # Load embeddings once — shared across all subjects
-    aligned_embeddings, df_word = load_embeddings(args.data_root, args.layer)
+    aligned_embeddings, df_word = load_embeddings(enc.data_root, enc.layer)
 
     # Lag axis: epochs are built with tmin=-2, tmax=2 then resampled to 32 Hz
     # That gives 4 s * 32 Hz = 128 samples but MNE epoch layout is:
@@ -99,7 +73,7 @@ def main():
         # ------------------------------------------------------------------
         # a. Load raw data
         # ------------------------------------------------------------------
-        raws = load_raws([bids_sub_id], args.data_root, use_high_gamma=True)
+        raws = load_raws([bids_sub_id], enc.data_root, use_high_gamma=True)
         raw = raws[0]
         electrode_names = raw.ch_names
         print(f"  Electrodes: {len(electrode_names)}")
@@ -114,7 +88,7 @@ def main():
         # c. Align X and Y by epoch selection and word offset
         # ------------------------------------------------------------------
         n_words, n_elec, n_lags = data.shape
-        X_arr, Y = apply_offset(aligned_embeddings[epochs.selection], data, args.offset)
+        X_arr, Y = apply_offset(aligned_embeddings[epochs.selection], data, enc.offset)
         X = [X_arr, X_arr]  # one per fold
 
         # Update lag_sec based on actual n_lags (in case resampling gives different count)
@@ -142,19 +116,19 @@ def main():
         # ------------------------------------------------------------------
         # g. Significance test
         # ------------------------------------------------------------------
-        print(f"  Running significance test ({args.n_permutations} permutations)...")
+        print(f"  Running significance test ({config.n_permutations} permutations)...")
         sig, p_values, q_values, obs_corrs = significant_lags_all_electrodes_gpu(
             all_predictions.transpose(1, 2, 0),
             all_targets.transpose(1, 2, 0),
-            n_permutations=args.n_permutations,
-            fdr_q=args.fdr_q,
+            n_permutations=config.n_permutations,
+            fdr_q=config.fdr_q,
         )
         # shapes: (n_elec, n_lags)
 
         # ------------------------------------------------------------------
         # h. Optionally save weights for significant electrodes
         # ------------------------------------------------------------------
-        if args.save_weights:
+        if config.save_weights:
             sig_elec_indices = np.where(sig.any(axis=1))[0]
             if len(sig_elec_indices) > 0:
                 coefficients, intercepts = get_models_coefficients(
@@ -165,9 +139,9 @@ def main():
                 sig_corrs = corrs[:, sig_elec_indices, :]
                 sig_names = [electrode_names[i] for i in sig_elec_indices]
                 save_subject_results(
-                    args.output_dir, bids_sub_id, sig_corrs,
+                    output_dir, bids_sub_id, sig_corrs,
                     sig_coefs, sig_ints, models, tr_idxs, test_idxs,
-                    scalers, sig_names, args.offset, args.layer,
+                    scalers, sig_names, enc.offset, enc.layer,
                     actual_lag_sec,
                 )
                 del coefficients, intercepts
@@ -207,7 +181,7 @@ def main():
     # ------------------------------------------------------------------
     # 5. Write output files
     # ------------------------------------------------------------------
-    detailed_path = os.path.join(args.output_dir, "significance_detailed.csv")
+    detailed_path = os.path.join(output_dir, "significance_detailed.csv")
     df_detailed.to_csv(detailed_path, index=False)
     print(f"\nWrote {detailed_path}  ({len(df_detailed):,} rows)")
 
@@ -219,7 +193,7 @@ def main():
         .query("sig == True")[["subject", "electrode"]]
         .rename(columns={"electrode": "elec"})
     )
-    sig_path = os.path.join(args.output_dir, "all_subject_sig.csv")
+    sig_path = os.path.join(output_dir, "all_subject_sig.csv")
     df_any_sig.to_csv(sig_path, index=False)
     print(f"Wrote {sig_path}  ({len(df_any_sig):,} rows)")
 

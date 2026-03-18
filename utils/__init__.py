@@ -1,6 +1,17 @@
 # Public API for the utils package.
 # Import the most commonly used functions for convenience.
 
+from utils.config import EncodingConfig, SignificanceConfig, get_results_dir
+from utils.config_utils import (
+    parse_override_args,
+    get_nested_value,
+    set_nested_attr,
+    apply_overrides,
+    dict_to_dataclass,
+    load_config,
+    parse_args,
+)
+
 from utils.data_loaders import (
     load_raws,
     read_subject_mapping,
@@ -47,6 +58,17 @@ from utils.examples import (
 )
 
 __all__ = [
+    # config
+    "EncodingConfig",
+    "SignificanceConfig",
+    "get_results_dir",
+    "parse_override_args",
+    "get_nested_value",
+    "set_nested_attr",
+    "apply_overrides",
+    "dict_to_dataclass",
+    "load_config",
+    "parse_args",
     # data_loaders
     "load_raws",
     "read_subject_mapping",

@@ -2,6 +2,7 @@
 train_encoding_models.py — Joint or batched encoding model training.
 
 Trains ridge regression encoding models (GPT-2 embeddings → ECoG neural data).
+Layer is specified as an integer in the config (24=mid, 48=final).
 
 Writes per-subject results to:
   {run_name}/subjects/sub_{id}/
@@ -11,7 +12,6 @@ Writes per-subject results to:
     corrs_plot.png
 """
 
-import argparse
 import gc
 import os
 
@@ -31,39 +31,8 @@ from utils import (
     save_subject_results,
     read_electrode_file,
 )
-
-
-LAYER_MAP = {"mid": 24, "final": 48}
-
-
-# ---------------------------------------------------------------------------
-# CLI
-# ---------------------------------------------------------------------------
-
-def parse_args():
-    parser = argparse.ArgumentParser(description="Encoding model training script")
-    parser.add_argument(
-        "--layer", choices=["mid", "final"], required=True,
-        help="GPT-2-XL layer: 'mid' (24) or 'final' (48)",
-    )
-    parser.add_argument(
-        "--offset", type=int, default=0,
-        help="Word offset to apply when aligning embeddings to neural data",
-    )
-    parser.add_argument(
-        "--subjects", nargs="+", type=int, default=None,
-        help="Subject BIDS IDs to process (default: 1–9). E.g. --subjects 1 3 5",
-    )
-    parser.add_argument(
-        "--run-name", required=True,
-        help="Run directory name; {run_name}/all_subject_sig.csv must exist",
-    )
-    parser.add_argument("--data-root", default="data/", help="Root of BIDS dataset")
-    parser.add_argument(
-        "--batch", action="store_true",
-        help="Process one subject at a time to reduce peak RAM usage",
-    )
-    return parser.parse_args()
+from utils.config import EncodingConfig, get_results_dir
+from utils.config_utils import parse_args, load_config
 
 
 # ---------------------------------------------------------------------------
@@ -185,10 +154,13 @@ def _run_batch(sig_elecs, subject_ids, aligned_embeddings, df_word,
 # ---------------------------------------------------------------------------
 
 def main():
-    args = parse_args()
-    layer_int = LAYER_MAP[args.layer]
-    subject_ids = args.subjects or list(range(1, 10))
-    offset = args.offset
+    args, overrides = parse_args("Encoding model training")
+    config: EncodingConfig = load_config(args.config, overrides, EncodingConfig)
+
+    layer_int = config.layer
+    subject_ids = config.subjects or list(range(1, 10))
+    offset = config.offset
+    run_name = config.run_name or get_results_dir(config.model, config.layer, config.offset)
 
     if torch.cuda.is_available():
         set_backend("torch_cuda")
@@ -196,23 +168,25 @@ def main():
     else:
         print("CUDA not available, using CPU.")
 
-    sig_elec_path = os.path.join(args.run_name, "all_subject_sig.csv")
+    print(f"Results directory: {run_name}")
+
+    sig_elec_path = os.path.join(run_name, "all_subject_sig.csv")
     sig_elecs = read_electrode_file(sig_elec_path)
     sig_elecs = {s: sig_elecs[s] for s in subject_ids if s in sig_elecs}
     if not sig_elecs:
         raise ValueError("No significant electrodes found for the requested subjects.")
 
     print(f"Loading embeddings (layer {layer_int})...")
-    aligned_embeddings, df_word = load_embeddings(args.data_root, layer_int)
+    aligned_embeddings, df_word = load_embeddings(config.data_root, layer_int)
 
     model_constructor = get_ridge_model_constructor()
 
-    if args.batch:
+    if config.batch:
         _run_batch(sig_elecs, subject_ids, aligned_embeddings, df_word,
-                   args.data_root, offset, layer_int, args.run_name, model_constructor)
+                   config.data_root, offset, layer_int, run_name, model_constructor)
     else:
         _run_joint(sig_elecs, aligned_embeddings, df_word,
-                   args.data_root, offset, layer_int, args.run_name, model_constructor)
+                   config.data_root, offset, layer_int, run_name, model_constructor)
 
 
 if __name__ == "__main__":
