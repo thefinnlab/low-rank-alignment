@@ -177,6 +177,7 @@ def main():
     per_subject_results = {}
     per_subject_full_corrs_orig = {}  # original corrs from training, for plotting
     lags = None
+    ref_test_idxs = None  # test_idxs from the first subject, used for cross-subject consistency check
 
     for sub_id in subject_ids:
         print(f"\n{'='*60}")
@@ -193,6 +194,15 @@ def main():
             f"Subject {sub_id} has {len(test_idxs)} folds in encoding_results but "
             f"coefficients_all has {n_folds} folds. Results may be from different runs."
         )
+        if ref_test_idxs is None:
+            ref_test_idxs = test_idxs
+        else:
+            for fold_i, (ref_idx, sub_idx) in enumerate(zip(ref_test_idxs, test_idxs)):
+                assert set(ref_idx) == set(sub_idx), (
+                    f"Subject {sub_id} fold {fold_i} test indices differ from subject "
+                    f"{subject_ids[0]}. All subjects must use the same word-level train/test "
+                    "split to ensure comparable evaluation."
+                )
         if lags is None:
             lags = enc_results["lags"]
         per_subject_full_corrs_orig[sub_id] = enc_results["corrs"]  # (n_folds, n_elecs, n_lags)
