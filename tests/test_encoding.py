@@ -218,6 +218,9 @@ class TestApplyOffset:
         assert X.shape[0] == 18  # embs[2:]
         assert Y.shape[0] == 18  # data[:-2]
         assert X.shape[0] == Y.shape[0]
+        # X rows align to embs[2:], Y rows align to data[:-2]
+        np.testing.assert_array_equal(X, embs[2:].astype(np.float32))
+        np.testing.assert_array_equal(Y, data[:-2].reshape(18, -1).astype(np.float32))
 
     def test_negative_offset_trims_correctly(self):
         rng = np.random.default_rng(2)
@@ -227,6 +230,9 @@ class TestApplyOffset:
         assert X.shape[0] == 18  # embs[:-2]
         assert Y.shape[0] == 18  # data[2:]
         assert X.shape[0] == Y.shape[0]
+        # X rows align to embs[:-2], Y rows align to data[2:]
+        np.testing.assert_array_equal(X, embs[:-2].astype(np.float32))
+        np.testing.assert_array_equal(Y, data[2:].reshape(18, -1).astype(np.float32))
 
     def test_output_is_float32(self):
         rng = np.random.default_rng(3)
