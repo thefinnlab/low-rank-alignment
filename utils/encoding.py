@@ -1,6 +1,8 @@
+import glob
 import os
 
 import numpy as np
+import pandas as pd
 import torch
 from sklearn.model_selection import KFold
 from sklearn.pipeline import make_pipeline
@@ -335,6 +337,100 @@ def save_subject_results(
             save_path=os.path.join(sub_dir, "corrs_plot.png"),
         )
     print(f"  Subject {sub_id}: {corrs.shape[1]} electrodes → {sub_dir}")
+
+
+def _iter_subject_results(output_dir, subjects=None):
+    """Yield (subject_id, results_dict) for each subject directory, sorted by subject ID.
+
+    Args:
+        output_dir: Root output directory containing subjects/sub_*/ subdirs.
+        subjects: Optional list of subject IDs to include; if None, include all found.
+
+    Yields:
+        (subject_id: int, results: dict) tuples in ascending subject_id order.
+    """
+    pattern = os.path.join(output_dir, "subjects", "sub_*", "encoding_results.joblib")
+    paths = sorted(glob.glob(pattern))
+    if subjects is not None:
+        subjects_set = set(subjects)
+        paths = [p for p in paths if int(os.path.basename(os.path.dirname(p)).split("_")[1]) in subjects_set]
+    if not paths:
+        raise FileNotFoundError(
+            f"No subject encoding results found under {output_dir}/subjects/ "
+            f"(subjects filter: {subjects})"
+        )
+    for path in paths:
+        sub_id = int(os.path.basename(os.path.dirname(path)).split("_")[1])
+        yield sub_id, load_encoding_results(path)
+
+
+def load_all_subject_correlations(output_dir: str, subjects=None):
+    """Load and concatenate correlations across subjects.
+
+    Args:
+        output_dir: Root output directory containing subjects/sub_*/ subdirs.
+        subjects: Optional list of subject IDs to load; loads all found if None.
+
+    Returns:
+        corrs_all: np.ndarray of shape (n_folds, n_total_elecs, n_lags).
+        metadata_df: pd.DataFrame with columns ['subject', 'electrode'], one row per electrode.
+
+    Raises:
+        FileNotFoundError: If no subject directories are found (after filtering).
+    """
+    corrs_list = []
+    rows = []
+    for sub_id, results in _iter_subject_results(output_dir, subjects):
+        corrs = results["corrs"]  # (n_folds, n_elecs, n_lags)
+        elec_names = results["elec_names"]
+        corrs_list.append(corrs)
+        for name in elec_names:
+            rows.append({"subject": sub_id, "electrode": name})
+    corrs_all = np.concatenate(corrs_list, axis=1)  # (n_folds, n_total_elecs, n_lags)
+    metadata_df = pd.DataFrame(rows, columns=["subject", "electrode"])
+    return corrs_all, metadata_df
+
+
+def load_all_subject_coefficients(output_dir: str, subjects=None):
+    """Load and concatenate model coefficients and intercepts across subjects.
+
+    Args:
+        output_dir: Root output directory containing subjects/sub_*/ subdirs.
+        subjects: Optional list of subject IDs to load; loads all found if None.
+
+    Returns:
+        coefficients_all: np.ndarray of shape (n_folds, n_total_elecs, n_lags, n_features).
+        intercepts_all: list of np.ndarray, one per fold, each shape (n_total_elecs * n_lags,).
+        metadata_df: pd.DataFrame with columns ['subject', 'electrode'], one row per electrode.
+
+    Raises:
+        FileNotFoundError: If no subject directories are found (after filtering).
+    """
+    # Collect per-subject coefficient/intercept lists and metadata
+    all_subject_coefs = []  # list of (list-of-folds per subject)
+    all_subject_intercepts = []  # list of (list-of-folds per subject)
+    rows = []
+    for sub_id, results in _iter_subject_results(output_dir, subjects):
+        coefficients = results["coefficients"]  # list of (n_elecs, n_lags, n_features) per fold
+        intercepts = results["intercepts"]  # list of (n_elecs * n_lags,) per fold
+        elec_names = results["elec_names"]
+        all_subject_coefs.append(coefficients)
+        all_subject_intercepts.append(intercepts)
+        for name in elec_names:
+            rows.append({"subject": sub_id, "electrode": name})
+
+    n_folds = len(all_subject_coefs[0])
+    # Stack per-fold concatenations into a single (n_folds, n_total_elecs, n_lags, n_features) array
+    coefficients_all = np.stack([
+        np.concatenate([subj_coefs[fold] for subj_coefs in all_subject_coefs], axis=0)
+        for fold in range(n_folds)
+    ])
+    intercepts_all = [
+        np.concatenate([subj_intercepts[fold] for subj_intercepts in all_subject_intercepts], axis=0)
+        for fold in range(n_folds)
+    ]
+    metadata_df = pd.DataFrame(rows, columns=["subject", "electrode"])
+    return coefficients_all, intercepts_all, metadata_df
 
 
 def get_all_predictions_and_targets_test_set(
