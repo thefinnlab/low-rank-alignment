@@ -374,23 +374,28 @@ class TestLoadAllSubjectCoefficients:
         n_folds = len(args1["coefficients"])
         n_lags = args1["coefficients"][0].shape[1]
         n_feat = args1["coefficients"][0].shape[2]
-        coefs_all, _ = load_all_subject_coefficients(str(output_dir))
+        coefs_all, intercepts_all, _ = load_all_subject_coefficients(str(output_dir))
         assert len(coefs_all) == n_folds
+        assert len(intercepts_all) == n_folds
         for fold_arr in coefs_all:
             assert fold_arr.shape == (5, n_lags, n_feat)
 
     def test_metadata_order(self, two_subject_dir):
         output_dir, args1, args2 = two_subject_dir
-        _, meta = load_all_subject_coefficients(str(output_dir))
+        _, _, meta = load_all_subject_coefficients(str(output_dir))
         assert list(meta["subject"]) == [1, 1, 1, 2, 2]
         assert list(meta["electrode"]) == args1["elec_names"] + args2["elec_names"]
 
     def test_values(self, two_subject_dir):
-        output_dir, args1, _ = two_subject_dir
-        coefs_all, _ = load_all_subject_coefficients(str(output_dir))
+        output_dir, args1, args2 = two_subject_dir
+        coefs_all, intercepts_all, _ = load_all_subject_coefficients(str(output_dir))
         # First 3 rows of each fold should match sub_1's coefficients
         for fold_idx, fold_arr in enumerate(coefs_all):
             np.testing.assert_array_equal(fold_arr[:3], args1["coefficients"][fold_idx])
+        # First n_elec1*n_lags entries of intercepts should match sub_1's intercepts
+        n_elec1_lags = len(args1["intercepts"][0])
+        for fold_idx, fold_arr in enumerate(intercepts_all):
+            np.testing.assert_array_equal(fold_arr[:n_elec1_lags], args1["intercepts"][fold_idx])
 
     def test_no_subjects_raises(self, tmp_path):
         with pytest.raises(FileNotFoundError):
@@ -398,9 +403,11 @@ class TestLoadAllSubjectCoefficients:
 
     def test_subject_filter(self, two_subject_dir):
         output_dir, _, args2 = two_subject_dir
-        coefs_all, meta = load_all_subject_coefficients(str(output_dir), subjects=[2])
+        coefs_all, intercepts_all, meta = load_all_subject_coefficients(str(output_dir), subjects=[2])
         assert len(meta) == 2
         assert list(meta["subject"]) == [2, 2]
         for fold_idx, fold_arr in enumerate(coefs_all):
             assert fold_arr.shape[0] == 2
             np.testing.assert_array_equal(fold_arr, args2["coefficients"][fold_idx])
+        for fold_idx, fold_arr in enumerate(intercepts_all):
+            np.testing.assert_array_equal(fold_arr, args2["intercepts"][fold_idx])

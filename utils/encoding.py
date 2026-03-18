@@ -392,7 +392,7 @@ def load_all_subject_correlations(output_dir: str, subjects=None):
 
 
 def load_all_subject_coefficients(output_dir: str, subjects=None):
-    """Load and concatenate model coefficients across subjects.
+    """Load and concatenate model coefficients and intercepts across subjects.
 
     Args:
         output_dir: Root output directory containing subjects/sub_*/ subdirs.
@@ -400,18 +400,22 @@ def load_all_subject_coefficients(output_dir: str, subjects=None):
 
     Returns:
         coefficients_all: list of np.ndarray, one per fold, each shape (n_total_elecs, n_lags, n_features).
+        intercepts_all: list of np.ndarray, one per fold, each shape (n_total_elecs * n_lags,).
         metadata_df: pd.DataFrame with columns ['subject', 'electrode'], one row per electrode.
 
     Raises:
         FileNotFoundError: If no subject directories are found (after filtering).
     """
-    # Collect per-subject coefficient lists and metadata
+    # Collect per-subject coefficient/intercept lists and metadata
     all_subject_coefs = []  # list of (list-of-folds per subject)
+    all_subject_intercepts = []  # list of (list-of-folds per subject)
     rows = []
     for sub_id, results in _iter_subject_results(output_dir, subjects):
         coefficients = results["coefficients"]  # list of (n_elecs, n_lags, n_features) per fold
+        intercepts = results["intercepts"]  # list of (n_elecs * n_lags,) per fold
         elec_names = results["elec_names"]
         all_subject_coefs.append(coefficients)
+        all_subject_intercepts.append(intercepts)
         for name in elec_names:
             rows.append({"subject": sub_id, "electrode": name})
 
@@ -420,8 +424,12 @@ def load_all_subject_coefficients(output_dir: str, subjects=None):
         np.concatenate([subj_coefs[fold] for subj_coefs in all_subject_coefs], axis=0)
         for fold in range(n_folds)
     ]
+    intercepts_all = [
+        np.concatenate([subj_intercepts[fold] for subj_intercepts in all_subject_intercepts], axis=0)
+        for fold in range(n_folds)
+    ]
     metadata_df = pd.DataFrame(rows, columns=["subject", "electrode"])
-    return coefficients_all, metadata_df
+    return coefficients_all, intercepts_all, metadata_df
 
 
 def get_all_predictions_and_targets_test_set(
