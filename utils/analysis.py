@@ -5,12 +5,13 @@ import numpy as np
 import torch
 
 
-def find_dominant_directions(weights, n_directions=50):
+def find_dominant_directions(weights, n_directions=None):
     """Find dominant directions in weight space via SVD.
 
     Args:
         weights: (n_folds, n_models, embed_dim) — typically significant electrode-lag weights.
-        n_directions: Maximum number of singular vectors to compute.
+        n_directions: Maximum number of singular vectors to return. None (default) returns
+            the full SVD (min(n_models, embed_dim) directions).
 
     Returns:
         all_U: list of (n_folds,) left singular vector arrays.
@@ -35,12 +36,12 @@ def find_dominant_directions(weights, n_directions=50):
 
         U, S, Vt = np.linalg.svd(W_unit, full_matrices=False)
 
-        actual_rank = min(n_models, embed_dim)
-        n_dirs = min(n_directions, actual_rank)
-
-        U = U[:, :n_dirs]
-        S = S[:n_dirs]
-        Vt = Vt[:n_dirs]
+        if n_directions is not None:
+            actual_rank = min(n_models, embed_dim)
+            n_dirs = min(n_directions, actual_rank)
+            U = U[:, :n_dirs]
+            S = S[:n_dirs]
+            Vt = Vt[:n_dirs]
 
         alignments = W[f] @ Vt.T  # (n_models, n_dirs)
 

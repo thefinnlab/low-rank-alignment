@@ -32,6 +32,7 @@ from utils import (
     build_word_epochs,
     apply_offset,
     load_all_subject_coefficients,
+    load_all_subject_correlations,
     find_dominant_directions,
     compute_truncated_correlations,
     find_best_k,
@@ -69,17 +70,15 @@ def _build_global_sig_mask(sig_df, metadata_df, n_lags):
         ]
         for _, sig_row in matches.iterrows():
             lag_i = int(sig_row["lag_idx"])
-            if 0 <= lag_i < n_lags:
-                mask[row_i, lag_i] = bool(sig_row["sig"])
+            assert 0 <= lag_i < n_lags, (
+                f"lag_idx {lag_i} from significance_detailed.csv is out of range "
+                f"[0, {n_lags}) for electrode '{row['electrode']}' "
+                f"(subject {row['subject']}). The CSV may have been produced with "
+                "different lag settings."
+            )
+            mask[row_i, lag_i] = bool(sig_row["sig"])
 
     return mask
-
-
-def _subject_lags(output_dir, sub_id):
-    """Load the lag array for a given subject from its encoding_results.joblib."""
-    sub_dir = os.path.join(output_dir, "subjects", f"sub_{sub_id}")
-    results = load_encoding_results(os.path.join(sub_dir, "encoding_results.joblib"))
-    return results["lags"]
 
 
 # ---------------------------------------------------------------------------
@@ -144,11 +143,10 @@ def main():
     n_directions = config.n_directions
     print(f"Computing SVD (n_directions={n_directions})...")
     all_U, all_S, all_Vt, all_alignments = find_dominant_directions(W_sig, n_directions)
-    # Pad Vt to n_directions rows (in case rank < n_directions)
-    Vt_arr = np.zeros((n_folds, n_directions, n_features))
-    for f in range(n_folds):
-        actual = all_Vt[f].shape[0]
-        Vt_arr[f, :actual] = all_Vt[f]
+
+    # Stack Vt: all folds have the same rank after truncation
+    Vt_arr = np.stack(all_Vt)  # (n_folds, actual_n_dirs, n_features)
+    actual_n_dirs = Vt_arr.shape[1]
 
     # ------------------------------------------------------------------
     # G. Save SVD decomposition
@@ -169,18 +167,35 @@ def main():
     print("Loading embeddings...")
     aligned_embeddings, df_word = load_embeddings(enc.data_root, enc.layer)
 
-    # Clamp k_values to available directions
-    k_values = [k for k in config.k_values if k <= n_directions]
+    # Clamp k_values to the number of directions actually computed
+    k_values = [k for k in config.k_values if k <= actual_n_dirs]
     print(f"k_values: {k_values}")
 
     # ------------------------------------------------------------------
     # I. Per-subject loop
     # ------------------------------------------------------------------
     per_subject_results = {}
+    per_subject_full_corrs_orig = {}  # original corrs from training, for plotting
+    lags = None
 
     for sub_id in subject_ids:
         print(f"\n{'='*60}")
         print(f"Subject {sub_id}")
+
+        # Load encoding results to reuse the exact test_idxs from training,
+        # avoiding any risk of evaluating on training data.
+        sub_enc_dir = os.path.join(output_dir, "subjects", f"sub_{sub_id}")
+        enc_results = load_encoding_results(
+            os.path.join(sub_enc_dir, "encoding_results.joblib")
+        )
+        test_idxs = enc_results["test_idxs"]
+        assert len(test_idxs) == n_folds, (
+            f"Subject {sub_id} has {len(test_idxs)} folds in encoding_results but "
+            f"coefficients_all has {n_folds} folds. Results may be from different runs."
+        )
+        if lags is None:
+            lags = enc_results["lags"]
+        per_subject_full_corrs_orig[sub_id] = enc_results["corrs"]  # (n_folds, n_elecs, n_lags)
 
         # Load raw neural data
         raws = load_raws([sub_id], enc.data_root, use_high_gamma=True)
@@ -188,7 +203,6 @@ def main():
         n_elecs_sub = len(raw.ch_names)
 
         epochs, data = build_word_epochs(raw, df_word)
-        n_words, _, _ = data.shape
         X_arr, Y = apply_offset(aligned_embeddings[epochs.selection], data, enc.offset)
         # Y shape: (n_words, n_elecs_sub * n_lags)
 
@@ -200,11 +214,6 @@ def main():
             for f in range(n_folds)
         ]
 
-        # Build test_idxs: train/test split matches encoding (2-fold, half/half)
-        half = n_words // 2
-        test_idxs = [np.arange(half), np.arange(half, n_words)]
-
-        # Subject sig_mask
         sig_mask_sub = sig_mask_global[sub_rows]  # (n_elecs_sub, n_lags)
 
         print(f"  Evaluating truncation (n_elecs={n_elecs_sub})...")
@@ -284,14 +293,20 @@ def main():
     # ------------------------------------------------------------------
     best_ki = int(np.where(k_vals == best_k)[0][0])
 
-    # Try to get lags from first available subject
-    lags = None
-    for sub_id in subject_ids:
-        try:
-            lags = _subject_lags(output_dir, sub_id)
-            break
-        except Exception:
-            continue
+    def _save_corrs_plot(corrs_trunc, corrs_full, lags, title, save_path):
+        """Plot SVD-truncated vs full-model correlations on the same axes."""
+        fig, ax = plt.subplots(figsize=(8, 4))
+        add_corrs(corrs_full, lags, label="Full model", color="blue", ax=ax)
+        add_corrs(corrs_trunc, lags, label=f"SVD k={best_k}", color="steelblue",
+                  linestyle="--", ax=ax)
+        ax.axhline(0, color="black", linewidth=0.5)
+        ax.set_xlabel("Lag (s)")
+        ax.set_ylabel("Correlation")
+        ax.set_title(title)
+        ax.legend()
+        fig.tight_layout()
+        fig.savefig(save_path, dpi=150)
+        plt.close(fig)
 
     # Per-subject
     for sub_id in subject_ids:
@@ -299,21 +314,16 @@ def main():
         os.makedirs(sub_dir, exist_ok=True)
 
         sub_rows = metadata_df.index[metadata_df["subject"] == sub_id].tolist()
-        # truncated_corrs_per_fold: (n_k, n_folds, n_total_elecs, n_lags)
         corrs_sub = truncated_corrs_all[best_ki, :, sub_rows, :]  # (n_folds, n_elecs_sub, n_lags)
         np.save(os.path.join(sub_dir, f"corrs_k{best_k}.npy"), corrs_sub)
 
         if lags is not None:
-            fig, ax = plt.subplots(figsize=(8, 4))
-            add_corrs(corrs_sub, lags, label=f"k={best_k}", color="steelblue", ax=ax)
-            ax.axhline(0, color="black", linewidth=0.5)
-            ax.set_xlabel("Lag (s)")
-            ax.set_ylabel("Correlation")
-            ax.set_title(f"Subject {sub_id} — k={best_k}")
-            ax.legend()
-            fig.tight_layout()
-            fig.savefig(os.path.join(sub_dir, f"corrs_plot_k{best_k}.png"), dpi=150)
-            plt.close(fig)
+            full_corrs_sub = per_subject_full_corrs_orig[sub_id]
+            _save_corrs_plot(
+                corrs_sub, full_corrs_sub, lags,
+                title=f"Subject {sub_id}",
+                save_path=os.path.join(sub_dir, f"corrs_plot_k{best_k}.png"),
+            )
 
             sig_mask_sub = sig_mask_global[sub_rows]
             plot_corrs_by_significance(
@@ -325,24 +335,16 @@ def main():
 
     # Cross-subject
     if lags is not None:
-        # full cross-subject: (n_folds, n_total_elecs, n_lags)
-        corrs_cross = truncated_corrs_all[best_ki]
+        corrs_cross_trunc = truncated_corrs_all[best_ki]  # (n_folds, n_total_elecs, n_lags)
+        corrs_cross_full, _ = load_all_subject_correlations(output_dir, subjects=subject_ids)
 
-        fig, ax = plt.subplots(figsize=(8, 4))
-        add_corrs(corrs_cross, lags, label=f"k={best_k}", color="steelblue", ax=ax)
-        ax.axhline(0, color="black", linewidth=0.5)
-        ax.set_xlabel("Lag (s)")
-        ax.set_ylabel("Correlation")
-        ax.set_title(f"Cross-subject — k={best_k}")
-        ax.legend()
-        fig.tight_layout()
-        fig.savefig(
-            os.path.join(svd_dir, f"cross_subject_corrs_plot_k{best_k}.png"), dpi=150
+        _save_corrs_plot(
+            corrs_cross_trunc, corrs_cross_full, lags,
+            title="Cross-subject",
+            save_path=os.path.join(svd_dir, f"cross_subject_corrs_plot_k{best_k}.png"),
         )
-        plt.close(fig)
-
         plot_corrs_by_significance(
-            corrs_cross, sig_mask_global, lags,
+            corrs_cross_trunc, sig_mask_global, lags,
             save_path=os.path.join(svd_dir, f"cross_subject_sig_corrs_plot_k{best_k}.png"),
         )
         print(f"Saved cross-subject plots → {svd_dir}/cross_subject_*_k{best_k}.png")

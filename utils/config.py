@@ -43,7 +43,7 @@ class SVDConfig:
     encoding: EncodingConfig = field(default_factory=EncodingConfig)
     output_dir: str | None = None        # Root results dir; auto-generated if None
     svd_output_dir: str | None = None    # Override for SVD subdir; defaults to {output_dir}/svd
-    n_directions: int = 1600             # Max singular vectors to compute
+    n_directions: int | None = None      # Max singular vectors to compute; None → full SVD
     k_values: list[int] = field(
         default_factory=lambda: [1, 2, 5, 10, 20, 50, 100, 200, 400, 800, 1600]
     )
