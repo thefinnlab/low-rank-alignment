@@ -1,0 +1,12 @@
+encoding:
+  data_root: data/
+  model: gpt2xl
+  layer: 24
+  offset: 0
+  subjects: null  # null → all subjects (1–9)
+  run_name: null
+  batch: false
+output_dir: null  # null → auto-generated as results/<model>_layer<layer>_offset<offset>
+n_permutations: 100
+fdr_q: 0.01
+save_weights: false

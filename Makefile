@@ -9,50 +9,39 @@ JOB_NAME ?= "$(PREFIX)-$(USR)-$(DT)"
 # Flip to `python` to run locally instead of submitting to Slurm
 CMD = sbatch --job-name=$(JOB_NAME) submit.sh
 
-# ── Configurable defaults (override on the command line) ──────────────────────
-DATA_ROOT      ?= data/
-OUTPUT_DIR     ?= results/
-LAYER          ?= 24
-N_PERMUTATIONS ?= 5000
-FDR_Q          ?= 0.01
-SUBJECTS       ?=
-
-# ── Helpers ───────────────────────────────────────────────────────────────────
-# Build the --subjects flag only when SUBJECTS is non-empty
-ifdef SUBJECTS
-  SUBJECTS_FLAG = --subjects $(SUBJECTS)
-else
-  SUBJECTS_FLAG =
-endif
+# ── Config defaults (override on the command line) ────────────────────────────
+ENCODING_CONFIG ?= configs/encoding_mid.yml
+SIG_CONFIG      ?= configs/significance_default.yml
+OVERRIDES       ?=   # e.g. OVERRIDES="--encoding.layer=48 --n_permutations=100"
 
 # ── Targets ───────────────────────────────────────────────────────────────────
 
 ## Submit (or run) the full significance pipeline
 ## Usage:
-##   make sig                                         # all subjects, default params
-##   make sig SUBJECTS="1 3 5"                        # specific subjects
-##   make sig N_PERMUTATIONS=100 OUTPUT_DIR=results_test/  # quick test run
-##   make sig CMD=python                              # run locally
+##   make sig                                                      # default config
+##   make sig SIG_CONFIG=configs/significance_fast.yml            # fast config
+##   make sig OVERRIDES="--encoding.subjects=[1,3,5]"             # specific subjects
+##   make sig CMD=python                                           # run locally
 sig:
-	mkdir -p logs $(OUTPUT_DIR)
-	$(CMD) run_significance.py \
-		--data-root $(DATA_ROOT) \
-		--output-dir $(OUTPUT_DIR) \
-		--layer $(LAYER) \
-		--n-permutations $(N_PERMUTATIONS) \
-		--fdr-q $(FDR_Q) \
-		$(SUBJECTS_FLAG)
+	mkdir -p logs
+	$(CMD) scripts/run_significance.py --config $(SIG_CONFIG) $(OVERRIDES)
 
-## Quick smoke-test: 1 subject, 100 permutations, results go to results_test/
+## Train encoding models
+## Usage:
+##   make train                                                    # default config
+##   make train ENCODING_CONFIG=configs/encoding_final.yml        # final layer
+##   make train OVERRIDES="--run_name=my_run"                     # set run name
+##   make train CMD=python                                         # run locally
+train:
+	mkdir -p logs
+	$(CMD) scripts/train_encoding_models.py --config $(ENCODING_CONFIG) $(OVERRIDES)
+
+## Quick smoke-test: 1 subject, 100 permutations
 sig-test:
-	$(MAKE) sig \
-		SUBJECTS=1 \
-		N_PERMUTATIONS=100 \
-		OUTPUT_DIR=results_test/ \
-		CMD=python
+	$(MAKE) sig SIG_CONFIG=configs/significance_fast.yml OVERRIDES="--encoding.subjects=[1]" CMD=python
 
 ## Run tests
 test:
 	python -m pytest tests/ -v
 
-.PHONY: sig sig-test test
+.PHONY: sig train sig-test test
