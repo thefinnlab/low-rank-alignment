@@ -9,4 +9,4 @@ encoding:
 output_dir: null  # null → auto-generated as results/<model>_layer<layer>_offset<offset>
 n_permutations: 5000
 fdr_q: 0.01
-save_weights: false
+save_weights: true
