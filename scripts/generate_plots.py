@@ -16,11 +16,12 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
+import pandas as pd
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from utils.encoding import load_encoding_results, load_all_subject_correlations
-from utils.plotting import add_corrs, plot_corrs_vs_arbitrary
+from utils.plotting import add_corrs, plot_corrs_vs_arbitrary, plot_corrs_by_significance
 
 
 def _subject_dirs(run_dir, subjects=None):
@@ -37,6 +38,33 @@ def _subject_dirs(run_dir, subjects=None):
         (int(os.path.basename(os.path.dirname(p)).split("_")[1]), os.path.dirname(p))
         for p in paths
     ]
+
+
+def _load_sig_mask(run_dir, elec_names, lags):
+    """Build a (n_electrodes, n_lags) boolean sig_mask from significance_detailed.csv.
+
+    Rows are aligned to elec_names order; columns are aligned to lags order.
+    Returns None if the CSV is not present.
+    """
+    csv_path = os.path.join(run_dir, "significance_detailed.csv")
+    if not os.path.exists(csv_path):
+        return None
+
+    df = pd.read_csv(csv_path)
+    n_elecs = len(elec_names)
+    n_lags = len(lags)
+    mask = np.zeros((n_elecs, n_lags), dtype=bool)
+
+    elec_index = {name: i for i, name in enumerate(elec_names)}
+    lag_index = {round(float(l), 8): j for j, l in enumerate(lags)}
+
+    for _, row in df.iterrows():
+        ei = elec_index.get(row["electrode"])
+        li = lag_index.get(round(float(row["lag_sec"]), 8))
+        if ei is not None and li is not None:
+            mask[ei, li] = bool(row["sig"])
+
+    return mask
 
 
 def generate_per_subject_plots(run_dir, subjects=None, force=False):
@@ -70,6 +98,18 @@ def generate_per_subject_plots(run_dir, subjects=None, force=False):
             plt.close(fig)
 
         print(f"  sub_{sub_id}: wrote {save_path}")
+
+        # Significance split plot
+        sig_save_path = os.path.join(sub_dir, "sig_corrs_plot.png")
+        if os.path.exists(sig_save_path) and not force:
+            print(f"  sub_{sub_id}: skip sig plot (already exists)")
+        else:
+            sig_mask = _load_sig_mask(run_dir, results["elec_names"], lags)
+            if sig_mask is not None:
+                plot_corrs_by_significance(corrs, sig_mask, lags, save_path=sig_save_path)
+                print(f"  sub_{sub_id}: wrote {sig_save_path}")
+            else:
+                print(f"  sub_{sub_id}: skip sig plot (no significance_detailed.csv)")
 
 
 def generate_cross_subject_plot(run_dir, subjects=None, force=False):
@@ -116,6 +156,23 @@ def generate_cross_subject_plot(run_dir, subjects=None, force=False):
         plt.close(fig)
 
     print(f"Cross-subject: wrote {save_path}")
+
+    # Cross-subject significance split plot
+    sig_save_path = os.path.join(run_dir, "sig_corrs_plot.png")
+    if os.path.exists(sig_save_path) and not force:
+        print("Cross-subject: skip sig plot (already exists)")
+    else:
+        # Collect all electrode names in the same order as corrs_all
+        all_elec_names = []
+        for _, sub_dir in dirs:
+            r = load_encoding_results(os.path.join(sub_dir, "encoding_results.joblib"))
+            all_elec_names.extend(r["elec_names"])
+        sig_mask = _load_sig_mask(run_dir, all_elec_names, lags)
+        if sig_mask is not None:
+            plot_corrs_by_significance(corrs_all, sig_mask, lags, save_path=sig_save_path)
+            print(f"Cross-subject: wrote {sig_save_path}")
+        else:
+            print("Cross-subject: skip sig plot (no significance_detailed.csv)")
 
 
 def main():
