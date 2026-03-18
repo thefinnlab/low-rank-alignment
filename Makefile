@@ -9,6 +9,8 @@ JOB_NAME ?= "$(PREFIX)-$(USR)-$(DT)"
 # Flip to `python` to run locally instead of submitting to Slurm
 CMD = sbatch --job-name=$(JOB_NAME) submit.sh
 
+export PYTHONPATH := $(CURDIR)
+
 # ── Config defaults (override on the command line) ────────────────────────────
 ENCODING_CONFIG ?= configs/encoding_mid.yml
 SIG_CONFIG      ?= configs/significance_default.yml
