@@ -48,3 +48,4 @@ class SVDConfig:
         default_factory=lambda: [1, 2, 5, 10, 20, 50, 100, 200, 400, 800, 1600]
     )
     threshold: float = 0.95              # Performance retention threshold for best_k
+    per_subject_svd: bool = False        # If True, compute independent SVD per subject

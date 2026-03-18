@@ -11,3 +11,4 @@ svd_output_dir: null
 n_directions: null
 k_values: [1, 2, 5, 10, 20, 50, 100, 200, 400, 800, 1600]
 threshold: 0.95
+per_subject_svd: false
