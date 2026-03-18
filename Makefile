@@ -14,6 +14,8 @@ export PYTHONPATH := $(CURDIR)
 # ── Config defaults (override on the command line) ────────────────────────────
 ENCODING_CONFIG ?= configs/encoding_mid.yml
 SIG_CONFIG      ?= configs/significance_default.yml
+SVD_CONFIG      ?= configs/svd_default.yml
+RUN_DIR         ?=   # required for plots: RUN_DIR=results/my_run
 OVERRIDES       ?=   # e.g. OVERRIDES="--encoding.layer=48 --n_permutations=100"
 
 # ── Targets ───────────────────────────────────────────────────────────────────
@@ -38,6 +40,24 @@ train:
 	mkdir -p logs
 	$(CMD) scripts/train_encoding_models.py --config $(ENCODING_CONFIG) $(OVERRIDES)
 
+## Generate correlation plots for an existing run directory
+## Usage:
+##   make plots RUN_DIR=results/my_run                                # all subjects
+##   make plots RUN_DIR=results/my_run OVERRIDES="--subjects 1 3 5"  # specific subjects
+##   make plots RUN_DIR=results/my_run OVERRIDES="--force"           # overwrite existing
+plots:
+	python scripts/generate_plots.py --run-dir $(RUN_DIR) $(OVERRIDES)
+
+## Run SVD analysis on encoding model weights
+## Usage:
+##   make svd                                                          # default config
+##   make svd SVD_CONFIG=configs/svd_default.yml                      # explicit config
+##   make svd OVERRIDES="--per_subject_svd=true"                      # per-subject mode
+##   make svd CMD=python                                               # run locally
+svd:
+	mkdir -p logs
+	$(CMD) scripts/run_svd_analysis.py --config $(SVD_CONFIG) $(OVERRIDES)
+
 ## Quick smoke-test: 1 subject, 100 permutations
 sig-test:
 	$(MAKE) sig SIG_CONFIG=configs/significance_fast.yml OVERRIDES="--encoding.subjects=[1]" CMD=python
@@ -46,4 +66,4 @@ sig-test:
 test:
 	python -m pytest tests/ -v
 
-.PHONY: sig train sig-test test
+.PHONY: sig train plots svd sig-test test
