@@ -5,6 +5,146 @@ import numpy as np
 import torch
 
 
+def find_dominant_directions(weights, n_directions=None):
+    """Find dominant directions in weight space via SVD.
+
+    Args:
+        weights: (n_folds, n_models, embed_dim) — typically significant electrode-lag weights.
+        n_directions: Maximum number of singular vectors to return. None (default) returns
+            the full SVD (min(n_models, embed_dim) directions).
+
+    Returns:
+        all_U: list of (n_folds,) left singular vector arrays.
+        all_S: list of (n_folds,) singular value arrays, each shape (actual_n_dirs,).
+        all_Vt: list of (n_folds,) right singular vector arrays, each (actual_n_dirs, embed_dim).
+        all_alignments: list of (n_folds,) alignment arrays — how much each weight aligns with
+            each direction.
+
+    Raises:
+        ValueError: If n_models == 0 for any fold.
+    """
+    n_folds, n_models, embed_dim = weights.shape
+    if n_models == 0:
+        raise ValueError("weights has n_models == 0; no significant electrode-lag pairs found.")
+
+    all_U, all_S, all_Vt, all_alignments = [], [], [], []
+
+    for f in range(n_folds):
+        W = weights[f]  # (n_models, embed_dim)
+        norms = np.linalg.norm(W, axis=1, keepdims=True)
+        W_unit = W / np.maximum(norms, 1e-12)
+
+        U, S, Vt = np.linalg.svd(W_unit, full_matrices=False)
+
+        if n_directions is not None:
+            actual_rank = min(n_models, embed_dim)
+            n_dirs = min(n_directions, actual_rank)
+            U = U[:, :n_dirs]
+            S = S[:n_dirs]
+            Vt = Vt[:n_dirs]
+
+        alignments = W[f] @ Vt.T  # (n_models, n_dirs)
+
+        all_U.append(U)
+        all_S.append(S)
+        all_Vt.append(Vt)
+        all_alignments.append(alignments)
+
+    return all_U, all_S, all_Vt, all_alignments
+
+
+def compute_truncated_correlations(
+    coefficients,
+    intercepts,
+    test_idxs,
+    X,
+    Y,
+    n_elecs,
+    n_lags,
+    Vt,
+    k_values,
+    sig_mask,
+):
+    """Evaluate SVD truncation of encoding model weights against full-model performance.
+
+    Args:
+        coefficients: (n_folds, n_elecs, n_lags, n_features) — raw-space weights (absorb_scaler).
+        intercepts: list of (n_elecs * n_lags,) per fold.
+        test_idxs: list of test index arrays per fold.
+        X: (n_words, n_features) embedding matrix.
+        Y: (n_words, n_elecs * n_lags) neural data.
+        n_elecs: number of electrodes.
+        n_lags: number of time lags.
+        Vt: (n_folds, n_directions, n_features) — global SVD right singular vectors.
+        k_values: list[int] — truncation levels to evaluate.
+        sig_mask: (n_elecs, n_lags) bool — significance mask.
+
+    Returns:
+        dict with keys:
+            k_values, full_corrs, truncated_corrs, sig_mask,
+            full_corrs_per_fold, truncated_corrs_per_fold.
+    """
+    n_folds = len(test_idxs)
+    n_features = X.shape[1]
+    n_k = len(k_values)
+
+    full_corrs = np.zeros((n_folds, n_elecs, n_lags))
+    truncated_corrs = np.zeros((n_k, n_folds, n_elecs, n_lags))
+
+    def _pearson_columns(Y_pred, Y_test):
+        """Vectorized Pearson correlation per column. Returns (n_outputs,)."""
+        n = Y_pred.shape[0]
+        Y_pred_z = (Y_pred - Y_pred.mean(axis=0)) / np.maximum(Y_pred.std(axis=0), 1e-12)
+        Y_test_z = (Y_test - Y_test.mean(axis=0)) / np.maximum(Y_test.std(axis=0), 1e-12)
+        return (Y_pred_z * Y_test_z).mean(axis=0)
+
+    for f in range(n_folds):
+        W = coefficients[f].reshape(-1, n_features)  # (n_elecs*n_lags, n_features)
+        X_test = X[test_idxs[f]]
+        Y_test = Y[test_idxs[f]]
+
+        Y_pred_full = X_test @ W.T + intercepts[f]
+        corr_full = _pearson_columns(Y_pred_full, Y_test).reshape(n_elecs, n_lags)
+        full_corrs[f] = corr_full
+
+        for ki, k in enumerate(k_values):
+            basis = Vt[f, :k]  # (k, n_features)
+            W_trunc = (W @ basis.T) @ basis  # (n_elecs*n_lags, n_features)
+            Y_pred_trunc = X_test @ W_trunc.T + intercepts[f]
+            corr_trunc = _pearson_columns(Y_pred_trunc, Y_test).reshape(n_elecs, n_lags)
+            truncated_corrs[ki, f] = corr_trunc
+
+    return {
+        "k_values": np.array(k_values),
+        "full_corrs": full_corrs.mean(axis=0),
+        "truncated_corrs": truncated_corrs.mean(axis=1),
+        "sig_mask": sig_mask,
+        "full_corrs_per_fold": full_corrs,
+        "truncated_corrs_per_fold": truncated_corrs,
+    }
+
+
+def find_best_k(results, threshold=0.95):
+    """Find the smallest k that retains threshold fraction of full-model performance.
+
+    Args:
+        results: dict from compute_truncated_correlations.
+        threshold: fraction of full performance to retain (default 0.95).
+
+    Returns:
+        int: smallest k meeting the threshold, or the largest k if threshold is never met.
+    """
+    sig_mask = results["sig_mask"]
+    full_sig = results["full_corrs"][sig_mask].mean()
+    trunc_sig = np.array([t[sig_mask].mean() for t in results["truncated_corrs"]])
+    ratios = trunc_sig / full_sig
+    passing = np.where(ratios >= threshold)[0]
+    if len(passing) == 0:
+        print(f"Warning: no k reaches {threshold:.0%} of full performance")
+        return int(results["k_values"][-1])
+    return int(results["k_values"][passing[0]])
+
+
 def get_correlation_gpu(array_a, array_b, device=None):
     """
     Compute the full cross-correlation matrix between two feature sets.
