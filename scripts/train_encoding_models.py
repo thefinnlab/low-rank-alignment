@@ -23,12 +23,12 @@ from utils import (
     load_raws,
     train_encoding,
     get_arbitrary_embeddings,
-    absorb_scaler,
+    get_models_coefficients,
     load_embeddings,
     get_ridge_model_constructor,
     build_word_epochs,
-    save_encoding_results,
-    plot_corrs_vs_arbitrary,
+    apply_offset,
+    save_subject_results,
     read_electrode_file,
 )
 
@@ -70,17 +70,6 @@ def parse_args():
 # Script-local helpers
 # ---------------------------------------------------------------------------
 
-def _apply_offset(averaged_embeddings, data, offset):
-    """Apply word offset: trim embeddings and neural data to align them."""
-    n_words = data.shape[0]
-    Y = data.reshape(n_words, -1).astype(np.float32)
-    if offset < 0:
-        return averaged_embeddings[:offset].astype(np.float32), Y[-offset:]
-    elif offset > 0:
-        return averaged_embeddings[offset:].astype(np.float32), Y[:-offset]
-    return averaged_embeddings.astype(np.float32), Y
-
-
 def _train_with_arbitrary(X_arr, Y, n_elecs, n_lags, model_constructor,
                            averaged_embeddings, epochs, df_word, offset):
     """Train real encoding model then null (arbitrary) model on same folds."""
@@ -104,45 +93,6 @@ def _train_with_arbitrary(X_arr, Y, n_elecs, n_lags, model_constructor,
     return corrs, corrs_arb, models, tr_idxs, test_idxs, scalers
 
 
-def _extract_coefficients(models, n_elecs, n_lags):
-    """Extract raw-space coefficients and intercepts via absorb_scaler."""
-    coefficients, intercepts = [], []
-    for fold_model in models:
-        coef, intercept = absorb_scaler(fold_model, n_elecs, n_lags)
-        coefficients.append(coef)
-        intercepts.append(intercept)
-    return coefficients, intercepts
-
-
-def _save_subject(run_name, sub_id, corrs, corrs_arb, coefficients, intercepts,
-                  models, tr_idxs, test_idxs, scalers, elec_names,
-                  offset, layer_int, lags):
-    """Build results dict and write all outputs to subjects/sub_{id}/."""
-    results = {
-        "corrs": corrs,
-        "arb_corrs": corrs_arb,
-        "coefficients": coefficients,
-        "intercepts": intercepts,
-        "models": models,
-        "train_idxs": tr_idxs,
-        "test_idxs": test_idxs,
-        "scalers": scalers,
-        "elec_names": list(elec_names),
-        "subject_id": sub_id,
-        "offset": offset,
-        "layer": layer_int,
-        "lags": lags,
-    }
-    sub_dir = os.path.join(run_name, "subjects", f"sub_{sub_id}")
-    os.makedirs(sub_dir, exist_ok=True)
-    save_encoding_results(results, os.path.join(sub_dir, "encoding_results.joblib"))
-    np.save(os.path.join(sub_dir, "corrs.npy"), corrs)
-    np.save(os.path.join(sub_dir, "arbitrary_corrs.npy"), corrs_arb)
-    plot_corrs_vs_arbitrary(corrs, corrs_arb, lags,
-                            save_path=os.path.join(sub_dir, "corrs_plot.png"))
-    print(f"  Subject {sub_id}: {corrs.shape[1]} electrodes → {sub_dir}")
-
-
 # ---------------------------------------------------------------------------
 # Joint mode
 # ---------------------------------------------------------------------------
@@ -164,13 +114,13 @@ def _run_joint(sig_elecs, aligned_embeddings, df_word,
     lags = np.linspace(-2.0, 2.0, n_lags, endpoint=False)
 
     avg_embs = aligned_embeddings[epochs.selection]
-    X_arr, Y = _apply_offset(avg_embs, datas, offset)
+    X_arr, Y = apply_offset(avg_embs, datas, offset)
 
     print(f"Training joint model: {total_elecs} electrodes, {X_arr.shape[0]} words...")
     corrs, corrs_arb, models, tr_idxs, test_idxs, scalers = _train_with_arbitrary(
         X_arr, Y, total_elecs, n_lags, model_constructor, avg_embs, epochs, df_word, offset
     )
-    coefficients, intercepts = _extract_coefficients(models, total_elecs, n_lags)
+    coefficients, intercepts = get_models_coefficients(models, total_elecs, n_lags, scaled_model=False)
 
     cursor = 0
     for sub_id, raw, n_elecs in zip(sig_elecs.keys(), raws, elec_counts):
@@ -178,9 +128,12 @@ def _run_joint(sig_elecs, aligned_embeddings, df_word,
         cursor += n_elecs
         coef_slices = [c[sl] for c in coefficients]
         int_slices = [i.reshape(total_elecs, n_lags)[sl].ravel() for i in intercepts]
-        _save_subject(run_name, sub_id, corrs[:, sl, :], corrs_arb[:, sl, :],
-                      coef_slices, int_slices, models, tr_idxs, test_idxs,
-                      scalers, raw.ch_names, offset, layer_int, lags)
+        save_subject_results(
+            run_name, sub_id, corrs[:, sl, :],
+            coef_slices, int_slices, models, tr_idxs, test_idxs,
+            scalers, raw.ch_names, offset, layer_int, lags,
+            corrs_arb=corrs_arb[:, sl, :],
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -207,16 +160,19 @@ def _run_batch(sig_elecs, subject_ids, aligned_embeddings, df_word,
         lags = np.linspace(-2.0, 2.0, n_lags, endpoint=False)
 
         avg_embs = aligned_embeddings[epochs.selection]
-        X_arr, Y = _apply_offset(avg_embs, data, offset)
+        X_arr, Y = apply_offset(avg_embs, data, offset)
 
         corrs, corrs_arb, models, tr_idxs, test_idxs, scalers = _train_with_arbitrary(
             X_arr, Y, n_elecs, n_lags, model_constructor, avg_embs, epochs, df_word, offset
         )
-        coefficients, intercepts = _extract_coefficients(models, n_elecs, n_lags)
+        coefficients, intercepts = get_models_coefficients(models, n_elecs, n_lags, scaled_model=False)
 
-        _save_subject(run_name, sub_id, corrs, corrs_arb,
-                      coefficients, intercepts, models, tr_idxs, test_idxs,
-                      scalers, raw.ch_names, offset, layer_int, lags)
+        save_subject_results(
+            run_name, sub_id, corrs,
+            coefficients, intercepts, models, tr_idxs, test_idxs,
+            scalers, raw.ch_names, offset, layer_int, lags,
+            corrs_arb=corrs_arb,
+        )
 
         del raws, raw, epochs, data, X_arr, Y, models, scalers, corrs, corrs_arb
         gc.collect()

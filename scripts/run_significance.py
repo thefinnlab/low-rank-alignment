@@ -24,6 +24,9 @@ from utils import (
     load_embeddings,
     get_ridge_model_constructor,
     build_word_epochs,
+    apply_offset,
+    get_models_coefficients,
+    save_subject_results,
 )
 
 
@@ -44,6 +47,14 @@ def parse_args():
     )
     parser.add_argument("--n-permutations", type=int, default=5000)
     parser.add_argument("--fdr-q", type=float, default=0.01)
+    parser.add_argument(
+        "--offset", type=int, default=0,
+        help="Word offset to apply when aligning embeddings to neural data",
+    )
+    parser.add_argument(
+        "--save-weights", action="store_true",
+        help="If set, save model weights for electrodes with ≥1 significant lag",
+    )
     return parser.parse_args()
 
 
@@ -100,16 +111,11 @@ def main():
         print(f"  Epoch data shape: {data.shape}")
 
         # ------------------------------------------------------------------
-        # c. Align X to epoch selection
-        # ------------------------------------------------------------------
-        X = aligned_embeddings[epochs.selection].astype(np.float32)
-        X = [X, X]  # one per fold
-
-        # ------------------------------------------------------------------
-        # d. Build Y
+        # c. Align X and Y by epoch selection and word offset
         # ------------------------------------------------------------------
         n_words, n_elec, n_lags = data.shape
-        Y = data.reshape(n_words, -1).astype(np.float32)
+        X_arr, Y = apply_offset(aligned_embeddings[epochs.selection], data, args.offset)
+        X = [X_arr, X_arr]  # one per fold
 
         # Update lag_sec based on actual n_lags (in case resampling gives different count)
         actual_lag_sec = np.linspace(-2.0, 2.0, n_lags, endpoint=False)
@@ -146,7 +152,28 @@ def main():
         # shapes: (n_elec, n_lags)
 
         # ------------------------------------------------------------------
-        # h. Collect rows
+        # h. Optionally save weights for significant electrodes
+        # ------------------------------------------------------------------
+        if args.save_weights:
+            sig_elec_indices = np.where(sig.any(axis=1))[0]
+            if len(sig_elec_indices) > 0:
+                coefficients, intercepts = get_models_coefficients(
+                    models, n_elec, n_lags, scaled_model=False
+                )
+                sig_coefs = [c[sig_elec_indices] for c in coefficients]
+                sig_ints = [i.reshape(n_elec, n_lags)[sig_elec_indices].ravel() for i in intercepts]
+                sig_corrs = corrs[:, sig_elec_indices, :]
+                sig_names = [electrode_names[i] for i in sig_elec_indices]
+                save_subject_results(
+                    args.output_dir, bids_sub_id, sig_corrs,
+                    sig_coefs, sig_ints, models, tr_idxs, test_idxs,
+                    scalers, sig_names, args.offset, args.layer,
+                    actual_lag_sec,
+                )
+                del coefficients, intercepts
+
+        # ------------------------------------------------------------------
+        # i. Collect rows
         # ------------------------------------------------------------------
         for elec_idx, elec_name in enumerate(electrode_names):
             for lag_idx in range(n_lags):
@@ -164,7 +191,7 @@ def main():
                 )
 
         # ------------------------------------------------------------------
-        # i. Free memory
+        # j. Free memory
         # ------------------------------------------------------------------
         del raws, raw, epochs, data, X, Y, models, scalers
         del all_predictions, all_targets, sig, p_values, q_values, obs_corrs, corrs

@@ -19,6 +19,8 @@ from utils.encoding import (
     get_ridge_model_constructor,
     save_encoding_results,
     load_encoding_results,
+    apply_offset,
+    save_subject_results,
 )
 from utils.plotting import add_corrs, plot_corrs_vs_arbitrary
 from utils.significance import (
@@ -63,6 +65,8 @@ __all__ = [
     "get_ridge_model_constructor",
     "save_encoding_results",
     "load_encoding_results",
+    "apply_offset",
+    "save_subject_results",
     # plotting
     "add_corrs",
     "plot_corrs_vs_arbitrary",
