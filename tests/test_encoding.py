@@ -374,8 +374,10 @@ class TestLoadAllSubjectCoefficients:
         n_lags = args1["coefficients"][0].shape[1]
         n_feat = args1["coefficients"][0].shape[2]
         coefs_all, intercepts_all, _ = load_all_subject_coefficients(str(output_dir))
+        n_elec1_lags = len(args1["intercepts"][0])
+        n_elec2_lags = len(two_subject_dir[2]["intercepts"][0])
         assert coefs_all.shape == (n_folds, 5, n_lags, n_feat)
-        assert len(intercepts_all) == n_folds
+        assert intercepts_all.shape == (n_folds, n_elec1_lags + n_elec2_lags)
 
     def test_metadata_order(self, two_subject_dir):
         output_dir, args1, args2 = two_subject_dir
@@ -391,8 +393,8 @@ class TestLoadAllSubjectCoefficients:
             np.testing.assert_array_equal(coefs_all[fold_idx, :3], args1["coefficients"][fold_idx])
         # First n_elec1*n_lags entries of intercepts should match sub_1's intercepts
         n_elec1_lags = len(args1["intercepts"][0])
-        for fold_idx, fold_arr in enumerate(intercepts_all):
-            np.testing.assert_array_equal(fold_arr[:n_elec1_lags], args1["intercepts"][fold_idx])
+        for fold_idx in range(intercepts_all.shape[0]):
+            np.testing.assert_array_equal(intercepts_all[fold_idx, :n_elec1_lags], args1["intercepts"][fold_idx])
 
     def test_no_subjects_raises(self, tmp_path):
         with pytest.raises(FileNotFoundError):
@@ -406,5 +408,5 @@ class TestLoadAllSubjectCoefficients:
         assert coefs_all.shape[1] == 2
         for fold_idx in range(coefs_all.shape[0]):
             np.testing.assert_array_equal(coefs_all[fold_idx], args2["coefficients"][fold_idx])
-        for fold_idx, fold_arr in enumerate(intercepts_all):
-            np.testing.assert_array_equal(fold_arr, args2["intercepts"][fold_idx])
+        for fold_idx in range(intercepts_all.shape[0]):
+            np.testing.assert_array_equal(intercepts_all[fold_idx], args2["intercepts"][fold_idx])
