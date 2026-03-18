@@ -5,10 +5,12 @@ import torch
 
 from utils.encoding import (
     absorb_scaler,
+    apply_offset,
     get_all_targets_test_set,
     get_ridge_model_constructor,
     load_encoding_results,
     save_encoding_results,
+    save_subject_results,
 )
 
 
@@ -193,3 +195,86 @@ class TestSaveLoadEncodingResults:
         filepath = str(tmp_path / "output.joblib")
         save_encoding_results({"x": 1}, filepath)
         assert os.path.exists(filepath)
+
+
+# ---------------------------------------------------------------------------
+# apply_offset
+# ---------------------------------------------------------------------------
+
+class TestApplyOffset:
+    def test_zero_offset_unchanged_shape(self):
+        rng = np.random.default_rng(0)
+        embs = rng.standard_normal((20, 10)).astype(np.float32)
+        data = rng.standard_normal((20, 3, 4)).astype(np.float32)
+        X, Y = apply_offset(embs, data, offset=0)
+        assert X.shape == (20, 10)
+        assert Y.shape == (20, 12)
+
+    def test_positive_offset_trims_correctly(self):
+        rng = np.random.default_rng(1)
+        embs = rng.standard_normal((20, 10))
+        data = rng.standard_normal((20, 3, 4))
+        X, Y = apply_offset(embs, data, offset=2)
+        assert X.shape[0] == 18  # embs[2:]
+        assert Y.shape[0] == 18  # data[:-2]
+        assert X.shape[0] == Y.shape[0]
+
+    def test_negative_offset_trims_correctly(self):
+        rng = np.random.default_rng(2)
+        embs = rng.standard_normal((20, 10))
+        data = rng.standard_normal((20, 3, 4))
+        X, Y = apply_offset(embs, data, offset=-2)
+        assert X.shape[0] == 18  # embs[:-2]
+        assert Y.shape[0] == 18  # data[2:]
+        assert X.shape[0] == Y.shape[0]
+
+    def test_output_is_float32(self):
+        rng = np.random.default_rng(3)
+        embs = rng.standard_normal((20, 10)).astype(np.float64)
+        data = rng.standard_normal((20, 3, 4)).astype(np.float64)
+        X, Y = apply_offset(embs, data, offset=1)
+        assert X.dtype == np.float32
+        assert Y.dtype == np.float32
+
+
+# ---------------------------------------------------------------------------
+# save_subject_results
+# ---------------------------------------------------------------------------
+
+class TestSaveSubjectResults:
+    @pytest.fixture()
+    def minimal_args(self):
+        rng = np.random.default_rng(0)
+        n_folds, n_elec, n_lags, n_feat = 2, 4, 3, 5
+        corrs = rng.standard_normal((n_folds, n_elec, n_lags)).astype(np.float32)
+        coefficients = [rng.standard_normal((n_elec, n_lags, n_feat)) for _ in range(n_folds)]
+        intercepts = [rng.standard_normal((n_elec * n_lags,)) for _ in range(n_folds)]
+        lags = np.linspace(-2.0, 2.0, n_lags, endpoint=False)
+        return dict(
+            corrs=corrs,
+            coefficients=coefficients,
+            intercepts=intercepts,
+            models=[None, None],
+            tr_idxs=[np.arange(10), np.arange(10, 20)],
+            test_idxs=[np.arange(10, 20), np.arange(10)],
+            scalers=[None, None],
+            elec_names=[f"E{i}" for i in range(n_elec)],
+            offset=0,
+            layer_int=24,
+            lags=lags,
+        )
+
+    def test_creates_expected_files_without_arb(self, tmp_path, minimal_args):
+        import os
+        save_subject_results(str(tmp_path), sub_id=1, **minimal_args)
+        sub_dir = tmp_path / "subjects" / "sub_1"
+        assert (sub_dir / "encoding_results.joblib").exists()
+        assert (sub_dir / "corrs.npy").exists()
+        assert not (sub_dir / "arbitrary_corrs.npy").exists()
+
+    def test_creates_arb_files_when_provided(self, tmp_path, minimal_args):
+        rng = np.random.default_rng(99)
+        corrs_arb = rng.standard_normal(minimal_args["corrs"].shape).astype(np.float32)
+        save_subject_results(str(tmp_path), sub_id=2, corrs_arb=corrs_arb, **minimal_args)
+        sub_dir = tmp_path / "subjects" / "sub_2"
+        assert (sub_dir / "arbitrary_corrs.npy").exists()

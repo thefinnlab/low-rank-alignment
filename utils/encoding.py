@@ -1,3 +1,5 @@
+import os
+
 import numpy as np
 import torch
 from sklearn.model_selection import KFold
@@ -251,6 +253,88 @@ def load_encoding_results(filepath: str) -> dict:
     """Load results dict previously saved by save_encoding_results."""
     import joblib
     return joblib.load(filepath)
+
+
+def apply_offset(averaged_embeddings, data, offset):
+    """Apply word offset: trim embeddings and neural data to align them.
+
+    Args:
+        averaged_embeddings: Array of shape (n_words, n_features).
+        data: Array of shape (n_words, n_elecs, n_lags) or (n_words, n_elecs*n_lags).
+        offset: Integer word offset. Positive shifts embeddings forward in time;
+                negative shifts them backward.
+
+    Returns:
+        Tuple of (X_arr, Y) both float32 with matching first dimension.
+    """
+    n_words = data.shape[0]
+    if data.ndim == 3:
+        Y = data.reshape(n_words, -1).astype(np.float32)
+    else:
+        Y = data.astype(np.float32)
+    if offset < 0:
+        return averaged_embeddings[:offset].astype(np.float32), Y[-offset:]
+    elif offset > 0:
+        return averaged_embeddings[offset:].astype(np.float32), Y[:-offset]
+    return averaged_embeddings.astype(np.float32), Y
+
+
+def save_subject_results(
+    output_dir, sub_id, corrs, coefficients, intercepts, models,
+    tr_idxs, test_idxs, scalers, elec_names, offset, layer_int, lags,
+    corrs_arb=None,
+):
+    """Build results dict and write outputs to {output_dir}/subjects/sub_{sub_id}/.
+
+    Always writes encoding_results.joblib and corrs.npy.
+    If corrs_arb is not None, also writes arbitrary_corrs.npy and corrs_plot.png.
+
+    Args:
+        output_dir: Root output directory.
+        sub_id: Subject BIDS ID.
+        corrs: Correlation array (n_folds, n_elecs, n_lags).
+        coefficients: List of coefficient arrays, one per fold.
+        intercepts: List of intercept arrays, one per fold.
+        models: List of fitted models.
+        tr_idxs: List of train index arrays.
+        test_idxs: List of test index arrays.
+        scalers: List of fitted StandardScalers.
+        elec_names: Electrode name list.
+        offset: Word offset used during alignment.
+        layer_int: Integer layer index.
+        lags: Lag axis array.
+        corrs_arb: Optional null-model correlation array (same shape as corrs).
+    """
+    from utils.plotting import plot_corrs_vs_arbitrary
+
+    results = {
+        "corrs": corrs,
+        "coefficients": coefficients,
+        "intercepts": intercepts,
+        "models": models,
+        "train_idxs": tr_idxs,
+        "test_idxs": test_idxs,
+        "scalers": scalers,
+        "elec_names": list(elec_names),
+        "subject_id": sub_id,
+        "offset": offset,
+        "layer": layer_int,
+        "lags": lags,
+    }
+    if corrs_arb is not None:
+        results["arb_corrs"] = corrs_arb
+
+    sub_dir = os.path.join(output_dir, "subjects", f"sub_{sub_id}")
+    os.makedirs(sub_dir, exist_ok=True)
+    save_encoding_results(results, os.path.join(sub_dir, "encoding_results.joblib"))
+    np.save(os.path.join(sub_dir, "corrs.npy"), corrs)
+    if corrs_arb is not None:
+        np.save(os.path.join(sub_dir, "arbitrary_corrs.npy"), corrs_arb)
+        plot_corrs_vs_arbitrary(
+            corrs, corrs_arb, lags,
+            save_path=os.path.join(sub_dir, "corrs_plot.png"),
+        )
+    print(f"  Subject {sub_id}: {corrs.shape[1]} electrodes → {sub_dir}")
 
 
 def get_all_predictions_and_targets_test_set(
