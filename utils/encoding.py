@@ -400,7 +400,7 @@ def load_all_subject_coefficients(output_dir: str, subjects=None):
 
     Returns:
         coefficients_all: np.ndarray of shape (n_folds, n_total_elecs, n_lags, n_features).
-        intercepts_all: np.ndarray of shape (n_folds, n_total_elecs * n_lags).
+        intercepts_all: list of np.ndarray, one per fold, each shape (n_total_elecs * n_lags,).
         metadata_df: pd.DataFrame with columns ['subject', 'electrode'], one row per electrode.
 
     Raises:
@@ -419,9 +419,16 @@ def load_all_subject_coefficients(output_dir: str, subjects=None):
         for name in elec_names:
             rows.append({"subject": sub_id, "electrode": name})
 
-    # Stack each subject's fold list into (n_folds, n_elecs, ...), then concatenate on the electrode axis
-    coefficients_all = np.concatenate([np.stack(s) for s in all_subject_coefs], axis=1)
-    intercepts_all = np.concatenate([np.stack(s) for s in all_subject_intercepts], axis=1)
+    n_folds = len(all_subject_coefs[0])
+    # Stack per-fold concatenations into a single (n_folds, n_total_elecs, n_lags, n_features) array
+    coefficients_all = np.stack([
+        np.concatenate([subj_coefs[fold] for subj_coefs in all_subject_coefs], axis=0)
+        for fold in range(n_folds)
+    ])
+    intercepts_all = [
+        np.concatenate([subj_intercepts[fold] for subj_intercepts in all_subject_intercepts], axis=0)
+        for fold in range(n_folds)
+    ]
     metadata_df = pd.DataFrame(rows, columns=["subject", "electrode"])
     return coefficients_all, intercepts_all, metadata_df
 
