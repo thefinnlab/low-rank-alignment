@@ -11,20 +11,9 @@ import argparse
 import gc
 import os
 
-import h5py
-import mne
 import numpy as np
 import pandas as pd
 from himalaya.backend import set_backend
-from sklearn.model_selection import KFold
-from sklearn.pipeline import make_pipeline
-from sklearn.preprocessing import StandardScaler
-
-try:
-    from himalaya.ridge import RidgeCV
-except ImportError:
-    from sklearn.linear_model import RidgeCV
-
 import torch
 
 from utils import (
@@ -32,6 +21,9 @@ from utils import (
     train_encoding,
     get_all_predictions_and_targets_test_set,
     significant_lags_all_electrodes_gpu,
+    load_embeddings,
+    get_ridge_model_constructor,
+    build_word_epochs,
 )
 
 
@@ -53,54 +45,6 @@ def parse_args():
     parser.add_argument("--n-permutations", type=int, default=5000)
     parser.add_argument("--fdr-q", type=float, default=0.01)
     return parser.parse_args()
-
-
-# ---------------------------------------------------------------------------
-# Load embeddings (once)
-# ---------------------------------------------------------------------------
-
-def load_embeddings(data_root, layer):
-    embedding_path = os.path.join(data_root, "stimuli/gpt2-xl/features.hdf5")
-    transcript_path = os.path.join(data_root, "stimuli/gpt2-xl/transcript.tsv")
-
-    print(f"Loading embeddings from {embedding_path} (layer {layer})...")
-    with h5py.File(embedding_path, "r") as f:
-        contextual_embeddings = f[f"layer-{layer}"][...]
-    print(f"  Raw embedding shape: {contextual_embeddings.shape}")
-
-    df_contextual = pd.read_csv(transcript_path, sep="\t", index_col=0)
-
-    # Average token embeddings per word
-    aligned_embeddings = []
-    for _, group in df_contextual.groupby("word_idx"):
-        indices = group.index.to_numpy()
-        aligned_embeddings.append(contextual_embeddings[indices].mean(0))
-    aligned_embeddings = np.stack(aligned_embeddings)
-    print(f"  Aligned embedding shape: {aligned_embeddings.shape}")
-
-    # Build df_word (one row per word)
-    df_word = df_contextual.groupby("word_idx").agg(
-        dict(word="first", start="first", end="last")
-    )
-
-    return aligned_embeddings, df_word
-
-
-# ---------------------------------------------------------------------------
-# Model constructor (mirrors dictionary.py get_ridge_model_constructor)
-# ---------------------------------------------------------------------------
-
-def get_model_constructor():
-    alphas = np.logspace(1, 10, 10)
-    inner_cv = KFold(n_splits=5, shuffle=False)
-
-    def create_model(_):
-        return make_pipeline(
-            StandardScaler(),
-            RidgeCV(alphas, fit_intercept=True, cv=inner_cv),
-        )
-
-    return create_model
 
 
 # ---------------------------------------------------------------------------
@@ -132,7 +76,7 @@ def main():
     #   original sfreq=512 → np.arange(-2*512, 2*512, 1) / 512, then every 16th sample
     lag_sec = np.arange(-2 * 512, 2 * 512, 16) / 512  # length 64
 
-    model_constructor = get_model_constructor()
+    model_constructor = get_ridge_model_constructor()
 
     all_rows = []
 
@@ -152,24 +96,7 @@ def main():
         # ------------------------------------------------------------------
         # b. Build epochs
         # ------------------------------------------------------------------
-        events = np.zeros((len(df_word), 3), dtype=int)
-        events[:, 0] = (df_word["start"].values * raw.info["sfreq"]).astype(int)
-
-        epochs = mne.Epochs(
-            raw,
-            events,
-            tmin=-2.0,
-            tmax=2.0,
-            baseline=None,
-            proj=False,
-            preload=True,
-            event_repeated="merge",
-            verbose=False,
-        )
-        epochs = epochs.resample(
-            sfreq=32, npad="auto", method="fft", window="hamming"
-        )
-        data = epochs.get_data(copy=False)  # (n_words, n_elec, n_lags)
+        epochs, data = build_word_epochs(raw, df_word)
         print(f"  Epoch data shape: {data.shape}")
 
         # ------------------------------------------------------------------

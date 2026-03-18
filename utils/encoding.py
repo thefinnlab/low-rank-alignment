@@ -1,5 +1,8 @@
 import numpy as np
 import torch
+from sklearn.model_selection import KFold
+from sklearn.pipeline import make_pipeline
+from sklearn.preprocessing import StandardScaler
 
 
 def train_encoding(
@@ -213,6 +216,41 @@ def get_all_targets_test_set(test_idxs, Y, num_electrodes, num_lags):
         all_targets.append(Y[test_idx])
     all_targets = np.vstack(all_targets).reshape((Y.shape[0], num_electrodes, num_lags))
     return all_targets
+
+
+def get_ridge_model_constructor():
+    """
+    Return a factory function for StandardScaler + RidgeCV pipelines.
+    Uses alphas = np.logspace(1, 10, 10) and inner 5-fold CV (no shuffle).
+    Compatible with the model_constructor_fn arg of train_encoding().
+    """
+    try:
+        from himalaya.ridge import RidgeCV
+    except ImportError:
+        from sklearn.linear_model import RidgeCV
+
+    alphas = np.logspace(1, 10, 10)
+    inner_cv = KFold(n_splits=5, shuffle=False)
+
+    def create_model(_):
+        return make_pipeline(
+            StandardScaler(),
+            RidgeCV(alphas, fit_intercept=True, cv=inner_cv),
+        )
+
+    return create_model
+
+
+def save_encoding_results(results: dict, filepath: str) -> None:
+    """Persist results dict to disk via joblib.dump."""
+    import joblib
+    joblib.dump(results, filepath)
+
+
+def load_encoding_results(filepath: str) -> dict:
+    """Load results dict previously saved by save_encoding_results."""
+    import joblib
+    return joblib.load(filepath)
 
 
 def get_all_predictions_and_targets_test_set(

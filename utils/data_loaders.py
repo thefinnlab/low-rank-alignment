@@ -223,6 +223,50 @@ def read_electrode_file(
     return sub_elec_mapping
 
 
+def build_word_epochs(
+    raw,
+    df_word: pd.DataFrame,
+    tmin: float = -2.0,
+    tmax: float = 2.0,
+    target_sfreq: float = 32.0,
+) -> tuple:
+    """
+    Build and resample word-locked MNE epochs from a raw recording.
+
+    Args:
+        raw: MNE Raw object.
+        df_word: DataFrame with a 'start' column (word onset times in seconds),
+                 one row per word, indexed by word_idx.
+        tmin: Epoch start relative to word onset (seconds).
+        tmax: Epoch end relative to word onset (seconds).
+        target_sfreq: Resample frequency after epoching (Hz).
+
+    Returns:
+        epochs: MNE Epochs object (resampled).
+        data: np.ndarray of shape (n_words_kept, n_electrodes, n_lags).
+    """
+    import mne
+
+    events = np.zeros((len(df_word), 3), dtype=int)
+    events[:, 0] = (df_word["start"].values * raw.info["sfreq"]).astype(int)
+
+    epochs = mne.Epochs(
+        raw,
+        events,
+        tmin=tmin,
+        tmax=tmax,
+        baseline=None,
+        proj=False,
+        preload=True,
+        event_repeated="merge",
+        verbose=False,
+    )
+    epochs = epochs.resample(
+        sfreq=target_sfreq, npad="auto", method="fft", window="hamming"
+    )
+    return epochs, epochs.get_data(copy=False)
+
+
 def get_arbitrary_embeddings(X, epochs, df_word):
     """
     Assign unique random embeddings per word type, preserving per-word consistency.

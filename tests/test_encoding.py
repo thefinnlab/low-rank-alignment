@@ -3,7 +3,13 @@ import numpy as np
 import pytest
 import torch
 
-from utils.encoding import absorb_scaler, get_all_targets_test_set
+from utils.encoding import (
+    absorb_scaler,
+    get_all_targets_test_set,
+    get_ridge_model_constructor,
+    load_encoding_results,
+    save_encoding_results,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -122,3 +128,68 @@ class TestAbsorbScaler:
             self.pipeline, self.n_electrodes, self.n_lags
         )
         assert raw_intercept.shape == (self.n_electrodes * self.n_lags,)
+
+
+# ---------------------------------------------------------------------------
+# get_ridge_model_constructor
+# ---------------------------------------------------------------------------
+
+class TestGetRidgeModelConstructor:
+    def test_returns_callable(self):
+        constructor = get_ridge_model_constructor()
+        assert callable(constructor)
+
+    def test_callable_produces_pipeline(self):
+        from sklearn.pipeline import Pipeline
+        constructor = get_ridge_model_constructor()
+        model = constructor(0)
+        assert isinstance(model, Pipeline)
+
+    def test_has_standardscaler_step(self):
+        constructor = get_ridge_model_constructor()
+        model = constructor(0)
+        assert "standardscaler" in model.named_steps
+
+    def test_has_ridgecv_step(self):
+        constructor = get_ridge_model_constructor()
+        model = constructor(0)
+        assert "ridgecv" in model.named_steps
+        ridge = model.named_steps["ridgecv"]
+        assert len(ridge.alphas) == 10
+
+    def test_each_call_returns_new_model(self):
+        constructor = get_ridge_model_constructor()
+        assert constructor(0) is not constructor(1)
+
+
+# ---------------------------------------------------------------------------
+# save_encoding_results / load_encoding_results
+# ---------------------------------------------------------------------------
+
+class TestSaveLoadEncodingResults:
+    def test_round_trip_simple_dict(self, tmp_path):
+        results = {"corrs": np.array([1.0, 2.0]), "subject_id": 3, "offset": -1}
+        filepath = str(tmp_path / "results.joblib")
+        save_encoding_results(results, filepath)
+        loaded = load_encoding_results(filepath)
+        np.testing.assert_array_equal(loaded["corrs"], results["corrs"])
+        assert loaded["subject_id"] == results["subject_id"]
+        assert loaded["offset"] == results["offset"]
+
+    def test_round_trip_nested_arrays(self, tmp_path):
+        rng = np.random.default_rng(42)
+        results = {
+            "coefficients": [rng.standard_normal((3, 4, 5)), rng.standard_normal((3, 4, 5))],
+            "intercepts": [rng.standard_normal((12,)), rng.standard_normal((12,))],
+        }
+        filepath = str(tmp_path / "nested.joblib")
+        save_encoding_results(results, filepath)
+        loaded = load_encoding_results(filepath)
+        for orig, restored in zip(results["coefficients"], loaded["coefficients"]):
+            np.testing.assert_array_equal(orig, restored)
+
+    def test_creates_file_on_disk(self, tmp_path):
+        import os
+        filepath = str(tmp_path / "output.joblib")
+        save_encoding_results({"x": 1}, filepath)
+        assert os.path.exists(filepath)
