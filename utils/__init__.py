@@ -6,7 +6,9 @@ from utils.data_loaders import (
     read_subject_mapping,
     read_electrode_file,
     get_arbitrary_embeddings,
+    build_word_epochs,
 )
+from utils.embeddings import load_embeddings
 from utils.encoding import (
     train_encoding,
     get_scaled_model_coefficients,
@@ -14,7 +16,11 @@ from utils.encoding import (
     get_models_coefficients,
     get_all_targets_test_set,
     get_all_predictions_and_targets_test_set,
+    get_ridge_model_constructor,
+    save_encoding_results,
+    load_encoding_results,
 )
+from utils.plotting import add_corrs, plot_corrs_vs_arbitrary
 from utils.significance import (
     batch_corrcoef,
     significant_lags_all_electrodes_gpu,
@@ -44,6 +50,9 @@ __all__ = [
     "read_subject_mapping",
     "read_electrode_file",
     "get_arbitrary_embeddings",
+    "build_word_epochs",
+    # embeddings
+    "load_embeddings",
     # encoding
     "train_encoding",
     "get_scaled_model_coefficients",
@@ -51,6 +60,12 @@ __all__ = [
     "get_models_coefficients",
     "get_all_targets_test_set",
     "get_all_predictions_and_targets_test_set",
+    "get_ridge_model_constructor",
+    "save_encoding_results",
+    "load_encoding_results",
+    # plotting
+    "add_corrs",
+    "plot_corrs_vs_arbitrary",
     # significance
     "batch_corrcoef",
     "significant_lags_all_electrodes_gpu",

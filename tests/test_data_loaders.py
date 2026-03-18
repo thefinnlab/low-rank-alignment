@@ -7,6 +7,7 @@ import pandas as pd
 import pytest
 
 from utils.data_loaders import (
+    build_word_epochs,
     get_arbitrary_embeddings,
     read_electrode_file,
     read_subject_mapping,
@@ -168,3 +169,36 @@ class TestGetArbitraryEmbeddings:
             idxs = [i for i, w in enumerate(words) if w == word]
             for idx in idxs[1:]:
                 np.testing.assert_array_equal(X_arb[idxs[0]], X_arb[idx])
+
+
+# ---------------------------------------------------------------------------
+# build_word_epochs
+# ---------------------------------------------------------------------------
+
+class TestBuildWordEpochs:
+    @pytest.fixture
+    def synthetic_raw(self):
+        mne = pytest.importorskip("mne")
+        sfreq = 512.0
+        n_seconds = 10
+        data = np.random.default_rng(0).standard_normal((1, int(sfreq * n_seconds)))
+        info = mne.create_info(["CH1"], sfreq=sfreq, ch_types=["ecog"])
+        return mne.io.RawArray(data, info, verbose=False)
+
+    @pytest.fixture
+    def df_word_simple(self):
+        return pd.DataFrame({"word": ["a", "b", "c"], "start": [1.0, 3.0, 5.0], "end": [1.1, 3.1, 5.1]})
+
+    def test_returns_tuple_of_two(self, synthetic_raw, df_word_simple):
+        result = build_word_epochs(synthetic_raw, df_word_simple)
+        assert len(result) == 2
+
+    def test_data_shape(self, synthetic_raw, df_word_simple):
+        epochs, data = build_word_epochs(synthetic_raw, df_word_simple)
+        n_words_kept, n_elec, n_lags = data.shape
+        assert n_elec == 1
+        assert n_lags > 0
+
+    def test_resampled_sfreq(self, synthetic_raw, df_word_simple):
+        epochs, _ = build_word_epochs(synthetic_raw, df_word_simple, target_sfreq=32.0)
+        assert int(epochs.info["sfreq"]) == 32
