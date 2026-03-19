@@ -1,6 +1,7 @@
 """Configuration utilities for argument parsing and config overrides."""
 
 import argparse
+import enum
 from copy import deepcopy
 from dataclasses import fields, is_dataclass
 from typing import get_type_hints, get_origin, get_args, Union
@@ -93,6 +94,8 @@ def dict_to_dataclass(d: dict, cls):
         resolved = _resolve_type(hints[f.name])
         if is_dataclass(resolved) and isinstance(value, dict):
             kwargs[f.name] = dict_to_dataclass(value, resolved)
+        elif isinstance(resolved, type) and issubclass(resolved, enum.Enum) and isinstance(value, str):
+            kwargs[f.name] = resolved(value)
         else:
             kwargs[f.name] = value
     return cls(**kwargs)

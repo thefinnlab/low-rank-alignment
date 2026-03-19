@@ -45,7 +45,8 @@ from utils import (
     plot_corrs_by_significance,
     plot_svd_truncation_results,
 )
-from utils.config import SVDConfig, get_results_dir
+from utils.atlas import build_electrode_region_map
+from utils.config import SVDConfig, SVDMode, get_results_dir
 from utils.config_utils import parse_args, load_config
 from utils.encoding import load_encoding_results
 
@@ -192,7 +193,7 @@ def _plot_subject_results(sub_id, subject_dir, corrs_trunc, full_corrs_orig,
 def _evaluate_subject_truncation(
     sub_id, metadata_df, coefficients_all, intercepts_all, sig_mask_global,
     n_total_elecs, n_lags, n_folds, enc, aligned_embeddings, df_word,
-    test_idxs, Vt, k_values,
+    test_idxs, Vt, k_values, electrode_subset=None,
 ):
     """Slice per-subject arrays, load neural data, and compute truncated correlations.
 
@@ -202,6 +203,8 @@ def _evaluate_subject_truncation(
         sig_mask_sub: (n_elecs, n_lags) bool mask for this subject.
     """
     sub_rows = metadata_df.index[metadata_df["subject"] == sub_id].tolist()
+    if electrode_subset is not None:
+        sub_rows = [r for r in sub_rows if metadata_df.loc[r, "electrode"] in set(electrode_subset)]
     sub_elec_names = metadata_df.loc[sub_rows, "electrode"].tolist()
     coefs_sub = coefficients_all[:, sub_rows, :, :]
     ints_sub = [
@@ -416,6 +419,153 @@ def _run_per_subject_svd(
 
 
 # ---------------------------------------------------------------------------
+# Branch: per-region SVD
+# ---------------------------------------------------------------------------
+
+def _run_per_region_svd(
+    config, enc, output_dir, svd_dir, subject_ids,
+    sig_mask_global, coefficients_all, intercepts_all,
+    metadata_df, n_folds, n_total_elecs, n_lags, n_features,
+    aligned_embeddings, df_word,
+):
+    """Compute an independent SVD per atlas region; evaluate per-subject within each region."""
+
+    # -- Pre-load encoding info for all subjects --
+    per_subject_enc = {}
+    lags = None
+    ref_test_idxs = None
+    for sub_id in subject_ids:
+        test_idxs, sub_lags, full_corrs_orig = _load_subject_encoding_info(
+            sub_id, output_dir, n_folds, ref_test_idxs
+        )
+        if ref_test_idxs is None:
+            ref_test_idxs = test_idxs
+        if lags is None:
+            lags = sub_lags
+        per_subject_enc[sub_id] = (test_idxs, sub_lags, full_corrs_orig)
+
+    # -- Build electrode region map --
+    print("Building electrode region map...")
+    electrode_region_map = build_electrode_region_map(
+        subject_ids, enc.data_root, config.atlas_region_groups, config.atlas_path
+    )
+    print(f"  Regions found: {list(electrode_region_map.keys())}")
+
+    # -- Per-region SVD --
+    for region_name, sub_elec_map in electrode_region_map.items():
+        print(f"\n{'='*60}\nRegion: {region_name}")
+
+        region_dir = os.path.join(svd_dir, "regions", region_name)
+        os.makedirs(region_dir, exist_ok=True)
+
+        # Build region_rows in metadata_df order (same order as _evaluate_subject_truncation)
+        region_rows = []
+        for sub_id, elec_list in sub_elec_map.items():
+            elec_set = set(elec_list)
+            for row_i in metadata_df.index[metadata_df["subject"] == sub_id].tolist():
+                if metadata_df.loc[row_i, "electrode"] in elec_set:
+                    region_rows.append(row_i)
+
+        coefs_region = coefficients_all[:, region_rows, :, :]
+        sig_mask_region = sig_mask_global[region_rows]
+
+        n_sig = sig_mask_region.sum()
+        print(f"  Electrodes: {len(region_rows)}, significant pairs: {n_sig}")
+        if n_sig == 0:
+            print(f"  No significant electrode-lag pairs, skipping.")
+            continue
+
+        # -- Region SVD --
+        print(f"  Computing SVD (n_directions={config.n_directions})...")
+        Vt_region, all_U, all_S, all_Vt, all_alignments = _filter_sig_and_svd(
+            coefs_region, sig_mask_region, config.n_directions
+        )
+        actual_n_dirs = Vt_region.shape[1]
+        k_values = [k for k in config.k_values if k <= actual_n_dirs]
+        if not k_values:
+            print(f"  No valid k_values after filtering, skipping.")
+            continue
+
+        _save_svd_decomposition(
+            os.path.join(region_dir, "svd_decomposition.npz"),
+            all_U, all_S, all_Vt, all_alignments,
+        )
+
+        # -- Per-subject evaluation --
+        per_subject_results = {}
+        subs_in_region = list(sub_elec_map.keys())
+        for sub_id in subs_in_region:
+            elec_list = sub_elec_map[sub_id]
+            test_idxs, _, _ = per_subject_enc[sub_id]
+            print(f"  Evaluating subject {sub_id} ({len(elec_list)} electrodes)...")
+            per_subject_results[sub_id], n_elecs, _ = _evaluate_subject_truncation(
+                sub_id, metadata_df, coefficients_all, intercepts_all, sig_mask_global,
+                n_total_elecs, n_lags, n_folds, enc, aligned_embeddings, df_word,
+                test_idxs, Vt=Vt_region, k_values=k_values,
+                electrode_subset=elec_list,
+            )
+            print(f"    n_elecs={n_elecs}")
+
+        # -- Merge across subjects --
+        full_corrs_per_fold = np.concatenate(
+            [per_subject_results[s]["full_corrs_per_fold"] for s in subs_in_region], axis=1
+        )  # (n_folds, n_region_elecs, n_lags)
+        truncated_corrs_all = np.concatenate(
+            [per_subject_results[s]["truncated_corrs_per_fold"] for s in subs_in_region], axis=2
+        )  # (n_k, n_folds, n_region_elecs, n_lags)
+        merged_results = {
+            "k_values": np.array(k_values),
+            "full_corrs": full_corrs_per_fold.mean(0),
+            "truncated_corrs": truncated_corrs_all.mean(1),
+            "sig_mask": sig_mask_region,
+            "full_corrs_per_fold": full_corrs_per_fold,
+            "truncated_corrs_per_fold": truncated_corrs_all,
+        }
+
+        best_k = find_best_k(merged_results, threshold=config.threshold)
+        print(f"  best_k = {best_k}")
+
+        _save_truncation_results(
+            os.path.join(region_dir, "truncation_results.npz"), merged_results, best_k
+        )
+        plot_svd_truncation_results(
+            merged_results, threshold=config.threshold,
+            save_path=os.path.join(region_dir, "truncation_plot.png"),
+        )
+
+        # -- Per-subject plots at best_k --
+        best_ki = int(np.where(np.array(k_values) == best_k)[0][0])
+        offset = 0
+        for sub_id in subs_in_region:
+            sub_dir = os.path.join(region_dir, "subjects", f"sub_{sub_id}")
+            os.makedirs(sub_dir, exist_ok=True)
+
+            n_sub_elecs = per_subject_results[sub_id]["full_corrs_per_fold"].shape[1]
+            corrs_sub = truncated_corrs_all[best_ki, :, offset:offset + n_sub_elecs, :]
+            sub_full_corrs = per_subject_results[sub_id]["full_corrs_per_fold"]
+
+            sub_region_rows = [
+                r for r in metadata_df.index[metadata_df["subject"] == sub_id].tolist()
+                if metadata_df.loc[r, "electrode"] in set(sub_elec_map[sub_id])
+            ]
+            sig_mask_sub = sig_mask_global[sub_region_rows]
+
+            if lags is not None:
+                _plot_subject_results(
+                    sub_id, sub_dir, corrs_sub, sub_full_corrs, sig_mask_sub, lags, best_k
+                )
+            print(f"  sub_{sub_id}: saved to {sub_dir}")
+            offset += n_sub_elecs
+
+        # -- Region-level aggregate plot --
+        if lags is not None:
+            plot_corrs_by_significance(
+                truncated_corrs_all[best_ki], sig_mask_region, lags,
+                save_path=os.path.join(region_dir, f"region_sig_corrs_plot_k{best_k}.png"),
+            )
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
@@ -429,7 +579,9 @@ def main():
 
     if config.svd_output_dir:
         svd_dir = config.svd_output_dir
-    elif config.per_subject_svd:
+    elif config.mode == SVDMode.PER_REGION:
+        svd_dir = os.path.join(output_dir, "per_region_svd")
+    elif config.mode == SVDMode.PER_SUBJECT:
         svd_dir = os.path.join(output_dir, "per_subject_svd")
     else:
         svd_dir = os.path.join(output_dir, "svd")
@@ -437,7 +589,7 @@ def main():
     os.makedirs(svd_dir, exist_ok=True)
     print(f"Output dir:  {output_dir}")
     print(f"SVD dir:     {svd_dir}")
-    print(f"Mode:        {'per-subject' if config.per_subject_svd else 'cross-subject'}")
+    print(f"Mode:        {config.mode.value}")
 
     # -- Load significance CSV --
     sig_csv = os.path.join(output_dir, "significance_detailed.csv")
@@ -475,7 +627,9 @@ def main():
         aligned_embeddings=aligned_embeddings, df_word=df_word,
     )
 
-    if config.per_subject_svd:
+    if config.mode == SVDMode.PER_REGION:
+        _run_per_region_svd(**branch_kwargs)
+    elif config.mode == SVDMode.PER_SUBJECT:
         _run_per_subject_svd(**branch_kwargs)
     else:
         _run_cross_subject_svd(**branch_kwargs)
