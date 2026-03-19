@@ -268,6 +268,39 @@ def group_electrodes_by_region(
     return result
 
 
+def _build_region_map_from_arrays(
+    per_subject_data: dict[int, tuple[list[str], np.ndarray]],
+    atlas_image: np.ndarray,
+    affine: np.ndarray,
+    region_groups: dict[str, list[str]],
+) -> dict[str, dict[int, list[str]]]:
+    """Core region-map computation from pre-loaded arrays — no file I/O.
+
+    Pure function, no I/O. Suitable for unit tests without mocks.
+
+    Args:
+        per_subject_data: {sub_id: (elec_names, coords)} where coords is
+            (n_elecs, 3) MNI coordinates in mm.
+        atlas_image: 3-D integer array (voxel label indices).
+        affine: (4, 4) affine matrix mapping voxel indices to MNI space.
+        region_groups: Mapping of region_name -> list of atlas labels (with hemisphere prefix).
+
+    Returns:
+        {region_name: {sub_id: [elec_names]}} — only subjects/regions with matching
+        electrodes are included.
+    """
+    result: dict[str, dict[int, list[str]]] = {}
+
+    for sub_id, (elec_names, coords) in per_subject_data.items():
+        labels = _lookup_atlas_labels(coords, atlas_image, affine, DESTRIEUX_2009_LABELS)
+        sub_region_map = group_electrodes_by_region(elec_names, labels, region_groups)
+
+        for region_name, elecs in sub_region_map.items():
+            result.setdefault(region_name, {})[sub_id] = elecs
+
+    return result
+
+
 def build_electrode_region_map(
     subject_ids: list[int],
     data_root: str,
@@ -307,8 +340,7 @@ def build_electrode_region_map(
     atlas_image = img.get_fdata().astype(int)
     affine = img.affine
 
-    result: dict[str, dict[int, list[str]]] = {}
-
+    per_subject_data: dict[int, tuple[list[str], np.ndarray]] = {}
     for sub_id in subject_ids:
         file_path = BIDSPath(
             root=os.path.join(data_root, "derivatives/ecogprep"),
@@ -320,14 +352,7 @@ def build_electrode_region_map(
             extension=".fif",
         )
         raw = mne.io.read_raw_fif(file_path, preload=False, verbose=False)
-
         coords = np.array([ch["loc"][:3] * 1000 for ch in raw.info["chs"]])
-        elec_names = raw.ch_names
+        per_subject_data[sub_id] = (raw.ch_names, coords)
 
-        labels = _lookup_atlas_labels(coords, atlas_image, affine, DESTRIEUX_2009_LABELS)
-        sub_region_map = group_electrodes_by_region(elec_names, labels, region_groups)
-
-        for region_name, elecs in sub_region_map.items():
-            result.setdefault(region_name, {})[sub_id] = elecs
-
-    return result
+    return _build_region_map_from_arrays(per_subject_data, atlas_image, affine, region_groups)
