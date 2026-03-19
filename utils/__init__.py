@@ -35,7 +35,12 @@ from utils.encoding import (
     load_all_subject_correlations,
     load_all_subject_coefficients,
 )
-from utils.plotting import add_corrs, plot_corrs_vs_arbitrary, plot_svd_truncation_results
+from utils.plotting import (
+    add_corrs,
+    plot_corrs_vs_arbitrary,
+    plot_svd_truncation_results,
+    plot_corrs_by_significance,
+)
 from utils.significance import (
     batch_corrcoef,
     significant_lags_all_electrodes_gpu,
@@ -101,6 +106,7 @@ __all__ = [
     "add_corrs",
     "plot_corrs_vs_arbitrary",
     "plot_svd_truncation_results",
+    "plot_corrs_by_significance",
     # significance
     "batch_corrcoef",
     "significant_lags_all_electrodes_gpu",

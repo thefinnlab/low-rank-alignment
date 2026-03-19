@@ -1,7 +1,7 @@
 encoding:
   data_root: data/
   model: gpt2xl
-  layer: 48
+  layer: 24
   offset: 0
   subjects: null
   run_name: null

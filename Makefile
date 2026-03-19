@@ -8,6 +8,7 @@ JOB_NAME ?= "$(PREFIX)-$(USR)-$(DT)"
 
 # Flip to `python` to run locally instead of submitting to Slurm
 CMD = sbatch --job-name=$(JOB_NAME) submit.sh
+# CMD = python
 
 export PYTHONPATH := $(CURDIR)
 

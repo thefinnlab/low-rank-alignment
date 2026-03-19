@@ -13,6 +13,7 @@ import sys
 import warnings
 
 import matplotlib
+
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
@@ -21,7 +22,11 @@ import pandas as pd
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from utils.encoding import load_encoding_results, load_all_subject_correlations
-from utils.plotting import add_corrs, plot_corrs_vs_arbitrary, plot_corrs_by_significance
+from utils.plotting import (
+    add_corrs,
+    plot_corrs_vs_arbitrary,
+    plot_corrs_by_significance,
+)
 
 
 def _subject_dirs(run_dir, subjects=None):
@@ -31,7 +36,8 @@ def _subject_dirs(run_dir, subjects=None):
     if subjects is not None:
         subjects_set = set(subjects)
         paths = [
-            p for p in paths
+            p
+            for p in paths
             if int(os.path.basename(os.path.dirname(p)).split("_")[1]) in subjects_set
         ]
     return [
@@ -75,29 +81,29 @@ def generate_per_subject_plots(run_dir, subjects=None, force=False):
 
     for sub_id, sub_dir in dirs:
         save_path = os.path.join(sub_dir, "corrs_plot.png")
-        if os.path.exists(save_path) and not force:
-            print(f"  sub_{sub_id}: skip (already exists, use --force to overwrite)")
-            continue
-
-        results = load_encoding_results(os.path.join(sub_dir, "encoding_results.joblib"))
+        results = load_encoding_results(
+            os.path.join(sub_dir, "encoding_results.joblib")
+        )
         corrs = results["corrs"]
         lags = results["lags"]
         arb_corrs = results.get("arb_corrs")
-
-        if arb_corrs is not None:
-            plot_corrs_vs_arbitrary(corrs, arb_corrs, lags, save_path=save_path)
+        if os.path.exists(save_path) and not force:
+            print(f"  sub_{sub_id}: skip (already exists, use --force to overwrite)")
         else:
-            fig, ax = plt.subplots(figsize=(8, 4))
-            add_corrs(corrs, lags, label="Real", color="blue", ax=ax)
-            ax.axhline(0, color="black", linewidth=0.5)
-            ax.set_xlabel("Lag (s)")
-            ax.set_ylabel("Correlation")
-            ax.legend()
-            fig.tight_layout()
-            fig.savefig(save_path, dpi=150)
-            plt.close(fig)
+            if arb_corrs is not None:
+                plot_corrs_vs_arbitrary(corrs, arb_corrs, lags, save_path=save_path)
+            else:
+                fig, ax = plt.subplots(figsize=(8, 4))
+                add_corrs(corrs, lags, label="Real", color="blue", ax=ax)
+                ax.axhline(0, color="black", linewidth=0.5)
+                ax.set_xlabel("Lag (s)")
+                ax.set_ylabel("Correlation")
+                ax.legend()
+                fig.tight_layout()
+                fig.savefig(save_path, dpi=150)
+                plt.close(fig)
 
-        print(f"  sub_{sub_id}: wrote {save_path}")
+            print(f"  sub_{sub_id}: wrote {save_path}")
 
         # Significance split plot
         sig_save_path = os.path.join(sub_dir, "sig_corrs_plot.png")
@@ -106,7 +112,9 @@ def generate_per_subject_plots(run_dir, subjects=None, force=False):
         else:
             sig_mask = _load_sig_mask(run_dir, results["elec_names"], lags)
             if sig_mask is not None:
-                plot_corrs_by_significance(corrs, sig_mask, lags, save_path=sig_save_path)
+                plot_corrs_by_significance(
+                    corrs, sig_mask, lags, save_path=sig_save_path
+                )
                 print(f"  sub_{sub_id}: wrote {sig_save_path}")
             else:
                 print(f"  sub_{sub_id}: skip sig plot (no significance_detailed.csv)")
@@ -122,7 +130,9 @@ def generate_cross_subject_plot(run_dir, subjects=None, force=False):
 
     # Get lags from first subject
     dirs = _subject_dirs(run_dir, subjects)
-    first_results = load_encoding_results(os.path.join(dirs[0][1], "encoding_results.joblib"))
+    first_results = load_encoding_results(
+        os.path.join(dirs[0][1], "encoding_results.joblib")
+    )
     lags = first_results["lags"]
 
     # Load per-subject arbitrary_corrs.npy if available
@@ -169,19 +179,31 @@ def generate_cross_subject_plot(run_dir, subjects=None, force=False):
             all_elec_names.extend(r["elec_names"])
         sig_mask = _load_sig_mask(run_dir, all_elec_names, lags)
         if sig_mask is not None:
-            plot_corrs_by_significance(corrs_all, sig_mask, lags, save_path=sig_save_path)
+            plot_corrs_by_significance(
+                corrs_all, sig_mask, lags, save_path=sig_save_path
+            )
             print(f"Cross-subject: wrote {sig_save_path}")
         else:
             print("Cross-subject: skip sig plot (no significance_detailed.csv)")
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Generate correlation plots for a run directory.")
-    parser.add_argument("--run-dir", required=True, help="Path to run output directory.")
-    parser.add_argument("--subjects", nargs="+", type=int, default=None,
-                        help="Subject IDs to include (default: all found).")
-    parser.add_argument("--force", action="store_true",
-                        help="Overwrite existing plots.")
+    parser = argparse.ArgumentParser(
+        description="Generate correlation plots for a run directory."
+    )
+    parser.add_argument(
+        "--run-dir", required=True, help="Path to run output directory."
+    )
+    parser.add_argument(
+        "--subjects",
+        nargs="+",
+        type=int,
+        default=None,
+        help="Subject IDs to include (default: all found).",
+    )
+    parser.add_argument(
+        "--force", action="store_true", help="Overwrite existing plots."
+    )
     args = parser.parse_args()
 
     print("Per-subject plots:")
