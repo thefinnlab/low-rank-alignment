@@ -17,6 +17,8 @@ ENCODING_CONFIG ?= configs/encoding_mid.yml
 SIG_CONFIG      ?= configs/significance_default.yml
 SVD_CONFIG      ?= configs/svd_default.yml
 RUN_DIR         ?=   # required for plots: RUN_DIR=results/my_run
+DATA_ROOT       ?= data
+ATLAS_PATH      ?= atlases/destrieux_2009/destrieux2009_rois_lateralized.nii.gz
 OVERRIDES       ?=   # e.g. OVERRIDES="--encoding.layer=48 --n_permutations=100"
 
 # ── Targets ───────────────────────────────────────────────────────────────────
@@ -58,6 +60,12 @@ plots:
 svd:
 	mkdir -p logs
 	$(CMD) scripts/run_svd_analysis.py --config $(SVD_CONFIG) $(OVERRIDES)
+
+## Print out regions where electrode in data are located according to an atlas
+## Usage:
+## make print-regions DATA_ROOT=data RUN_DIR=results/my_run
+print-atlas-regions:
+	python scripts/print_atlas_regions.py --data_root=$(DATA_ROOT) --output_dir=$(RUN_DIR) --atlas_path=$(ATLAS_PATH)
 
 ## Quick smoke-test: 1 subject, 100 permutations
 sig-test:
