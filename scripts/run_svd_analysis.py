@@ -313,7 +313,7 @@ def _run_cross_subject_svd(
         sub_dir = os.path.join(svd_dir, "subjects", f"sub_{sub_id}")
         os.makedirs(sub_dir, exist_ok=True)
         sub_rows = metadata_df.index[metadata_df["subject"] == sub_id].tolist()
-        corrs_sub = truncated_corrs_all[best_ki, :, sub_rows, :]
+        corrs_sub = truncated_corrs_all[best_ki][:, sub_rows, :]
         if lags is not None:
             _plot_subject_results(
                 sub_id, sub_dir, corrs_sub,
