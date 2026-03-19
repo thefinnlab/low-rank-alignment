@@ -85,6 +85,7 @@ Exploratory Jupyter notebooks (not part of the main pipeline):
 | `cluster-extraction.py` | Cluster analysis on neural/embedding data |
 | `dictionary.py` | Word dictionary and vocabulary analysis |
 | `word-analysis.py` | Word-level qualitative analysis |
+| `svd-interpretability.py` | Interactive marimo notebook for SVD direction interpretability, fold consistency, cross-source comparison, and subspace analyses |
 
 ### `processed_data/`
 
