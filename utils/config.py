@@ -2,6 +2,14 @@
 
 import os
 from dataclasses import dataclass, field
+from enum import Enum
+
+
+class SVDMode(str, Enum):
+    """Which SVD branch to run in run_svd_analysis.py."""
+    CROSS_SUBJECT = "cross_subject"
+    PER_SUBJECT = "per_subject"
+    PER_REGION = "per_region"
 
 
 def get_results_dir(model: str, layer: int, offset: int, base_dir: str = "results/") -> str:
@@ -48,4 +56,6 @@ class SVDConfig:
         default_factory=lambda: [1, 2, 5, 10, 20, 50, 100, 200, 400, 800, 1600]
     )
     threshold: float = 0.95              # Performance retention threshold for best_k
-    per_subject_svd: bool = False        # If True, compute independent SVD per subject
+    mode: SVDMode = SVDMode.CROSS_SUBJECT  # Which SVD branch to run
+    atlas_path: str | None = None        # Path to Destrieux 2009 .nii.gz; None = download via nilearn
+    atlas_region_groups: dict | None = None  # Required when mode=per_region

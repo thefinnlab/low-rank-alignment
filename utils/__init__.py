@@ -1,7 +1,7 @@
 # Public API for the utils package.
 # Import the most commonly used functions for convenience.
 
-from utils.config import EncodingConfig, SignificanceConfig, SVDConfig, get_results_dir
+from utils.config import EncodingConfig, SignificanceConfig, SVDConfig, SVDMode, get_results_dir
 from utils.config_utils import (
     parse_override_args,
     get_nested_value,
@@ -59,6 +59,11 @@ from utils.analysis import (
     compute_truncated_correlations,
     find_best_k,
 )
+from utils.atlas import (
+    get_coord_atlas_labels,
+    group_electrodes_by_region,
+    build_electrode_region_map,
+)
 from utils.examples import (
     _make_context,
     _sample,
@@ -72,6 +77,7 @@ __all__ = [
     "EncodingConfig",
     "SignificanceConfig",
     "SVDConfig",
+    "SVDMode",
     "get_results_dir",
     "parse_override_args",
     "get_nested_value",
@@ -123,6 +129,10 @@ __all__ = [
     "find_dominant_directions",
     "compute_truncated_correlations",
     "find_best_k",
+    # atlas
+    "get_coord_atlas_labels",
+    "group_electrodes_by_region",
+    "build_electrode_region_map",
     # examples
     "_make_context",
     "_sample",
