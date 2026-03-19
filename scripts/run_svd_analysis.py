@@ -458,6 +458,16 @@ def _run_per_region_svd(
         region_dir = os.path.join(svd_dir, "regions", region_name)
         os.makedirs(region_dir, exist_ok=True)
 
+        # Filter sub_elec_map to only electrodes present in metadata_df (encoding model output).
+        # build_electrode_region_map reads all raw channels, but some may have been excluded
+        # from the encoding model (e.g. too few words), so we restrict to the intersection.
+        sub_elec_map = {
+            sub_id: [e for e in elecs
+                     if e in set(metadata_df.loc[metadata_df["subject"] == sub_id, "electrode"])]
+            for sub_id, elecs in sub_elec_map.items()
+        }
+        sub_elec_map = {sub_id: elecs for sub_id, elecs in sub_elec_map.items() if elecs}
+
         # Build region_rows in metadata_df order (same order as _evaluate_subject_truncation)
         region_rows = []
         for sub_id, elec_list in sub_elec_map.items():
@@ -557,8 +567,14 @@ def _run_per_region_svd(
             print(f"  sub_{sub_id}: saved to {sub_dir}")
             offset += n_sub_elecs
 
-        # -- Region-level aggregate plot --
+        # -- Region-level aggregate plots --
         if lags is not None:
+            _save_corrs_plot(
+                truncated_corrs_all[best_ki], full_corrs_per_fold, lags,
+                title=f"Region: {region_name}",
+                save_path=os.path.join(region_dir, f"region_corrs_plot_k{best_k}.png"),
+                best_k=best_k,
+            )
             plot_corrs_by_significance(
                 truncated_corrs_all[best_ki], sig_mask_region, lags,
                 save_path=os.path.join(region_dir, f"region_sig_corrs_plot_k{best_k}.png"),
