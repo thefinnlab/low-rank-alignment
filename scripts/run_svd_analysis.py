@@ -189,6 +189,45 @@ def _plot_subject_results(sub_id, subject_dir, corrs_trunc, full_corrs_orig,
     )
 
 
+def _evaluate_subject_truncation(
+    sub_id, metadata_df, coefficients_all, intercepts_all, sig_mask_global,
+    n_total_elecs, n_lags, n_folds, enc, aligned_embeddings, df_word,
+    test_idxs, Vt, k_values,
+):
+    """Slice per-subject arrays, load neural data, and compute truncated correlations.
+
+    Returns:
+        results: dict from compute_truncated_correlations.
+        n_elecs: number of electrodes loaded for this subject.
+        sig_mask_sub: (n_elecs, n_lags) bool mask for this subject.
+    """
+    sub_rows = metadata_df.index[metadata_df["subject"] == sub_id].tolist()
+    sub_elec_names = metadata_df.loc[sub_rows, "electrode"].tolist()
+    coefs_sub = coefficients_all[:, sub_rows, :, :]
+    ints_sub = [
+        intercepts_all[f].reshape(n_total_elecs, n_lags)[sub_rows].ravel()
+        for f in range(n_folds)
+    ]
+    sig_mask_sub = sig_mask_global[sub_rows]
+
+    raws = load_raws([sub_id], enc.data_root, use_high_gamma=True,
+                     per_subject_electrodes={sub_id: sub_elec_names})
+    raw = raws[0]
+    n_elecs = len(raw.ch_names)
+    epochs, data = build_word_epochs(raw, df_word)
+    X_arr, Y = apply_offset(aligned_embeddings[epochs.selection], data, enc.offset)
+
+    results = compute_truncated_correlations(
+        coefficients=coefs_sub, intercepts=ints_sub, test_idxs=test_idxs,
+        X=X_arr, Y=Y, n_elecs=n_elecs, n_lags=n_lags,
+        Vt=Vt, k_values=k_values, sig_mask=sig_mask_sub,
+    )
+    del raws, raw, epochs, data, X_arr, Y
+    gc.collect()
+
+    return results, n_elecs, sig_mask_sub
+
+
 # ---------------------------------------------------------------------------
 # Branch: cross-subject SVD (default)
 # ---------------------------------------------------------------------------
@@ -233,27 +272,13 @@ def _run_cross_subject_svd(
             lags = sub_lags
         per_subject_full_corrs_orig[sub_id] = full_corrs_orig
 
-        sub_rows = metadata_df.index[metadata_df["subject"] == sub_id].tolist()
-        coefs_sub = coefficients_all[:, sub_rows, :, :]
-        ints_sub = [
-            intercepts_all[f].reshape(n_total_elecs, n_lags)[sub_rows].ravel()
-            for f in range(n_folds)
-        ]
-        sig_mask_sub = sig_mask_global[sub_rows]
-
-        raws = load_raws([sub_id], enc.data_root, use_high_gamma=True)
-        raw = raws[0]
-        epochs, data = build_word_epochs(raw, df_word)
-        X_arr, Y = apply_offset(aligned_embeddings[epochs.selection], data, enc.offset)
-
-        print(f"  Evaluating truncation (n_elecs={len(raw.ch_names)})...")
-        per_subject_results[sub_id] = compute_truncated_correlations(
-            coefficients=coefs_sub, intercepts=ints_sub, test_idxs=test_idxs,
-            X=X_arr, Y=Y, n_elecs=len(raw.ch_names), n_lags=n_lags,
-            Vt=Vt_arr, k_values=k_values, sig_mask=sig_mask_sub,
+        print(f"  Evaluating truncation...")
+        per_subject_results[sub_id], n_elecs, _ = _evaluate_subject_truncation(
+            sub_id, metadata_df, coefficients_all, intercepts_all, sig_mask_global,
+            n_total_elecs, n_lags, n_folds, enc, aligned_embeddings, df_word,
+            test_idxs, Vt=Vt_arr, k_values=k_values,
         )
-        del raws, raw, epochs, data, X_arr, Y
-        gc.collect()
+        print(f"  n_elecs={n_elecs}")
 
     # -- Merge across subjects --
     full_corrs_per_fold = np.concatenate(
@@ -338,11 +363,6 @@ def _run_per_subject_svd(
             lags = sub_lags
 
         sub_rows = metadata_df.index[metadata_df["subject"] == sub_id].tolist()
-        coefs_sub = coefficients_all[:, sub_rows, :, :]
-        ints_sub = [
-            intercepts_all[f].reshape(n_total_elecs, n_lags)[sub_rows].ravel()
-            for f in range(n_folds)
-        ]
         sig_mask_sub = sig_mask_global[sub_rows]
 
         if sig_mask_sub.sum() == 0:
@@ -350,6 +370,7 @@ def _run_per_subject_svd(
             continue
 
         # -- Per-subject SVD --
+        coefs_sub = coefficients_all[:, sub_rows, :, :]
         print(f"  Computing per-subject SVD (n_directions={config.n_directions})...")
         Vt_sub, all_U, all_S, all_Vt, all_alignments = _filter_sig_and_svd(
             coefs_sub, sig_mask_sub, config.n_directions
@@ -365,19 +386,13 @@ def _run_per_subject_svd(
         )
 
         # -- Evaluation --
-        raws = load_raws([sub_id], enc.data_root, use_high_gamma=True)
-        raw = raws[0]
-        epochs, data = build_word_epochs(raw, df_word)
-        X_arr, Y = apply_offset(aligned_embeddings[epochs.selection], data, enc.offset)
-
-        print(f"  Evaluating truncation (n_elecs={len(raw.ch_names)}, k_values={k_values})...")
-        results = compute_truncated_correlations(
-            coefficients=coefs_sub, intercepts=ints_sub, test_idxs=test_idxs,
-            X=X_arr, Y=Y, n_elecs=len(raw.ch_names), n_lags=n_lags,
-            Vt=Vt_sub, k_values=k_values, sig_mask=sig_mask_sub,
+        print(f"  Evaluating truncation (k_values={k_values})...")
+        results, n_elecs, sig_mask_sub = _evaluate_subject_truncation(
+            sub_id, metadata_df, coefficients_all, intercepts_all, sig_mask_global,
+            n_total_elecs, n_lags, n_folds, enc, aligned_embeddings, df_word,
+            test_idxs, Vt=Vt_sub, k_values=k_values,
         )
-        del raws, raw, epochs, data, X_arr, Y
-        gc.collect()
+        print(f"  n_elecs={n_elecs}")
 
         best_k = find_best_k(results, threshold=config.threshold)
         print(f"  best_k = {best_k}")
