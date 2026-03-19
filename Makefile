@@ -45,9 +45,11 @@ train:
 
 ## Generate correlation plots for an existing run directory
 ## Usage:
-##   make plots RUN_DIR=results/my_run                                # all subjects
-##   make plots RUN_DIR=results/my_run OVERRIDES="--subjects 1 3 5"  # specific subjects
-##   make plots RUN_DIR=results/my_run OVERRIDES="--force"           # overwrite existing
+##   make plots RUN_DIR=results/my_run                                           # all subjects
+##   make plots RUN_DIR=results/my_run OVERRIDES="--subjects 1 3 5"             # specific subjects
+##   make plots RUN_DIR=results/my_run OVERRIDES="--force"                      # overwrite existing
+##   make plots RUN_DIR=results/my_run OVERRIDES="--threshold 0.90"             # SVD threshold
+##   make plots RUN_DIR=results/my_run OVERRIDES="--svd-modes cross_subject"    # specific SVD mode
 plots:
 	python scripts/generate_plots.py --run-dir $(RUN_DIR) $(OVERRIDES)
 

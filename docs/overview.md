@@ -41,7 +41,7 @@ Main entry points for the pipeline:
 |------|---------|
 | `run_significance.py` | Permutation-test significance per electrode-lag pair; outputs `significance_detailed.csv` and `all_subject_sig.csv` |
 | `train_encoding_models.py` | Trains ridge regression models on significant electrodes; outputs coefficients, correlations, and plots |
-| `generate_plots.py` | Generates or regenerates correlation plots from existing run results |
+| `generate_plots.py` | Generates or regenerates correlation plots from existing run results; supports backfilling SVD plots for cross_subject, per_subject, and per_region modes (auto-detected or via `--svd-modes`) |
 | `run_svd_analysis.py` | SVD decomposition of encoding weights; evaluates truncation at various k values and selects optimal k |
 
 ### `utils/`

@@ -248,6 +248,37 @@ def add_corrs(corrs, lags, electrode=None, label=None, color="black", ax=None, l
     ax.fill_between(lags, mean - sem, mean + sem, alpha=0.2, color=color)
 
 
+def plot_svd_corrs(corrs_trunc, full_corrs, lags, title, save_path, best_k):
+    """Plot SVD-truncated vs full-model correlations and save.
+
+    Args:
+        corrs_trunc: (n_folds, n_electrodes, n_lags) truncated-model correlations.
+        full_corrs: (n_folds, n_electrodes, n_lags) full-model correlations.
+        lags: 1-D array of lag values (seconds).
+        title: figure title string.
+        save_path: if given, save figure here; otherwise call plt.show().
+        best_k: number of SVD components used (for legend label).
+    """
+    import matplotlib.pyplot as plt
+
+    fig, ax = plt.subplots(figsize=(8, 4))
+    add_corrs(full_corrs, lags, label="Full model", color="blue", ax=ax)
+    add_corrs(corrs_trunc, lags, label=f"SVD k={best_k}", color="steelblue",
+              linestyle="--", ax=ax)
+    ax.axhline(0, color="black", linewidth=0.5)
+    ax.set_xlabel("Lag (s)")
+    ax.set_ylabel("Correlation")
+    ax.set_title(title)
+    ax.legend()
+    fig.tight_layout()
+
+    if save_path is not None:
+        fig.savefig(save_path, dpi=150)
+        plt.close(fig)
+    else:
+        plt.show()
+
+
 def plot_corrs_vs_arbitrary(corrs, corrs_arb, lags, save_path=None):
     """
     Plot real encoding correlations (blue) vs arbitrary null (red).
