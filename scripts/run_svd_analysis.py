@@ -27,7 +27,6 @@ import os
 
 import matplotlib
 matplotlib.use("Agg")
-import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
@@ -41,9 +40,9 @@ from utils import (
     find_dominant_directions,
     compute_truncated_correlations,
     find_best_k,
-    add_corrs,
     plot_corrs_by_significance,
     plot_svd_truncation_results,
+    plot_svd_corrs,
 )
 from utils.atlas import build_electrode_region_map
 from utils.config import SVDConfig, SVDMode, get_results_dir
@@ -158,27 +157,11 @@ def _save_truncation_results(path, results, best_k):
     )
 
 
-def _save_corrs_plot(corrs_trunc, full_corrs_orig, lags, title, save_path, best_k):
-    """Plot SVD-truncated vs full-model correlations on the same axes and save."""
-    fig, ax = plt.subplots(figsize=(8, 4))
-    add_corrs(full_corrs_orig, lags, label="Full model", color="blue", ax=ax)
-    add_corrs(corrs_trunc, lags, label=f"SVD k={best_k}", color="steelblue",
-              linestyle="--", ax=ax)
-    ax.axhline(0, color="black", linewidth=0.5)
-    ax.set_xlabel("Lag (s)")
-    ax.set_ylabel("Correlation")
-    ax.set_title(title)
-    ax.legend()
-    fig.tight_layout()
-    fig.savefig(save_path, dpi=150)
-    plt.close(fig)
-
-
 def _plot_subject_results(sub_id, subject_dir, corrs_trunc, full_corrs_orig,
                           sig_mask_sub, lags, best_k):
     """Save per-subject corrs.npy and generate correlation plots."""
     np.save(os.path.join(subject_dir, f"corrs_k{best_k}.npy"), corrs_trunc)
-    _save_corrs_plot(
+    plot_svd_corrs(
         corrs_trunc, full_corrs_orig, lags,
         title=f"Subject {sub_id}",
         save_path=os.path.join(subject_dir, f"corrs_plot_k{best_k}.png"),
@@ -328,7 +311,7 @@ def _run_cross_subject_svd(
     # -- Cross-subject output plots --
     if lags is not None:
         corrs_cross_full, _ = load_all_subject_correlations(output_dir, subjects=subject_ids)
-        _save_corrs_plot(
+        plot_svd_corrs(
             truncated_corrs_all[best_ki], corrs_cross_full, lags,
             title="Cross-subject",
             save_path=os.path.join(svd_dir, f"cross_subject_corrs_plot_k{best_k}.png"),
@@ -569,7 +552,7 @@ def _run_per_region_svd(
 
         # -- Region-level aggregate plots --
         if lags is not None:
-            _save_corrs_plot(
+            plot_svd_corrs(
                 truncated_corrs_all[best_ki], full_corrs_per_fold, lags,
                 title=f"Region: {region_name}",
                 save_path=os.path.join(region_dir, f"region_corrs_plot_k{best_k}.png"),

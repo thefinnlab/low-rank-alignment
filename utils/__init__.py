@@ -40,6 +40,7 @@ from utils.plotting import (
     plot_corrs_vs_arbitrary,
     plot_svd_truncation_results,
     plot_corrs_by_significance,
+    plot_svd_corrs,
 )
 from utils.significance import (
     batch_corrcoef,
@@ -113,6 +114,7 @@ __all__ = [
     "plot_corrs_vs_arbitrary",
     "plot_svd_truncation_results",
     "plot_corrs_by_significance",
+    "plot_svd_corrs",
     # significance
     "batch_corrcoef",
     "significant_lags_all_electrodes_gpu",
