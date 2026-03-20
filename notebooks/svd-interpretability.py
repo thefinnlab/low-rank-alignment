@@ -946,11 +946,12 @@ def _(mo, source_options):
     s4d_source_b = mo.ui.dropdown(options=source_options, value=source_options[0], label="Source B")
     s4d_fold_b = mo.ui.dropdown(options=_fold_opts_4d, value="fold 0", label="Fold B")
     s4d_topk = mo.ui.slider(start=5, stop=50, value=20, step=5, label="Top-k")
+    s4d_n_perm = mo.ui.slider(start=100, stop=1000, value=500, step=100, label="N permutations")
     mo.vstack([
         mo.hstack([s4d_source_a, s4d_fold_a, s4d_source_b, s4d_fold_b]),
-        s4d_topk,
+        mo.hstack([s4d_topk, s4d_n_perm]),
     ])
-    return s4d_fold_a, s4d_fold_b, s4d_source_a, s4d_source_b, s4d_topk
+    return s4d_fold_a, s4d_fold_b, s4d_n_perm, s4d_source_a, s4d_source_b, s4d_topk
 
 
 @app.cell
@@ -963,6 +964,7 @@ def _(
     pd,
     s4d_fold_a,
     s4d_fold_b,
+    s4d_n_perm,
     s4d_source_a,
     s4d_source_b,
     s4d_topk,
@@ -979,6 +981,17 @@ def _(
     _sigma = np.clip(_sigma, -1, 1)
     _principal_angles = np.arccos(_sigma) * 180 / np.pi
     _overlap_score = float(np.mean(_sigma ** 2))
+
+    # Permutation null: shuffle features (columns) of Vt_b_k
+    _rng = np.random.default_rng(42)
+    _n_perm = int(s4d_n_perm.value)
+    _n_feat = _Vt_b_k.shape[1]
+    _null_scores = np.zeros(_n_perm)
+    for _perm_i in range(_n_perm):
+        _Vt_b_perm = _Vt_b_k[:, _rng.permutation(_n_feat)]
+        _, _s_perm, _ = np.linalg.svd(_Vt_a_k @ _Vt_b_perm.T)
+        _null_scores[_perm_i] = float(np.mean(np.clip(_s_perm, -1, 1) ** 2))
+    _p_val = ((_null_scores >= _overlap_score).sum() + 1) / (_n_perm + 1)
 
     _pa_df = pd.DataFrame({
         "index": np.arange(len(_principal_angles)),
@@ -1009,13 +1022,592 @@ def _(
         .configure_view(strokeWidth=0)
         .configure_axis(grid=False)
     )
+
+    # Null distribution histogram with observed value rule
+    _null_df = pd.DataFrame({"null_score": _null_scores})
+    _null_hist = (
+        alt.Chart(_null_df)
+        .mark_bar(color="#d1d5db")
+        .encode(
+            x=alt.X("null_score:Q", bin=alt.Bin(maxbins=40), title="Overlap score (null)"),
+            y=alt.Y("count():Q", title="Count"),
+        )
+    )
+    _obs_rule = (
+        alt.Chart(pd.DataFrame({"x": [_overlap_score]}))
+        .mark_rule(color="#10b981", strokeWidth=2)
+        .encode(x="x:Q")
+    )
+    _null_chart = (
+        (_null_hist + _obs_rule)
+        .properties(
+            width="container",
+            height=180,
+            title=f"Null distribution (N={_n_perm}) — observed (green line) p = {_p_val:.4f}",
+        )
+        .configure_view(strokeWidth=0)
+        .configure_axis(grid=False)
+    )
+
+    _sig_kind = "success" if _p_val < 0.05 else "warn"
     mo.vstack([
         mo.callout(
-            mo.md(f"**Subspace overlap score** (mean σ²): **{_overlap_score:.4f}** — 1.0 = identical subspaces, 0.0 = orthogonal"),
-            kind="info",
+            mo.md(f"**Subspace overlap score** (mean σ²): **{_overlap_score:.4f}** — p = {_p_val:.4f} (permutation, N={_n_perm})"),
+            kind=_sig_kind,
         ),
         mo.ui.altair_chart(_pa_chart),
+        mo.ui.altair_chart(_null_chart),
     ])
+    return
+
+
+# --- 4E: Paired Activation Correlation (Significance) ---
+
+
+@app.cell
+def _(mo):
+    mo.md("### 4E: Paired Activation Correlation (Permutation Significance)")
+    return
+
+
+@app.cell
+def _(mo, source_options):
+    _fold_opts_4e = ["fold 0", "fold 1", "average"]
+    s4e_source_a = mo.ui.dropdown(options=source_options, value=source_options[0], label="Source A")
+    s4e_fold_a = mo.ui.dropdown(options=_fold_opts_4e, value="fold 0", label="Fold A")
+    s4e_source_b = mo.ui.dropdown(options=source_options, value=source_options[0], label="Source B")
+    s4e_fold_b = mo.ui.dropdown(options=_fold_opts_4e, value="fold 0", label="Fold B")
+    s4e_topk = mo.ui.slider(start=5, stop=30, value=10, step=5, label="Top-k")
+    s4e_n_perm = mo.ui.slider(start=100, stop=1000, value=500, step=100, label="N permutations")
+    mo.vstack([
+        mo.hstack([s4e_source_a, s4e_fold_a, s4e_source_b, s4e_fold_b]),
+        mo.hstack([s4e_topk, s4e_n_perm]),
+    ])
+    return s4e_fold_a, s4e_fold_b, s4e_n_perm, s4e_source_a, s4e_source_b, s4e_topk
+
+
+@app.cell
+def _(
+    aligned_embeddings,
+    alt,
+    get_vt,
+    load_svd,
+    mo,
+    np,
+    pd,
+    s4e_fold_a,
+    s4e_fold_b,
+    s4e_n_perm,
+    s4e_source_a,
+    s4e_source_b,
+    s4e_topk,
+):
+    _svd_a = load_svd(s4e_source_a.value)
+    _svd_b = load_svd(s4e_source_b.value)
+    _Vt_a, _ = get_vt(_svd_a, s4e_fold_a.value)
+    _Vt_b, _ = get_vt(_svd_b, s4e_fold_b.value)
+    _k = min(s4e_topk.value, len(_Vt_a), len(_Vt_b))
+    _Vt_a_k = _Vt_a[:_k]
+    _Vt_b_k = _Vt_b[:_k]
+
+    # Project embeddings onto each set of directions: (n_tokens, k)
+    _X_a = aligned_embeddings @ _Vt_a_k.T
+    _X_b = aligned_embeddings @ _Vt_b_k.T
+
+    # Z-score columns so dot-product mean == Pearson r
+    _X_a_z = (_X_a - _X_a.mean(0)) / (_X_a.std(0) + 1e-8)
+    _X_b_z = (_X_b - _X_b.mean(0)) / (_X_b.std(0) + 1e-8)
+
+    # Observed paired Pearson r for each direction i
+    _obs_r = (_X_a_z * _X_b_z).mean(0)  # (k,)
+
+    # Permutation null: shuffle column order of B
+    _rng = np.random.default_rng(42)
+    _n_perm = int(s4e_n_perm.value)
+    _null = np.zeros((_n_perm, _k))
+    for _perm_i in range(_n_perm):
+        _perm_idx = _rng.permutation(_k)
+        _null[_perm_i] = (_X_a_z * _X_b_z[:, _perm_idx]).mean(0)
+
+    # One-sided p-values on |r|
+    _obs_abs = np.abs(_obs_r)
+    _null_abs = np.abs(_null)
+    _p_vals = ((_null_abs >= _obs_abs[np.newaxis, :]).sum(0) + 1) / (_n_perm + 1)
+
+    # BH FDR correction
+    _sorted_idx = np.argsort(_p_vals)
+    _ranks = np.empty_like(_sorted_idx)
+    _ranks[_sorted_idx] = np.arange(1, _k + 1)
+    _p_fdr = np.minimum(1.0, _p_vals * _k / _ranks)
+    _p_fdr_mono = np.minimum.accumulate(_p_fdr[_sorted_idx][::-1])[::-1]
+    _p_fdr_final = np.empty(_k)
+    _p_fdr_final[_sorted_idx] = _p_fdr_mono
+
+    _sig_df = pd.DataFrame({
+        "direction": np.arange(_k),
+        "obs_pearson_r": np.round(_obs_r, 4),
+        "p_val": np.round(_p_vals, 5),
+        "neg_log10_p_fdr": np.round(-np.log10(_p_fdr_final + 1e-10), 3),
+    })
+
+    _threshold = -np.log10(0.05)
+    _scatter = (
+        alt.Chart(_sig_df)
+        .mark_point(size=80, filled=True)
+        .encode(
+            x=alt.X("direction:O", title="Direction"),
+            y=alt.Y("neg_log10_p_fdr:Q", title="-log10(p_FDR)"),
+            color=alt.Color(
+                "neg_log10_p_fdr:Q",
+                scale=alt.Scale(scheme="blues"),
+                legend=None,
+            ),
+            tooltip=[
+                alt.Tooltip("direction:O"),
+                alt.Tooltip("obs_pearson_r:Q", title="Observed Pearson r", format=".3f"),
+                alt.Tooltip("neg_log10_p_fdr:Q", title="-log10(p_FDR)", format=".2f"),
+            ],
+        )
+    )
+    _threshold_rule = (
+        alt.Chart(pd.DataFrame({"y": [_threshold]}))
+        .mark_rule(color="#ef4444", strokeDash=[4, 4])
+        .encode(y="y:Q")
+    )
+    _perm_chart = (
+        (_scatter + _threshold_rule)
+        .properties(
+            width="container",
+            height=300,
+            title=f"Activation correlation significance (N={_n_perm}, dashed = p_FDR=0.05)",
+        )
+        .configure_view(strokeWidth=0)
+        .configure_axis(grid=False)
+    )
+    mo.vstack([
+        mo.ui.altair_chart(_perm_chart),
+        mo.ui.table(_sig_df),
+    ])
+    return
+
+
+# --- 4F: CCA of Activation Subspaces ---
+
+
+@app.cell
+def _(mo):
+    mo.md("### 4F: CCA of Activation Subspaces (Canonical Correlations)")
+    return
+
+
+@app.cell
+def _(mo, source_options):
+    _fold_opts_4f = ["fold 0", "fold 1", "average"]
+    s4f_source_a = mo.ui.dropdown(options=source_options, value=source_options[0], label="Source A")
+    s4f_fold_a = mo.ui.dropdown(options=_fold_opts_4f, value="fold 0", label="Fold A")
+    s4f_source_b = mo.ui.dropdown(options=source_options, value=source_options[0], label="Source B")
+    s4f_fold_b = mo.ui.dropdown(options=_fold_opts_4f, value="fold 0", label="Fold B")
+    s4f_topk = mo.ui.slider(start=5, stop=50, value=20, step=5, label="Top-k")
+    s4f_n_perm = mo.ui.slider(start=100, stop=1000, value=500, step=100, label="N permutations")
+    mo.vstack([
+        mo.hstack([s4f_source_a, s4f_fold_a, s4f_source_b, s4f_fold_b]),
+        mo.hstack([s4f_topk, s4f_n_perm]),
+    ])
+    return s4f_fold_a, s4f_fold_b, s4f_n_perm, s4f_source_a, s4f_source_b, s4f_topk
+
+
+@app.cell
+def _(
+    aligned_embeddings,
+    alt,
+    get_vt,
+    load_svd,
+    mo,
+    np,
+    pd,
+    s4f_fold_a,
+    s4f_fold_b,
+    s4f_n_perm,
+    s4f_source_a,
+    s4f_source_b,
+    s4f_topk,
+):
+    _svd_a = load_svd(s4f_source_a.value)
+    _svd_b = load_svd(s4f_source_b.value)
+    _Vt_a, _ = get_vt(_svd_a, s4f_fold_a.value)
+    _Vt_b, _ = get_vt(_svd_b, s4f_fold_b.value)
+    _k = min(s4f_topk.value, len(_Vt_a), len(_Vt_b))
+    _Vt_a_k = _Vt_a[:_k]
+    _Vt_b_k = _Vt_b[:_k]
+
+    # Project embeddings onto each subspace: (n_tokens, k)
+    _X_a = aligned_embeddings @ _Vt_a_k.T
+    _X_b = aligned_embeddings @ _Vt_b_k.T
+
+    # Center
+    _X_a = _X_a - _X_a.mean(0)
+    _X_b = _X_b - _X_b.mean(0)
+
+    # CCA via QR: canonical correlations = singular values of Q_a.T @ Q_b
+    _Qa, _ = np.linalg.qr(_X_a)
+    _Qb, _ = np.linalg.qr(_X_b)
+    _, _canon_corrs, _ = np.linalg.svd(_Qa.T @ _Qb)
+    _canon_corrs = np.clip(_canon_corrs, 0, 1)
+    _cca_score = float(np.mean(_canon_corrs))
+
+    # Permutation null: shuffle tokens (rows) of X_b to break activation correspondence
+    _rng = np.random.default_rng(42)
+    _n_perm = int(s4f_n_perm.value)
+    _n_tokens = _X_b.shape[0]
+    _null_cca = np.zeros(_n_perm)
+    for _perm_i in range(_n_perm):
+        _Qb_perm, _ = np.linalg.qr(_X_b[_rng.permutation(_n_tokens)])
+        _, _s_perm, _ = np.linalg.svd(_Qa.T @ _Qb_perm)
+        _null_cca[_perm_i] = float(np.mean(np.clip(_s_perm, 0, 1)))
+    _p_val = ((_null_cca >= _cca_score).sum() + 1) / (_n_perm + 1)
+
+    _cca_df = pd.DataFrame({
+        "index": np.arange(len(_canon_corrs)),
+        "canonical_correlation": np.round(_canon_corrs, 4),
+    })
+    _cca_chart = (
+        alt.Chart(_cca_df)
+        .mark_bar(color="#93c5fd")
+        .encode(
+            x=alt.X("index:O", title="Canonical component index"),
+            y=alt.Y(
+                "canonical_correlation:Q",
+                title="Canonical correlation",
+                scale=alt.Scale(domain=[0, 1]),
+            ),
+            tooltip=[
+                alt.Tooltip("index:O"),
+                alt.Tooltip("canonical_correlation:Q", title="Canonical r", format=".4f"),
+            ],
+        )
+        .properties(
+            width="container",
+            height=280,
+            title=f"CCA of activation subspaces (1.0 = identical, 0.0 = orthogonal) — mean r: {_cca_score:.4f}",
+        )
+        .configure_view(strokeWidth=0)
+        .configure_axis(grid=False)
+    )
+
+    # Null distribution histogram with observed value rule
+    _null_df = pd.DataFrame({"null_cca": _null_cca})
+    _null_hist = (
+        alt.Chart(_null_df)
+        .mark_bar(color="#d1d5db")
+        .encode(
+            x=alt.X("null_cca:Q", bin=alt.Bin(maxbins=40), title="Mean canonical r (null)"),
+            y=alt.Y("count():Q", title="Count"),
+        )
+    )
+    _obs_rule = (
+        alt.Chart(pd.DataFrame({"x": [_cca_score]}))
+        .mark_rule(color="#3b82f6", strokeWidth=2)
+        .encode(x="x:Q")
+    )
+    _null_chart = (
+        (_null_hist + _obs_rule)
+        .properties(
+            width="container",
+            height=180,
+            title=f"Null distribution (N={_n_perm}) — observed (blue line) p = {_p_val:.4f}",
+        )
+        .configure_view(strokeWidth=0)
+        .configure_axis(grid=False)
+    )
+
+    _sig_kind = "success" if _p_val < 0.05 else "warn"
+    mo.vstack([
+        mo.callout(
+            mo.md(f"**Mean canonical correlation**: **{_cca_score:.4f}** — p = {_p_val:.4f} (permutation, N={_n_perm})"),
+            kind=_sig_kind,
+        ),
+        mo.ui.altair_chart(_cca_chart),
+        mo.ui.altair_chart(_null_chart),
+    ])
+    return
+
+
+# --- 4G: Pairwise Subspace Overlap Heatmap ---
+
+
+@app.cell
+def _(mo):
+    mo.md("### 4G: Pairwise Subspace Overlap Heatmap")
+    return
+
+
+@app.cell
+def _(mo, source_options):
+    _fold_opts_4g = ["fold 0", "fold 1", "average"]
+    s4g_sources = mo.ui.multiselect(
+        options=source_options,
+        value=source_options[:min(3, len(source_options))],
+        label="Sources to compare",
+    )
+    s4g_fold = mo.ui.dropdown(options=_fold_opts_4g, value="fold 0", label="Fold")
+    s4g_topk = mo.ui.slider(start=5, stop=50, value=20, step=5, label="Top-k")
+    s4g_n_perm = mo.ui.slider(start=100, stop=500, value=200, step=100, label="N permutations")
+    mo.vstack([
+        s4g_sources,
+        mo.hstack([s4g_fold, s4g_topk, s4g_n_perm]),
+    ])
+    return s4g_fold, s4g_n_perm, s4g_sources, s4g_topk
+
+
+@app.cell
+def _(
+    alt,
+    get_vt,
+    load_svd,
+    mo,
+    np,
+    pd,
+    s4g_fold,
+    s4g_n_perm,
+    s4g_sources,
+    s4g_topk,
+):
+    mo.stop(
+        len(s4g_sources.value) < 2,
+        mo.callout(mo.md("Select at least 2 sources to compare."), kind="warn"),
+    )
+
+    _sources = s4g_sources.value
+    _fold = s4g_fold.value
+    _k_max = s4g_topk.value
+    _n_perm = int(s4g_n_perm.value)
+
+    # Short display labels (last path component)
+    _labels = {src: src.split("/")[-1] for src in _sources}
+
+    # Load all Vt matrices up-front
+    _vt_cache = {}
+    for _src in _sources:
+        _Vt, _ = get_vt(load_svd(_src), _fold)
+        _vt_cache[_src] = _Vt
+
+    _rng = np.random.default_rng(42)
+    _rows = []
+    for _src_a in _sources:
+        for _src_b in _sources:
+            _Vt_a = _vt_cache[_src_a]
+            _Vt_b = _vt_cache[_src_b]
+            _ki = min(_k_max, len(_Vt_a), len(_Vt_b))
+            _Vt_a_k = _Vt_a[:_ki]
+            _Vt_b_k = _Vt_b[:_ki]
+
+            _, _sigma, _ = np.linalg.svd(_Vt_a_k @ _Vt_b_k.T)
+            _sigma = np.clip(_sigma, -1, 1)
+            _score = float(np.mean(_sigma ** 2))
+
+            if _src_a == _src_b:
+                _p_text = "—"
+            else:
+                _n_feat = _Vt_b_k.shape[1]
+                _null = np.zeros(_n_perm)
+                for _pi in range(_n_perm):
+                    _Vt_b_perm = _Vt_b_k[:, _rng.permutation(_n_feat)]
+                    _, _s_perm, _ = np.linalg.svd(_Vt_a_k @ _Vt_b_perm.T)
+                    _null[_pi] = float(np.mean(np.clip(_s_perm, -1, 1) ** 2))
+                _p_val = ((_null >= _score).sum() + 1) / (_n_perm + 1)
+                _p_text = f"p={_p_val:.3f}"
+
+            _rows.append({
+                "source_a": _labels[_src_a],
+                "source_b": _labels[_src_b],
+                "score": round(_score, 4),
+                "p_text": _p_text,
+            })
+
+    _hm_df = pd.DataFrame(_rows)
+    _label_order = [_labels[s] for s in _sources]
+
+    _rect = (
+        alt.Chart(_hm_df)
+        .mark_rect()
+        .encode(
+            x=alt.X("source_b:N", sort=_label_order, title=None),
+            y=alt.Y("source_a:N", sort=_label_order, title=None),
+            color=alt.Color(
+                "score:Q",
+                scale=alt.Scale(scheme="viridis", domain=[0, 1]),
+                title="Overlap score",
+            ),
+            tooltip=[
+                alt.Tooltip("source_a:N", title="Source A"),
+                alt.Tooltip("source_b:N", title="Source B"),
+                alt.Tooltip("score:Q", title="Overlap score", format=".4f"),
+                alt.Tooltip("p_text:N", title="p-value"),
+            ],
+        )
+    )
+    _text = (
+        alt.Chart(_hm_df)
+        .mark_text(fontSize=11)
+        .encode(
+            x=alt.X("source_b:N", sort=_label_order),
+            y=alt.Y("source_a:N", sort=_label_order),
+            text=alt.Text("p_text:N"),
+            color=alt.value("white"),
+        )
+    )
+    _hm_chart = (
+        (_rect + _text)
+        .properties(
+            width="container",
+            height=400,
+            title=f"Pairwise subspace overlap (mean σ², top-{_k_max} dirs, {_fold})",
+        )
+        .configure_view(strokeWidth=0)
+        .configure_axis(labelLimit=200)
+    )
+    mo.ui.altair_chart(_hm_chart)
+    return
+
+
+# --- 4H: Pairwise CCA Heatmap ---
+
+
+@app.cell
+def _(mo):
+    mo.md("### 4H: Pairwise CCA Heatmap")
+    return
+
+
+@app.cell
+def _(mo, source_options):
+    _fold_opts_4h = ["fold 0", "fold 1", "average"]
+    s4h_sources = mo.ui.multiselect(
+        options=source_options,
+        value=source_options[:min(3, len(source_options))],
+        label="Sources to compare",
+    )
+    s4h_fold = mo.ui.dropdown(options=_fold_opts_4h, value="fold 0", label="Fold")
+    s4h_topk = mo.ui.slider(start=5, stop=50, value=20, step=5, label="Top-k")
+    s4h_n_perm = mo.ui.slider(start=100, stop=500, value=200, step=100, label="N permutations")
+    mo.vstack([
+        s4h_sources,
+        mo.hstack([s4h_fold, s4h_topk, s4h_n_perm]),
+    ])
+    return s4h_fold, s4h_n_perm, s4h_sources, s4h_topk
+
+
+@app.cell
+def _(
+    aligned_embeddings,
+    alt,
+    get_vt,
+    load_svd,
+    mo,
+    np,
+    pd,
+    s4h_fold,
+    s4h_n_perm,
+    s4h_sources,
+    s4h_topk,
+):
+    mo.stop(
+        len(s4h_sources.value) < 2,
+        mo.callout(mo.md("Select at least 2 sources to compare."), kind="warn"),
+    )
+
+    _sources = s4h_sources.value
+    _fold = s4h_fold.value
+    _k_max = s4h_topk.value
+    _n_perm = int(s4h_n_perm.value)
+
+    _labels = {src: src.split("/")[-1] for src in _sources}
+
+    # Pre-compute centered projections and QR factors for each source
+    _proj_cache = {}
+    _qr_cache = {}
+    for _src in _sources:
+        _Vt, _ = get_vt(load_svd(_src), _fold)
+        _ki = min(_k_max, len(_Vt))
+        _X = aligned_embeddings @ _Vt[:_ki].T
+        _X = _X - _X.mean(0)
+        _proj_cache[_src] = _X
+        _Q, _ = np.linalg.qr(_X)
+        _qr_cache[_src] = _Q
+
+    _rng = np.random.default_rng(42)
+    _rows = []
+    for _src_a in _sources:
+        for _src_b in _sources:
+            _Qa = _qr_cache[_src_a]
+            _Qb = _qr_cache[_src_b]
+            _, _cc, _ = np.linalg.svd(_Qa.T @ _Qb)
+            _cc = np.clip(_cc, 0, 1)
+            _score = float(np.mean(_cc))
+
+            if _src_a == _src_b:
+                _p_text = "—"
+            else:
+                _X_b = _proj_cache[_src_b]
+                _n_tokens = _X_b.shape[0]
+                _null = np.zeros(_n_perm)
+                for _pi in range(_n_perm):
+                    _Qb_perm, _ = np.linalg.qr(_X_b[_rng.permutation(_n_tokens)])
+                    _, _s_perm, _ = np.linalg.svd(_Qa.T @ _Qb_perm)
+                    _null[_pi] = float(np.mean(np.clip(_s_perm, 0, 1)))
+                _p_val = ((_null >= _score).sum() + 1) / (_n_perm + 1)
+                _p_text = f"p={_p_val:.3f}"
+
+            _rows.append({
+                "source_a": _labels[_src_a],
+                "source_b": _labels[_src_b],
+                "score": round(_score, 4),
+                "p_text": _p_text,
+            })
+
+    _hm_df = pd.DataFrame(_rows)
+    _label_order = [_labels[s] for s in _sources]
+
+    _rect = (
+        alt.Chart(_hm_df)
+        .mark_rect()
+        .encode(
+            x=alt.X("source_b:N", sort=_label_order, title=None),
+            y=alt.Y("source_a:N", sort=_label_order, title=None),
+            color=alt.Color(
+                "score:Q",
+                scale=alt.Scale(scheme="blues", domain=[0, 1]),
+                title="Mean canonical r",
+            ),
+            tooltip=[
+                alt.Tooltip("source_a:N", title="Source A"),
+                alt.Tooltip("source_b:N", title="Source B"),
+                alt.Tooltip("score:Q", title="Mean canonical r", format=".4f"),
+                alt.Tooltip("p_text:N", title="p-value"),
+            ],
+        )
+    )
+    _text = (
+        alt.Chart(_hm_df)
+        .mark_text(fontSize=11)
+        .encode(
+            x=alt.X("source_b:N", sort=_label_order),
+            y=alt.Y("source_a:N", sort=_label_order),
+            text=alt.Text("p_text:N"),
+            color=alt.value("white"),
+        )
+    )
+    _hm_chart = (
+        (_rect + _text)
+        .properties(
+            width="container",
+            height=400,
+            title=f"Pairwise CCA (mean canonical r, top-{_k_max} dirs, {_fold})",
+        )
+        .configure_view(strokeWidth=0)
+        .configure_axis(labelLimit=200)
+    )
+    mo.ui.altair_chart(_hm_chart)
     return
 
 
