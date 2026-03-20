@@ -1351,12 +1351,11 @@ def _(mo, source_options):
     )
     s4g_fold = mo.ui.dropdown(options=_fold_opts_4g, value="fold 0", label="Fold")
     s4g_topk = mo.ui.slider(start=5, stop=50, value=20, step=5, label="Top-k")
-    s4g_n_perm = mo.ui.slider(start=100, stop=500, value=200, step=100, label="N permutations")
     mo.vstack([
         s4g_sources,
-        mo.hstack([s4g_fold, s4g_topk, s4g_n_perm]),
+        mo.hstack([s4g_fold, s4g_topk]),
     ])
-    return s4g_fold, s4g_n_perm, s4g_sources, s4g_topk
+    return s4g_fold, s4g_sources, s4g_topk
 
 
 @app.cell
@@ -1368,7 +1367,6 @@ def _(
     np,
     pd,
     s4g_fold,
-    s4g_n_perm,
     s4g_sources,
     s4g_topk,
 ):
@@ -1380,7 +1378,6 @@ def _(
     _sources = s4g_sources.value
     _fold = s4g_fold.value
     _k_max = s4g_topk.value
-    _n_perm = int(s4g_n_perm.value)
 
     # Short display labels (last path component)
     _labels = {src: src.split("/")[-1] for src in _sources}
@@ -1391,7 +1388,6 @@ def _(
         _Vt, _ = get_vt(load_svd(_src), _fold)
         _vt_cache[_src] = _Vt
 
-    _rng = np.random.default_rng(42)
     _rows = []
     for _src_a in _sources:
         for _src_b in _sources:
@@ -1405,29 +1401,16 @@ def _(
             _sigma = np.clip(_sigma, -1, 1)
             _score = float(np.mean(_sigma ** 2))
 
-            if _src_a == _src_b:
-                _p_text = "—"
-            else:
-                _n_feat = _Vt_b_k.shape[1]
-                _null = np.zeros(_n_perm)
-                for _pi in range(_n_perm):
-                    _Vt_b_perm = _Vt_b_k[:, _rng.permutation(_n_feat)]
-                    _, _s_perm, _ = np.linalg.svd(_Vt_a_k @ _Vt_b_perm.T)
-                    _null[_pi] = float(np.mean(np.clip(_s_perm, -1, 1) ** 2))
-                _p_val = ((_null >= _score).sum() + 1) / (_n_perm + 1)
-                _p_text = f"p={_p_val:.3f}"
-
             _rows.append({
                 "source_a": _labels[_src_a],
                 "source_b": _labels[_src_b],
                 "score": round(_score, 4),
-                "p_text": _p_text,
             })
 
     _hm_df = pd.DataFrame(_rows)
     _label_order = [_labels[s] for s in _sources]
 
-    _rect = (
+    _hm_chart = (
         alt.Chart(_hm_df)
         .mark_rect()
         .encode(
@@ -1442,22 +1425,8 @@ def _(
                 alt.Tooltip("source_a:N", title="Source A"),
                 alt.Tooltip("source_b:N", title="Source B"),
                 alt.Tooltip("score:Q", title="Overlap score", format=".4f"),
-                alt.Tooltip("p_text:N", title="p-value"),
             ],
         )
-    )
-    _text = (
-        alt.Chart(_hm_df)
-        .mark_text(fontSize=11)
-        .encode(
-            x=alt.X("source_b:N", sort=_label_order),
-            y=alt.Y("source_a:N", sort=_label_order),
-            text=alt.Text("p_text:N"),
-            color=alt.value("white"),
-        )
-    )
-    _hm_chart = (
-        (_rect + _text)
         .properties(
             width="container",
             height=400,
@@ -1489,12 +1458,11 @@ def _(mo, source_options):
     )
     s4h_fold = mo.ui.dropdown(options=_fold_opts_4h, value="fold 0", label="Fold")
     s4h_topk = mo.ui.slider(start=5, stop=50, value=20, step=5, label="Top-k")
-    s4h_n_perm = mo.ui.slider(start=100, stop=500, value=200, step=100, label="N permutations")
     mo.vstack([
         s4h_sources,
-        mo.hstack([s4h_fold, s4h_topk, s4h_n_perm]),
+        mo.hstack([s4h_fold, s4h_topk]),
     ])
-    return s4h_fold, s4h_n_perm, s4h_sources, s4h_topk
+    return s4h_fold, s4h_sources, s4h_topk
 
 
 @app.cell
@@ -1507,7 +1475,6 @@ def _(
     np,
     pd,
     s4h_fold,
-    s4h_n_perm,
     s4h_sources,
     s4h_topk,
 ):
@@ -1519,23 +1486,19 @@ def _(
     _sources = s4h_sources.value
     _fold = s4h_fold.value
     _k_max = s4h_topk.value
-    _n_perm = int(s4h_n_perm.value)
 
     _labels = {src: src.split("/")[-1] for src in _sources}
 
     # Pre-compute centered projections and QR factors for each source
-    _proj_cache = {}
     _qr_cache = {}
     for _src in _sources:
         _Vt, _ = get_vt(load_svd(_src), _fold)
         _ki = min(_k_max, len(_Vt))
         _X = aligned_embeddings @ _Vt[:_ki].T
         _X = _X - _X.mean(0)
-        _proj_cache[_src] = _X
         _Q, _ = np.linalg.qr(_X)
         _qr_cache[_src] = _Q
 
-    _rng = np.random.default_rng(42)
     _rows = []
     for _src_a in _sources:
         for _src_b in _sources:
@@ -1545,30 +1508,16 @@ def _(
             _cc = np.clip(_cc, 0, 1)
             _score = float(np.mean(_cc))
 
-            if _src_a == _src_b:
-                _p_text = "—"
-            else:
-                _X_b = _proj_cache[_src_b]
-                _n_tokens = _X_b.shape[0]
-                _null = np.zeros(_n_perm)
-                for _pi in range(_n_perm):
-                    _Qb_perm, _ = np.linalg.qr(_X_b[_rng.permutation(_n_tokens)])
-                    _, _s_perm, _ = np.linalg.svd(_Qa.T @ _Qb_perm)
-                    _null[_pi] = float(np.mean(np.clip(_s_perm, 0, 1)))
-                _p_val = ((_null >= _score).sum() + 1) / (_n_perm + 1)
-                _p_text = f"p={_p_val:.3f}"
-
             _rows.append({
                 "source_a": _labels[_src_a],
                 "source_b": _labels[_src_b],
                 "score": round(_score, 4),
-                "p_text": _p_text,
             })
 
     _hm_df = pd.DataFrame(_rows)
     _label_order = [_labels[s] for s in _sources]
 
-    _rect = (
+    _hm_chart = (
         alt.Chart(_hm_df)
         .mark_rect()
         .encode(
@@ -1583,22 +1532,8 @@ def _(
                 alt.Tooltip("source_a:N", title="Source A"),
                 alt.Tooltip("source_b:N", title="Source B"),
                 alt.Tooltip("score:Q", title="Mean canonical r", format=".4f"),
-                alt.Tooltip("p_text:N", title="p-value"),
             ],
         )
-    )
-    _text = (
-        alt.Chart(_hm_df)
-        .mark_text(fontSize=11)
-        .encode(
-            x=alt.X("source_b:N", sort=_label_order),
-            y=alt.Y("source_a:N", sort=_label_order),
-            text=alt.Text("p_text:N"),
-            color=alt.value("white"),
-        )
-    )
-    _hm_chart = (
-        (_rect + _text)
         .properties(
             width="container",
             height=400,
