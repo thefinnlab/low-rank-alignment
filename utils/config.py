@@ -59,3 +59,46 @@ class SVDConfig:
     mode: SVDMode = SVDMode.CROSS_SUBJECT  # Which SVD branch to run
     atlas_path: str | None = None        # Path to Destrieux 2009 .nii.gz; None = download via nilearn
     atlas_region_groups: dict | None = None  # Required when mode=per_region
+
+
+@dataclass
+class SRRRConfig:
+    """Parameters for Sparse Reduced Rank Regression analysis (run_srrr.py).
+
+    Reads SVD decompositions written by run_svd_analysis.py and finds the
+    minimal subset of SVD directions that captures all significant encoding
+    variance, via stability selection and a statistical sufficiency test.
+
+    Mode → SVD input / SRRR output directory mapping (default, overridable via srrr_output_dir):
+        cross_subject : SVD in {output_dir}/svd/,               SRRR in {output_dir}/srrr/
+        per_subject   : SVD in {output_dir}/per_subject_svd/,   SRRR in {output_dir}/per_subject_srrr/
+        per_region    : SVD in {output_dir}/per_region_svd/,    SRRR in {output_dir}/per_region_srrr/
+    """
+
+    encoding: EncodingConfig = field(default_factory=EncodingConfig)
+    output_dir: str | None = None         # Root results dir; auto from model/layer/offset if None
+    srrr_output_dir: str | None = None    # Override for SRRR root subdir; default depends on mode
+    mode: SVDMode = SVDMode.CROSS_SUBJECT # Which SVD outputs to read (mirrors SVDConfig.mode)
+
+    # Model grid
+    rank_grid: list[int] = field(default_factory=lambda: [1, 2, 5, 10, 20, 50])
+    lambda_grid: list[float] = field(default_factory=lambda: [1e-4, 1e-3, 1e-2, 1e-1, 1.0, 10.0])
+
+    # ProxGD
+    max_iter: int = 500
+    tol: float = 1e-5
+    learning_rate: float = 1e-3
+    warm_start: bool = True               # Carry A,B weights as initial values across lambda grid
+
+    # Stability selection
+    n_stability_iters: int = 100
+    subsample_fraction: float = 0.8
+    selection_threshold: float = 0.8     # Min P_i to include direction in minimal model
+
+    # Sufficiency test
+    n_permutations: int = 5000
+    p_value_threshold: float = 0.05      # 95th percentile noise floor
+    cache_null_dist: bool = True
+
+    # Analysis
+    knee_sensitivity: float = 1.0        # Kneedle sensitivity parameter
