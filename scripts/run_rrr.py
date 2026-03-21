@@ -131,18 +131,20 @@ def _run_rrr_for_unit(
                 null_r2=None,
                 model_constructor_fn=get_ridge_model_constructor,
             )
-            cca_sim = compute_cca_similarity(Y_hat_full, Y_hat_rrr)
-            proc_sim = compute_procrustes_similarity(Y_hat_full, Y_hat_rrr)
+            cca_sim = compute_cca_similarity(Y_hat_full, Y_hat_rrr) if config.compute_cca else None
+            proc_sim = compute_procrustes_similarity(Y_hat_full, Y_hat_rrr) if config.compute_procrustes else None
 
             metrics = {
                 "full_r2": suf["full_r2"],
                 "minimal_r2": suf["minimal_r2"],
                 "recovery_r2": suf["recovery_r2"],
-                "cca_similarity": cca_sim,
-                "procrustes_similarity": proc_sim,
                 "fold": fold_f,
                 "k": k,
             }
+            if cca_sim is not None:
+                metrics["cca_similarity"] = cca_sim
+            if proc_sim is not None:
+                metrics["procrustes_similarity"] = proc_sim
             save_rrr_result(rrr_unit_dir, k=k, fold=fold_f, A=A, B=B, metrics=metrics)
             all_rows.append(metrics)
 
@@ -151,18 +153,13 @@ def _run_rrr_for_unit(
     df = pd.DataFrame(all_rows)
     df.to_csv(os.path.join(rrr_unit_dir, "grid_results.csv"), index=False)
 
-    # Summary: average over folds
-    summary = (
-        df.groupby("k")
-        .agg(
-            full_r2=("full_r2", "mean"),
-            minimal_r2=("minimal_r2", "mean"),
-            recovery_r2=("recovery_r2", "mean"),
-            cca_similarity=("cca_similarity", "mean"),
-            procrustes_similarity=("procrustes_similarity", "mean"),
-        )
-        .reset_index()
-    )
+    # Summary: average over folds (only include columns that were computed)
+    agg_cols = ["full_r2", "minimal_r2", "recovery_r2"]
+    if config.compute_cca:
+        agg_cols.append("cca_similarity")
+    if config.compute_procrustes:
+        agg_cols.append("procrustes_similarity")
+    summary = df.groupby("k")[agg_cols].mean().reset_index()
     summary.to_csv(os.path.join(rrr_unit_dir, "summary.csv"), index=False)
 
     return df

@@ -195,18 +195,20 @@ def _run_srrr_for_unit(
                 p_value_threshold=config.p_value_threshold,
                 model_constructor_fn=get_ridge_model_constructor,
             )
-            cca_sim = compute_cca_similarity(Y_hat_full, Y_hat_min)
-            proc_sim = compute_procrustes_similarity(Y_hat_full, Y_hat_min)
+            cca_sim = compute_cca_similarity(Y_hat_full, Y_hat_min) if config.compute_cca else None
+            proc_sim = compute_procrustes_similarity(Y_hat_full, Y_hat_min) if config.compute_procrustes else None
 
             metrics = {
                 **suf,
-                "cca_similarity": cca_sim,
-                "procrustes_similarity": proc_sim,
                 "n_selected": len(selected_idx),
                 "fold": fold_f,
                 "k": k,
                 "lam": lam,
             }
+            if cca_sim is not None:
+                metrics["cca_similarity"] = cca_sim
+            if proc_sim is not None:
+                metrics["procrustes_similarity"] = proc_sim
             save_srrr_result(
                 srrr_unit_dir, k=k, lam=lam, fold=fold_f,
                 selection_probs=sel_probs,
@@ -223,20 +225,14 @@ def _run_srrr_for_unit(
     df = pd.DataFrame(all_rows)
     df.to_csv(os.path.join(srrr_unit_dir, "grid_results.csv"), index=False)
 
-    # Summary: average over folds
-    summary = (
-        df.groupby(["k", "lam"])
-        .agg(
-            minimal_r2=("minimal_r2", "mean"),
-            full_r2=("full_r2", "mean"),
-            recovery_r2=("recovery_r2", "mean"),
-            sufficient_frac=("sufficient", "mean"),
-            n_selected=("n_selected", "mean"),
-            cca_similarity=("cca_similarity", "mean"),
-            procrustes_similarity=("procrustes_similarity", "mean"),
-        )
-        .reset_index()
-    )
+    # Summary: average over folds (only include columns that were computed)
+    agg_cols = ["minimal_r2", "full_r2", "recovery_r2", "sufficient", "n_selected"]
+    if config.compute_cca:
+        agg_cols.append("cca_similarity")
+    if config.compute_procrustes:
+        agg_cols.append("procrustes_similarity")
+    summary = df.groupby(["k", "lam"])[agg_cols].mean().reset_index()
+    summary = summary.rename(columns={"sufficient": "sufficient_frac"})
     summary.to_csv(os.path.join(srrr_unit_dir, "summary.csv"), index=False)
 
     # Knee selection: for each k, find the knee lambda by minimal_r2 vs lambda

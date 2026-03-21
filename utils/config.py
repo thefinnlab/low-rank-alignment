@@ -83,6 +83,10 @@ class RRRConfig:
     # Rank sweep
     rank_grid: list[int] = field(default_factory=lambda: [1, 2, 5, 10, 20, 50])
 
+    # Optional metrics (expensive; disabled by default to speed up rank sweeps)
+    compute_cca: bool = False
+    compute_procrustes: bool = False
+
 
 @dataclass
 class SRRRConfig:
@@ -125,3 +129,7 @@ class SRRRConfig:
 
     # Analysis
     knee_sensitivity: float = 1.0        # Kneedle sensitivity parameter
+
+    # Optional metrics (expensive; disabled by default to speed up grid sweeps)
+    compute_cca: bool = False
+    compute_procrustes: bool = False
