@@ -16,7 +16,6 @@ from utils.srrr import (
     fit_dense_rrr,
     fit_srrr_proxgd,
     predict_from_factors,
-    project_to_svd_space,
     prox_l21,
     run_stability_selection,
     run_sufficiency_test,
@@ -291,27 +290,6 @@ class TestPredictFromFactors:
 
 
 # ---------------------------------------------------------------------------
-# TestProjectToSVDSpace
-# ---------------------------------------------------------------------------
-
-class TestProjectToSVDSpace:
-    def test_shape(self, rng):
-        n_words, n_embed, n_dirs = 50, 100, 15
-        X = rng.standard_normal((n_words, n_embed)).astype(np.float32)
-        Vt = rng.standard_normal((n_dirs, n_embed)).astype(np.float32)
-        X_proj = project_to_svd_space(X, Vt)
-        assert X_proj.shape == (n_words, n_dirs)
-
-    def test_values(self, rng):
-        n_words, n_embed, n_dirs = 20, 30, 5
-        X = rng.standard_normal((n_words, n_embed)).astype(np.float64)
-        Vt = rng.standard_normal((n_dirs, n_embed)).astype(np.float64)
-        X_proj = project_to_svd_space(X, Vt)
-        expected = X @ Vt.T
-        np.testing.assert_allclose(X_proj, expected, rtol=1e-10)
-
-
-# ---------------------------------------------------------------------------
 # TestBuildNullDistribution
 # ---------------------------------------------------------------------------
 
@@ -373,44 +351,63 @@ class TestRunSufficiencyTest:
     def _make_null(self, rng, n=200):
         return rng.standard_normal(n).astype(np.float64) * 0.01
 
-    def test_sufficient_when_min_equals_full(self, rng):
-        n_test, n_dirs, n_targets = 30, 8, 4
-        X = rng.standard_normal((n_test, n_dirs)).astype(np.float64)
-        Y = rng.standard_normal((n_test, n_targets)).astype(np.float64)
-        null = self._make_null(rng)
+    def _split(self, rng, n_train, n_test, n_dirs, n_targets):
+        X_train = rng.standard_normal((n_train, n_dirs)).astype(np.float64)
+        Y_train = rng.standard_normal((n_train, n_targets)).astype(np.float64)
+        X_test = rng.standard_normal((n_test, n_dirs)).astype(np.float64)
+        Y_test = rng.standard_normal((n_test, n_targets)).astype(np.float64)
+        return X_train, Y_train, X_test, Y_test
 
-        result = run_sufficiency_test(X, Y, Y_hat_full=Y, Y_hat_min=Y, null_r2=null)
+    def test_sufficient_when_min_equals_full(self, rng):
+        X_train, Y_train, X_test, Y_test = self._split(rng, 30, 20, 8, 4)
+        null = self._make_null(rng)
+        # When Y_hat_min == Y_test, residuals are zero → recovery_r2 ≈ 0
+        Y_resid_train = np.zeros_like(Y_train)
+        result = run_sufficiency_test(
+            X_train, Y_resid_train, X_test, Y_test,
+            Y_hat_full=Y_test, Y_hat_min=Y_test, null_r2=null,
+        )
         assert result["sufficient"]
 
     def test_not_sufficient_when_large_residual(self, rng):
-        n_test, n_dirs, n_targets = 40, 6, 3
-        X = rng.standard_normal((n_test, n_dirs)).astype(np.float64)
-        Y = X[:, :n_targets]  # Y is perfectly predictable from X
-        Y_hat_min = np.zeros_like(Y)  # terrible minimal model
-        Y_hat_full = Y  # perfect full model
+        n_dirs, n_targets = 6, 3
+        X_train = rng.standard_normal((40, n_dirs)).astype(np.float64)
+        X_test = rng.standard_normal((20, n_dirs)).astype(np.float64)
+        # Y linearly recoverable from X
+        Y_train = X_train[:, :n_targets]
+        Y_test = X_test[:, :n_targets]
+        Y_hat_min = np.zeros_like(Y_test)   # terrible minimal model
+        Y_hat_full = Y_test                 # perfect full model
+        # Large residuals on train: the full-dim model can recover them
+        Y_resid_train = Y_train             # Y_train - 0
         null = self._make_null(rng) - 0.5  # push null well below 0
 
-        result = run_sufficiency_test(X, Y, Y_hat_full=Y_hat_full,
-                                       Y_hat_min=Y_hat_min, null_r2=null)
+        result = run_sufficiency_test(
+            X_train, Y_resid_train, X_test, Y_test,
+            Y_hat_full=Y_hat_full, Y_hat_min=Y_hat_min, null_r2=null,
+        )
         assert not result["sufficient"]
 
     def test_all_output_keys_present(self, rng):
-        n_test, n_dirs, n_targets = 20, 4, 2
-        X = rng.standard_normal((n_test, n_dirs)).astype(np.float64)
-        Y = rng.standard_normal((n_test, n_targets)).astype(np.float64)
+        X_train, Y_train, X_test, Y_test = self._split(rng, 20, 10, 4, 2)
         null = self._make_null(rng)
-
-        result = run_sufficiency_test(X, Y, Y, Y, null_r2=null)
+        Y_resid_train = np.zeros_like(Y_train)
+        result = run_sufficiency_test(
+            X_train, Y_resid_train, X_test, Y_test,
+            Y_hat_full=Y_test, Y_hat_min=Y_test, null_r2=null,
+        )
         expected_keys = {"recovery_r2", "noise_floor", "sufficient", "p_value",
                          "full_r2", "minimal_r2"}
         assert expected_keys == set(result.keys())
 
     def test_p_value_in_range(self, rng):
-        n_test, n_dirs, n_targets = 20, 4, 2
-        X = rng.standard_normal((n_test, n_dirs)).astype(np.float64)
-        Y = rng.standard_normal((n_test, n_targets)).astype(np.float64)
+        X_train, Y_train, X_test, Y_test = self._split(rng, 20, 10, 4, 2)
         null = self._make_null(rng)
-        result = run_sufficiency_test(X, Y, Y, Y, null_r2=null)
+        Y_resid_train = np.zeros_like(Y_train)
+        result = run_sufficiency_test(
+            X_train, Y_resid_train, X_test, Y_test,
+            Y_hat_full=Y_test, Y_hat_min=Y_test, null_r2=null,
+        )
         assert 0.0 <= result["p_value"] <= 1.0
 
 

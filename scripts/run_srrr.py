@@ -58,7 +58,6 @@ from utils.srrr import (
     find_knee_lambda,
     load_svd_decomposition,
     predict_from_factors,
-    project_to_svd_space,
     run_stability_selection,
     run_sufficiency_test,
     save_srrr_result,
@@ -106,7 +105,7 @@ def _run_srrr_for_unit(
         train_idx = np.where(train_mask)[0]
 
         Vt_f = Vt_arr[fold_f]  # (n_dirs, n_embed)
-        X_proj = project_to_svd_space(X_raw, Vt_f)  # (n_words, n_dirs)
+        X_proj = X_raw @ Vt_f.T  # (n_words, n_dirs)
         X_proj_train = X_proj[train_idx]
         X_proj_test = X_proj[test_idx]
 
@@ -159,6 +158,7 @@ def _run_srrr_for_unit(
                     A_cons = np.zeros((0, k), dtype=np.float32)
                     B_cons = np.zeros((n_targets, k), dtype=np.float32)
                     Y_hat_min = np.zeros_like(Y_test)
+                    Y_hat_min_train = np.zeros_like(Y_train)
                 else:
                     cons_result = fit_dense_rrr(
                         X_proj_train, Y_train, k=k, selected_idx=selected_idx,
@@ -168,13 +168,18 @@ def _run_srrr_for_unit(
                     Y_hat_min = predict_from_factors(
                         X_proj_test, A_cons, B_cons, selected_idx=selected_idx,
                     )
+                    Y_hat_min_train = predict_from_factors(
+                        X_proj_train, A_cons, B_cons, selected_idx=selected_idx,
+                    )
 
                 suf = run_sufficiency_test(
+                    X_proj_train, Y_train - Y_hat_min_train,
                     X_proj_test, Y_test,
                     Y_hat_full=Y_hat_full,
                     Y_hat_min=Y_hat_min,
                     null_r2=null_r2,
                     p_value_threshold=config.p_value_threshold,
+                    model_constructor_fn=get_ridge_model_constructor,
                 )
                 cca_sim = compute_cca_similarity(Y_hat_full, Y_hat_min)
                 proc_sim = compute_procrustes_similarity(Y_hat_full, Y_hat_min)

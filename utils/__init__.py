@@ -67,7 +67,6 @@ from utils.atlas import (
     build_electrode_region_map,
 )
 from utils.srrr import (
-    project_to_svd_space,
     load_svd_decomposition,
     prox_l21,
     solve_B_closed_form,
@@ -158,7 +157,6 @@ __all__ = [
     "group_electrodes_by_region",
     "build_electrode_region_map",
     # srrr
-    "project_to_svd_space",
     "load_svd_decomposition",
     "prox_l21",
     "solve_B_closed_form",

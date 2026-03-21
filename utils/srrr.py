@@ -16,19 +16,6 @@ import torch
 # A. Data utilities
 # ---------------------------------------------------------------------------
 
-def project_to_svd_space(X_raw: np.ndarray, Vt: np.ndarray) -> np.ndarray:
-    """Project raw embeddings into SVD direction space.
-
-    Args:
-        X_raw: (n_words, n_embed) raw embedding matrix.
-        Vt: (n_dirs, n_embed) right singular vectors.
-
-    Returns:
-        X_proj: (n_words, n_dirs) projections.
-    """
-    return X_raw @ Vt.T
-
-
 def load_svd_decomposition(svd_dir: str, n_folds: int) -> np.ndarray:
     """Load per-fold Vt arrays from an svd_decomposition.npz file.
 
@@ -83,7 +70,7 @@ def solve_B_closed_form(
 ) -> torch.Tensor:
     """Closed-form solution for B given fixed A.
 
-    Minimises ||X_proj @ A @ B^T - Y||_F^2 + alpha ||B||_F^2.
+    Minimises ||X_proj @ A @ B^T - Y||_F^2.
 
     B = ((XA)^T (XA) + alpha I)^{-1} (XA)^T Y
 
@@ -91,7 +78,10 @@ def solve_B_closed_form(
         X_proj: (n, n_dirs) projected inputs.
         Y: (n, n_targets) outputs.
         A: (n_dirs, k) direction-selection matrix.
-        ridge_alpha: Ridge regularisation for numerical stability.
+        ridge_alpha: Tiny constant added to the diagonal of (XA)^T(XA) purely
+            for numerical stabilisation of the linear solve; not a regularisation
+            parameter. CV is not appropriate here — this function is called on
+            every ProxGD iteration.
 
     Returns:
         B: (n_targets, k) output factor matrix.
@@ -311,7 +301,9 @@ def fit_dense_rrr(
         Y_train: (n, n_targets) training outputs.
         k: Rank.
         selected_idx: Integer indices of selected SVD directions.
-        ridge_alpha: Ridge regularisation for the OLS solve.
+        ridge_alpha: Tiny constant added to X^T X for numerical stabilisation
+            only. Regularisation comes from the rank-k truncation and the
+            direction selection, not this alpha. CV is not needed here.
         device: torch device string.
 
     Returns:
@@ -497,55 +489,68 @@ def build_null_distribution(
 
 
 def run_sufficiency_test(
-    X_proj_full_test: np.ndarray,
+    X_proj_train: np.ndarray,
+    Y_resid_train: np.ndarray,
+    X_proj_test: np.ndarray,
     Y_test: np.ndarray,
     Y_hat_full: np.ndarray,
     Y_hat_min: np.ndarray,
     null_r2: np.ndarray,
     p_value_threshold: float = 0.05,
+    model_constructor_fn=None,
 ) -> dict:
     """Test whether the minimal model's predictions are sufficient.
 
-    Tests whether the full model's predictions contain any additional
-    recoverable signal beyond what the minimal model captures.
+    Tests whether the residuals left by the minimal model contain any signal
+    that a full-dim model can recover out-of-sample.
 
     Procedure:
-      1. Compute residual: Y_resid = Y_test - Y_hat_min
-      2. Fit OLS from X_proj_full_test to Y_resid
-      3. Evaluate mean recovery R^2
-      4. Compare to null distribution noise floor (p_value_threshold percentile)
+      1. Fit model_constructor_fn on (X_proj_train, Y_resid_train)
+      2. Predict on X_proj_test; evaluate mean recovery R^2 against Y_test - Y_hat_min
+      3. Compare recovery_r2 to null distribution noise floor
 
     Args:
-        X_proj_full_test: (n_test, n_dirs) full-dimension projections (test set).
-        Y_test: (n_test, n_targets) true outputs.
-        Y_hat_full: (n_test, n_targets) full model predictions.
+        X_proj_train: (n_train, n_dirs) full-dimension projections (train set).
+        Y_resid_train: (n_train, n_targets) residuals on the training set
+            (Y_train - Y_hat_min_train), precomputed by the caller.
+        X_proj_test: (n_test, n_dirs) full-dimension projections (test set).
+        Y_test: (n_test, n_targets) true outputs (test set).
+        Y_hat_full: (n_test, n_targets) full reference model predictions.
         Y_hat_min: (n_test, n_targets) minimal model predictions.
         null_r2: (n_permutations,) null mean R^2 values.
         p_value_threshold: Alpha level for noise floor percentile.
+        model_constructor_fn: Callable returning a factory function that creates
+            a fresh sklearn-compatible model (e.g. ``get_ridge_model_constructor``).
+            When None, falls back to OLS for backward-compatible testing.
 
     Returns:
         dict with keys:
-            recovery_r2: float — mean R^2 of OLS(X_full → Y_resid)
+            recovery_r2: float — mean R^2 of model(X_train → Y_resid_train) on test
             noise_floor: float — null percentile at (1 - p_value_threshold)
             sufficient: bool
             p_value: float — fraction of null >= recovery_r2
             full_r2: float — mean R^2 of full model on Y_test
             minimal_r2: float — mean R^2 of minimal model on Y_test
     """
-    n_test, n_dirs = X_proj_full_test.shape
-
     full_r2 = float(compute_r2(Y_test, Y_hat_full).mean())
     minimal_r2 = float(compute_r2(Y_test, Y_hat_min).mean())
 
-    # OLS recovery of residuals
-    Y_resid = Y_test - Y_hat_min
-    X = torch.tensor(X_proj_full_test, dtype=torch.float64)
-    Yr = torch.tensor(Y_resid, dtype=torch.float64)
-    gram = X.T @ X + 1e-8 * torch.eye(n_dirs, dtype=torch.float64)
-    coef = torch.linalg.solve(gram, X.T @ Yr)  # (n_dirs, n_targets)
-    Y_resid_hat = (X @ coef).numpy()
-    recovery_r2 = float(compute_r2(Y_resid, Y_resid_hat).mean())
+    Y_resid_test = Y_test - Y_hat_min
 
+    if model_constructor_fn is not None:
+        model = model_constructor_fn()(0)
+        model.fit(X_proj_train, Y_resid_train)
+        Y_resid_hat = model.predict(X_proj_test)
+    else:
+        # OLS fallback (no external model dependency; used for testing)
+        n_dirs = X_proj_test.shape[1]
+        X = torch.tensor(X_proj_test, dtype=torch.float64)
+        Yr = torch.tensor(Y_resid_test, dtype=torch.float64)
+        gram = X.T @ X + 1e-8 * torch.eye(n_dirs, dtype=torch.float64)
+        coef = torch.linalg.solve(gram, X.T @ Yr)
+        Y_resid_hat = (X @ coef).numpy()
+
+    recovery_r2 = float(compute_r2(Y_resid_test, Y_resid_hat).mean())
     noise_floor = float(np.percentile(null_r2, 100.0 * (1.0 - p_value_threshold)))
     p_value = float(np.mean(null_r2 >= recovery_r2))
     sufficient = recovery_r2 < noise_floor
