@@ -114,7 +114,7 @@ def _run_rrr_for_unit(
 
         print(f"  Running {len(config.rank_grid)} rank(s): {config.rank_grid}")
         for k in tqdm(config.rank_grid, desc=f"  fold {fold_f}", leave=True, unit="rank"):
-            rrr_result = fit_dense_rrr(X_train, Y_train, k=k, selected_idx=selected_idx)
+            rrr_result = fit_dense_rrr(X_train, Y_train, k=k, selected_idx=selected_idx, ridge_model=ridge_model)
             A = rrr_result["A_dense"]
             B = rrr_result["B_dense"]
 
@@ -161,6 +161,13 @@ def _run_rrr_for_unit(
         agg_cols.append("procrustes_similarity")
     summary = df.groupby("k")[agg_cols].mean().reset_index()
     summary.to_csv(os.path.join(rrr_unit_dir, "summary.csv"), index=False)
+
+    from utils.plotting import plot_rrr_rank_results
+    plot_rrr_rank_results(
+        summary, grid_df=df,
+        title=f"RRR: R² vs rank ({os.path.basename(rrr_unit_dir)})",
+        save_path=os.path.join(rrr_unit_dir, "rank_analysis.png"),
+    )
 
     return df
 

@@ -203,107 +203,13 @@ def _(get_rrr_dir, mo, pd, s1_source):
 
 
 @app.cell
-def _(alt, mo, pd, s1_grid, s1_show_folds, s1_summary):
-    # Build long-form summary for 3-series line chart
-    _cols = ["full_r2", "minimal_r2", "recovery_r2"]
-    _long = s1_summary.melt(
-        id_vars="k", value_vars=[c for c in _cols if c in s1_summary.columns],
-        var_name="metric", value_name="r2",
+def _(s1_grid, s1_source, s1_summary):
+    from utils.plotting import plot_rrr_rank_results
+    plot_rrr_rank_results(
+        s1_summary,
+        grid_df=s1_grid,
+        title=f"RRR: R² vs rank ({s1_source.value})",
     )
-    _color_map = {
-        "full_r2": "#9ca3af",
-        "minimal_r2": "#3b82f6",
-        "recovery_r2": "#ef4444",
-    }
-    _dash_map = {
-        "full_r2": [4, 2],
-        "minimal_r2": [1, 0],
-        "recovery_r2": [1, 0],
-    }
-
-    _summary_lines = (
-        alt.Chart(_long)
-        .mark_line(point=True)
-        .encode(
-            x=alt.X("k:Q", scale=alt.Scale(type="log"), title="Rank k"),
-            y=alt.Y("r2:Q", title="R²"),
-            color=alt.Color(
-                "metric:N",
-                scale=alt.Scale(
-                    domain=list(_color_map.keys()),
-                    range=list(_color_map.values()),
-                ),
-                legend=alt.Legend(title="Metric"),
-            ),
-            strokeDash=alt.StrokeDash(
-                "metric:N",
-                scale=alt.Scale(
-                    domain=list(_dash_map.keys()),
-                    range=list(_dash_map.values()),
-                ),
-                legend=None,
-            ),
-            tooltip=["k:Q", "metric:N", alt.Tooltip("r2:Q", format=".4f")],
-        )
-    )
-
-    _layers = [_summary_lines]
-
-    if s1_show_folds and s1_grid is not None:
-        _fold_long = s1_grid.melt(
-            id_vars=["k", "fold"], value_vars=[c for c in _cols if c in s1_grid.columns],
-            var_name="metric", value_name="r2",
-        )
-        _fold_lines = (
-            alt.Chart(_fold_long)
-            .mark_line(opacity=0.25, strokeWidth=1)
-            .encode(
-                x=alt.X("k:Q", scale=alt.Scale(type="log")),
-                y="r2:Q",
-                color=alt.Color("metric:N", scale=alt.Scale(
-                    domain=list(_color_map.keys()), range=list(_color_map.values())
-                ), legend=None),
-                detail="fold:N",
-            )
-        )
-        _layers = [_fold_lines, _summary_lines]
-
-    _chart = (
-        alt.layer(*_layers)
-        .properties(width="container", height=280, title="RRR: R² metrics vs rank")
-        .configure_view(strokeWidth=0)
-        .configure_axis(grid=False)
-    )
-    mo.ui.altair_chart(_chart)
-    return
-
-
-@app.cell
-def _(alt, mo, pd, s1_grid):
-    # Fold heatmap: rows=fold, cols=k, color=recovery_r2
-    mo.stop(
-        s1_grid is None,
-        mo.callout(mo.md("grid_results.csv not found; fold heatmap unavailable."), kind="warn"),
-    )
-    _hm_df = s1_grid[["fold", "k", "recovery_r2"]].copy()
-    _hm_df["fold"] = _hm_df["fold"].astype(str)
-    _hm = (
-        alt.Chart(_hm_df)
-        .mark_rect()
-        .encode(
-            x=alt.X("k:O", title="Rank k"),
-            y=alt.Y("fold:O", title="Fold"),
-            color=alt.Color(
-                "recovery_r2:Q",
-                scale=alt.Scale(scheme="reds", reverse=True),
-                legend=alt.Legend(title="recovery_r2"),
-            ),
-            tooltip=["fold:O", "k:O", alt.Tooltip("recovery_r2:Q", format=".4f")],
-        )
-        .properties(width="container", height=100, title="Recovery R² per fold × rank (lower = more sufficient)")
-        .configure_view(strokeWidth=0)
-    )
-    mo.ui.altair_chart(_hm)
     return
 
 
@@ -432,119 +338,13 @@ def _(s2_knee, s2_lambda_mode, s2_manual_lam, s2_summary):
 
 
 @app.cell
-def _(alt, mo, s2_active):
-    # Plot 1: sufficient_frac vs rank
-    mo.stop(
-        "sufficient_frac" not in s2_active.columns,
-        mo.callout(mo.md("`sufficient_frac` column not found in SRRR summary."), kind="warn"),
+def _(s2_active, s2_source):
+    from utils.plotting import plot_srrr_rank_results
+    plot_srrr_rank_results(
+        summary_df=s2_active,  # already lambda-resolved by the cell above
+        active_df=s2_active,
+        title=f"SRRR: Rank analysis ({s2_source.value})",
     )
-    _first_suf_k = s2_active[s2_active["sufficient_frac"] >= 1.0]["k"].min() if (s2_active["sufficient_frac"] >= 1.0).any() else None
-    _bars = (
-        alt.Chart(s2_active)
-        .mark_bar(color="#60a5fa")
-        .encode(
-            x=alt.X("k:O", title="Rank k"),
-            y=alt.Y("sufficient_frac:Q", title="Sufficient fraction", scale=alt.Scale(domain=[0, 1])),
-            tooltip=["k:O", alt.Tooltip("sufficient_frac:Q", format=".3f"),
-                     alt.Tooltip("lam:Q", format=".2e")],
-        )
-    )
-    _ref = alt.Chart({"values": [{"y": 1.0}]}).mark_rule(color="#dc2626", strokeDash=[4, 2]).encode(y="y:Q")
-    _chart = (
-        alt.layer(_bars, _ref)
-        .properties(width="container", height=200, title="SRRR: Sufficient fraction vs rank")
-        .configure_view(strokeWidth=0)
-        .configure_axis(grid=False)
-    )
-    _suf_note = f"  \n**First fully sufficient rank:** k = **{int(_first_suf_k)}**" if _first_suf_k is not None else "  \n*No rank achieves full sufficiency in this lambda selection.*"
-    mo.vstack([mo.ui.altair_chart(_chart), mo.md(_suf_note)])
-    return
-
-
-@app.cell
-def _(alt, mo, pd, s2_active, s2_grid, s2_lambda_mode, s2_manual_lam, s2_show_folds):
-    # Plot 2: R² metrics vs rank at selected lambda
-    _cols = ["full_r2", "minimal_r2", "recovery_r2"]
-    _long = s2_active.melt(
-        id_vars="k", value_vars=[c for c in _cols if c in s2_active.columns],
-        var_name="metric", value_name="r2",
-    )
-    _color_map = {
-        "full_r2": "#9ca3af",
-        "minimal_r2": "#3b82f6",
-        "recovery_r2": "#ef4444",
-    }
-    _summary_lines = (
-        alt.Chart(_long)
-        .mark_line(point=True)
-        .encode(
-            x=alt.X("k:Q", scale=alt.Scale(type="log"), title="Rank k"),
-            y=alt.Y("r2:Q", title="R²"),
-            color=alt.Color("metric:N", scale=alt.Scale(
-                domain=list(_color_map.keys()), range=list(_color_map.values())
-            )),
-            tooltip=["k:Q", "metric:N", alt.Tooltip("r2:Q", format=".4f")],
-        )
-    )
-    _layers = [_summary_lines]
-
-    if s2_show_folds and s2_grid is not None:
-        if s2_lambda_mode.value == "knee (auto)":
-            # Filter fold data to match active lam per k
-            _active_kl = set(zip(s2_active["k"], s2_active["lam"]))
-            _fold_sub = s2_grid[s2_grid.apply(lambda r: (r["k"], r["lam"]) in _active_kl, axis=1)]
-        else:
-            _lv = float(s2_manual_lam.value)
-            _fold_sub = s2_grid[s2_grid["lam"].apply(lambda l: abs(l - _lv) < 1e-12)]
-        _fold_long = _fold_sub.melt(
-            id_vars=["k", "fold"], value_vars=[c for c in _cols if c in _fold_sub.columns],
-            var_name="metric", value_name="r2",
-        )
-        _fold_lines = (
-            alt.Chart(_fold_long)
-            .mark_line(opacity=0.2, strokeWidth=1)
-            .encode(
-                x=alt.X("k:Q", scale=alt.Scale(type="log")),
-                y="r2:Q",
-                color=alt.Color("metric:N", scale=alt.Scale(
-                    domain=list(_color_map.keys()), range=list(_color_map.values())
-                ), legend=None),
-                detail="fold:N",
-            )
-        )
-        _layers = [_fold_lines, _summary_lines]
-
-    _chart = (
-        alt.layer(*_layers)
-        .properties(width="container", height=250, title="SRRR: R² metrics vs rank (at selected lambda)")
-        .configure_view(strokeWidth=0)
-        .configure_axis(grid=False)
-    )
-    mo.ui.altair_chart(_chart)
-    return
-
-
-@app.cell
-def _(alt, mo, s2_active):
-    # Plot 3: n_selected vs rank
-    mo.stop(
-        "n_selected" not in s2_active.columns,
-        mo.callout(mo.md("`n_selected` column not found."), kind="warn"),
-    )
-    _chart = (
-        alt.Chart(s2_active)
-        .mark_line(point=True, color="#8b5cf6")
-        .encode(
-            x=alt.X("k:Q", scale=alt.Scale(type="log"), title="Rank k"),
-            y=alt.Y("n_selected:Q", title="Avg. selected SVD directions"),
-            tooltip=["k:Q", alt.Tooltip("n_selected:Q", format=".1f"),
-                     alt.Tooltip("lam:Q", format=".2e")],
-        )
-        .properties(width="container", height=200, title="SRRR: Selected directions vs rank")
-        .configure_view(strokeWidth=0)
-        .configure_axis(grid=False)
-    )
-    mo.ui.altair_chart(_chart)
     return
 
 

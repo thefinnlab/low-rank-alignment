@@ -279,6 +279,202 @@ def plot_svd_corrs(corrs_trunc, full_corrs, lags, title, save_path, best_k):
         plt.show()
 
 
+def plot_rrr_rank_results(summary_df, grid_df=None, title="RRR: R² vs rank", save_path=None):
+    """Two-panel figure summarising RRR rank analysis.
+
+    Panel 1 (left): full_r2, minimal_r2, recovery_r2 vs rank on a log-x axis.
+                    Per-fold traces shown as light lines when grid_df is provided.
+    Panel 2 (right): Fold × rank heatmap of recovery_r2 (lower = more sufficient).
+                     Omitted when grid_df is None.
+
+    Args:
+        summary_df: DataFrame with columns [k, full_r2, minimal_r2, recovery_r2]
+            averaged over folds (i.e. summary.csv).
+        grid_df: Optional per-fold DataFrame with columns [k, fold, full_r2,
+            minimal_r2, recovery_r2] (i.e. grid_results.csv).
+        title: Figure title.
+        save_path: If given, save figure here and close it; otherwise return the Figure.
+
+    Returns:
+        matplotlib Figure when save_path is None, else None.
+    """
+    import matplotlib.pyplot as plt
+
+    has_folds = grid_df is not None
+    n_panels = 2 if has_folds else 1
+    fig, axes = plt.subplots(1, n_panels, figsize=(7 * n_panels, 4))
+    if n_panels == 1:
+        axes = [axes]
+
+    colors = {"full_r2": "#9ca3af", "minimal_r2": "#3b82f6", "recovery_r2": "#ef4444"}
+    labels = {
+        "full_r2": "full_r2 (ceiling)",
+        "minimal_r2": "minimal_r2 (RRR)",
+        "recovery_r2": "recovery_r2 (residual)",
+    }
+    styles = {"full_r2": "--", "minimal_r2": "-", "recovery_r2": "-"}
+    metrics = [m for m in ["full_r2", "minimal_r2", "recovery_r2"] if m in summary_df.columns]
+
+    ax = axes[0]
+    ks = summary_df["k"].values
+
+    if has_folds:
+        for metric in metrics:
+            if metric not in grid_df.columns:
+                continue
+            for _, fold_df in grid_df.groupby("fold"):
+                ax.semilogx(fold_df["k"], fold_df[metric],
+                            color=colors[metric], alpha=0.2, linewidth=0.8)
+
+    for metric in metrics:
+        ax.semilogx(ks, summary_df[metric], color=colors[metric],
+                    linestyle=styles[metric], marker="o", markersize=4,
+                    label=labels[metric], linewidth=1.5)
+
+    ax.axhline(0, color="black", linewidth=0.5, linestyle=":")
+    ax.set_xlabel("Rank k")
+    ax.set_ylabel("R²")
+    ax.set_title(title)
+    ax.legend(fontsize=8)
+
+    if has_folds:
+        folds = sorted(grid_df["fold"].unique())
+        ks_ord = sorted(grid_df["k"].unique())
+        k_idx = {k: i for i, k in enumerate(ks_ord)}
+        f_idx = {f: i for i, f in enumerate(folds)}
+        hm = np.full((len(folds), len(ks_ord)), np.nan)
+        for _, row in grid_df.iterrows():
+            hm[f_idx[row["fold"]], k_idx[row["k"]]] = row["recovery_r2"]
+
+        ax2 = axes[1]
+        im = ax2.imshow(hm, aspect="auto", cmap="Reds_r")
+        ax2.set_xticks(range(len(ks_ord)))
+        ax2.set_xticklabels([str(k) for k in ks_ord], rotation=45, ha="right")
+        ax2.set_yticks(range(len(folds)))
+        ax2.set_yticklabels([f"fold {f}" for f in folds])
+        ax2.set_xlabel("Rank k")
+        ax2.set_title("Recovery R² per fold (lower = more sufficient)")
+        plt.colorbar(im, ax=ax2, label="recovery_r2")
+
+    fig.tight_layout()
+
+    if save_path is not None:
+        fig.savefig(save_path, dpi=150, bbox_inches="tight")
+        plt.close(fig)
+        return None
+    return fig
+
+
+def plot_srrr_rank_results(
+    summary_df,
+    knee_df=None,
+    active_df=None,
+    title="SRRR: Rank analysis",
+    save_path=None,
+):
+    """Three-panel figure summarising SRRR rank analysis.
+
+    Uses *active_df* if provided (already lambda-resolved), otherwise resolves
+    the knee lambda per rank from *knee_df*, or falls back to the lowest lambda
+    in *summary_df*.
+
+    Panel 1 (left):   sufficient_frac vs rank (bar chart).
+    Panel 2 (centre): full_r2, minimal_r2, recovery_r2 vs rank.
+    Panel 3 (right):  avg. n_selected SVD directions vs rank.
+
+    Args:
+        summary_df: DataFrame from summary.csv with columns
+            [k, lam, full_r2, minimal_r2, recovery_r2, sufficient_frac, n_selected].
+        knee_df: Optional DataFrame from knee_selection.csv with columns [k, knee_lam].
+            Used when active_df is None to resolve the knee lambda per rank.
+        active_df: Optional pre-filtered single-lambda-per-k DataFrame. When
+            provided, summary_df/knee_df are ignored for the plot data.
+        title: Figure suptitle.
+        save_path: If given, save figure here and close it; otherwise return the Figure.
+
+    Returns:
+        matplotlib Figure when save_path is None, else None.
+    """
+    import matplotlib.pyplot as plt
+
+    if active_df is not None:
+        active = active_df.copy()
+    elif knee_df is not None:
+        lam_per_k = dict(zip(knee_df["k"], knee_df["knee_lam"]))
+        active = summary_df[
+            summary_df.apply(
+                lambda r: abs(r["lam"] - lam_per_k.get(r["k"], -1)) < 1e-12, axis=1
+            )
+        ].copy()
+    else:
+        min_lam = summary_df["lam"].min()
+        active = summary_df[
+            summary_df["lam"].apply(lambda l: abs(l - min_lam) < 1e-12)
+        ].copy()
+
+    if active.empty:
+        return None
+
+    active = active.sort_values("k")
+    ks = active["k"].values
+
+    fig, axes = plt.subplots(1, 3, figsize=(15, 4))
+
+    # Panel 1: sufficient_frac
+    ax = axes[0]
+    if "sufficient_frac" in active.columns:
+        ax.bar(range(len(ks)), active["sufficient_frac"].values, color="#60a5fa")
+        ax.axhline(1.0, color="#dc2626", linestyle="--", linewidth=1)
+        suf_mask = active["sufficient_frac"] >= 1.0
+        if suf_mask.any():
+            first_k = int(active[suf_mask]["k"].min())
+            first_i = list(ks).index(first_k)
+            ax.axvline(first_i, color="#16a34a", linestyle=":", linewidth=1.5,
+                       label=f"first sufficient k={first_k}")
+            ax.legend(fontsize=8)
+    ax.set_xticks(range(len(ks)))
+    ax.set_xticklabels([str(k) for k in ks])
+    ax.set_xlabel("Rank k")
+    ax.set_ylabel("Sufficient fraction")
+    ax.set_title("Sufficient fraction vs rank")
+    ax.set_ylim(0, 1.05)
+
+    # Panel 2: R² metrics
+    ax = axes[1]
+    colors = {"full_r2": "#9ca3af", "minimal_r2": "#3b82f6", "recovery_r2": "#ef4444"}
+    labels = {"full_r2": "full_r2", "minimal_r2": "minimal_r2", "recovery_r2": "recovery_r2"}
+    styles = {"full_r2": "--", "minimal_r2": "-", "recovery_r2": "-"}
+    for metric in ["full_r2", "minimal_r2", "recovery_r2"]:
+        if metric not in active.columns:
+            continue
+        ax.semilogx(ks, active[metric].values, color=colors[metric],
+                    linestyle=styles[metric], marker="o", markersize=4,
+                    label=labels[metric], linewidth=1.5)
+    ax.axhline(0, color="black", linewidth=0.5, linestyle=":")
+    ax.set_xlabel("Rank k")
+    ax.set_ylabel("R²")
+    ax.set_title("R² metrics vs rank")
+    ax.legend(fontsize=8)
+
+    # Panel 3: n_selected
+    ax = axes[2]
+    if "n_selected" in active.columns:
+        ax.semilogx(ks, active["n_selected"].values, color="#8b5cf6",
+                    marker="o", markersize=4, linewidth=1.5)
+    ax.set_xlabel("Rank k")
+    ax.set_ylabel("Avg. selected SVD directions")
+    ax.set_title("Selected directions vs rank")
+
+    fig.suptitle(title, fontsize=11)
+    fig.tight_layout()
+
+    if save_path is not None:
+        fig.savefig(save_path, dpi=150, bbox_inches="tight")
+        plt.close(fig)
+        return None
+    return fig
+
+
 def plot_corrs_vs_arbitrary(corrs, corrs_arb, lags, save_path=None):
     """
     Plot real encoding correlations (blue) vs arbitrary null (red).

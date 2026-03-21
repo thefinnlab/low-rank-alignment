@@ -176,6 +176,7 @@ def _run_srrr_for_unit(
             else:
                 cons_result = fit_dense_rrr(
                     X_proj_train, Y_train, k=k, selected_idx=selected_idx,
+                    ridge_model=ridge_model,
                 )
                 A_cons = cons_result["A_dense"]
                 B_cons = cons_result["B_dense"]
@@ -250,8 +251,14 @@ def _run_srrr_for_unit(
         knee_row["knee_lam"] = knee_lam
         knee_rows.append(knee_row)
 
-    pd.DataFrame(knee_rows).to_csv(
-        os.path.join(srrr_unit_dir, "knee_selection.csv"), index=False
+    knee_df = pd.DataFrame(knee_rows)
+    knee_df.to_csv(os.path.join(srrr_unit_dir, "knee_selection.csv"), index=False)
+
+    from utils.plotting import plot_srrr_rank_results
+    plot_srrr_rank_results(
+        summary, knee_df=knee_df if not knee_df.empty else None,
+        title=f"SRRR: Rank analysis ({os.path.basename(srrr_unit_dir)})",
+        save_path=os.path.join(srrr_unit_dir, "rank_analysis.png"),
     )
 
     return df

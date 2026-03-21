@@ -283,13 +283,15 @@ def fit_dense_rrr(
     Y_train: np.ndarray,
     k: int,
     selected_idx: np.ndarray,
+    ridge_model=None,
     ridge_alpha: float = 1e-6,
     device: str | None = None,
 ) -> dict:
     """Fit dense (non-sparse) Reduced Rank Regression on the selected direction subset.
 
     Approach:
-      1. Fit ridge OLS: beta_ols = (X^T X + alpha I)^{-1} X^T Y  (n_selected, n_targets)
+      1. Obtain beta_ols (n_selected, n_targets): either from a pre-fit ridge_model
+         (preferred) or by solving an unregularized ridge system with ridge_alpha.
       2. Compute Y_hat_ols = X @ beta_ols and take its rank-k SVD: U S Vh
       3. A_dense = beta_ols @ Vh_k^T   (n_selected, k)
          B_dense = Vh_k^T              (n_targets, k)
@@ -302,9 +304,14 @@ def fit_dense_rrr(
         Y_train: (n, n_targets) training outputs.
         k: Rank.
         selected_idx: Integer indices of selected SVD directions.
-        ridge_alpha: Tiny constant added to X^T X for numerical stabilisation
-            only. Regularisation comes from the rank-k truncation and the
-            direction selection, not this alpha. CV is not needed here.
+        ridge_model: Optional pre-fit sklearn Pipeline(StandardScaler, Ridge/RidgeCV)
+            already fit on X_proj_train and Y_train. When provided, its predictions
+            and coefficients are used for beta_ols, avoiding a redundant and
+            potentially under-regularised solve. ridge_alpha is ignored.
+        ridge_alpha: Regularisation constant for the fallback internal solve (used
+            only when ridge_model is None). Note: when n_features > n_train this
+            value must be large enough to prevent overfitting — pass ridge_model
+            instead to reuse the cross-validated alpha from the outer loop.
         device: torch device string.
 
     Returns:
@@ -325,16 +332,36 @@ def fit_dense_rrr(
             "selected_idx": selected_idx,
         }
 
-    X_sel = X_proj_train[:, selected_idx]  # (n, n_selected)
-    X = torch.tensor(X_sel, dtype=torch.float32, device=device)
-    Y = torch.tensor(Y_train, dtype=torch.float32, device=device)
+    if ridge_model is not None:
+        # Use the already-fit ridge pipeline (StandardScaler + Ridge/RidgeCV).
+        # Y_hat_ols comes from predict(), which correctly applies the scaler and
+        # intercept — no separate OLS solve needed.
+        Y_hat_ols_np = ridge_model.predict(X_proj_train)  # (n, n_targets)
 
-    # Step 1: Ridge OLS coefficients beta_ols: (n_selected, n_targets)
-    gram = X.T @ X + ridge_alpha * torch.eye(n_selected, dtype=torch.float32, device=device)
-    beta_ols = torch.linalg.solve(gram, X.T @ Y)  # (n_selected, n_targets)
+        # Recover beta in X_proj space by undoing the StandardScaler transform.
+        # pipeline[0] = StandardScaler, pipeline[-1] = Ridge/RidgeCV
+        # sklearn coef_ shape: (n_targets, n_features); himalaya: (n_features, n_targets)
+        # Normalise to (n_features, n_targets) then divide by scale_.
+        coef = np.asarray(ridge_model[-1].coef_)           # handles GPU tensors
+        n_features_in = X_proj_train.shape[1]
+        if coef.shape[0] != n_features_in:
+            coef = coef.T                                  # → (n_features, n_targets)
+        beta_full = coef / ridge_model[0].scale_[:, np.newaxis]    # (n_features, n_targets)
+        beta_ols_np = beta_full[selected_idx]              # (n_selected, n_targets)
 
-    # Step 2: Training-set OLS prediction and its rank-k SVD
-    Y_hat_ols = X @ beta_ols  # (n, n_targets)
+        Y_hat_ols = torch.tensor(Y_hat_ols_np, dtype=torch.float32, device=device)
+        beta_ols = torch.tensor(beta_ols_np, dtype=torch.float32, device=device)
+    else:
+        X_sel = X_proj_train[:, selected_idx]  # (n, n_selected)
+        X = torch.tensor(X_sel, dtype=torch.float32, device=device)
+        Y = torch.tensor(Y_train, dtype=torch.float32, device=device)
+
+        # Step 1: Ridge OLS coefficients beta_ols: (n_selected, n_targets)
+        gram = X.T @ X + ridge_alpha * torch.eye(n_selected, dtype=torch.float32, device=device)
+        beta_ols = torch.linalg.solve(gram, X.T @ Y)  # (n_selected, n_targets)
+        Y_hat_ols = X @ beta_ols
+
+    # Step 2: Training-set predictions and their rank-k SVD
     try:
         _, _, Vh = torch.linalg.svd(Y_hat_ols, full_matrices=False)
     except Exception:
