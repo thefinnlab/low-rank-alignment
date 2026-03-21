@@ -11,6 +11,7 @@ from utils.srrr import (
     build_null_distribution,
     compute_cca_similarity,
     compute_procrustes_similarity,
+    compute_correlation,
     compute_r2,
     find_knee_lambda,
     fit_dense_rrr,
@@ -248,6 +249,46 @@ class TestComputeR2:
 
 
 # ---------------------------------------------------------------------------
+# TestComputeCorrelation
+# ---------------------------------------------------------------------------
+
+class TestComputeCorrelation:
+    def test_perfect_prediction_returns_one(self, rng):
+        Y = rng.standard_normal((30, 4)).astype(np.float32)
+        corr = compute_correlation(Y, Y)
+        np.testing.assert_allclose(corr, 1.0, atol=1e-5)
+
+    def test_uncorrelated_returns_near_zero(self, rng):
+        Y_true = rng.standard_normal((1000, 4)).astype(np.float32)
+        Y_pred = rng.standard_normal((1000, 4)).astype(np.float32)
+        corr = compute_correlation(Y_true, Y_pred)
+        assert np.all(np.abs(corr) < 0.15)
+
+    def test_output_shape(self, rng):
+        Y = rng.standard_normal((20, 5)).astype(np.float32)
+        corr = compute_correlation(Y, Y * 0.9 + 1.0)
+        assert corr.shape == (5,)
+
+    def test_negative_correlation(self, rng):
+        Y = rng.standard_normal((30, 2)).astype(np.float32)
+        corr = compute_correlation(Y, -Y)
+        np.testing.assert_allclose(corr, -1.0, atol=1e-5)
+
+    def test_constant_column_returns_zero_not_nan(self):
+        Y = np.ones((20, 1), dtype=np.float32)
+        Y_pred = np.zeros((20, 1), dtype=np.float32)
+        corr = compute_correlation(Y, Y_pred)
+        assert np.isfinite(corr[0])
+        assert corr[0] == 0.0
+
+    def test_scale_invariant(self, rng):
+        Y = rng.standard_normal((30, 3)).astype(np.float32)
+        corr1 = compute_correlation(Y, Y * 0.5)
+        corr2 = compute_correlation(Y, Y * 100.0)
+        np.testing.assert_allclose(corr1, corr2, atol=1e-5)
+
+
+# ---------------------------------------------------------------------------
 # TestPredictFromFactors
 # ---------------------------------------------------------------------------
 
@@ -397,7 +438,8 @@ class TestRunSufficiencyTest:
             Y_hat_full=Y_test, Y_hat_min=Y_test, null_r2=null,
         )
         expected_keys = {"recovery_r2", "noise_floor", "sufficient", "p_value",
-                         "full_r2", "minimal_r2", "pred_r2"}
+                         "full_r2", "minimal_r2", "pred_r2",
+                         "full_corr", "minimal_corr", "recovery_corr"}
         assert expected_keys == set(result.keys())
 
     def test_p_value_in_range(self, rng):

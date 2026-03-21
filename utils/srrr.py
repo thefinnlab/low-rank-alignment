@@ -460,6 +460,27 @@ def compute_r2(Y_true: np.ndarray, Y_pred: np.ndarray) -> np.ndarray:
     return r2
 
 
+def compute_correlation(Y_true: np.ndarray, Y_pred: np.ndarray) -> np.ndarray:
+    """Compute per-column Pearson correlation.
+
+    Constant columns return 0.0 instead of NaN.
+
+    Args:
+        Y_true: (n, n_targets).
+        Y_pred: (n, n_targets).
+
+    Returns:
+        corr: (n_targets,) array.
+    """
+    Y_true_c = Y_true - Y_true.mean(axis=0, keepdims=True)
+    Y_pred_c = Y_pred - Y_pred.mean(axis=0, keepdims=True)
+    num = np.sum(Y_true_c * Y_pred_c, axis=0)
+    denom = np.sqrt(np.sum(Y_true_c ** 2, axis=0) * np.sum(Y_pred_c ** 2, axis=0))
+    with np.errstate(divide="ignore", invalid="ignore"):
+        corr = np.where(denom < 1e-12, 0.0, num / denom)
+    return corr
+
+
 # ---------------------------------------------------------------------------
 # E. Sufficiency test
 # ---------------------------------------------------------------------------
@@ -585,10 +606,17 @@ def run_sufficiency_test(
             pred_r2: float — mean R^2 of minimal model predictions vs full model
                 predictions (Y_hat_full as target). Unaffected by ridge shrinkage;
                 equals 1 when both models make identical predictions.
+            full_corr: float — mean Pearson correlation of full model with Y_test
+            minimal_corr: float — mean Pearson correlation of minimal model with Y_test
+            recovery_corr: float — mean Pearson correlation of residual model with
+                Y_test - Y_hat_min
     """
     full_r2 = float(compute_r2(Y_test, Y_hat_full).mean())
     minimal_r2 = float(compute_r2(Y_test, Y_hat_min).mean())
     pred_r2 = float(compute_r2(Y_hat_full, Y_hat_min).mean())
+
+    full_corr = float(compute_correlation(Y_test, Y_hat_full).mean())
+    minimal_corr = float(compute_correlation(Y_test, Y_hat_min).mean())
 
     Y_resid_test = Y_test - Y_hat_min
 
@@ -606,6 +634,7 @@ def run_sufficiency_test(
         Y_resid_hat = to_numpy(X @ coef)
 
     recovery_r2 = float(compute_r2(Y_resid_test, Y_resid_hat).mean())
+    recovery_corr = float(compute_correlation(Y_resid_test, Y_resid_hat).mean())
 
     if null_r2 is not None:
         noise_floor = float(np.percentile(null_r2, 100.0 * (1.0 - p_value_threshold)))
@@ -624,6 +653,9 @@ def run_sufficiency_test(
         "full_r2": full_r2,
         "minimal_r2": minimal_r2,
         "pred_r2": pred_r2,
+        "full_corr": full_corr,
+        "minimal_corr": minimal_corr,
+        "recovery_corr": recovery_corr,
     }
 
 
