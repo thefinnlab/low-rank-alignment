@@ -17,6 +17,7 @@ ENCODING_CONFIG ?= configs/encoding_mid.yml
 SIG_CONFIG      ?= configs/significance_default.yml
 SVD_CONFIG      ?= configs/svd_default.yml
 SRRR_CONFIG     ?= configs/srrr_default.yml
+RRR_CONFIG      ?= configs/rrr_default.yml
 RUN_DIR         ?=   # required for plots: RUN_DIR=results/my_run
 DATA_ROOT       ?= data
 ATLAS_PATH      ?= atlases/destrieux_2009/destrieux2009_rois_lateralized.nii.gz
@@ -74,6 +75,16 @@ srrr:
 	mkdir -p logs
 	$(CMD) scripts/run_srrr.py --config $(SRRR_CONFIG) $(OVERRIDES)
 
+## Run RRR analysis (raw-input baseline: no SVD projection)
+## Usage:
+##   make rrr                                                          # default config
+##   make rrr RRR_CONFIG=configs/rrr_per_subject.yml                  # per-subject mode
+##   make rrr OVERRIDES="--mode=per_region"                           # per-region mode
+##   make rrr CMD=python                                               # run locally
+rrr:
+	mkdir -p logs
+	$(CMD) scripts/run_rrr.py --config $(RRR_CONFIG) $(OVERRIDES)
+
 ## Print out regions where electrode in data are located according to an atlas
 ## Usage:
 ## make print-regions DATA_ROOT=data RUN_DIR=results/my_run
@@ -88,4 +99,4 @@ sig-test:
 test:
 	python -m pytest tests/ -v
 
-.PHONY: sig train plots svd srrr sig-test test
+.PHONY: sig train plots svd srrr rrr sig-test test
