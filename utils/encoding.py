@@ -388,9 +388,19 @@ def build_per_fold_baselines(
             Y_train_parts.append((Y_sub_train - scaler_mean) / scaler_scale)
             Y_test_parts.append((Y_sub_test - scaler_mean) / scaler_scale)
 
-            # Predictions from saved model (already in scaled Y space)
-            Y_hat_all_train = to_numpy(model.predict(X_raw[train_idx]))
-            Y_hat_all_test = to_numpy(model.predict(X_raw[test_idx]))
+            # Predictions from saved model (already in scaled Y space).
+            # himalaya's predict does backend.to_cpu(X) @ backend.to_cpu(coef_).
+            # coef_ is a torch tensor (saved with torch backend), so X must also
+            # be a torch tensor on the same device for the matmul to type-match.
+            ridge_coef = model[-1].coef_
+            if isinstance(ridge_coef, torch.Tensor):
+                X_train = to_torch(X_raw[train_idx], device=str(ridge_coef.device))
+                X_test = to_torch(X_raw[test_idx], device=str(ridge_coef.device))
+            else:
+                X_train = X_raw[train_idx]
+                X_test = X_raw[test_idx]
+            Y_hat_all_train = to_numpy(model.predict(X_train))
+            Y_hat_all_test = to_numpy(model.predict(X_test))
             Y_hat_train_parts.append(Y_hat_all_train[:, col_idxs])
             Y_hat_test_parts.append(Y_hat_all_test[:, col_idxs])
 
