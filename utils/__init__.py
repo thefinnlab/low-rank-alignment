@@ -1,7 +1,7 @@
 # Public API for the utils package.
 # Import the most commonly used functions for convenience.
 
-from utils.config import EncodingConfig, SignificanceConfig, SVDConfig, SRRRConfig, SVDMode, get_results_dir
+from utils.config import EncodingConfig, SignificanceConfig, SVDConfig, SRRRConfig, RRRConfig, SVDMode, get_results_dir
 from utils.config_utils import (
     parse_override_args,
     get_nested_value,
@@ -18,6 +18,7 @@ from utils.data_loaders import (
     read_electrode_file,
     get_arbitrary_embeddings,
     build_word_epochs,
+    build_XY_from_subjects,
 )
 from utils.embeddings import load_embeddings
 from utils.encoding import (
@@ -82,6 +83,8 @@ from utils.srrr import (
     compute_procrustes_similarity,
     save_srrr_result,
     load_srrr_result,
+    save_rrr_result,
+    load_rrr_result,
     find_knee_lambda,
 )
 from utils.examples import (
@@ -98,6 +101,7 @@ __all__ = [
     "SignificanceConfig",
     "SVDConfig",
     "SRRRConfig",
+    "RRRConfig",
     "SVDMode",
     "get_results_dir",
     "parse_override_args",
@@ -113,6 +117,7 @@ __all__ = [
     "read_electrode_file",
     "get_arbitrary_embeddings",
     "build_word_epochs",
+    "build_XY_from_subjects",
     # embeddings
     "load_embeddings",
     # encoding
@@ -172,6 +177,8 @@ __all__ = [
     "compute_procrustes_similarity",
     "save_srrr_result",
     "load_srrr_result",
+    "save_rrr_result",
+    "load_rrr_result",
     "find_knee_lambda",
     # examples
     "_make_context",

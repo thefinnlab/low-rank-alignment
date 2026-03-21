@@ -267,6 +267,62 @@ def build_word_epochs(
     return epochs, epochs.get_data(copy=False)
 
 
+def build_XY_from_subjects(
+    subject_ids: list,
+    enc,
+    sig_electrodes: dict,
+    aligned_embeddings: "np.ndarray",
+    df_word: "pd.DataFrame",
+) -> tuple:
+    """Load neural data for multiple subjects and stack into X and Y arrays.
+
+    For each subject with significant electrodes, builds word-locked epochs and
+    concatenates neural responses column-wise to form Y. X is taken from the first
+    subject (all subjects share the same embedding sequence after alignment).
+
+    Args:
+        subject_ids: Ordered list of subject IDs to load.
+        enc: EncodingConfig with data_root, offset.
+        sig_electrodes: Dict mapping subject_id → list of significant electrode names.
+            Subjects absent from this dict are skipped.
+        aligned_embeddings: (n_words_total, n_embed) embedding array.
+        df_word: DataFrame with word onset times ('start' column).
+
+    Returns:
+        X: (n_words, n_embed) embedding matrix (from first subject with data).
+        Y: (n_words, n_targets) concatenated neural response matrix, float32.
+
+    Raises:
+        ValueError: If no subjects have significant electrodes.
+    """
+    import gc
+    from utils.encoding import apply_offset
+
+    subs_to_load = [s for s in subject_ids if s in sig_electrodes and sig_electrodes[s]]
+    if not subs_to_load:
+        raise ValueError(
+            f"No subjects with significant electrodes found in subject_ids={subject_ids}."
+        )
+
+    raws = load_raws(
+        subs_to_load, enc.data_root, use_high_gamma=True,
+        per_subject_electrodes={s: sig_electrodes[s] for s in subs_to_load},
+    )
+
+    Y_cols = []
+    X_ref = None
+    for raw, sub_id in zip(raws, subs_to_load):
+        epochs, data = build_word_epochs(raw, df_word)
+        X_arr, Y_sub = apply_offset(aligned_embeddings[epochs.selection], data, enc.offset)
+        if X_ref is None:
+            X_ref = X_arr
+        Y_cols.append(Y_sub)
+    del raws
+    gc.collect()
+
+    return X_ref, np.concatenate(Y_cols, axis=1).astype(np.float32)
+
+
 def get_arbitrary_embeddings(X, epochs, df_word):
     """
     Assign unique random embeddings per word type, preserving per-word consistency.

@@ -1,0 +1,12 @@
+encoding:
+  data_root: data/
+  model: gpt2xl
+  layer: 24
+  offset: 0
+  subjects: null
+  run_name: null
+  batch: false
+output_dir: null
+rrr_output_dir: null
+mode: cross_subject
+rank_grid: [1, 2, 5, 10, 20, 50]
