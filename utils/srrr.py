@@ -10,6 +10,7 @@ import warnings
 
 import numpy as np
 import torch
+from tqdm import tqdm
 
 
 # ---------------------------------------------------------------------------
@@ -455,7 +456,7 @@ def build_null_distribution(
     all_idx = np.arange(X_proj_train.shape[0])
     null_r2 = np.zeros(n_permutations)
 
-    for i in range(n_permutations):
+    for i in tqdm(range(n_permutations), desc="Null distribution", unit="perm"):
         perm_idx = rng.permutation(all_idx)
         Y_perm = Y_train[perm_idx]
 
