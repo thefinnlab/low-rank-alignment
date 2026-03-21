@@ -262,6 +262,159 @@ def load_encoding_results(filepath: str) -> dict:
     return joblib.load(filepath)
 
 
+def _make_col_idxs(enc_results: dict, target_elec_names: list) -> np.ndarray:
+    """Map target electrode names to column indices in the saved encoding result.
+
+    For an encoding result with shape (n_words, n_elec * n_lags), electrode e at
+    index i in enc_results["elec_names"] occupies columns i*n_lags : (i+1)*n_lags.
+
+    Args:
+        enc_results: Dict loaded from encoding_results.joblib.
+        target_elec_names: Ordered list of electrode names to include.
+
+    Returns:
+        Integer array of column indices into the saved model's output.
+
+    Raises:
+        ValueError: If any electrode in target_elec_names is not found.
+    """
+    elec_names = enc_results["elec_names"]
+    n_lags = len(enc_results["lags"])
+    col_idxs = []
+    for e in target_elec_names:
+        try:
+            i = elec_names.index(e)
+        except ValueError:
+            raise ValueError(
+                f"Electrode '{e}' not found in enc_results['elec_names']. "
+                "Ensure encoding results match the current run's electrode list."
+            )
+        col_idxs.extend(range(i * n_lags, (i + 1) * n_lags))
+    return np.array(col_idxs, dtype=int)
+
+
+def build_enc_subjects_info(
+    output_dir: str,
+    subs_in_unit: list,
+    target_elecs_per_sub: dict,
+) -> list:
+    """Load per-subject encoding results and build info dicts for baseline computation.
+
+    Args:
+        output_dir: Root results directory containing subjects/sub_{id}/.
+        subs_in_unit: Ordered list of subject IDs contributing to the analysis unit.
+        target_elecs_per_sub: Dict mapping sub_id → list of target electrode names.
+
+    Returns:
+        List of dicts, one per subject, each containing:
+            models:      list of fitted Pipeline per fold
+            scalers:     list of StandardScaler per fold (fitted on all-electrode Y)
+            col_idxs:    int array of column indices into the saved model's output
+            y_col_start: start column in the assembled Y_full
+            y_col_end:   end column (exclusive) in the assembled Y_full
+    """
+    import os
+    info_list = []
+    y_cursor = 0
+    for sub_id in subs_in_unit:
+        enc_results = load_encoding_results(
+            os.path.join(output_dir, "subjects", f"sub_{sub_id}", "encoding_results.joblib")
+        )
+        target_elecs = target_elecs_per_sub[sub_id]
+        col_idxs = _make_col_idxs(enc_results, target_elecs)
+        n_target_cols = len(target_elecs) * len(enc_results["lags"])
+        info_list.append({
+            "models": enc_results["models"],
+            "scalers": enc_results["scalers"],
+            "col_idxs": col_idxs,
+            "y_col_start": y_cursor,
+            "y_col_end": y_cursor + n_target_cols,
+        })
+        y_cursor += n_target_cols
+    return info_list
+
+
+def build_per_fold_baselines(
+    X_raw: np.ndarray,
+    Y_full: np.ndarray,
+    test_idxs: list,
+    enc_subjects_info: list,
+) -> list:
+    """Pre-compute per-fold scaled Y arrays, baseline predictions, and raw coefficients.
+
+    Replaces the fresh StandardScaler + ridge model training inside the per-fold loops
+    of _run_rrr_for_unit and _run_srrr_for_unit by reusing the saved encoding models.
+
+    Args:
+        X_raw: (n_words, n_embed) raw embedding matrix.
+        Y_full: (n_words, n_targets) assembled neural response matrix.
+        test_idxs: List of test index arrays, one per fold.
+        enc_subjects_info: Output of build_enc_subjects_info.
+
+    Returns:
+        List of dicts, one per fold, each containing:
+            train_idx:       training index array
+            test_idx:        test index array
+            Y_train:         (n_train, n_targets) scaled neural responses
+            Y_test:          (n_test, n_targets) scaled neural responses
+            Y_hat_full_train:(n_train, n_targets) baseline model predictions on train
+            Y_hat_full_test: (n_test, n_targets) baseline model predictions on test
+            beta_full_raw:   (n_embed, n_targets) unscaled coefficients in raw embed space
+    """
+    n_words, n_embed = X_raw.shape
+    n_targets = Y_full.shape[1]
+    baselines = []
+
+    for fold_f, test_idx in enumerate(test_idxs):
+        train_mask = np.ones(n_words, dtype=bool)
+        train_mask[test_idx] = False
+        train_idx = np.where(train_mask)[0]
+
+        Y_train_parts, Y_test_parts = [], []
+        Y_hat_train_parts, Y_hat_test_parts = [], []
+        beta_full_raw = np.zeros((n_embed, n_targets), dtype=np.float32)
+
+        for info in enc_subjects_info:
+            model = info["models"][fold_f]
+            scaler = info["scalers"][fold_f]
+            col_idxs = info["col_idxs"]
+            y_start = info["y_col_start"]
+            y_end = info["y_col_end"]
+
+            # Scale Y using saved scaler parameters (no refit)
+            scaler_mean = scaler.mean_[col_idxs]
+            scaler_scale = scaler.scale_[col_idxs]
+            Y_sub_train = Y_full[train_idx, y_start:y_end]
+            Y_sub_test = Y_full[test_idx, y_start:y_end]
+            Y_train_parts.append((Y_sub_train - scaler_mean) / scaler_scale)
+            Y_test_parts.append((Y_sub_test - scaler_mean) / scaler_scale)
+
+            # Predictions from saved model (already in scaled Y space)
+            Y_hat_all_train = np.asarray(model.predict(X_raw[train_idx]))
+            Y_hat_all_test = np.asarray(model.predict(X_raw[test_idx]))
+            Y_hat_train_parts.append(Y_hat_all_train[:, col_idxs])
+            Y_hat_test_parts.append(Y_hat_all_test[:, col_idxs])
+
+            # Unscaled coefficients in raw embedding space
+            coef = np.asarray(model[-1].coef_)
+            if coef.shape[0] != n_embed:
+                coef = coef.T  # → (n_embed, n_all_cols)
+            beta_sub_all = coef / model[0].scale_[:, np.newaxis]
+            beta_full_raw[:, y_start:y_end] = beta_sub_all[:, col_idxs]
+
+        baselines.append({
+            "train_idx": train_idx,
+            "test_idx": test_idx,
+            "Y_train": np.concatenate(Y_train_parts, axis=1).astype(np.float32),
+            "Y_test": np.concatenate(Y_test_parts, axis=1).astype(np.float32),
+            "Y_hat_full_train": np.concatenate(Y_hat_train_parts, axis=1).astype(np.float32),
+            "Y_hat_full_test": np.concatenate(Y_hat_test_parts, axis=1).astype(np.float32),
+            "beta_full_raw": beta_full_raw,
+        })
+
+    return baselines
+
+
 def apply_offset(averaged_embeddings, data, offset):
     """Apply word offset: trim embeddings and neural data to align them.
 

@@ -33,7 +33,6 @@ import time
 
 import numpy as np
 import pandas as pd
-from sklearn.preprocessing import StandardScaler
 from tqdm import tqdm
 
 from utils import (
@@ -46,7 +45,12 @@ from utils import (
 from utils.atlas import build_electrode_region_map
 from utils.config import RRRConfig, SVDMode, get_results_dir
 from utils.config_utils import parse_args, load_config
-from utils.encoding import load_encoding_results, get_ridge_model_constructor
+from utils.encoding import (
+    load_encoding_results,
+    get_ridge_model_constructor,
+    build_enc_subjects_info,
+    build_per_fold_baselines,
+)
 from utils.srrr import (
     compute_cca_similarity,
     compute_procrustes_similarity,
@@ -65,8 +69,8 @@ from utils.srrr import (
 def _run_rrr_for_unit(
     rrr_unit_dir: str,
     X_raw: np.ndarray,
-    Y_full: np.ndarray,
     test_idxs: list,
+    per_fold_baselines: list,
     config: RRRConfig,
 ) -> pd.DataFrame:
     """Core RRR loop for one analysis unit (cross-subject, per-subject, or per-region).
@@ -74,8 +78,9 @@ def _run_rrr_for_unit(
     Args:
         rrr_unit_dir: Root output directory for this unit.
         X_raw: (n_words, n_embed) raw embedding matrix.
-        Y_full: (n_words, n_targets) neural response matrix.
         test_idxs: List of test index arrays, one per fold.
+        per_fold_baselines: Output of build_per_fold_baselines — pre-computed scaled Y
+            arrays and baseline predictions from the saved encoding model.
         config: RRRConfig.
 
     Returns:
@@ -84,7 +89,7 @@ def _run_rrr_for_unit(
     os.makedirs(rrr_unit_dir, exist_ok=True)
 
     n_folds = len(test_idxs)
-    n_words, n_embed = X_raw.shape
+    n_embed = X_raw.shape[1]
     selected_idx = np.arange(n_embed)
 
     all_rows = []
@@ -93,29 +98,23 @@ def _run_rrr_for_unit(
         fold_start = time.time()
         print(f"\n[Fold {fold_f + 1}/{n_folds}]")
 
-        test_idx = test_idxs[fold_f]
-        train_mask = np.ones(n_words, dtype=bool)
-        train_mask[test_idx] = False
-        train_idx = np.where(train_mask)[0]
-
+        baseline = per_fold_baselines[fold_f]
+        train_idx = baseline["train_idx"]
+        test_idx = baseline["test_idx"]
         X_train = X_raw[train_idx]
         X_test = X_raw[test_idx]
-
-        # Z-score Y on training set, apply to test
-        scaler = StandardScaler()
-        Y_train = scaler.fit_transform(Y_full[train_idx])
-        Y_test = scaler.transform(Y_full[test_idx])
-
-        # Full ridge baseline — fitted once per fold, shared across all ranks
-        print("  Fitting full ridge baseline...")
-        ridge_model = get_ridge_model_constructor()(fold_f)
-        ridge_model.fit(X_train, Y_train)
-        Y_hat_full = ridge_model.predict(X_test)
-        Y_hat_ols_train = ridge_model.predict(X_train)
+        Y_train = baseline["Y_train"]
+        Y_test = baseline["Y_test"]
+        Y_hat_full = baseline["Y_hat_full_test"]
+        Y_hat_ols_train = baseline["Y_hat_full_train"]
 
         print(f"  Running {len(config.rank_grid)} rank(s): {config.rank_grid}")
         for k in tqdm(config.rank_grid, desc=f"  fold {fold_f}", leave=True, unit="rank"):
-            rrr_result = fit_dense_rrr(X_train, Y_train, k=k, selected_idx=selected_idx, ridge_model=ridge_model)
+            rrr_result = fit_dense_rrr(
+                X_train, Y_train, k=k, selected_idx=selected_idx,
+                precomputed_Y_hat_ols=Y_hat_ols_train,
+                precomputed_beta_full=baseline["beta_full_raw"],
+            )
             A = rrr_result["A_dense"]
             B = rrr_result["B_dense"]
 
@@ -198,11 +197,14 @@ def _run_cross_subject_rrr(
     )
     print(f"  X: {X_ref.shape}, Y: {Y_full.shape}")
 
+    enc_subjects_info = build_enc_subjects_info(output_dir, subs_with_sig, sig_electrodes)
+    per_fold_baselines = build_per_fold_baselines(X_ref, Y_full, ref_test_idxs, enc_subjects_info)
+
     _run_rrr_for_unit(
         rrr_unit_dir=rrr_dir,
         X_raw=X_ref,
-        Y_full=Y_full,
         test_idxs=ref_test_idxs,
+        per_fold_baselines=per_fold_baselines,
         config=config,
     )
 
@@ -240,12 +242,17 @@ def _run_per_subject_rrr(
         del raws, raw, epochs, data
         gc.collect()
 
+        Y_sub = Y_sub.astype(np.float32)
         print(f"  X: {X_arr.shape}, Y: {Y_sub.shape}")
+
+        enc_subjects_info = build_enc_subjects_info(output_dir, [sub_id], {sub_id: sub_sig_elecs})
+        per_fold_baselines = build_per_fold_baselines(X_arr, Y_sub, test_idxs, enc_subjects_info)
+
         _run_rrr_for_unit(
             rrr_unit_dir=rrr_sub_dir,
             X_raw=X_arr,
-            Y_full=Y_sub.astype(np.float32),
             test_idxs=test_idxs,
+            per_fold_baselines=per_fold_baselines,
             config=config,
         )
 
@@ -294,11 +301,14 @@ def _run_per_region_rrr(
         )
         print(f"  X: {X_ref.shape}, Y: {Y_full.shape}")
 
+        enc_subjects_info = build_enc_subjects_info(output_dir, subs_in_region, per_subject_region_elecs)
+        per_fold_baselines = build_per_fold_baselines(X_ref, Y_full, ref_test_idxs, enc_subjects_info)
+
         _run_rrr_for_unit(
             rrr_unit_dir=rrr_region_dir,
             X_raw=X_ref,
-            Y_full=Y_full,
             test_idxs=ref_test_idxs,
+            per_fold_baselines=per_fold_baselines,
             config=config,
         )
 
