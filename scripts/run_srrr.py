@@ -34,11 +34,13 @@ Output layout per unit (subject or region):
 
 import gc
 import os
+import time
 import warnings
 
 import numpy as np
 import pandas as pd
 from sklearn.preprocessing import StandardScaler
+from tqdm import tqdm
 
 from utils import (
     load_raws,
@@ -99,6 +101,9 @@ def _run_srrr_for_unit(
     all_rows = []
 
     for fold_f in range(n_folds):
+        fold_start = time.time()
+        print(f"\n[Fold {fold_f + 1}/{n_folds}]")
+
         test_idx = test_idxs[fold_f]
         train_mask = np.ones(n_words, dtype=bool)
         train_mask[test_idx] = False
@@ -115,6 +120,7 @@ def _run_srrr_for_unit(
         Y_test = scaler.transform(Y_full[test_idx])
 
         # Full ridge baseline — fitted once per fold, shared across all k/lam
+        print("  Fitting full ridge baseline...")
         ridge_model = get_ridge_model_constructor()(fold_f)
         ridge_model.fit(X_proj_train, Y_train)
         Y_hat_full = ridge_model.predict(X_proj_test)
@@ -124,6 +130,8 @@ def _run_srrr_for_unit(
             os.path.join(srrr_unit_dir, f"null_dist_fold_{fold_f}.npy")
             if config.cache_null_dist else None
         )
+        cached = null_cache and os.path.exists(null_cache)
+        print(f"  Building null distribution ({config.n_permutations} permutations){' [cached]' if cached else ''}...")
         null_r2 = build_null_distribution(
             X_proj_train, Y_train, X_proj_test, Y_test,
             model_constructor_fn=get_ridge_model_constructor,
@@ -131,83 +139,81 @@ def _run_srrr_for_unit(
             cache_path=null_cache,
             seed=fold_f,
         )
+        print(f"  Null distribution ready. Running {len(config.rank_grid) * len(config.lambda_grid)} (k, lam) combos...")
 
-        for k in config.rank_grid:
-            for lam in sorted(config.lambda_grid):
-                # Stability selection
-                sel_probs = run_stability_selection(
-                    X_proj_train, Y_train,
-                    k=k, lam=lam,
-                    n_iters=config.n_stability_iters,
-                    subsample_frac=config.subsample_fraction,
-                    max_iter=config.max_iter,
-                    tol=config.tol,
-                    lr=config.learning_rate,
-                    seed=fold_f * 100000 + k * 1000 + int(lam * 1000),
-                )
-                selected_idx = select_directions(sel_probs, threshold=config.selection_threshold)
+        grid = [(k, lam) for k in config.rank_grid for lam in sorted(config.lambda_grid)]
+        for k, lam in tqdm(grid, desc=f"  fold {fold_f}", leave=True, unit="combo"):
+            # Stability selection
+            sel_probs = run_stability_selection(
+                X_proj_train, Y_train,
+                k=k, lam=lam,
+                n_iters=config.n_stability_iters,
+                subsample_frac=config.subsample_fraction,
+                max_iter=config.max_iter,
+                tol=config.tol,
+                lr=config.learning_rate,
+                seed=fold_f * 100000 + k * 1000 + int(lam * 1000),
+            )
+            selected_idx = select_directions(sel_probs, threshold=config.selection_threshold)
 
-                if len(selected_idx) == 0:
-                    warnings.warn(
-                        f"No directions selected at fold={fold_f}, k={k}, lam={lam:.2e}. "
-                        "Consider lowering selection_threshold or lambda_grid values.",
-                        RuntimeWarning,
-                        stacklevel=2,
-                    )
-                    n_targets = Y_train.shape[1]
-                    A_cons = np.zeros((0, k), dtype=np.float32)
-                    B_cons = np.zeros((n_targets, k), dtype=np.float32)
-                    Y_hat_min = np.zeros_like(Y_test)
-                    Y_hat_min_train = np.zeros_like(Y_train)
-                else:
-                    cons_result = fit_dense_rrr(
-                        X_proj_train, Y_train, k=k, selected_idx=selected_idx,
-                    )
-                    A_cons = cons_result["A_dense"]
-                    B_cons = cons_result["B_dense"]
-                    Y_hat_min = predict_from_factors(
-                        X_proj_test, A_cons, B_cons, selected_idx=selected_idx,
-                    )
-                    Y_hat_min_train = predict_from_factors(
-                        X_proj_train, A_cons, B_cons, selected_idx=selected_idx,
-                    )
+            if len(selected_idx) == 0:
+                warnings.warn(
+                    f"No directions selected at fold={fold_f}, k={k}, lam={lam:.2e}. "
+                    "Consider lowering selection_threshold or lambda_grid values.",
+                    RuntimeWarning,
+                    stacklevel=2,
+                )
+                n_targets = Y_train.shape[1]
+                A_cons = np.zeros((0, k), dtype=np.float32)
+                B_cons = np.zeros((n_targets, k), dtype=np.float32)
+                Y_hat_min = np.zeros_like(Y_test)
+                Y_hat_min_train = np.zeros_like(Y_train)
+            else:
+                cons_result = fit_dense_rrr(
+                    X_proj_train, Y_train, k=k, selected_idx=selected_idx,
+                )
+                A_cons = cons_result["A_dense"]
+                B_cons = cons_result["B_dense"]
+                Y_hat_min = predict_from_factors(
+                    X_proj_test, A_cons, B_cons, selected_idx=selected_idx,
+                )
+                Y_hat_min_train = predict_from_factors(
+                    X_proj_train, A_cons, B_cons, selected_idx=selected_idx,
+                )
 
-                suf = run_sufficiency_test(
-                    X_proj_train, Y_train - Y_hat_min_train,
-                    X_proj_test, Y_test,
-                    Y_hat_full=Y_hat_full,
-                    Y_hat_min=Y_hat_min,
-                    null_r2=null_r2,
-                    p_value_threshold=config.p_value_threshold,
-                    model_constructor_fn=get_ridge_model_constructor,
-                )
-                cca_sim = compute_cca_similarity(Y_hat_full, Y_hat_min)
-                proc_sim = compute_procrustes_similarity(Y_hat_full, Y_hat_min)
+            suf = run_sufficiency_test(
+                X_proj_train, Y_train - Y_hat_min_train,
+                X_proj_test, Y_test,
+                Y_hat_full=Y_hat_full,
+                Y_hat_min=Y_hat_min,
+                null_r2=null_r2,
+                p_value_threshold=config.p_value_threshold,
+                model_constructor_fn=get_ridge_model_constructor,
+            )
+            cca_sim = compute_cca_similarity(Y_hat_full, Y_hat_min)
+            proc_sim = compute_procrustes_similarity(Y_hat_full, Y_hat_min)
 
-                metrics = {
-                    **suf,
-                    "cca_similarity": cca_sim,
-                    "procrustes_similarity": proc_sim,
-                    "n_selected": len(selected_idx),
-                    "fold": fold_f,
-                    "k": k,
-                    "lam": lam,
-                }
-                save_srrr_result(
-                    srrr_unit_dir, k=k, lam=lam, fold=fold_f,
-                    selection_probs=sel_probs,
-                    selected_idx=selected_idx,
-                    A=A_cons, B=B_cons,
-                    metrics=metrics,
-                )
-                all_rows.append(metrics)
-                print(
-                    f"    fold={fold_f} k={k} lam={lam:.2e} "
-                    f"n_sel={len(selected_idx)} "
-                    f"min_r2={suf['minimal_r2']:.3f} "
-                    f"full_r2={suf['full_r2']:.3f} "
-                    f"sufficient={suf['sufficient']}"
-                )
+            metrics = {
+                **suf,
+                "cca_similarity": cca_sim,
+                "procrustes_similarity": proc_sim,
+                "n_selected": len(selected_idx),
+                "fold": fold_f,
+                "k": k,
+                "lam": lam,
+            }
+            save_srrr_result(
+                srrr_unit_dir, k=k, lam=lam, fold=fold_f,
+                selection_probs=sel_probs,
+                selected_idx=selected_idx,
+                A=A_cons, B=B_cons,
+                metrics=metrics,
+            )
+            all_rows.append(metrics)
+
+        print(
+            f"  Fold {fold_f} done in {time.time() - fold_start:.1f}s"
+        )
 
     df = pd.DataFrame(all_rows)
     df.to_csv(os.path.join(srrr_unit_dir, "grid_results.csv"), index=False)
