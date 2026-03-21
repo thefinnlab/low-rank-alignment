@@ -280,22 +280,26 @@ def plot_svd_corrs(corrs_trunc, full_corrs, lags, title, save_path, best_k):
 
 
 def plot_rrr_rank_results(summary_df, grid_df=None, title="RRR: R² vs rank", save_path=None):
-    """Four-panel figure summarising RRR rank analysis.
+    """Multi-panel figure summarising RRR rank analysis.
 
-    Panel 1 (left): full_r2 - minimal_r2 (gap, dominant sufficiency metric) and
-                    recovery_r2 vs rank on a log-x axis. Per-fold traces shown
-                    as light lines when grid_df is provided.
-    Panel 2: full_r2 (dashed reference) and minimal_r2 (absolute R² values) on
-             a separate axis — different scale from the gap.
-    Panel 3: minimal_r2 / full_r2 ratio (normalised fraction of ceiling captured).
-    Panel 4 (right): Fold × rank heatmap of recovery_r2 (lower = more sufficient).
-                     Omitted when grid_df is None.
+    Row 1 (R² metrics — always shown):
+        Panel 1: full_r2 - minimal_r2 (gap) and recovery_r2 vs rank.
+        Panel 2: Absolute R² (full_r2 dashed, minimal_r2 solid).
+        Panel 3: minimal_r2 / full_r2 ratio.
+        Panel 4: Fold × rank heatmap of recovery_r2 (omitted when grid_df is None).
+
+    Row 2 (correlation metrics — shown when full_corr column exists):
+        Panel 5: Absolute correlations (full_corr, minimal_corr, recovery_corr).
+        Panel 6: minimal_corr / full_corr ratio.
+        Panel 7: pred_r2 vs rank (R² of rank-k vs full predictions).
+        Panel 8: Fold × rank heatmap of recovery_corr.
 
     Args:
         summary_df: DataFrame with columns [k, full_r2, minimal_r2, recovery_r2]
-            averaged over folds (i.e. summary.csv).
-        grid_df: Optional per-fold DataFrame with columns [k, fold, full_r2,
-            minimal_r2, recovery_r2] (i.e. grid_results.csv).
+            averaged over folds (i.e. summary.csv). May also contain
+            full_corr, minimal_corr, recovery_corr, pred_r2.
+        grid_df: Optional per-fold DataFrame with columns [k, fold, ...]
+            (i.e. grid_results.csv).
         title: Figure title.
         save_path: If given, save figure here and close it; otherwise return the Figure.
 
@@ -305,15 +309,24 @@ def plot_rrr_rank_results(summary_df, grid_df=None, title="RRR: R² vs rank", sa
     import matplotlib.pyplot as plt
 
     has_folds = grid_df is not None
-    n_panels = 4 if has_folds else 3
-    fig, axes = plt.subplots(1, n_panels, figsize=(7 * n_panels, 4))
+    has_corr = "full_corr" in summary_df.columns and "minimal_corr" in summary_df.columns
+
+    n_cols = 4 if has_folds else 3
+    n_rows = 2 if has_corr else 1
+    fig, axes = plt.subplots(n_rows, n_cols, figsize=(7 * n_cols, 4.5 * n_rows))
+    if n_rows == 1:
+        axes = axes[np.newaxis, :]  # uniform 2D indexing
 
     ks = summary_df["k"].values
     gap = summary_df["full_r2"].values - summary_df["minimal_r2"].values
-    ratio = summary_df["minimal_r2"].values / np.where(summary_df["full_r2"].values > 0, summary_df["full_r2"].values, np.nan)
+    ratio = summary_df["minimal_r2"].values / np.where(
+        summary_df["full_r2"].values > 0, summary_df["full_r2"].values, np.nan
+    )
 
-    # --- Panel 1: gap + recovery_r2 (dominant sufficiency metrics) ---
-    ax1 = axes[0]
+    # ===== Row 1: R² panels =====
+
+    # --- Panel 1: gap + recovery_r2 ---
+    ax1 = axes[0, 0]
     if has_folds:
         for _, fold_df in grid_df.groupby("fold"):
             fold_gap = fold_df["full_r2"].values - fold_df["minimal_r2"].values
@@ -334,8 +347,8 @@ def plot_rrr_rank_results(summary_df, grid_df=None, title="RRR: R² vs rank", sa
     ax1.set_title(f"{title}\n(gap + residual)")
     ax1.legend(fontsize=8)
 
-    # --- Panel 2: absolute R² values (full_r2 + minimal_r2) ---
-    ax2 = axes[1]
+    # --- Panel 2: absolute R² ---
+    ax2 = axes[0, 1]
     if has_folds:
         for _, fold_df in grid_df.groupby("fold"):
             ax2.semilogx(fold_df["k"], fold_df["full_r2"],
@@ -354,7 +367,7 @@ def plot_rrr_rank_results(summary_df, grid_df=None, title="RRR: R² vs rank", sa
     ax2.legend(fontsize=8)
 
     # --- Panel 3: ratio minimal_r2 / full_r2 ---
-    ax3 = axes[2]
+    ax3 = axes[0, 2]
     if has_folds:
         for _, fold_df in grid_df.groupby("fold"):
             fold_ratio = fold_df["minimal_r2"].values / np.where(
@@ -370,7 +383,7 @@ def plot_rrr_rank_results(summary_df, grid_df=None, title="RRR: R² vs rank", sa
     ax3.set_title(f"{title}\n(normalised ratio)")
     ax3.legend(fontsize=8)
 
-    # --- Panel 4: heatmap (only when fold data available) ---
+    # --- Panel 4: heatmap recovery_r2 per fold ---
     if has_folds:
         folds = sorted(grid_df["fold"].unique())
         ks_ord = sorted(grid_df["k"].unique())
@@ -380,15 +393,95 @@ def plot_rrr_rank_results(summary_df, grid_df=None, title="RRR: R² vs rank", sa
         for _, row in grid_df.iterrows():
             hm[f_idx[row["fold"]], k_idx[row["k"]]] = row["recovery_r2"]
 
-        ax4 = axes[3]
+        ax4 = axes[0, 3]
         im = ax4.imshow(hm, aspect="auto", cmap="Reds_r")
         ax4.set_xticks(range(len(ks_ord)))
         ax4.set_xticklabels([str(k) for k in ks_ord], rotation=45, ha="right")
         ax4.set_yticks(range(len(folds)))
         ax4.set_yticklabels([f"fold {f}" for f in folds])
         ax4.set_xlabel("Rank k")
-        ax4.set_title("Recovery R² per fold (lower = more sufficient)")
+        ax4.set_title("Recovery R² per fold\n(lower = more sufficient)")
         plt.colorbar(im, ax=ax4, label="recovery_r2")
+
+    # ===== Row 2: Correlation panels (only when correlation data available) =====
+
+    if has_corr:
+        # --- Panel 5: absolute correlations + recovery_corr ---
+        ax5 = axes[1, 0]
+        if has_folds:
+            for _, fold_df in grid_df.groupby("fold"):
+                ax5.semilogx(fold_df["k"], fold_df["full_corr"],
+                             color="#9ca3af", alpha=0.2, linewidth=0.8)
+                ax5.semilogx(fold_df["k"], fold_df["minimal_corr"],
+                             color="#10b981", alpha=0.2, linewidth=0.8)
+                if "recovery_corr" in fold_df.columns:
+                    ax5.semilogx(fold_df["k"], fold_df["recovery_corr"],
+                                 color="#ef4444", alpha=0.2, linewidth=0.8)
+
+        ax5.semilogx(ks, summary_df["full_corr"], color="#9ca3af", linestyle="--",
+                     marker="o", markersize=4, label="full_corr (ceiling)", linewidth=1.5)
+        ax5.semilogx(ks, summary_df["minimal_corr"], color="#10b981", linestyle="-",
+                     marker="o", markersize=4, label="minimal_corr (RRR)", linewidth=1.5)
+        if "recovery_corr" in summary_df.columns:
+            ax5.semilogx(ks, summary_df["recovery_corr"], color="#ef4444", linestyle="-",
+                         marker="o", markersize=4, label="recovery_corr (residual)", linewidth=1.5)
+        ax5.axhline(0, color="black", linewidth=0.5, linestyle=":")
+        ax5.set_xlabel("Rank k")
+        ax5.set_ylabel("Correlation")
+        ax5.set_title(f"{title}\n(absolute correlation)")
+        ax5.legend(fontsize=8)
+
+        # --- Panel 6: ratio minimal_corr / full_corr ---
+        ax6 = axes[1, 1]
+        corr_ratio = summary_df["minimal_corr"].values / np.where(
+            summary_df["full_corr"].values > 0, summary_df["full_corr"].values, np.nan
+        )
+        if has_folds:
+            for _, fold_df in grid_df.groupby("fold"):
+                fold_corr_ratio = fold_df["minimal_corr"].values / np.where(
+                    fold_df["full_corr"].values > 0, fold_df["full_corr"].values, np.nan
+                )
+                ax6.semilogx(fold_df["k"], fold_corr_ratio, color="#8b5cf6", alpha=0.2, linewidth=0.8)
+
+        ax6.semilogx(ks, corr_ratio, color="#8b5cf6", linestyle="-", marker="o", markersize=4,
+                     label="minimal_corr / full_corr", linewidth=1.5)
+        ax6.axhline(1, color="black", linewidth=0.5, linestyle=":")
+        ax6.set_xlabel("Rank k")
+        ax6.set_ylabel("Fraction of ceiling")
+        ax6.set_title(f"{title}\n(correlation ratio)")
+        ax6.legend(fontsize=8)
+
+        # --- Panel 7: pred_r2 vs rank ---
+        ax7 = axes[1, 2]
+        if "pred_r2" in summary_df.columns:
+            if has_folds and "pred_r2" in grid_df.columns:
+                for _, fold_df in grid_df.groupby("fold"):
+                    ax7.semilogx(fold_df["k"], fold_df["pred_r2"],
+                                 color="#f97316", alpha=0.2, linewidth=0.8)
+
+            ax7.semilogx(ks, summary_df["pred_r2"], color="#f97316", linestyle="-",
+                         marker="o", markersize=4, label="pred_r2", linewidth=1.5)
+            ax7.axhline(1, color="black", linewidth=0.5, linestyle=":")
+            ax7.set_xlabel("Rank k")
+            ax7.set_ylabel("R² (Y_hat_full as target)")
+            ax7.set_title(f"{title}\n(pred R²: rank-k vs full)")
+            ax7.legend(fontsize=8)
+
+        # --- Panel 8: heatmap recovery_corr per fold ---
+        if has_folds and "recovery_corr" in grid_df.columns:
+            ax8 = axes[1, 3]
+            hm_corr = np.full((len(folds), len(ks_ord)), np.nan)
+            for _, row in grid_df.iterrows():
+                hm_corr[f_idx[row["fold"]], k_idx[row["k"]]] = row["recovery_corr"]
+
+            im2 = ax8.imshow(hm_corr, aspect="auto", cmap="Reds_r")
+            ax8.set_xticks(range(len(ks_ord)))
+            ax8.set_xticklabels([str(k) for k in ks_ord], rotation=45, ha="right")
+            ax8.set_yticks(range(len(folds)))
+            ax8.set_yticklabels([f"fold {f}" for f in folds])
+            ax8.set_xlabel("Rank k")
+            ax8.set_title("Recovery corr per fold\n(lower = more sufficient)")
+            plt.colorbar(im2, ax=ax8, label="recovery_corr")
 
     fig.tight_layout()
 
