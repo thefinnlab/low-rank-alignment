@@ -87,6 +87,10 @@ class RRRConfig:
     compute_cca: bool = False
     compute_procrustes: bool = False
 
+    # Per-region mode
+    atlas_path: str | None = None        # Path to Destrieux 2009 .nii.gz; None = download via nilearn
+    atlas_region_groups: dict | None = None  # Required when mode=per_region
+
 
 @dataclass
 class SRRRConfig:
@@ -133,3 +137,7 @@ class SRRRConfig:
     # Optional metrics (expensive; disabled by default to speed up grid sweeps)
     compute_cca: bool = False
     compute_procrustes: bool = False
+
+    # Per-region mode
+    atlas_path: str | None = None        # Path to Destrieux 2009 .nii.gz; None = download via nilearn
+    atlas_region_groups: dict | None = None  # Required when mode=per_region

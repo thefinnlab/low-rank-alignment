@@ -111,6 +111,7 @@ def _run_rrr_for_unit(
         ridge_model = get_ridge_model_constructor()(fold_f)
         ridge_model.fit(X_train, Y_train)
         Y_hat_full = ridge_model.predict(X_test)
+        Y_hat_ols_train = ridge_model.predict(X_train)
 
         print(f"  Running {len(config.rank_grid)} rank(s): {config.rank_grid}")
         for k in tqdm(config.rank_grid, desc=f"  fold {fold_f}", leave=True, unit="rank"):
@@ -118,8 +119,8 @@ def _run_rrr_for_unit(
             A = rrr_result["A_dense"]
             B = rrr_result["B_dense"]
 
-            Y_hat_rrr = predict_from_factors(X_test, A, B, selected_idx=selected_idx)
-            Y_hat_rrr_train = predict_from_factors(X_train, A, B, selected_idx=selected_idx)
+            Y_hat_rrr = Y_hat_full @ B @ B.T
+            Y_hat_rrr_train = Y_hat_ols_train @ B @ B.T
 
             # Residualization: fit a new model on Y_train - Y_hat_rrr_train,
             # evaluate recovery R² on Y_test - Y_hat_rrr_test
