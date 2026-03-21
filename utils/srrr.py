@@ -426,7 +426,8 @@ def build_null_distribution(
     Y_train: np.ndarray,
     X_proj_test: np.ndarray,
     Y_test: np.ndarray,
-    k: int,
+    model_constructor_fn=None,
+    k: int = 2,
     n_permutations: int = 5000,
     cache_path: str | None = None,
     seed: int = 42,
@@ -434,19 +435,22 @@ def build_null_distribution(
 ) -> np.ndarray:
     """Build a null distribution for mean R^2 via label permutation.
 
-    For each permutation: shuffle Y_train rows, fit dense full-dim RRR (rank k,
-    all n_dirs), evaluate on un-shuffled Y_test, record mean R^2.
+    For each permutation: shuffle Y_train rows, fit a model on the shuffled
+    labels, evaluate on un-shuffled Y_test, and record mean R^2.
 
     Args:
         X_proj_train: (n_train, n_dirs).
         Y_train: (n_train, n_targets).
         X_proj_test: (n_test, n_dirs).
         Y_test: (n_test, n_targets).
-        k: Rank for RRR.
+        model_constructor_fn: Callable returning a fresh sklearn-compatible model
+            on each call (e.g. ``get_ridge_model_constructor()``). When None,
+            falls back to full-dim dense RRR of rank ``k`` (used for testing).
+        k: Rank for the RRR fallback; ignored when model_constructor_fn is given.
         n_permutations: Number of permutations.
         cache_path: If given, load from file if it exists; save after computing.
         seed: Random seed.
-        device: torch device string.
+        device: torch device string (only used by the RRR fallback path).
 
     Returns:
         null_r2: (n_permutations,) array of mean R^2 values under the null.
@@ -463,22 +467,30 @@ def build_null_distribution(
         perm_idx = rng.permutation(all_idx)
         Y_perm = Y_train[perm_idx]
 
-        result = fit_dense_rrr(
-            X_proj_train, Y_perm, k=k,
-            selected_idx=np.arange(n_dirs),
-            device=device,
-        )
-        Y_hat = predict_from_factors(
-            X_proj_test,
-            result["A_dense"],
-            result["B_dense"],
-            selected_idx=np.arange(n_dirs),
-        )
+        if model_constructor_fn is not None:
+            model = model_constructor_fn()(i)
+            model.fit(X_proj_train, Y_perm)
+            Y_hat = model.predict(X_proj_test)
+        else:
+            result = fit_dense_rrr(
+                X_proj_train, Y_perm, k=k,
+                selected_idx=np.arange(n_dirs),
+                device=device,
+            )
+            Y_hat = predict_from_factors(
+                X_proj_test,
+                result["A_dense"],
+                result["B_dense"],
+                selected_idx=np.arange(n_dirs),
+            )
+
         r2_vals = compute_r2(Y_test, Y_hat)
         null_r2[i] = float(r2_vals.mean())
 
     if cache_path is not None:
-        os.makedirs(os.path.dirname(cache_path), exist_ok=True) if os.path.dirname(cache_path) else None
+        cache_dir = os.path.dirname(cache_path)
+        if cache_dir:
+            os.makedirs(cache_dir, exist_ok=True)
         np.save(cache_path, null_r2)
 
     return null_r2

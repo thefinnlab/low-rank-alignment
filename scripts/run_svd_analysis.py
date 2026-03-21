@@ -31,6 +31,7 @@ import numpy as np
 import pandas as pd
 
 from utils import (
+    build_global_sig_mask,
     load_raws,
     load_embeddings,
     build_word_epochs,
@@ -53,26 +54,6 @@ from utils.encoding import load_encoding_results
 # ---------------------------------------------------------------------------
 # Shared helpers
 # ---------------------------------------------------------------------------
-
-def _build_global_sig_mask(sig_df, metadata_df, n_lags):
-    """Build (n_total_elecs, n_lags) bool mask aligned to metadata_df row order."""
-    mask = np.zeros((len(metadata_df), n_lags), dtype=bool)
-    for row_i, row in metadata_df.iterrows():
-        matches = sig_df[
-            (sig_df["subject"] == row["subject"]) &
-            (sig_df["electrode"] == row["electrode"])
-        ]
-        for _, sig_row in matches.iterrows():
-            lag_i = int(sig_row["lag_idx"])
-            assert 0 <= lag_i < n_lags, (
-                f"lag_idx {lag_i} from significance_detailed.csv is out of range "
-                f"[0, {n_lags}) for electrode '{row['electrode']}' "
-                f"(subject {row['subject']}). The CSV may have been produced with "
-                "different lag settings."
-            )
-            mask[row_i, lag_i] = bool(sig_row["sig"])
-    return mask
-
 
 def _load_subject_encoding_info(sub_id, output_dir, n_folds, ref_test_idxs=None):
     """Load encoding results for one subject; validate fold count and test indices.
@@ -608,7 +589,7 @@ def main():
     n_folds, n_total_elecs, n_lags, n_features = coefficients_all.shape
     print(f"  Shape: {coefficients_all.shape}")
 
-    sig_mask_global = _build_global_sig_mask(sig_df, metadata_df, n_lags)
+    sig_mask_global = build_global_sig_mask(sig_df, metadata_df, n_lags)
     print(f"  Significant pairs: {sig_mask_global.sum()} / {sig_mask_global.size}")
 
     # -- Load embeddings --

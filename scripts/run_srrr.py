@@ -27,13 +27,14 @@ Output layout per unit (subject or region):
         grid_results.csv
         summary.csv
         knee_selection.csv
-        null_dist_fold_{f}_k{k}.npy
+        null_dist_fold_{f}.npy
         k{k}_lam{l:.2e}/fold_{f}/
             selection_probs.npy, selected_idx.npy, A.npy, B.npy, metrics.npz
 """
 
 import gc
 import os
+import warnings
 
 import numpy as np
 import pandas as pd
@@ -44,13 +45,11 @@ from utils import (
     load_embeddings,
     build_word_epochs,
     apply_offset,
-    load_all_subject_coefficients,
 )
 from utils.atlas import build_electrode_region_map
 from utils.config import SRRRConfig, SVDMode, get_results_dir
 from utils.config_utils import parse_args, load_config
-from utils.encoding import load_encoding_results
-from utils.significance import load_significance_results
+from utils.encoding import load_encoding_results, get_ridge_model_constructor
 from utils.srrr import (
     build_null_distribution,
     compute_cca_similarity,
@@ -68,44 +67,8 @@ from utils.srrr import (
 
 
 # ---------------------------------------------------------------------------
-# Shared helpers
+# Core per-unit loop
 # ---------------------------------------------------------------------------
-
-def _build_global_sig_mask(sig_df, metadata_df, n_lags):
-    """Build (n_total_elecs, n_lags) bool mask aligned to metadata_df row order."""
-    mask = np.zeros((len(metadata_df), n_lags), dtype=bool)
-    for row_i, row in metadata_df.iterrows():
-        matches = sig_df[
-            (sig_df["subject"] == row["subject"]) &
-            (sig_df["electrode"] == row["electrode"])
-        ]
-        for _, sig_row in matches.iterrows():
-            lag_i = int(sig_row["lag_idx"])
-            if 0 <= lag_i < n_lags:
-                mask[row_i, lag_i] = bool(sig_row["sig"])
-    return mask
-
-
-def _load_subject_neural_data(sub_id, sub_elec_names, enc, aligned_embeddings, df_word):
-    """Load neural data Y and aligned embeddings X for one subject.
-
-    Returns:
-        X_arr: (n_words, n_embed) embeddings aligned to epochs.
-        Y: (n_words * n_lags, n_elecs) — raw neural data before any offset.
-        n_elecs: int
-    """
-    raws = load_raws(
-        [sub_id], enc.data_root, use_high_gamma=True,
-        per_subject_electrodes={sub_id: sub_elec_names},
-    )
-    raw = raws[0]
-    n_elecs = len(raw.ch_names)
-    epochs, data = build_word_epochs(raw, df_word)
-    X_arr, Y = apply_offset(aligned_embeddings[epochs.selection], data, enc.offset)
-    del raws, raw, epochs, data
-    gc.collect()
-    return X_arr, Y, n_elecs
-
 
 def _run_srrr_for_unit(
     svd_dir: str,
@@ -113,7 +76,6 @@ def _run_srrr_for_unit(
     X_raw: np.ndarray,
     Y_full: np.ndarray,
     test_idxs: list,
-    n_words: int,
     config: SRRRConfig,
 ) -> pd.DataFrame:
     """Core SRRR loop for one analysis unit (cross-subject, per-subject, or per-region).
@@ -122,9 +84,8 @@ def _run_srrr_for_unit(
         svd_dir: Directory containing svd_decomposition.npz.
         srrr_unit_dir: Root output directory for this unit.
         X_raw: (n_words, n_embed) raw embedding matrix.
-        Y_full: (n_words, n_targets) neural response matrix (already z-scored or raw).
+        Y_full: (n_words, n_targets) neural response matrix.
         test_idxs: List of test index arrays, one per fold.
-        n_words: Total number of words (n_words == X_raw.shape[0]).
         config: SRRRConfig.
 
     Returns:
@@ -133,8 +94,8 @@ def _run_srrr_for_unit(
     os.makedirs(srrr_unit_dir, exist_ok=True)
 
     n_folds = len(test_idxs)
+    n_words = X_raw.shape[0]
     Vt_arr = load_svd_decomposition(svd_dir, n_folds)  # (n_folds, n_dirs, n_embed)
-    n_dirs = Vt_arr.shape[1]
 
     all_rows = []
 
@@ -145,46 +106,34 @@ def _run_srrr_for_unit(
         train_idx = np.where(train_mask)[0]
 
         Vt_f = Vt_arr[fold_f]  # (n_dirs, n_embed)
-        X_proj_full = project_to_svd_space(X_raw, Vt_f)  # (n_words, n_dirs)
-        X_proj_train = X_proj_full[train_idx]
-        X_proj_test = X_proj_full[test_idx]
+        X_proj = project_to_svd_space(X_raw, Vt_f)  # (n_words, n_dirs)
+        X_proj_train = X_proj[train_idx]
+        X_proj_test = X_proj[test_idx]
 
-        # Z-score Y on training set
+        # Z-score Y on training set, apply to test
         scaler = StandardScaler()
-        Y_train_raw = Y_full[train_idx]
-        Y_test_raw = Y_full[test_idx]
-        Y_train = scaler.fit_transform(Y_train_raw)
-        Y_test = scaler.transform(Y_test_raw)
+        Y_train = scaler.fit_transform(Y_full[train_idx])
+        Y_test = scaler.transform(Y_full[test_idx])
+
+        # Full ridge baseline — fitted once per fold, shared across all k/lam
+        ridge_model = get_ridge_model_constructor()(fold_f)
+        ridge_model.fit(X_proj_train, Y_train)
+        Y_hat_full = ridge_model.predict(X_proj_test)
+
+        # Null distribution via ridge permutations — once per fold (no rank dependence)
+        null_cache = (
+            os.path.join(srrr_unit_dir, f"null_dist_fold_{fold_f}.npy")
+            if config.cache_null_dist else None
+        )
+        null_r2 = build_null_distribution(
+            X_proj_train, Y_train, X_proj_test, Y_test,
+            model_constructor_fn=get_ridge_model_constructor,
+            n_permutations=config.n_permutations,
+            cache_path=null_cache,
+            seed=fold_f,
+        )
 
         for k in config.rank_grid:
-            null_cache = os.path.join(
-                srrr_unit_dir, f"null_dist_fold_{fold_f}_k{k}.npy"
-            ) if config.cache_null_dist else None
-
-            null_r2 = build_null_distribution(
-                X_proj_train, Y_train,
-                X_proj_test, Y_test,
-                k=k,
-                n_permutations=config.n_permutations,
-                cache_path=null_cache,
-                seed=fold_f * 1000 + k,
-            )
-
-            # Fit full model (all directions) for reference
-            full_result = fit_dense_rrr(
-                X_proj_train, Y_train, k=k,
-                selected_idx=np.arange(n_dirs),
-            )
-            Y_hat_full = predict_from_factors(
-                X_proj_test,
-                full_result["A_dense"],
-                full_result["B_dense"],
-                selected_idx=np.arange(n_dirs),
-            )
-
-            prev_A = None
-            prev_B = None
-
             for lam in sorted(config.lambda_grid):
                 # Stability selection
                 sel_probs = run_stability_selection(
@@ -199,34 +148,27 @@ def _run_srrr_for_unit(
                 )
                 selected_idx = select_directions(sel_probs, threshold=config.selection_threshold)
 
-                # Consensus model on selected directions
                 if len(selected_idx) == 0:
+                    warnings.warn(
+                        f"No directions selected at fold={fold_f}, k={k}, lam={lam:.2e}. "
+                        "Consider lowering selection_threshold or lambda_grid values.",
+                        RuntimeWarning,
+                        stacklevel=2,
+                    )
                     n_targets = Y_train.shape[1]
                     A_cons = np.zeros((0, k), dtype=np.float32)
                     B_cons = np.zeros((n_targets, k), dtype=np.float32)
                     Y_hat_min = np.zeros_like(Y_test)
                 else:
-                    # Warm start: if warm_start and previous A exists, slice to selected rows
-                    A_init = None
-                    B_init = None
-                    if config.warm_start and prev_A is not None:
-                        pass  # Stability selection uses fresh starts; warm start for consensus only
-                        A_init = None  # Could slice prev_A[selected_idx] but indices may differ
-
                     cons_result = fit_dense_rrr(
-                        X_proj_train, Y_train, k=k,
-                        selected_idx=selected_idx,
+                        X_proj_train, Y_train, k=k, selected_idx=selected_idx,
                     )
                     A_cons = cons_result["A_dense"]
                     B_cons = cons_result["B_dense"]
                     Y_hat_min = predict_from_factors(
-                        X_proj_test, A_cons, B_cons, selected_idx=selected_idx
+                        X_proj_test, A_cons, B_cons, selected_idx=selected_idx,
                     )
 
-                    prev_A = A_cons
-                    prev_B = B_cons
-
-                # Sufficiency test
                 suf = run_sufficiency_test(
                     X_proj_test, Y_test,
                     Y_hat_full=Y_hat_full,
@@ -234,8 +176,6 @@ def _run_srrr_for_unit(
                     null_r2=null_r2,
                     p_value_threshold=config.p_value_threshold,
                 )
-
-                # Alignment metrics
                 cca_sim = compute_cca_similarity(Y_hat_full, Y_hat_min)
                 proc_sim = compute_procrustes_similarity(Y_hat_full, Y_hat_min)
 
@@ -248,7 +188,6 @@ def _run_srrr_for_unit(
                     "k": k,
                     "lam": lam,
                 }
-
                 save_srrr_result(
                     srrr_unit_dir, k=k, lam=lam, fold=fold_f,
                     selection_probs=sel_probs,
@@ -256,7 +195,6 @@ def _run_srrr_for_unit(
                     A=A_cons, B=B_cons,
                     metrics=metrics,
                 )
-
                 all_rows.append(metrics)
                 print(
                     f"    fold={fold_f} k={k} lam={lam:.2e} "
@@ -285,7 +223,7 @@ def _run_srrr_for_unit(
     )
     summary.to_csv(os.path.join(srrr_unit_dir, "summary.csv"), index=False)
 
-    # Knee selection: for each k, find knee lambda by minimal_r2 vs lambda
+    # Knee selection: for each k, find the knee lambda by minimal_r2 vs lambda
     knee_rows = []
     for k in config.rank_grid:
         sub = summary[summary["k"] == k].sort_values("lam")
@@ -313,97 +251,47 @@ def _run_srrr_for_unit(
 
 def _run_cross_subject_srrr(
     config, enc, output_dir, srrr_dir, subject_ids,
-    sig_mask_global, metadata_df, n_folds, n_total_elecs, n_lags,
-    aligned_embeddings, df_word,
+    sig_electrodes, n_folds, aligned_embeddings, df_word,
 ):
     """SRRR using the cross-subject SVD basis."""
     svd_dir = os.path.join(output_dir, "svd")
 
-    # Load reference test_idxs from first subject
-    ref_test_idxs = None
-    for sub_id in subject_ids:
-        sub_enc_dir = os.path.join(output_dir, "subjects", f"sub_{sub_id}")
-        enc_results = load_encoding_results(
-            os.path.join(sub_enc_dir, "encoding_results.joblib")
-        )
-        if ref_test_idxs is None:
-            ref_test_idxs = enc_results["test_idxs"]
-        break
-
-    # Build global Y: significant (electrode, lag) targets across all subjects
-    # For SRRR we use the raw word-level embeddings and neural responses.
-    # Build Y as a flat concatenation of significant electrode-lag responses.
-    # Collect all significant electrode-lag column indices (flattened mask).
-    sig_flat = sig_mask_global.flatten()  # (n_total_elecs * n_lags,)
-    n_sig_targets = int(sig_flat.sum())
-    if n_sig_targets == 0:
-        print("  No significant electrode-lag pairs; skipping cross-subject SRRR.")
-        return
-
-    # We need X and Y at the word level. Load first subject to get word count.
-    print("  Building global Y from significant electrode-lag pairs...")
-    # Use one subject to get embeddings dimension and word alignment
-    first_sub = subject_ids[0]
-    sub_rows = metadata_df.index[metadata_df["subject"] == first_sub].tolist()
-    sub_elec_names = metadata_df.loc[sub_rows, "electrode"].tolist()
-
-    X_arr, Y_first, n_elecs_first = _load_subject_neural_data(
-        first_sub, sub_elec_names, enc, aligned_embeddings, df_word
+    enc_results = load_encoding_results(
+        os.path.join(output_dir, "subjects", f"sub_{subject_ids[0]}", "encoding_results.joblib")
     )
-    n_words = X_arr.shape[0]
+    ref_test_idxs = enc_results["test_idxs"]
 
-    # Collect Y columns from all subjects for significant (electrode, lag) pairs
-    # This mirrors the weight matrix construction in SVD analysis
-    # We use per-subject neural data and slice significant lags
+    # Load all subjects' significant electrodes at once
+    raws = load_raws(
+        subject_ids, enc.data_root, use_high_gamma=True,
+        per_subject_electrodes=sig_electrodes,
+    )
     Y_cols = []
-    for sub_id in subject_ids:
-        sub_rows_sub = metadata_df.index[metadata_df["subject"] == sub_id].tolist()
-        sub_elec_names_sub = metadata_df.loc[sub_rows_sub, "electrode"].tolist()
-        sig_mask_sub = sig_mask_global[sub_rows_sub]  # (n_sub_elecs, n_lags)
-
-        if sig_mask_sub.sum() == 0:
+    X_ref = None
+    for raw, sub_id in zip(raws, subject_ids):
+        if sub_id not in sig_electrodes:
             continue
-
-        if sub_id == first_sub:
-            X_sub = X_arr
-            Y_sub_raw = Y_first
-        else:
-            X_sub, Y_sub_raw, _ = _load_subject_neural_data(
-                sub_id, sub_elec_names_sub, enc, aligned_embeddings, df_word
-            )
-
-        # Y_sub_raw shape: (n_words, n_sub_elecs * n_lags) or (n_words, n_sub_elecs)?
-        # apply_offset returns Y as (n_words, n_elecs * n_lags) typically.
-        # We need to select columns corresponding to significant (elec, lag) pairs.
-        # Reshape to (n_words, n_sub_elecs, n_lags) and flatten sig mask
-        n_sub_elecs = len(sub_elec_names_sub)
-        expected_cols = n_sub_elecs * n_lags
-        if Y_sub_raw.shape[1] == expected_cols:
-            Y_sub_3d = Y_sub_raw.reshape(n_words, n_sub_elecs, n_lags)
-            sig_mask_flat_sub = sig_mask_sub.flatten()
-            # Select significant columns
-            Y_sub_sig = Y_sub_raw[:, sig_mask_flat_sub]
-        else:
-            # Y is (n_words, n_elecs) — no lag dimension; use all electrodes if any sig
-            Y_sub_sig = Y_sub_raw[:, np.any(sig_mask_sub, axis=1)]
-
-        if Y_sub_sig.shape[1] > 0:
-            Y_cols.append(Y_sub_sig)
+        epochs, data = build_word_epochs(raw, df_word)
+        X_arr, Y_sub = apply_offset(aligned_embeddings[epochs.selection], data, enc.offset)
+        if X_ref is None:
+            X_ref = X_arr
+        Y_cols.append(Y_sub)  # (n_words, n_elecs * n_lags)
+    del raws
+    gc.collect()
 
     if not Y_cols:
-        print("  No valid Y columns found; skipping.")
+        print("  No significant electrodes found; skipping cross-subject SRRR.")
         return
 
     Y_full = np.concatenate(Y_cols, axis=1).astype(np.float32)
-    print(f"  X shape: {X_arr.shape}, Y shape: {Y_full.shape}")
+    print(f"  X: {X_ref.shape}, Y: {Y_full.shape}")
 
     _run_srrr_for_unit(
         svd_dir=svd_dir,
         srrr_unit_dir=srrr_dir,
-        X_raw=X_arr,
+        X_raw=X_ref,
         Y_full=Y_full,
         test_idxs=ref_test_idxs,
-        n_words=n_words,
         config=config,
     )
 
@@ -414,8 +302,7 @@ def _run_cross_subject_srrr(
 
 def _run_per_subject_srrr(
     config, enc, output_dir, srrr_dir, subject_ids,
-    sig_mask_global, metadata_df, n_folds, n_total_elecs, n_lags,
-    aligned_embeddings, df_word,
+    sig_electrodes, n_folds, aligned_embeddings, df_word,
 ):
     """SRRR using per-subject SVD bases."""
     for sub_id in subject_ids:
@@ -428,47 +315,34 @@ def _run_per_subject_srrr(
             print(f"  SVD decomposition not found at {svd_sub_dir}; skipping.")
             continue
 
-        sub_rows = metadata_df.index[metadata_df["subject"] == sub_id].tolist()
-        sub_elec_names = metadata_df.loc[sub_rows, "electrode"].tolist()
-        sig_mask_sub = sig_mask_global[sub_rows]  # (n_sub_elecs, n_lags)
-
-        if sig_mask_sub.sum() == 0:
-            print(f"  No significant electrode-lag pairs; skipping.")
+        sub_sig_elecs = sig_electrodes.get(sub_id, [])
+        if not sub_sig_elecs:
+            print(f"  No significant electrodes; skipping.")
             continue
 
-        # Load test_idxs for this subject
-        sub_enc_dir = os.path.join(output_dir, "subjects", f"sub_{sub_id}")
         enc_results = load_encoding_results(
-            os.path.join(sub_enc_dir, "encoding_results.joblib")
+            os.path.join(output_dir, "subjects", f"sub_{sub_id}", "encoding_results.joblib")
         )
         test_idxs = enc_results["test_idxs"]
 
-        # Load neural data
-        X_arr, Y_raw, n_elecs = _load_subject_neural_data(
-            sub_id, sub_elec_names, enc, aligned_embeddings, df_word
+        raws = load_raws(
+            [sub_id], enc.data_root, use_high_gamma=True,
+            per_subject_electrodes={sub_id: sub_sig_elecs},
         )
-        n_words = X_arr.shape[0]
+        raw = raws[0]
+        epochs, data = build_word_epochs(raw, df_word)
+        X_arr, Y_sub = apply_offset(aligned_embeddings[epochs.selection], data, enc.offset)
+        del raws, raw, epochs, data
+        gc.collect()
 
-        # Select significant columns
-        n_sub_elecs = len(sub_elec_names)
-        if Y_raw.shape[1] == n_sub_elecs * n_lags:
-            sig_flat = sig_mask_sub.flatten()
-            Y_sig = Y_raw[:, sig_flat]
-        else:
-            Y_sig = Y_raw[:, np.any(sig_mask_sub, axis=1)]
-
-        if Y_sig.shape[1] == 0:
-            print(f"  No significant targets after column selection; skipping.")
-            continue
-
-        print(f"  X: {X_arr.shape}, Y: {Y_sig.shape}")
+        # Y_sub shape: (n_words, n_sig_elecs * n_lags)
+        print(f"  X: {X_arr.shape}, Y: {Y_sub.shape}")
         _run_srrr_for_unit(
             svd_dir=svd_sub_dir,
             srrr_unit_dir=srrr_sub_dir,
             X_raw=X_arr,
-            Y_full=Y_sig.astype(np.float32),
+            Y_full=Y_sub.astype(np.float32),
             test_idxs=test_idxs,
-            n_words=n_words,
             config=config,
         )
 
@@ -479,20 +353,14 @@ def _run_per_subject_srrr(
 
 def _run_per_region_srrr(
     config, enc, output_dir, srrr_dir, subject_ids,
-    sig_mask_global, metadata_df, n_folds, n_total_elecs, n_lags,
-    aligned_embeddings, df_word,
+    sig_electrodes, n_folds, aligned_embeddings, df_word,
 ):
     """SRRR using per-region SVD bases."""
-
-    # Pre-load test_idxs and X from first subject (word order shared)
-    first_sub = subject_ids[0]
-    sub_enc_dir = os.path.join(output_dir, "subjects", f"sub_{first_sub}")
     enc_results = load_encoding_results(
-        os.path.join(sub_enc_dir, "encoding_results.joblib")
+        os.path.join(output_dir, "subjects", f"sub_{subject_ids[0]}", "encoding_results.joblib")
     )
     ref_test_idxs = enc_results["test_idxs"]
 
-    # Build electrode region map
     print("Building electrode region map...")
     electrode_region_map = build_electrode_region_map(
         subject_ids, enc.data_root,
@@ -511,52 +379,35 @@ def _run_per_region_srrr(
             print(f"  SVD decomposition not found at {svd_region_dir}; skipping.")
             continue
 
-        # Filter to electrodes present in metadata_df
-        sub_elec_map = {
-            sub_id: [e for e in elecs
-                     if e in set(metadata_df.loc[metadata_df["subject"] == sub_id, "electrode"])]
+        # Intersect region electrodes with significant electrodes
+        per_subject_region_elecs = {
+            sub_id: [e for e in elecs if e in set(sig_electrodes.get(sub_id, []))]
             for sub_id, elecs in sub_elec_map.items()
         }
-        sub_elec_map = {s: e for s, e in sub_elec_map.items() if e}
+        per_subject_region_elecs = {s: e for s, e in per_subject_region_elecs.items() if e}
 
-        # Collect Y columns across subjects in this region
-        X_ref = None
-        Y_cols = []
-
-        for sub_id, elec_list in sub_elec_map.items():
-            sub_rows_sub = [
-                r for r in metadata_df.index[metadata_df["subject"] == sub_id].tolist()
-                if metadata_df.loc[r, "electrode"] in set(elec_list)
-            ]
-            if not sub_rows_sub:
-                continue
-
-            sig_mask_sub = sig_mask_global[sub_rows_sub]
-            if sig_mask_sub.sum() == 0:
-                continue
-
-            X_arr, Y_raw, n_elecs = _load_subject_neural_data(
-                sub_id, elec_list, enc, aligned_embeddings, df_word
-            )
-            if X_ref is None:
-                X_ref = X_arr
-
-            n_sub_elecs = len(elec_list)
-            if Y_raw.shape[1] == n_sub_elecs * n_lags:
-                sig_flat = sig_mask_sub.flatten()
-                Y_sig = Y_raw[:, sig_flat]
-            else:
-                Y_sig = Y_raw[:, np.any(sig_mask_sub, axis=1)]
-
-            if Y_sig.shape[1] > 0:
-                Y_cols.append(Y_sig)
-
-        if X_ref is None or not Y_cols:
-            print("  No valid data for region; skipping.")
+        if not per_subject_region_elecs:
+            print(f"  No significant electrodes in region; skipping.")
             continue
 
+        # Load all subjects in region at once
+        subs_in_region = list(per_subject_region_elecs.keys())
+        raws = load_raws(
+            subs_in_region, enc.data_root, use_high_gamma=True,
+            per_subject_electrodes=per_subject_region_elecs,
+        )
+        Y_cols = []
+        X_ref = None
+        for raw, sub_id in zip(raws, subs_in_region):
+            epochs, data = build_word_epochs(raw, df_word)
+            X_arr, Y_sub = apply_offset(aligned_embeddings[epochs.selection], data, enc.offset)
+            if X_ref is None:
+                X_ref = X_arr
+            Y_cols.append(Y_sub)  # (n_words, n_elecs * n_lags)
+        del raws
+        gc.collect()
+
         Y_full = np.concatenate(Y_cols, axis=1).astype(np.float32)
-        n_words = X_ref.shape[0]
         print(f"  X: {X_ref.shape}, Y: {Y_full.shape}")
 
         _run_srrr_for_unit(
@@ -565,7 +416,6 @@ def _run_per_region_srrr(
             X_raw=X_ref,
             Y_full=Y_full,
             test_idxs=ref_test_idxs,
-            n_words=n_words,
             config=config,
         )
 
@@ -597,39 +447,45 @@ def main():
     print(f"SRRR dir:    {srrr_dir}")
     print(f"Mode:        {config.mode.value}")
 
-    # -- Load significance CSV --
-    sig_csv = os.path.join(output_dir, "significance_detailed.csv")
+    # Load all_subject_sig.csv — one row per significant (subject, electrode)
+    sig_csv = os.path.join(output_dir, "all_subject_sig.csv")
     if not os.path.exists(sig_csv):
         raise FileNotFoundError(
-            f"significance_detailed.csv not found at {sig_csv}. "
+            f"all_subject_sig.csv not found at {sig_csv}. "
             "Run run_significance.py first."
         )
     sig_df = pd.read_csv(sig_csv)
-    print(f"Loaded significance CSV: {len(sig_df):,} rows")
+    print(f"Loaded significance CSV: {len(sig_df):,} significant electrodes")
 
-    # -- Load all subject coefficients (for metadata and n_folds) --
-    print("Loading all subject coefficients...")
-    coefficients_all, intercepts_all, metadata_df = load_all_subject_coefficients(
-        output_dir, subjects=subject_ids
+    # Build subject → significant electrode list mapping
+    sig_electrodes = {
+        sub_id: sig_df[sig_df["subject"] == sub_id]["elec"].tolist()
+        for sub_id in subject_ids
+    }
+    sig_electrodes = {s: e for s, e in sig_electrodes.items() if e}
+
+    if not sig_electrodes:
+        raise ValueError(
+            f"No significant electrodes found for subjects {subject_ids} in {sig_csv}."
+        )
+
+    # Determine n_folds from first subject's encoding results
+    first_sub = next(iter(sig_electrodes))
+    enc_results = load_encoding_results(
+        os.path.join(output_dir, "subjects", f"sub_{first_sub}", "encoding_results.joblib")
     )
-    n_folds, n_total_elecs, n_lags, n_features = coefficients_all.shape
-    print(f"  Shape: {coefficients_all.shape}")
-    del coefficients_all, intercepts_all  # not needed for SRRR
+    n_folds = len(enc_results["test_idxs"])
+    print(f"n_folds: {n_folds}")
 
-    sig_mask_global = _build_global_sig_mask(sig_df, metadata_df, n_lags)
-    print(f"  Significant pairs: {sig_mask_global.sum()} / {sig_mask_global.size}")
-
-    # -- Load embeddings --
+    # Load embeddings
     print("Loading embeddings...")
     aligned_embeddings, df_word = load_embeddings(enc.data_root, enc.layer)
 
-    # -- Dispatch --
     branch_kwargs = dict(
         config=config, enc=enc, output_dir=output_dir, srrr_dir=srrr_dir,
         subject_ids=subject_ids,
-        sig_mask_global=sig_mask_global,
-        metadata_df=metadata_df,
-        n_folds=n_folds, n_total_elecs=n_total_elecs, n_lags=n_lags,
+        sig_electrodes=sig_electrodes,
+        n_folds=n_folds,
         aligned_embeddings=aligned_embeddings, df_word=df_word,
     )
 

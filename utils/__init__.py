@@ -50,6 +50,7 @@ from utils.significance import (
     get_sig_results,
 )
 from utils.analysis import (
+    build_global_sig_mask,
     get_correlation_gpu,
     partial_out_direction,
     save_partial_results,
@@ -142,6 +143,7 @@ __all__ = [
     "load_significance_results",
     "get_sig_results",
     # analysis
+    "build_global_sig_mask",
     "get_correlation_gpu",
     "partial_out_direction",
     "save_partial_results",

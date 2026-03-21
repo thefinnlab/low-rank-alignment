@@ -2,7 +2,39 @@ import os
 
 import joblib
 import numpy as np
+import pandas as pd
 import torch
+
+
+def build_global_sig_mask(sig_df: pd.DataFrame, metadata_df: pd.DataFrame, n_lags: int) -> np.ndarray:
+    """Build a (n_total_elecs, n_lags) boolean mask aligned to metadata_df row order.
+
+    Args:
+        sig_df: DataFrame with columns [subject, electrode, lag_idx, sig] from
+            significance_detailed.csv.
+        metadata_df: DataFrame with columns [subject, electrode] in the electrode
+            order used by the encoding model (one row per electrode).
+        n_lags: Number of lag bins.
+
+    Returns:
+        mask: (n_total_elecs, n_lags) bool array.
+    """
+    mask = np.zeros((len(metadata_df), n_lags), dtype=bool)
+    for row_i, row in metadata_df.iterrows():
+        matches = sig_df[
+            (sig_df["subject"] == row["subject"]) &
+            (sig_df["electrode"] == row["electrode"])
+        ]
+        for _, sig_row in matches.iterrows():
+            lag_i = int(sig_row["lag_idx"])
+            assert 0 <= lag_i < n_lags, (
+                f"lag_idx {lag_i} from significance_detailed.csv is out of range "
+                f"[0, {n_lags}) for electrode '{row['electrode']}' "
+                f"(subject {row['subject']}). The CSV may have been produced with "
+                "different lag settings."
+            )
+            mask[row_i, lag_i] = bool(sig_row["sig"])
+    return mask
 
 
 def find_dominant_directions(weights, n_directions=None):
