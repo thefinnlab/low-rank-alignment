@@ -88,7 +88,6 @@ class SRRRConfig:
     max_iter: int = 500
     tol: float = 1e-5
     learning_rate: float = 1e-3
-    warm_start: bool = True               # Carry A,B weights as initial values across lambda grid
 
     # Stability selection
     n_stability_iters: int = 100
