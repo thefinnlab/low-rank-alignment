@@ -8,7 +8,7 @@ from sklearn.model_selection import KFold
 from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import StandardScaler
 
-from utils.tensor_utils import to_numpy
+from utils.tensor_utils import to_numpy, to_torch
 
 
 def train_encoding(
@@ -115,11 +115,11 @@ def get_scaled_model_coefficients(encoding_model, num_electrodes, num_lags):
     Returns:
         Tuple of (ridge_coefficients, ridge_intercept).
     """
-    ridge_coefficients = encoding_model.named_steps['ridgecv'].coef_
+    ridge_coefficients = encoding_model.named_steps["ridgecv"].coef_
     ridge_coefficients = ridge_coefficients.view(
         ridge_coefficients.shape[0], num_electrodes, num_lags
     ).permute(1, 2, 0)
-    ridge_intercept = encoding_model.named_steps['ridgecv'].intercept_
+    ridge_intercept = encoding_model.named_steps["ridgecv"].intercept_
     return ridge_coefficients, ridge_intercept
 
 
@@ -171,7 +171,9 @@ def absorb_scaler(encoding_model, num_electrodes, num_lags):
     return raw_coefs_np, np.asarray(raw_intercept)
 
 
-def get_models_coefficients(encoding_models, num_electrodes, num_lags, scaled_model=False):
+def get_models_coefficients(
+    encoding_models, num_electrodes, num_lags, scaled_model=False
+):
     """
     Extract coefficients from a list of encoding models.
 
@@ -187,7 +189,9 @@ def get_models_coefficients(encoding_models, num_electrodes, num_lags, scaled_mo
     coefficients, intercepts = [], []
     for encoding_model in encoding_models:
         if scaled_model:
-            coefs = get_scaled_model_coefficients(encoding_model, num_electrodes, num_lags)
+            coefs = get_scaled_model_coefficients(
+                encoding_model, num_electrodes, num_lags
+            )
         else:
             coefs = absorb_scaler(encoding_model, num_electrodes, num_lags)
 
@@ -232,6 +236,7 @@ def get_ridge_model_constructor():
         from himalaya.ridge import RidgeCV
         from himalaya.backend import set_backend
         import torch
+
         if torch.cuda.is_available():
             set_backend("torch_cuda")
     except ImportError:
@@ -252,12 +257,14 @@ def get_ridge_model_constructor():
 def save_encoding_results(results: dict, filepath: str) -> None:
     """Persist results dict to disk via joblib.dump."""
     import joblib
+
     joblib.dump(results, filepath)
 
 
 def load_encoding_results(filepath: str) -> dict:
     """Load results dict previously saved by save_encoding_results."""
     import joblib
+
     return joblib.load(filepath)
 
 
@@ -313,22 +320,27 @@ def build_enc_subjects_info(
             y_col_end:   end column (exclusive) in the assembled Y_full
     """
     import os
+
     info_list = []
     y_cursor = 0
     for sub_id in subs_in_unit:
         enc_results = load_encoding_results(
-            os.path.join(output_dir, "subjects", f"sub_{sub_id}", "encoding_results.joblib")
+            os.path.join(
+                output_dir, "subjects", f"sub_{sub_id}", "encoding_results.joblib"
+            )
         )
         target_elecs = target_elecs_per_sub[sub_id]
         col_idxs = _make_col_idxs(enc_results, target_elecs)
         n_target_cols = len(target_elecs) * len(enc_results["lags"])
-        info_list.append({
-            "models": enc_results["models"],
-            "scalers": enc_results["scalers"],
-            "col_idxs": col_idxs,
-            "y_col_start": y_cursor,
-            "y_col_end": y_cursor + n_target_cols,
-        })
+        info_list.append(
+            {
+                "models": enc_results["models"],
+                "scalers": enc_results["scalers"],
+                "col_idxs": col_idxs,
+                "y_col_start": y_cursor,
+                "y_col_end": y_cursor + n_target_cols,
+            }
+        )
         y_cursor += n_target_cols
     return info_list
 
@@ -393,7 +405,7 @@ def build_per_fold_baselines(
             # coef_ is a torch tensor (saved with torch backend), so X must also
             # be a torch tensor on the same device for the matmul to type-match.
             ridge_coef = model[-1].coef_
-            if isinstance(ridge_coef, torch.Tensor):
+            if hasattr(ridge_coef, "device"):
                 X_train = to_torch(X_raw[train_idx], device=str(ridge_coef.device))
                 X_test = to_torch(X_raw[test_idx], device=str(ridge_coef.device))
             else:
@@ -411,15 +423,21 @@ def build_per_fold_baselines(
             beta_sub_all = coef / model[0].scale_[:, np.newaxis]
             beta_full_raw[:, y_start:y_end] = beta_sub_all[:, col_idxs]
 
-        baselines.append({
-            "train_idx": train_idx,
-            "test_idx": test_idx,
-            "Y_train": np.concatenate(Y_train_parts, axis=1).astype(np.float32),
-            "Y_test": np.concatenate(Y_test_parts, axis=1).astype(np.float32),
-            "Y_hat_full_train": np.concatenate(Y_hat_train_parts, axis=1).astype(np.float32),
-            "Y_hat_full_test": np.concatenate(Y_hat_test_parts, axis=1).astype(np.float32),
-            "beta_full_raw": beta_full_raw,
-        })
+        baselines.append(
+            {
+                "train_idx": train_idx,
+                "test_idx": test_idx,
+                "Y_train": np.concatenate(Y_train_parts, axis=1).astype(np.float32),
+                "Y_test": np.concatenate(Y_test_parts, axis=1).astype(np.float32),
+                "Y_hat_full_train": np.concatenate(Y_hat_train_parts, axis=1).astype(
+                    np.float32
+                ),
+                "Y_hat_full_test": np.concatenate(Y_hat_test_parts, axis=1).astype(
+                    np.float32
+                ),
+                "beta_full_raw": beta_full_raw,
+            }
+        )
 
     return baselines
 
@@ -449,8 +467,19 @@ def apply_offset(averaged_embeddings, data, offset):
 
 
 def save_subject_results(
-    output_dir, sub_id, corrs, coefficients, intercepts, models,
-    tr_idxs, test_idxs, scalers, elec_names, offset, layer_int, lags,
+    output_dir,
+    sub_id,
+    corrs,
+    coefficients,
+    intercepts,
+    models,
+    tr_idxs,
+    test_idxs,
+    scalers,
+    elec_names,
+    offset,
+    layer_int,
+    lags,
     corrs_arb=None,
 ):
     """Build results dict and write outputs to {output_dir}/subjects/sub_{sub_id}/.
@@ -500,7 +529,9 @@ def save_subject_results(
     if corrs_arb is not None:
         np.save(os.path.join(sub_dir, "arbitrary_corrs.npy"), corrs_arb)
         plot_corrs_vs_arbitrary(
-            corrs, corrs_arb, lags,
+            corrs,
+            corrs_arb,
+            lags,
             save_path=os.path.join(sub_dir, "corrs_plot.png"),
         )
     print(f"  Subject {sub_id}: {corrs.shape[1]} electrodes → {sub_dir}")
@@ -520,7 +551,11 @@ def _iter_subject_results(output_dir, subjects=None):
     paths = sorted(glob.glob(pattern))
     if subjects is not None:
         subjects_set = set(subjects)
-        paths = [p for p in paths if int(os.path.basename(os.path.dirname(p)).split("_")[1]) in subjects_set]
+        paths = [
+            p
+            for p in paths
+            if int(os.path.basename(os.path.dirname(p)).split("_")[1]) in subjects_set
+        ]
     if not paths:
         raise FileNotFoundError(
             f"No subject encoding results found under {output_dir}/subjects/ "
@@ -578,7 +613,9 @@ def load_all_subject_coefficients(output_dir: str, subjects=None):
     all_subject_intercepts = []  # list of (list-of-folds per subject)
     rows = []
     for sub_id, results in _iter_subject_results(output_dir, subjects):
-        coefficients = results["coefficients"]  # list of (n_elecs, n_lags, n_features) per fold
+        coefficients = results[
+            "coefficients"
+        ]  # list of (n_elecs, n_lags, n_features) per fold
         intercepts = results["intercepts"]  # list of (n_elecs * n_lags,) per fold
         elec_names = results["elec_names"]
         all_subject_coefs.append(coefficients)
@@ -588,12 +625,19 @@ def load_all_subject_coefficients(output_dir: str, subjects=None):
 
     n_folds = len(all_subject_coefs[0])
     # Stack per-fold concatenations into a single (n_folds, n_total_elecs, n_lags, n_features) array
-    coefficients_all = np.stack([
-        np.concatenate([subj_coefs[fold] for subj_coefs in all_subject_coefs], axis=0)
-        for fold in range(n_folds)
-    ])
+    coefficients_all = np.stack(
+        [
+            np.concatenate(
+                [subj_coefs[fold] for subj_coefs in all_subject_coefs], axis=0
+            )
+            for fold in range(n_folds)
+        ]
+    )
     intercepts_all = [
-        np.concatenate([subj_intercepts[fold] for subj_intercepts in all_subject_intercepts], axis=0)
+        np.concatenate(
+            [subj_intercepts[fold] for subj_intercepts in all_subject_intercepts],
+            axis=0,
+        )
         for fold in range(n_folds)
     ]
     metadata_df = pd.DataFrame(rows, columns=["subject", "electrode"])

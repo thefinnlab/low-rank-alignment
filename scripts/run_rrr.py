@@ -66,6 +66,7 @@ from utils.srrr import (
 # Core per-unit loop
 # ---------------------------------------------------------------------------
 
+
 def _run_rrr_for_unit(
     rrr_unit_dir: str,
     X_raw: np.ndarray,
@@ -109,9 +110,14 @@ def _run_rrr_for_unit(
         Y_hat_ols_train = baseline["Y_hat_full_train"]
 
         print(f"  Running {len(config.rank_grid)} rank(s): {config.rank_grid}")
-        for k in tqdm(config.rank_grid, desc=f"  fold {fold_f}", leave=True, unit="rank"):
+        for k in tqdm(
+            config.rank_grid, desc=f"  fold {fold_f}", leave=True, unit="rank"
+        ):
             rrr_result = fit_dense_rrr(
-                X_train, Y_train, k=k, selected_idx=selected_idx,
+                X_train,
+                Y_train,
+                k=k,
+                selected_idx=selected_idx,
                 precomputed_Y_hat_ols=Y_hat_ols_train,
                 precomputed_beta_full=baseline["beta_full_raw"],
             )
@@ -124,15 +130,25 @@ def _run_rrr_for_unit(
             # Residualization: fit a new model on Y_train - Y_hat_rrr_train,
             # evaluate recovery R² on Y_test - Y_hat_rrr_test
             suf = run_sufficiency_test(
-                X_train, Y_train - Y_hat_rrr_train,
-                X_test, Y_test,
+                X_train,
+                Y_train - Y_hat_rrr_train,
+                X_test,
+                Y_test,
                 Y_hat_full=Y_hat_full,
                 Y_hat_min=Y_hat_rrr,
                 null_r2=None,
                 model_constructor_fn=get_ridge_model_constructor,
             )
-            cca_sim = compute_cca_similarity(Y_hat_full, Y_hat_rrr) if config.compute_cca else None
-            proc_sim = compute_procrustes_similarity(Y_hat_full, Y_hat_rrr) if config.compute_procrustes else None
+            cca_sim = (
+                compute_cca_similarity(Y_hat_full, Y_hat_rrr)
+                if config.compute_cca
+                else None
+            )
+            proc_sim = (
+                compute_procrustes_similarity(Y_hat_full, Y_hat_rrr)
+                if config.compute_procrustes
+                else None
+            )
 
             metrics = {
                 "full_r2": suf["full_r2"],
@@ -168,8 +184,10 @@ def _run_rrr_for_unit(
     summary.to_csv(os.path.join(rrr_unit_dir, "summary.csv"), index=False)
 
     from utils.plotting import plot_rrr_rank_results
+
     plot_rrr_rank_results(
-        summary, grid_df=df,
+        summary,
+        grid_df=df,
         title=f"RRR: R² vs rank ({os.path.basename(rrr_unit_dir)})",
         save_path=os.path.join(rrr_unit_dir, "rank_analysis.png"),
     )
@@ -181,28 +199,47 @@ def _run_rrr_for_unit(
 # Branch: cross-subject RRR
 # ---------------------------------------------------------------------------
 
+
 def _run_cross_subject_rrr(
-    config, enc, output_dir, rrr_dir, subject_ids,
-    sig_electrodes, aligned_embeddings, df_word,
+    config,
+    enc,
+    output_dir,
+    rrr_dir,
+    subject_ids,
+    sig_electrodes,
+    aligned_embeddings,
+    df_word,
 ):
     """RRR on raw embeddings using all subjects' significant electrodes."""
     enc_results = load_encoding_results(
-        os.path.join(output_dir, "subjects", f"sub_{subject_ids[0]}", "encoding_results.joblib")
+        os.path.join(
+            output_dir, "subjects", f"sub_{subject_ids[0]}", "encoding_results.joblib"
+        )
     )
     ref_test_idxs = enc_results["test_idxs"]
 
-    subs_with_sig = [s for s in subject_ids if s in sig_electrodes and sig_electrodes[s]]
+    subs_with_sig = [
+        s for s in subject_ids if s in sig_electrodes and sig_electrodes[s]
+    ]
     if not subs_with_sig:
         print("  No significant electrodes found; skipping cross-subject RRR.")
         return
 
     X_ref, Y_full = build_XY_from_subjects(
-        subject_ids, enc, sig_electrodes, aligned_embeddings, df_word,
+        subject_ids,
+        enc,
+        sig_electrodes,
+        aligned_embeddings,
+        df_word,
     )
     print(f"  X: {X_ref.shape}, Y: {Y_full.shape}")
 
-    enc_subjects_info = build_enc_subjects_info(output_dir, subs_with_sig, sig_electrodes)
-    per_fold_baselines = build_per_fold_baselines(X_ref, Y_full, ref_test_idxs, enc_subjects_info)
+    enc_subjects_info = build_enc_subjects_info(
+        output_dir, subs_with_sig, sig_electrodes
+    )
+    per_fold_baselines = build_per_fold_baselines(
+        X_ref, Y_full, ref_test_idxs, enc_subjects_info
+    )
 
     _run_rrr_for_unit(
         rrr_unit_dir=rrr_dir,
@@ -217,9 +254,16 @@ def _run_cross_subject_rrr(
 # Branch: per-subject RRR
 # ---------------------------------------------------------------------------
 
+
 def _run_per_subject_rrr(
-    config, enc, output_dir, rrr_dir, subject_ids,
-    sig_electrodes, aligned_embeddings, df_word,
+    config,
+    enc,
+    output_dir,
+    rrr_dir,
+    subject_ids,
+    sig_electrodes,
+    aligned_embeddings,
+    df_word,
 ):
     """RRR on raw embeddings independently per subject."""
     for sub_id in subject_ids:
@@ -232,25 +276,35 @@ def _run_per_subject_rrr(
             continue
 
         enc_results = load_encoding_results(
-            os.path.join(output_dir, "subjects", f"sub_{sub_id}", "encoding_results.joblib")
+            os.path.join(
+                output_dir, "subjects", f"sub_{sub_id}", "encoding_results.joblib"
+            )
         )
         test_idxs = enc_results["test_idxs"]
 
         raws = load_raws(
-            [sub_id], enc.data_root, use_high_gamma=True,
+            [sub_id],
+            enc.data_root,
+            use_high_gamma=True,
             per_subject_electrodes={sub_id: sub_sig_elecs},
         )
         raw = raws[0]
         epochs, data = build_word_epochs(raw, df_word)
-        X_arr, Y_sub = apply_offset(aligned_embeddings[epochs.selection], data, enc.offset)
+        X_arr, Y_sub = apply_offset(
+            aligned_embeddings[epochs.selection], data, enc.offset
+        )
         del raws, raw, epochs, data
         gc.collect()
 
         Y_sub = Y_sub.astype(np.float32)
         print(f"  X: {X_arr.shape}, Y: {Y_sub.shape}")
 
-        enc_subjects_info = build_enc_subjects_info(output_dir, [sub_id], {sub_id: sub_sig_elecs})
-        per_fold_baselines = build_per_fold_baselines(X_arr, Y_sub, test_idxs, enc_subjects_info)
+        enc_subjects_info = build_enc_subjects_info(
+            output_dir, [sub_id], {sub_id: sub_sig_elecs}
+        )
+        per_fold_baselines = build_per_fold_baselines(
+            X_arr, Y_sub, test_idxs, enc_subjects_info
+        )
 
         _run_rrr_for_unit(
             rrr_unit_dir=rrr_sub_dir,
@@ -265,19 +319,29 @@ def _run_per_subject_rrr(
 # Branch: per-region RRR
 # ---------------------------------------------------------------------------
 
+
 def _run_per_region_rrr(
-    config, enc, output_dir, rrr_dir, subject_ids,
-    sig_electrodes, aligned_embeddings, df_word,
+    config,
+    enc,
+    output_dir,
+    rrr_dir,
+    subject_ids,
+    sig_electrodes,
+    aligned_embeddings,
+    df_word,
 ):
     """RRR on raw embeddings independently per atlas region."""
     enc_results = load_encoding_results(
-        os.path.join(output_dir, "subjects", f"sub_{subject_ids[0]}", "encoding_results.joblib")
+        os.path.join(
+            output_dir, "subjects", f"sub_{subject_ids[0]}", "encoding_results.joblib"
+        )
     )
     ref_test_idxs = enc_results["test_idxs"]
 
     print("Building electrode region map...")
     electrode_region_map = build_electrode_region_map(
-        subject_ids, enc.data_root,
+        subject_ids,
+        enc.data_root,
         getattr(config, "atlas_region_groups", None),
         getattr(config, "atlas_path", None),
     )
@@ -293,7 +357,9 @@ def _run_per_region_rrr(
             sub_id: [e for e in elecs if e in set(sig_electrodes.get(sub_id, []))]
             for sub_id, elecs in sub_elec_map.items()
         }
-        per_subject_region_elecs = {s: e for s, e in per_subject_region_elecs.items() if e}
+        per_subject_region_elecs = {
+            s: e for s, e in per_subject_region_elecs.items() if e
+        }
 
         if not per_subject_region_elecs:
             print(f"  No significant electrodes in region; skipping.")
@@ -301,12 +367,20 @@ def _run_per_region_rrr(
 
         subs_in_region = list(per_subject_region_elecs.keys())
         X_ref, Y_full = build_XY_from_subjects(
-            subs_in_region, enc, per_subject_region_elecs, aligned_embeddings, df_word,
+            subs_in_region,
+            enc,
+            per_subject_region_elecs,
+            aligned_embeddings,
+            df_word,
         )
         print(f"  X: {X_ref.shape}, Y: {Y_full.shape}")
 
-        enc_subjects_info = build_enc_subjects_info(output_dir, subs_in_region, per_subject_region_elecs)
-        per_fold_baselines = build_per_fold_baselines(X_ref, Y_full, ref_test_idxs, enc_subjects_info)
+        enc_subjects_info = build_enc_subjects_info(
+            output_dir, subs_in_region, per_subject_region_elecs
+        )
+        per_fold_baselines = build_per_fold_baselines(
+            X_ref, Y_full, ref_test_idxs, enc_subjects_info
+        )
 
         _run_rrr_for_unit(
             rrr_unit_dir=rrr_region_dir,
@@ -321,10 +395,17 @@ def _run_per_region_rrr(
 # Main
 # ---------------------------------------------------------------------------
 
+
 def main():
     args, overrides = parse_args("RRR: raw-input reduced rank regression baseline")
     config: RRRConfig = load_config(args.config, overrides, RRRConfig)
     enc = config.encoding
+
+    import torch
+    from himalaya.backend import set_backend
+
+    if torch.cuda.is_available():
+        set_backend("torch_cuda")
 
     subject_ids = enc.subjects or list(range(1, 10))
     output_dir = config.output_dir or get_results_dir(enc.model, enc.layer, enc.offset)
@@ -371,10 +452,14 @@ def main():
     aligned_embeddings, df_word = load_embeddings(enc.data_root, enc.layer)
 
     branch_kwargs = dict(
-        config=config, enc=enc, output_dir=output_dir, rrr_dir=rrr_dir,
+        config=config,
+        enc=enc,
+        output_dir=output_dir,
+        rrr_dir=rrr_dir,
         subject_ids=subject_ids,
         sig_electrodes=sig_electrodes,
-        aligned_embeddings=aligned_embeddings, df_word=df_word,
+        aligned_embeddings=aligned_embeddings,
+        df_word=df_word,
     )
 
     if config.mode == SVDMode.PER_REGION:
