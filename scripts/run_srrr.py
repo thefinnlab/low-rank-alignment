@@ -76,6 +76,7 @@ from utils.srrr import (
 # Core per-unit loop
 # ---------------------------------------------------------------------------
 
+
 def _run_srrr_for_unit(
     svd_dir: str,
     srrr_unit_dir: str,
@@ -129,28 +130,42 @@ def _run_srrr_for_unit(
         if config.use_null_dist:
             null_cache = (
                 os.path.join(srrr_unit_dir, f"null_dist_fold_{fold_f}.npy")
-                if config.cache_null_dist else None
+                if config.cache_null_dist
+                else None
             )
             cached = null_cache and os.path.exists(null_cache)
-            print(f"  Building null distribution ({config.n_permutations} permutations){' [cached]' if cached else ''}...")
+            print(
+                f"  Building null distribution ({config.n_permutations} permutations){' [cached]' if cached else ''}..."
+            )
             null_r2 = build_null_distribution(
-                X_proj_train, Y_train, X_proj_test, Y_test,
+                X_proj_train,
+                Y_train,
+                X_proj_test,
+                Y_test,
                 model_constructor_fn=get_ridge_model_constructor,
                 n_permutations=config.n_permutations,
                 cache_path=null_cache,
                 seed=fold_f,
             )
-            print(f"  Null distribution ready. Running {len(config.rank_grid) * len(config.lambda_grid)} (k, lam) combos...")
+            print(
+                f"  Null distribution ready. Running {len(config.rank_grid) * len(config.lambda_grid)} (k, lam) combos..."
+            )
         else:
             null_r2 = None
-            print(f"  Null distribution disabled. Running {len(config.rank_grid) * len(config.lambda_grid)} (k, lam) combos...")
+            print(
+                f"  Null distribution disabled. Running {len(config.rank_grid) * len(config.lambda_grid)} (k, lam) combos..."
+            )
 
-        grid = [(k, lam) for k in config.rank_grid for lam in sorted(config.lambda_grid)]
+        grid = [
+            (k, lam) for k in config.rank_grid for lam in sorted(config.lambda_grid)
+        ]
         for k, lam in tqdm(grid, desc=f"  fold {fold_f}", leave=True, unit="combo"):
             # Stability selection
             sel_probs = run_stability_selection(
-                X_proj_train, Y_train,
-                k=k, lam=lam,
+                X_proj_train,
+                Y_train,
+                k=k,
+                lam=lam,
                 n_iters=config.n_stability_iters,
                 subsample_frac=config.subsample_fraction,
                 max_iter=config.max_iter,
@@ -158,7 +173,9 @@ def _run_srrr_for_unit(
                 lr=config.learning_rate,
                 seed=fold_f * 100000 + k * 1000 + int(lam * 1000),
             )
-            selected_idx = select_directions(sel_probs, threshold=config.selection_threshold)
+            selected_idx = select_directions(
+                sel_probs, threshold=config.selection_threshold
+            )
 
             if len(selected_idx) == 0:
                 warnings.warn(
@@ -174,30 +191,49 @@ def _run_srrr_for_unit(
                 Y_hat_min_train = np.zeros_like(Y_train)
             else:
                 cons_result = fit_dense_rrr(
-                    X_proj_train, Y_train, k=k, selected_idx=selected_idx,
+                    X_proj_train,
+                    Y_train,
+                    k=k,
+                    selected_idx=selected_idx,
                     precomputed_Y_hat_ols=baseline["Y_hat_full_train"],
                     precomputed_beta_full=beta_full_SVD,
                 )
                 A_cons = cons_result["A_dense"]
                 B_cons = cons_result["B_dense"]
                 Y_hat_min = predict_from_factors(
-                    X_proj_test, A_cons, B_cons, selected_idx=selected_idx,
+                    X_proj_test,
+                    A_cons,
+                    B_cons,
+                    selected_idx=selected_idx,
                 )
                 Y_hat_min_train = predict_from_factors(
-                    X_proj_train, A_cons, B_cons, selected_idx=selected_idx,
+                    X_proj_train,
+                    A_cons,
+                    B_cons,
+                    selected_idx=selected_idx,
                 )
 
             suf = run_sufficiency_test(
-                X_proj_train, Y_train - Y_hat_min_train,
-                X_proj_test, Y_test,
+                X_proj_train,
+                Y_train - Y_hat_min_train,
+                X_proj_test,
+                Y_test,
                 Y_hat_full=Y_hat_full,
                 Y_hat_min=Y_hat_min,
                 null_r2=null_r2,
                 p_value_threshold=config.p_value_threshold,
                 model_constructor_fn=get_ridge_model_constructor,
             )
-            cca_sim = compute_cca_similarity(Y_hat_full, Y_hat_min) if config.compute_cca else None
-            proc_sim = compute_procrustes_similarity(Y_hat_full, Y_hat_min) if config.compute_procrustes else None
+            cca_sim = (
+                compute_cca_similarity(Y_hat_full, Y_hat_min)
+                if config.compute_cca
+                else None
+            )
+            proc_sim = (
+                compute_procrustes_similarity(Y_hat_full, Y_hat_min)
+                if config.compute_procrustes
+                else None
+            )
 
             metrics = {
                 **suf,
@@ -211,23 +247,32 @@ def _run_srrr_for_unit(
             if proc_sim is not None:
                 metrics["procrustes_similarity"] = proc_sim
             save_srrr_result(
-                srrr_unit_dir, k=k, lam=lam, fold=fold_f,
+                srrr_unit_dir,
+                k=k,
+                lam=lam,
+                fold=fold_f,
                 selection_probs=sel_probs,
                 selected_idx=selected_idx,
-                A=A_cons, B=B_cons,
+                A=A_cons,
+                B=B_cons,
                 metrics=metrics,
             )
             all_rows.append(metrics)
 
-        print(
-            f"  Fold {fold_f} done in {time.time() - fold_start:.1f}s"
-        )
+        print(f"  Fold {fold_f} done in {time.time() - fold_start:.1f}s")
 
     df = pd.DataFrame(all_rows)
     df.to_csv(os.path.join(srrr_unit_dir, "grid_results.csv"), index=False)
 
     # Summary: average over folds (only include columns that were computed)
-    agg_cols = ["minimal_r2", "full_r2", "recovery_r2", "pred_r2", "sufficient", "n_selected"]
+    agg_cols = [
+        "minimal_r2",
+        "full_r2",
+        "recovery_r2",
+        "pred_r2",
+        "sufficient",
+        "n_selected",
+    ]
     if config.compute_cca:
         agg_cols.append("cca_similarity")
     if config.compute_procrustes:
@@ -255,8 +300,10 @@ def _run_srrr_for_unit(
     knee_df.to_csv(os.path.join(srrr_unit_dir, "knee_selection.csv"), index=False)
 
     from utils.plotting import plot_srrr_rank_results
+
     plot_srrr_rank_results(
-        summary, knee_df=knee_df if not knee_df.empty else None,
+        summary,
+        knee_df=knee_df if not knee_df.empty else None,
         title=f"SRRR: Rank analysis ({os.path.basename(srrr_unit_dir)})",
         save_path=os.path.join(srrr_unit_dir, "rank_analysis.png"),
     )
@@ -268,30 +315,50 @@ def _run_srrr_for_unit(
 # Branch: cross-subject SRRR
 # ---------------------------------------------------------------------------
 
+
 def _run_cross_subject_srrr(
-    config, enc, output_dir, srrr_dir, subject_ids,
-    sig_electrodes, n_folds, aligned_embeddings, df_word,
+    config,
+    enc,
+    output_dir,
+    srrr_dir,
+    subject_ids,
+    sig_electrodes,
+    n_folds,
+    aligned_embeddings,
+    df_word,
 ):
     """SRRR using the cross-subject SVD basis."""
     svd_dir = os.path.join(output_dir, "svd")
 
     enc_results = load_encoding_results(
-        os.path.join(output_dir, "subjects", f"sub_{subject_ids[0]}", "encoding_results.joblib")
+        os.path.join(
+            output_dir, "subjects", f"sub_{subject_ids[0]}", "encoding_results.joblib"
+        )
     )
     ref_test_idxs = enc_results["test_idxs"]
 
-    subs_with_sig = [s for s in subject_ids if s in sig_electrodes and sig_electrodes[s]]
+    subs_with_sig = [
+        s for s in subject_ids if s in sig_electrodes and sig_electrodes[s]
+    ]
     if not subs_with_sig:
         print("  No significant electrodes found; skipping cross-subject SRRR.")
         return
 
     X_ref, Y_full = build_XY_from_subjects(
-        subject_ids, enc, sig_electrodes, aligned_embeddings, df_word,
+        subject_ids,
+        enc,
+        sig_electrodes,
+        aligned_embeddings,
+        df_word,
     )
     print(f"  X: {X_ref.shape}, Y: {Y_full.shape}")
 
-    enc_subjects_info = build_enc_subjects_info(output_dir, subs_with_sig, sig_electrodes)
-    per_fold_baselines = build_per_fold_baselines(X_ref, Y_full, ref_test_idxs, enc_subjects_info)
+    enc_subjects_info = build_enc_subjects_info(
+        output_dir, subs_with_sig, sig_electrodes
+    )
+    per_fold_baselines = build_per_fold_baselines(
+        X_ref, Y_full, ref_test_idxs, enc_subjects_info
+    )
 
     _run_srrr_for_unit(
         svd_dir=svd_dir,
@@ -307,15 +374,25 @@ def _run_cross_subject_srrr(
 # Branch: per-subject SRRR
 # ---------------------------------------------------------------------------
 
+
 def _run_per_subject_srrr(
-    config, enc, output_dir, srrr_dir, subject_ids,
-    sig_electrodes, n_folds, aligned_embeddings, df_word,
+    config,
+    enc,
+    output_dir,
+    srrr_dir,
+    subject_ids,
+    sig_electrodes,
+    n_folds,
+    aligned_embeddings,
+    df_word,
 ):
     """SRRR using per-subject SVD bases."""
     for sub_id in subject_ids:
         print(f"\n{'='*60}\nSubject {sub_id}")
 
-        svd_sub_dir = os.path.join(output_dir, "per_subject_svd", "subjects", f"sub_{sub_id}")
+        svd_sub_dir = os.path.join(
+            output_dir, "per_subject_svd", "subjects", f"sub_{sub_id}"
+        )
         srrr_sub_dir = os.path.join(srrr_dir, "subjects", f"sub_{sub_id}")
 
         if not os.path.exists(os.path.join(svd_sub_dir, "svd_decomposition.npz")):
@@ -328,17 +405,23 @@ def _run_per_subject_srrr(
             continue
 
         enc_results = load_encoding_results(
-            os.path.join(output_dir, "subjects", f"sub_{sub_id}", "encoding_results.joblib")
+            os.path.join(
+                output_dir, "subjects", f"sub_{sub_id}", "encoding_results.joblib"
+            )
         )
         test_idxs = enc_results["test_idxs"]
 
         raws = load_raws(
-            [sub_id], enc.data_root, use_high_gamma=True,
+            [sub_id],
+            enc.data_root,
+            use_high_gamma=True,
             per_subject_electrodes={sub_id: sub_sig_elecs},
         )
         raw = raws[0]
         epochs, data = build_word_epochs(raw, df_word)
-        X_arr, Y_sub = apply_offset(aligned_embeddings[epochs.selection], data, enc.offset)
+        X_arr, Y_sub = apply_offset(
+            aligned_embeddings[epochs.selection], data, enc.offset
+        )
         del raws, raw, epochs, data
         gc.collect()
 
@@ -346,8 +429,12 @@ def _run_per_subject_srrr(
         # Y_sub shape: (n_words, n_sig_elecs * n_lags)
         print(f"  X: {X_arr.shape}, Y: {Y_sub.shape}")
 
-        enc_subjects_info = build_enc_subjects_info(output_dir, [sub_id], {sub_id: sub_sig_elecs})
-        per_fold_baselines = build_per_fold_baselines(X_arr, Y_sub, test_idxs, enc_subjects_info)
+        enc_subjects_info = build_enc_subjects_info(
+            output_dir, [sub_id], {sub_id: sub_sig_elecs}
+        )
+        per_fold_baselines = build_per_fold_baselines(
+            X_arr, Y_sub, test_idxs, enc_subjects_info
+        )
 
         _run_srrr_for_unit(
             svd_dir=svd_sub_dir,
@@ -363,19 +450,30 @@ def _run_per_subject_srrr(
 # Branch: per-region SRRR
 # ---------------------------------------------------------------------------
 
+
 def _run_per_region_srrr(
-    config, enc, output_dir, srrr_dir, subject_ids,
-    sig_electrodes, n_folds, aligned_embeddings, df_word,
+    config,
+    enc,
+    output_dir,
+    srrr_dir,
+    subject_ids,
+    sig_electrodes,
+    n_folds,
+    aligned_embeddings,
+    df_word,
 ):
     """SRRR using per-region SVD bases."""
     enc_results = load_encoding_results(
-        os.path.join(output_dir, "subjects", f"sub_{subject_ids[0]}", "encoding_results.joblib")
+        os.path.join(
+            output_dir, "subjects", f"sub_{subject_ids[0]}", "encoding_results.joblib"
+        )
     )
     ref_test_idxs = enc_results["test_idxs"]
 
     print("Building electrode region map...")
     electrode_region_map = build_electrode_region_map(
-        subject_ids, enc.data_root,
+        subject_ids,
+        enc.data_root,
         getattr(config, "atlas_region_groups", None),
         getattr(config, "atlas_path", None),
     )
@@ -384,7 +482,9 @@ def _run_per_region_srrr(
     for region_name, sub_elec_map in electrode_region_map.items():
         print(f"\n{'='*60}\nRegion: {region_name}")
 
-        svd_region_dir = os.path.join(output_dir, "per_region_svd", "regions", region_name)
+        svd_region_dir = os.path.join(
+            output_dir, "per_region_svd", "regions", region_name
+        )
         srrr_region_dir = os.path.join(srrr_dir, "regions", region_name)
 
         if not os.path.exists(os.path.join(svd_region_dir, "svd_decomposition.npz")):
@@ -396,7 +496,9 @@ def _run_per_region_srrr(
             sub_id: [e for e in elecs if e in set(sig_electrodes.get(sub_id, []))]
             for sub_id, elecs in sub_elec_map.items()
         }
-        per_subject_region_elecs = {s: e for s, e in per_subject_region_elecs.items() if e}
+        per_subject_region_elecs = {
+            s: e for s, e in per_subject_region_elecs.items() if e
+        }
 
         if not per_subject_region_elecs:
             print(f"  No significant electrodes in region; skipping.")
@@ -404,12 +506,20 @@ def _run_per_region_srrr(
 
         subs_in_region = list(per_subject_region_elecs.keys())
         X_ref, Y_full = build_XY_from_subjects(
-            subs_in_region, enc, per_subject_region_elecs, aligned_embeddings, df_word,
+            subs_in_region,
+            enc,
+            per_subject_region_elecs,
+            aligned_embeddings,
+            df_word,
         )
         print(f"  X: {X_ref.shape}, Y: {Y_full.shape}")
 
-        enc_subjects_info = build_enc_subjects_info(output_dir, subs_in_region, per_subject_region_elecs)
-        per_fold_baselines = build_per_fold_baselines(X_ref, Y_full, ref_test_idxs, enc_subjects_info)
+        enc_subjects_info = build_enc_subjects_info(
+            output_dir, subs_in_region, per_subject_region_elecs
+        )
+        per_fold_baselines = build_per_fold_baselines(
+            X_ref, Y_full, ref_test_idxs, enc_subjects_info
+        )
 
         _run_srrr_for_unit(
             svd_dir=svd_region_dir,
@@ -425,10 +535,17 @@ def _run_per_region_srrr(
 # Main
 # ---------------------------------------------------------------------------
 
+
 def main():
     args, overrides = parse_args("SRRR: find minimal SVD directions for encoding model")
     config: SRRRConfig = load_config(args.config, overrides, SRRRConfig)
     enc = config.encoding
+
+    import torch
+    from himalaya.backend import set_backend
+
+    if torch.cuda.is_available():
+        set_backend("torch_cuda")
 
     subject_ids = enc.subjects or list(range(1, 10))
     output_dir = config.output_dir or get_results_dir(enc.model, enc.layer, enc.offset)
@@ -473,7 +590,9 @@ def main():
     # Determine n_folds from first subject's encoding results
     first_sub = next(iter(sig_electrodes))
     enc_results = load_encoding_results(
-        os.path.join(output_dir, "subjects", f"sub_{first_sub}", "encoding_results.joblib")
+        os.path.join(
+            output_dir, "subjects", f"sub_{first_sub}", "encoding_results.joblib"
+        )
     )
     n_folds = len(enc_results["test_idxs"])
     print(f"n_folds: {n_folds}")
@@ -483,11 +602,15 @@ def main():
     aligned_embeddings, df_word = load_embeddings(enc.data_root, enc.layer)
 
     branch_kwargs = dict(
-        config=config, enc=enc, output_dir=output_dir, srrr_dir=srrr_dir,
+        config=config,
+        enc=enc,
+        output_dir=output_dir,
+        srrr_dir=srrr_dir,
         subject_ids=subject_ids,
         sig_electrodes=sig_electrodes,
         n_folds=n_folds,
-        aligned_embeddings=aligned_embeddings, df_word=df_word,
+        aligned_embeddings=aligned_embeddings,
+        df_word=df_word,
     )
 
     if config.mode == SVDMode.PER_REGION:
