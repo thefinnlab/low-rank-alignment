@@ -1,7 +1,7 @@
 # Public API for the utils package.
 # Import the most commonly used functions for convenience.
 
-from utils.config import EncodingConfig, SignificanceConfig, SVDConfig, SVDMode, get_results_dir
+from utils.config import EncodingConfig, SignificanceConfig, SVDConfig, SRRRConfig, SVDMode, get_results_dir
 from utils.config_utils import (
     parse_override_args,
     get_nested_value,
@@ -50,6 +50,7 @@ from utils.significance import (
     get_sig_results,
 )
 from utils.analysis import (
+    build_global_sig_mask,
     get_correlation_gpu,
     partial_out_direction,
     save_partial_results,
@@ -65,6 +66,24 @@ from utils.atlas import (
     group_electrodes_by_region,
     build_electrode_region_map,
 )
+from utils.srrr import (
+    load_svd_decomposition,
+    prox_l21,
+    solve_B_closed_form,
+    fit_srrr_proxgd,
+    run_stability_selection,
+    select_directions,
+    fit_dense_rrr,
+    predict_from_factors,
+    compute_r2,
+    build_null_distribution,
+    run_sufficiency_test,
+    compute_cca_similarity,
+    compute_procrustes_similarity,
+    save_srrr_result,
+    load_srrr_result,
+    find_knee_lambda,
+)
 from utils.examples import (
     _make_context,
     _sample,
@@ -78,6 +97,7 @@ __all__ = [
     "EncodingConfig",
     "SignificanceConfig",
     "SVDConfig",
+    "SRRRConfig",
     "SVDMode",
     "get_results_dir",
     "parse_override_args",
@@ -122,6 +142,7 @@ __all__ = [
     "load_significance_results",
     "get_sig_results",
     # analysis
+    "build_global_sig_mask",
     "get_correlation_gpu",
     "partial_out_direction",
     "save_partial_results",
@@ -135,6 +156,23 @@ __all__ = [
     "get_coord_atlas_labels",
     "group_electrodes_by_region",
     "build_electrode_region_map",
+    # srrr
+    "load_svd_decomposition",
+    "prox_l21",
+    "solve_B_closed_form",
+    "fit_srrr_proxgd",
+    "run_stability_selection",
+    "select_directions",
+    "fit_dense_rrr",
+    "predict_from_factors",
+    "compute_r2",
+    "build_null_distribution",
+    "run_sufficiency_test",
+    "compute_cca_similarity",
+    "compute_procrustes_similarity",
+    "save_srrr_result",
+    "load_srrr_result",
+    "find_knee_lambda",
     # examples
     "_make_context",
     "_sample",

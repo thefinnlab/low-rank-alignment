@@ -1,0 +1,24 @@
+encoding:
+  data_root: data/
+  model: gpt2xl
+  layer: 24
+  offset: 0
+  subjects: null
+  run_name: null
+  batch: false
+output_dir: null
+srrr_output_dir: null
+mode: cross_subject
+rank_grid: [1, 2, 5, 10, 20, 50]
+lambda_grid: [0.0001, 0.001, 0.01, 0.1, 1.0, 10.0]
+max_iter: 500
+tol: 0.00001
+learning_rate: 0.001
+warm_start: true
+n_stability_iters: 100
+subsample_fraction: 0.8
+selection_threshold: 0.8
+n_permutations: 5000
+p_value_threshold: 0.05
+cache_null_dist: true
+knee_sensitivity: 1.0
