@@ -181,8 +181,8 @@ def _(mo, rrr_options):
     )
     s1_show_folds = mo.ui.checkbox(value=False, label="Show individual folds")
     s1_threshold = mo.ui.slider(
-        start=0.80, stop=1.00, value=0.95, step=0.01,
-        label="Sufficiency threshold (pred_r2 ≥)",
+        start=0.0, stop=0.10, value=0.01, step=0.005,
+        label="Sufficiency threshold (full_r2 − minimal_r2 ≤)",
     )
     mo.hstack([s1_source, s1_show_folds, s1_threshold])
     return s1_show_folds, s1_source, s1_threshold
@@ -239,25 +239,30 @@ def _(alt, mo, s1_summary):
 
 
 @app.cell
-def _(mo, s1_summary, s1_threshold):
+def _(mo, np, s1_summary, s1_threshold):
     # Sufficiency summary
-    if "pred_r2" in s1_summary.columns:
-        _suf = s1_summary[s1_summary["pred_r2"] >= s1_threshold.value]
+    if "full_r2" in s1_summary.columns and "minimal_r2" in s1_summary.columns:
+        _gap = s1_summary["full_r2"] - s1_summary["minimal_r2"]
+        _ratio = s1_summary["minimal_r2"] / s1_summary["full_r2"].replace(0, float("nan"))
+        _suf = s1_summary[_gap <= s1_threshold.value]
         if len(_suf) > 0:
             _min_k = int(_suf["k"].min())
+            _gap_at_k = float(_gap[s1_summary["k"] == _min_k].values[0])
+            _ratio_at_k = float(_ratio[s1_summary["k"] == _min_k].values[0])
             mo.callout(
                 mo.md(f"**Minimum sufficient rank (RRR):** k = **{_min_k}**  \n"
-                      f"First rank where avg. `pred_r2 ≥ {s1_threshold.value:.2f}`"),
+                      f"First rank where avg. `full_r2 − minimal_r2 ≤ {s1_threshold.value:.3f}` "
+                      f"(gap = {_gap_at_k:.4f}, ratio = {_ratio_at_k:.3f})"),
                 kind="success",
             )
         else:
             mo.callout(
-                mo.md(f"No rank achieves `pred_r2 ≥ {s1_threshold.value:.2f}`. "
-                      "Try a lower threshold or a larger rank grid."),
+                mo.md(f"No rank achieves `full_r2 − minimal_r2 ≤ {s1_threshold.value:.3f}`. "
+                      "Try a larger threshold or a larger rank grid."),
                 kind="warn",
             )
     else:
-        mo.callout(mo.md("*`pred_r2` not found — re-run `scripts/run_rrr.py` to generate it.*"), kind="warn")
+        mo.callout(mo.md("*`full_r2` or `minimal_r2` not found in summary.csv.*"), kind="warn")
     return
 
 
@@ -663,9 +668,10 @@ def _(
     alt, mo, np, pd,
     s4_lam_for_cmp, s4_rrr_summary, s4_srrr_knee, s4_srrr_summary, s4_use_knee,
 ):
-    # Build RRR series
-    _metric = "pred_r2" if "pred_r2" in s4_rrr_summary.columns else "recovery_r2"
-    _rrr_df = s4_rrr_summary[["k", _metric]].copy()
+    # Build RRR gap + ratio series
+    _rrr_df = s4_rrr_summary[["k", "full_r2", "minimal_r2"]].copy()
+    _rrr_df["gap"] = _rrr_df["full_r2"] - _rrr_df["minimal_r2"]
+    _rrr_df["ratio"] = _rrr_df["minimal_r2"] / _rrr_df["full_r2"].replace(0, float("nan"))
     _rrr_df["method"] = "RRR"
 
     # Build SRRR series at selected lambda
@@ -678,38 +684,36 @@ def _(
         _lv = float(s4_lam_for_cmp.value)
         _srrr_filtered = s4_srrr_summary[s4_srrr_summary["lam"].apply(lambda l: abs(l - _lv) < 1e-12)].copy()
 
-    _srrr_df = _srrr_filtered[["k", _metric]].copy()
+    _srrr_df = _srrr_filtered[["k", "full_r2", "minimal_r2"]].copy()
+    _srrr_df["gap"] = _srrr_df["full_r2"] - _srrr_df["minimal_r2"]
+    _srrr_df["ratio"] = _srrr_df["minimal_r2"] / _srrr_df["full_r2"].replace(0, float("nan"))
     _srrr_df["method"] = "SRRR"
 
     _cmp_df = pd.concat([_rrr_df, _srrr_df], ignore_index=True)
 
-    # Determine sufficient ranks (pred_r2 >= 0.95; recovery_r2 < 0.05 as fallback)
-    if _metric == "pred_r2":
-        _threshold = 0.95
-        _rrr_suf = _rrr_df[_rrr_df[_metric] >= _threshold]["k"].min() if (_rrr_df[_metric] >= _threshold).any() else None
-        _srrr_suf = _srrr_df[_srrr_df[_metric] >= _threshold]["k"].min() if (_srrr_df[_metric] >= _threshold).any() else None
-        _y_title = "pred_r2 (RRR vs full model predictions)"
-        _chart_title = "RRR vs SRRR: pred_r2 vs rank (higher = more sufficient)"
-        _suf_label = f"pred_r2 ≥ {_threshold}"
-    else:
-        _threshold = 0.05
-        _rrr_suf = _rrr_df[_rrr_df[_metric] < _threshold]["k"].min() if (_rrr_df[_metric] < _threshold).any() else None
-        _srrr_suf = _srrr_df[_srrr_df[_metric] < _threshold]["k"].min() if (_srrr_df[_metric] < _threshold).any() else None
-        _y_title = "Recovery R²"
-        _chart_title = "RRR vs SRRR: Recovery R² vs rank (lower = more sufficient)"
-        _suf_label = f"recovery_r2 < {_threshold}"
+    # Sufficient rank: first k where gap <= 0.01
+    _threshold = 0.01
+    _rrr_suf = _rrr_df[_rrr_df["gap"] <= _threshold]["k"].min() if (_rrr_df["gap"] <= _threshold).any() else None
+    _srrr_suf = _srrr_df[_srrr_df["gap"] <= _threshold]["k"].min() if (_srrr_df["gap"] <= _threshold).any() else None
 
     _lines = (
         alt.Chart(_cmp_df)
         .mark_line(point=True)
         .encode(
             x=alt.X("k:Q", scale=alt.Scale(type="log"), title="Rank k"),
-            y=alt.Y(f"{_metric}:Q", title=_y_title),
+            y=alt.Y("gap:Q", title="full_r2 − minimal_r2 (gap)"),
             color=alt.Color("method:N", scale=alt.Scale(
                 domain=["RRR", "SRRR"], range=["#3b82f6", "#f59e0b"]
             )),
-            tooltip=["method:N", "k:Q", alt.Tooltip(f"{_metric}:Q", format=".4f")],
+            tooltip=["method:N", "k:Q", alt.Tooltip("gap:Q", format=".4f"),
+                     alt.Tooltip("full_r2:Q", format=".4f"), alt.Tooltip("minimal_r2:Q", format=".4f")],
         )
+    )
+
+    _threshold_line = (
+        alt.Chart(pd.DataFrame({"y": [_threshold]}))
+        .mark_rule(strokeDash=[4, 2], strokeWidth=1, color="#6b7280")
+        .encode(y="y:Q")
     )
 
     _vlines_data = []
@@ -718,7 +722,7 @@ def _(
     if _srrr_suf is not None:
         _vlines_data.append({"k": float(_srrr_suf), "method": "SRRR"})
 
-    _layers = [_lines]
+    _layers = [_lines, _threshold_line]
     if _vlines_data:
         _vlines = (
             alt.Chart(pd.DataFrame(_vlines_data))
@@ -732,28 +736,56 @@ def _(
         )
         _layers.append(_vlines)
 
-    _chart = (
+    _gap_chart = (
         alt.layer(*_layers)
-        .properties(width="container", height=280, title=_chart_title)
+        .properties(width="container", height=250,
+                    title="RRR vs SRRR: full_r2 − minimal_r2 vs rank (lower = more sufficient)")
         .configure_view(strokeWidth=0)
         .configure_axis(grid=False)
     )
 
-    # Summary callout
-    _lines_md = []
-    if _rrr_suf is not None:
-        _lines_md.append(f"- **RRR sufficient rank:** k = {int(_rrr_suf)}")
-    else:
-        _lines_md.append(f"- **RRR sufficient rank:** not reached ({_suf_label})")
+    # Ratio chart
+    _ratio_cmp_df = pd.concat([_rrr_df[["k", "ratio", "method"]], _srrr_df[["k", "ratio", "method"]]], ignore_index=True)
+    _ratio_chart = (
+        alt.Chart(_ratio_cmp_df)
+        .mark_line(point=True)
+        .encode(
+            x=alt.X("k:Q", scale=alt.Scale(type="log"), title="Rank k"),
+            y=alt.Y("ratio:Q", title="minimal_r2 / full_r2", scale=alt.Scale(domain=[0, 1])),
+            color=alt.Color("method:N", scale=alt.Scale(
+                domain=["RRR", "SRRR"], range=["#3b82f6", "#f59e0b"]
+            )),
+            tooltip=["method:N", "k:Q", alt.Tooltip("ratio:Q", format=".4f")],
+        )
+        .properties(width="container", height=250,
+                    title="RRR vs SRRR: minimal_r2 / full_r2 vs rank (higher = more sufficient)")
+        .configure_view(strokeWidth=0)
+        .configure_axis(grid=False)
+    )
+
+    # Summary callout — report both gap and ratio at sufficient rank
+    def _fmt_suf(df, suf_k, filtered_df):
+        if suf_k is None:
+            return f"not reached (gap ≤ {_threshold})"
+        _row = df[df["k"] == suf_k].iloc[0]
+        _ratio_str = f", ratio = {_row['ratio']:.3f}" if pd.notna(_row["ratio"]) else ""
+        return f"k = {int(suf_k)} (gap ≤ {_threshold}{_ratio_str})"
+
+    _lines_md = [
+        f"- **RRR sufficient rank:** {_fmt_suf(_rrr_df, _rrr_suf, None)}",
+    ]
     if _srrr_suf is not None:
         _n_sel = _srrr_filtered[_srrr_filtered["k"] == _srrr_suf]["n_selected"].values
-        _n_str = f", avg. {_n_sel[0]:.0f} SVD directions selected" if len(_n_sel) > 0 else ""
-        _lines_md.append(f"- **SRRR sufficient rank:** k = {int(_srrr_suf)}{_n_str}")
+        _n_str = f", avg. {_n_sel[0]:.0f} SVD dirs" if len(_n_sel) > 0 else ""
+        _srrr_row = _srrr_df[_srrr_df["k"] == _srrr_suf].iloc[0]
+        _ratio_str = f", ratio = {_srrr_row['ratio']:.3f}" if pd.notna(_srrr_row["ratio"]) else ""
+        _lines_md.append(f"- **SRRR sufficient rank:** k = {int(_srrr_suf)}{_n_str} (gap ≤ {_threshold}{_ratio_str})")
     else:
-        _lines_md.append(f"- **SRRR sufficient rank:** not reached ({_suf_label})")
+        _lines_md.append(f"- **SRRR sufficient rank:** not reached (gap ≤ {_threshold})")
 
     mo.vstack([
-        mo.ui.altair_chart(_chart),
+        mo.ui.altair_chart(_gap_chart),
+        mo.ui.altair_chart(_ratio_chart),
         mo.callout(mo.md("\n".join(_lines_md)), kind="info"),
     ])
     return

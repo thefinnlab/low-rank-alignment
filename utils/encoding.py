@@ -227,9 +227,14 @@ def get_ridge_model_constructor():
     Return a factory function for StandardScaler + RidgeCV pipelines.
     Uses alphas = np.logspace(1, 10, 10) and inner 5-fold CV (no shuffle).
     Compatible with the model_constructor_fn arg of train_encoding().
+    Sets the himalaya torch_cuda backend if CUDA is available.
     """
     try:
         from himalaya.ridge import RidgeCV
+        from himalaya.backend import set_backend
+        import torch
+        if torch.cuda.is_available():
+            set_backend("torch_cuda")
     except ImportError:
         from sklearn.linear_model import RidgeCV
 
