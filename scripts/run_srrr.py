@@ -126,20 +126,24 @@ def _run_srrr_for_unit(
         Y_hat_full = ridge_model.predict(X_proj_test)
 
         # Null distribution via ridge permutations — once per fold (no rank dependence)
-        null_cache = (
-            os.path.join(srrr_unit_dir, f"null_dist_fold_{fold_f}.npy")
-            if config.cache_null_dist else None
-        )
-        cached = null_cache and os.path.exists(null_cache)
-        print(f"  Building null distribution ({config.n_permutations} permutations){' [cached]' if cached else ''}...")
-        null_r2 = build_null_distribution(
-            X_proj_train, Y_train, X_proj_test, Y_test,
-            model_constructor_fn=get_ridge_model_constructor,
-            n_permutations=config.n_permutations,
-            cache_path=null_cache,
-            seed=fold_f,
-        )
-        print(f"  Null distribution ready. Running {len(config.rank_grid) * len(config.lambda_grid)} (k, lam) combos...")
+        if config.use_null_dist:
+            null_cache = (
+                os.path.join(srrr_unit_dir, f"null_dist_fold_{fold_f}.npy")
+                if config.cache_null_dist else None
+            )
+            cached = null_cache and os.path.exists(null_cache)
+            print(f"  Building null distribution ({config.n_permutations} permutations){' [cached]' if cached else ''}...")
+            null_r2 = build_null_distribution(
+                X_proj_train, Y_train, X_proj_test, Y_test,
+                model_constructor_fn=get_ridge_model_constructor,
+                n_permutations=config.n_permutations,
+                cache_path=null_cache,
+                seed=fold_f,
+            )
+            print(f"  Null distribution ready. Running {len(config.rank_grid) * len(config.lambda_grid)} (k, lam) combos...")
+        else:
+            null_r2 = None
+            print(f"  Null distribution disabled. Running {len(config.rank_grid) * len(config.lambda_grid)} (k, lam) combos...")
 
         grid = [(k, lam) for k in config.rank_grid for lam in sorted(config.lambda_grid)]
         for k, lam in tqdm(grid, desc=f"  fold {fold_f}", leave=True, unit="combo"):

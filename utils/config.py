@@ -95,6 +95,7 @@ class SRRRConfig:
     selection_threshold: float = 0.8     # Min P_i to include direction in minimal model
 
     # Sufficiency test
+    use_null_dist: bool = False          # Set True to enable null distribution and sufficiency test
     n_permutations: int = 5000
     p_value_threshold: float = 0.05      # 95th percentile noise floor
     cache_null_dist: bool = True

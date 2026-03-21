@@ -552,9 +552,15 @@ def run_sufficiency_test(
         Y_resid_hat = (X @ coef).numpy()
 
     recovery_r2 = float(compute_r2(Y_resid_test, Y_resid_hat).mean())
-    noise_floor = float(np.percentile(null_r2, 100.0 * (1.0 - p_value_threshold)))
-    p_value = float(np.mean(null_r2 >= recovery_r2))
-    sufficient = recovery_r2 < noise_floor
+
+    if null_r2 is not None:
+        noise_floor = float(np.percentile(null_r2, 100.0 * (1.0 - p_value_threshold)))
+        p_value = float(np.mean(null_r2 >= recovery_r2))
+        sufficient = recovery_r2 < noise_floor
+    else:
+        noise_floor = None
+        p_value = None
+        sufficient = None
 
     return {
         "recovery_r2": recovery_r2,
