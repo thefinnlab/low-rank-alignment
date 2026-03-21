@@ -699,6 +699,54 @@ def load_srrr_result(output_dir: str, k: int, lam: float, fold: int) -> dict:
     }
 
 
+def save_rrr_result(
+    output_dir: str,
+    k: int,
+    fold: int,
+    A: np.ndarray,
+    B: np.ndarray,
+    metrics: dict,
+) -> None:
+    """Save RRR results for one (k, fold) combination.
+
+    Writes to {output_dir}/k{k}/fold_{fold}/:
+        A.npy, B.npy, metrics.npz
+
+    Args:
+        output_dir: Root RRR output directory.
+        k: Rank.
+        fold: Fold index.
+        A: (n_embed, k) direction factor matrix.
+        B: (n_targets, k) output factor matrix.
+        metrics: Dict of scalar metrics.
+    """
+    fold_dir = os.path.join(output_dir, f"k{k}", f"fold_{fold}")
+    os.makedirs(fold_dir, exist_ok=True)
+    np.save(os.path.join(fold_dir, "A.npy"), A)
+    np.save(os.path.join(fold_dir, "B.npy"), B)
+    np.savez(os.path.join(fold_dir, "metrics.npz"), **{k_: np.array(v) for k_, v in metrics.items() if v is not None})
+
+
+def load_rrr_result(output_dir: str, k: int, fold: int) -> dict:
+    """Load RRR results for one (k, fold) combination.
+
+    Args:
+        output_dir: Root RRR output directory.
+        k: Rank.
+        fold: Fold index.
+
+    Returns:
+        dict with keys: A, B, metrics (dict).
+    """
+    fold_dir = os.path.join(output_dir, f"k{k}", f"fold_{fold}")
+    metrics_npz = np.load(os.path.join(fold_dir, "metrics.npz"))
+    return {
+        "A": np.load(os.path.join(fold_dir, "A.npy")),
+        "B": np.load(os.path.join(fold_dir, "B.npy")),
+        "metrics": dict(metrics_npz),
+    }
+
+
 def find_knee_lambda(
     lambda_grid: list[float],
     r2_values: np.ndarray,

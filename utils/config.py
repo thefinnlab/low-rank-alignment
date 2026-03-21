@@ -62,6 +62,29 @@ class SVDConfig:
 
 
 @dataclass
+class RRRConfig:
+    """Parameters for raw-input Reduced Rank Regression analysis (run_rrr.py).
+
+    Performs RRR directly from raw embeddings to neural targets — no SVD projection.
+    Sweeps over a rank grid to find the minimal rank that captures all variance
+    explained by an unconstrained ridge baseline.
+
+    Mode → output directory mapping (default, overridable via rrr_output_dir):
+        cross_subject : {output_dir}/rrr/
+        per_subject   : {output_dir}/per_subject_rrr/
+        per_region    : {output_dir}/per_region_rrr/
+    """
+
+    encoding: EncodingConfig = field(default_factory=EncodingConfig)
+    output_dir: str | None = None         # Root results dir; auto from model/layer/offset if None
+    rrr_output_dir: str | None = None     # Override for RRR root subdir; default depends on mode
+    mode: SVDMode = SVDMode.CROSS_SUBJECT
+
+    # Rank sweep
+    rank_grid: list[int] = field(default_factory=lambda: [1, 2, 5, 10, 20, 50])
+
+
+@dataclass
 class SRRRConfig:
     """Parameters for Sparse Reduced Rank Regression analysis (run_srrr.py).
 

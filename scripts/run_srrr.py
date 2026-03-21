@@ -47,6 +47,7 @@ from utils import (
     load_embeddings,
     build_word_epochs,
     apply_offset,
+    build_XY_from_subjects,
 )
 from utils.atlas import build_electrode_region_map
 from utils.config import SRRRConfig, SVDMode, get_results_dir
@@ -276,29 +277,14 @@ def _run_cross_subject_srrr(
     )
     ref_test_idxs = enc_results["test_idxs"]
 
-    # Load all subjects' significant electrodes at once
-    raws = load_raws(
-        subject_ids, enc.data_root, use_high_gamma=True,
-        per_subject_electrodes=sig_electrodes,
-    )
-    Y_cols = []
-    X_ref = None
-    for raw, sub_id in zip(raws, subject_ids):
-        if sub_id not in sig_electrodes:
-            continue
-        epochs, data = build_word_epochs(raw, df_word)
-        X_arr, Y_sub = apply_offset(aligned_embeddings[epochs.selection], data, enc.offset)
-        if X_ref is None:
-            X_ref = X_arr
-        Y_cols.append(Y_sub)  # (n_words, n_elecs * n_lags)
-    del raws
-    gc.collect()
-
-    if not Y_cols:
+    subs_with_sig = [s for s in subject_ids if s in sig_electrodes and sig_electrodes[s]]
+    if not subs_with_sig:
         print("  No significant electrodes found; skipping cross-subject SRRR.")
         return
 
-    Y_full = np.concatenate(Y_cols, axis=1).astype(np.float32)
+    X_ref, Y_full = build_XY_from_subjects(
+        subject_ids, enc, sig_electrodes, aligned_embeddings, df_word,
+    )
     print(f"  X: {X_ref.shape}, Y: {Y_full.shape}")
 
     _run_srrr_for_unit(
@@ -405,24 +391,10 @@ def _run_per_region_srrr(
             print(f"  No significant electrodes in region; skipping.")
             continue
 
-        # Load all subjects in region at once
         subs_in_region = list(per_subject_region_elecs.keys())
-        raws = load_raws(
-            subs_in_region, enc.data_root, use_high_gamma=True,
-            per_subject_electrodes=per_subject_region_elecs,
+        X_ref, Y_full = build_XY_from_subjects(
+            subs_in_region, enc, per_subject_region_elecs, aligned_embeddings, df_word,
         )
-        Y_cols = []
-        X_ref = None
-        for raw, sub_id in zip(raws, subs_in_region):
-            epochs, data = build_word_epochs(raw, df_word)
-            X_arr, Y_sub = apply_offset(aligned_embeddings[epochs.selection], data, enc.offset)
-            if X_ref is None:
-                X_ref = X_arr
-            Y_cols.append(Y_sub)  # (n_words, n_elecs * n_lags)
-        del raws
-        gc.collect()
-
-        Y_full = np.concatenate(Y_cols, axis=1).astype(np.float32)
         print(f"  X: {X_ref.shape}, Y: {Y_full.shape}")
 
         _run_srrr_for_unit(

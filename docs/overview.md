@@ -8,7 +8,8 @@ This is a neuroscience encoding analysis pipeline that studies how GPT-2-XL lang
 2. **Encoding model training** (`make train`) — trains ridge regression models on significant electrodes
 3. **SVD analysis** (`make svd`) — decomposes model weights to find dominant directions in embedding space
 4. **SRRR analysis** (`make srrr`) — finds the minimal subset of SVD directions that explains all significant encoding variance, via stability selection and a statistical sufficiency test
-5. **Visualization** (`make plots`) — generates correlation plots with optional significance overlays
+5. **RRR analysis** (`make rrr`) — raw-input RRR baseline: sweeps over ranks to find the minimal rank that captures full-ridge variance, directly in embedding space (no SVD projection)
+6. **Visualization** (`make plots`) — generates correlation plots with optional significance overlays
 
 ---
 
@@ -33,6 +34,9 @@ YAML config files passed to scripts via `--config`:
 | `significance_default.yml` | Default significance testing (5000 permutations, FDR q=0.01) |
 | `significance_fast.yml` | Reduced permutations for quick iteration |
 | `svd_default.yml` | SVD on mid-layer (layer 24) with k values [1,2,5,…,1600] and 0.95 retention threshold |
+| `rrr_default.yml` | RRR cross-subject baseline (rank_grid [1,2,5,10,20,50]) |
+| `rrr_per_subject.yml` | Per-subject RRR variant |
+| `rrr_per_region.yml` | Per-region RRR variant with Destrieux atlas regions |
 
 ### `scripts/`
 
@@ -45,6 +49,7 @@ Main entry points for the pipeline:
 | `generate_plots.py` | Generates or regenerates correlation plots from existing run results; supports backfilling SVD plots for cross_subject, per_subject, and per_region modes (auto-detected or via `--svd-modes`) |
 | `run_svd_analysis.py` | SVD decomposition of encoding weights; evaluates truncation at various k values and selects optimal k |
 | `run_srrr.py` | SRRR analysis; reads SVD decompositions and finds minimal direction subset via stability selection and sufficiency testing; supports cross_subject, per_subject, and per_region modes |
+| `run_rrr.py` | RRR baseline; fits RRR directly from raw embeddings to neural targets (no SVD projection); sweeps over ranks with residual R², CCA, and Procrustes metrics; supports cross_subject, per_subject, and per_region modes |
 
 ### `utils/`
 
@@ -52,14 +57,14 @@ Core library modules:
 
 | File | Purpose |
 |------|---------|
-| `config.py` | Dataclass definitions for `EncodingConfig`, `SignificanceConfig`, `SVDConfig`, `SRRRConfig`; `get_results_dir()` for canonical output paths |
+| `config.py` | Dataclass definitions for `EncodingConfig`, `SignificanceConfig`, `SVDConfig`, `SRRRConfig`, `RRRConfig`; `get_results_dir()` for canonical output paths |
 | `config_utils.py` | Argument parsing and YAML loading with CLI override support (dot-notation, e.g. `--encoding.layer=48`) |
-| `data_loaders.py` | Loads iEEG BIDS data via MNE, GPT-2 embeddings from HDF5, builds word-aligned epochs, handles time offsets |
+| `data_loaders.py` | Loads iEEG BIDS data via MNE, GPT-2 embeddings from HDF5, builds word-aligned epochs, handles time offsets; `build_XY_from_subjects()` for stacking multi-subject neural data |
 | `embeddings.py` | Loads contextual GPT-2-XL token embeddings from HDF5 and averages tokens per word |
 | `encoding.py` | K-fold cross-validation ridge regression (Himalaya backend), coefficient serialization, cross-subject aggregation |
 | `significance.py` | GPU-accelerated permutation testing, vectorized Pearson correlation, Benjamini-Hochberg FDR correction |
 | `analysis.py` | SVD decomposition of weights, truncated correlation evaluation, best-k selection, residualization utilities |
-| `srrr.py` | Core SRRR functions: ProxGD optimizer, stability selection, sufficiency test, alignment metrics (CCA, Procrustes), I/O helpers |
+| `srrr.py` | Core SRRR/RRR functions: ProxGD optimizer, stability selection, `fit_dense_rrr`, sufficiency test, alignment metrics (CCA, Procrustes), I/O helpers for both SRRR and RRR outputs |
 | `plotting.py` | Matplotlib helpers for correlation vs lag plots, significance overlays, SVD truncation analysis figures |
 | `examples.py` | Generates context windows and markdown tables of example words for qualitative analysis |
 | `__init__.py` | Public API — re-exports all key functions for convenient imports |
@@ -77,6 +82,7 @@ Unit tests with full pipeline coverage:
 | `test_encoding.py` | Ridge regression, k-fold CV, result serialization |
 | `test_analysis.py` | SVD decomposition, truncation evaluation, best-k selection |
 | `test_srrr.py` | SRRR core functions: ProxGD, stability selection, sufficiency test, alignment metrics, I/O |
+| `test_rrr.py` | RRR utilities: `save_rrr_result`/`load_rrr_result` roundtrip, `_run_rrr_for_unit` integration, `build_XY_from_subjects` |
 | `test_significance.py` | Permutation testing, FDR correction |
 | `test_examples.py` | Context building and table generation |
 
