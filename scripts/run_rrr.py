@@ -138,6 +138,7 @@ def _run_rrr_for_unit(
                 "full_r2": suf["full_r2"],
                 "minimal_r2": suf["minimal_r2"],
                 "recovery_r2": suf["recovery_r2"],
+                "pred_r2": suf["pred_r2"],
                 "fold": fold_f,
                 "k": k,
             }
@@ -154,7 +155,7 @@ def _run_rrr_for_unit(
     df.to_csv(os.path.join(rrr_unit_dir, "grid_results.csv"), index=False)
 
     # Summary: average over folds (only include columns that were computed)
-    agg_cols = ["full_r2", "minimal_r2", "recovery_r2"]
+    agg_cols = ["full_r2", "minimal_r2", "recovery_r2", "pred_r2"]
     if config.compute_cca:
         agg_cols.append("cca_similarity")
     if config.compute_procrustes:

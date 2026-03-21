@@ -181,8 +181,8 @@ def _(mo, rrr_options):
     )
     s1_show_folds = mo.ui.checkbox(value=False, label="Show individual folds")
     s1_threshold = mo.ui.slider(
-        start=0.01, stop=0.10, value=0.05, step=0.01,
-        label="Sufficiency threshold (recovery_r2 <)",
+        start=0.80, stop=1.00, value=0.95, step=0.01,
+        label="Sufficiency threshold (pred_r2 ≥)",
     )
     mo.hstack([s1_source, s1_show_folds, s1_threshold])
     return s1_show_folds, s1_source, s1_threshold
@@ -241,20 +241,23 @@ def _(alt, mo, s1_summary):
 @app.cell
 def _(mo, s1_summary, s1_threshold):
     # Sufficiency summary
-    _suf = s1_summary[s1_summary["recovery_r2"] < s1_threshold.value]
-    if len(_suf) > 0:
-        _min_k = int(_suf["k"].min())
-        mo.callout(
-            mo.md(f"**Minimum sufficient rank (RRR):** k = **{_min_k}**  \n"
-                  f"First rank where avg. `recovery_r2 < {s1_threshold.value:.2f}`"),
-            kind="success",
-        )
+    if "pred_r2" in s1_summary.columns:
+        _suf = s1_summary[s1_summary["pred_r2"] >= s1_threshold.value]
+        if len(_suf) > 0:
+            _min_k = int(_suf["k"].min())
+            mo.callout(
+                mo.md(f"**Minimum sufficient rank (RRR):** k = **{_min_k}**  \n"
+                      f"First rank where avg. `pred_r2 ≥ {s1_threshold.value:.2f}`"),
+                kind="success",
+            )
+        else:
+            mo.callout(
+                mo.md(f"No rank achieves `pred_r2 ≥ {s1_threshold.value:.2f}`. "
+                      "Try a lower threshold or a larger rank grid."),
+                kind="warn",
+            )
     else:
-        mo.callout(
-            mo.md(f"No rank achieves `recovery_r2 < {s1_threshold.value:.2f}`. "
-                  "Try a higher threshold or a larger rank grid."),
-            kind="warn",
-        )
+        mo.callout(mo.md("*`pred_r2` not found — re-run `scripts/run_rrr.py` to generate it.*"), kind="warn")
     return
 
 
@@ -661,7 +664,8 @@ def _(
     s4_lam_for_cmp, s4_rrr_summary, s4_srrr_knee, s4_srrr_summary, s4_use_knee,
 ):
     # Build RRR series
-    _rrr_df = s4_rrr_summary[["k", "recovery_r2"]].copy()
+    _metric = "pred_r2" if "pred_r2" in s4_rrr_summary.columns else "recovery_r2"
+    _rrr_df = s4_rrr_summary[["k", _metric]].copy()
     _rrr_df["method"] = "RRR"
 
     # Build SRRR series at selected lambda
@@ -674,26 +678,37 @@ def _(
         _lv = float(s4_lam_for_cmp.value)
         _srrr_filtered = s4_srrr_summary[s4_srrr_summary["lam"].apply(lambda l: abs(l - _lv) < 1e-12)].copy()
 
-    _srrr_df = _srrr_filtered[["k", "recovery_r2"]].copy()
+    _srrr_df = _srrr_filtered[["k", _metric]].copy()
     _srrr_df["method"] = "SRRR"
 
     _cmp_df = pd.concat([_rrr_df, _srrr_df], ignore_index=True)
 
-    # Determine sufficient ranks
-    _threshold = 0.05
-    _rrr_suf = _rrr_df[_rrr_df["recovery_r2"] < _threshold]["k"].min() if (_rrr_df["recovery_r2"] < _threshold).any() else None
-    _srrr_suf = _srrr_df[_srrr_df["recovery_r2"] < _threshold]["k"].min() if (_srrr_df["recovery_r2"] < _threshold).any() else None
+    # Determine sufficient ranks (pred_r2 >= 0.95; recovery_r2 < 0.05 as fallback)
+    if _metric == "pred_r2":
+        _threshold = 0.95
+        _rrr_suf = _rrr_df[_rrr_df[_metric] >= _threshold]["k"].min() if (_rrr_df[_metric] >= _threshold).any() else None
+        _srrr_suf = _srrr_df[_srrr_df[_metric] >= _threshold]["k"].min() if (_srrr_df[_metric] >= _threshold).any() else None
+        _y_title = "pred_r2 (RRR vs full model predictions)"
+        _chart_title = "RRR vs SRRR: pred_r2 vs rank (higher = more sufficient)"
+        _suf_label = f"pred_r2 ≥ {_threshold}"
+    else:
+        _threshold = 0.05
+        _rrr_suf = _rrr_df[_rrr_df[_metric] < _threshold]["k"].min() if (_rrr_df[_metric] < _threshold).any() else None
+        _srrr_suf = _srrr_df[_srrr_df[_metric] < _threshold]["k"].min() if (_srrr_df[_metric] < _threshold).any() else None
+        _y_title = "Recovery R²"
+        _chart_title = "RRR vs SRRR: Recovery R² vs rank (lower = more sufficient)"
+        _suf_label = f"recovery_r2 < {_threshold}"
 
     _lines = (
         alt.Chart(_cmp_df)
         .mark_line(point=True)
         .encode(
             x=alt.X("k:Q", scale=alt.Scale(type="log"), title="Rank k"),
-            y=alt.Y("recovery_r2:Q", title="Recovery R²"),
+            y=alt.Y(f"{_metric}:Q", title=_y_title),
             color=alt.Color("method:N", scale=alt.Scale(
                 domain=["RRR", "SRRR"], range=["#3b82f6", "#f59e0b"]
             )),
-            tooltip=["method:N", "k:Q", alt.Tooltip("recovery_r2:Q", format=".4f")],
+            tooltip=["method:N", "k:Q", alt.Tooltip(f"{_metric}:Q", format=".4f")],
         )
     )
 
@@ -719,7 +734,7 @@ def _(
 
     _chart = (
         alt.layer(*_layers)
-        .properties(width="container", height=280, title="RRR vs SRRR: Recovery R² vs rank (lower = more sufficient)")
+        .properties(width="container", height=280, title=_chart_title)
         .configure_view(strokeWidth=0)
         .configure_axis(grid=False)
     )
@@ -729,13 +744,13 @@ def _(
     if _rrr_suf is not None:
         _lines_md.append(f"- **RRR sufficient rank:** k = {int(_rrr_suf)}")
     else:
-        _lines_md.append("- **RRR sufficient rank:** not reached (recovery_r2 < 0.05)")
+        _lines_md.append(f"- **RRR sufficient rank:** not reached ({_suf_label})")
     if _srrr_suf is not None:
         _n_sel = _srrr_filtered[_srrr_filtered["k"] == _srrr_suf]["n_selected"].values
         _n_str = f", avg. {_n_sel[0]:.0f} SVD directions selected" if len(_n_sel) > 0 else ""
         _lines_md.append(f"- **SRRR sufficient rank:** k = {int(_srrr_suf)}{_n_str}")
     else:
-        _lines_md.append("- **SRRR sufficient rank:** not reached (recovery_r2 < 0.05)")
+        _lines_md.append(f"- **SRRR sufficient rank:** not reached ({_suf_label})")
 
     mo.vstack([
         mo.ui.altair_chart(_chart),

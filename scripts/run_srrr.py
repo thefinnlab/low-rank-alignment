@@ -227,7 +227,7 @@ def _run_srrr_for_unit(
     df.to_csv(os.path.join(srrr_unit_dir, "grid_results.csv"), index=False)
 
     # Summary: average over folds (only include columns that were computed)
-    agg_cols = ["minimal_r2", "full_r2", "recovery_r2", "sufficient", "n_selected"]
+    agg_cols = ["minimal_r2", "full_r2", "recovery_r2", "pred_r2", "sufficient", "n_selected"]
     if config.compute_cca:
         agg_cols.append("cca_similarity")
     if config.compute_procrustes:

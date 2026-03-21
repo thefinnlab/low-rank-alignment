@@ -559,9 +559,13 @@ def run_sufficiency_test(
             p_value: float — fraction of null >= recovery_r2
             full_r2: float — mean R^2 of full model on Y_test
             minimal_r2: float — mean R^2 of minimal model on Y_test
+            pred_r2: float — mean R^2 of minimal model predictions vs full model
+                predictions (Y_hat_full as target). Unaffected by ridge shrinkage;
+                equals 1 when both models make identical predictions.
     """
     full_r2 = float(compute_r2(Y_test, Y_hat_full).mean())
     minimal_r2 = float(compute_r2(Y_test, Y_hat_min).mean())
+    pred_r2 = float(compute_r2(Y_hat_full, Y_hat_min).mean())
 
     Y_resid_test = Y_test - Y_hat_min
 
@@ -596,6 +600,7 @@ def run_sufficiency_test(
         "p_value": p_value,
         "full_r2": full_r2,
         "minimal_r2": minimal_r2,
+        "pred_r2": pred_r2,
     }
 
 

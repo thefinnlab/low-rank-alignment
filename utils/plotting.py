@@ -306,14 +306,15 @@ def plot_rrr_rank_results(summary_df, grid_df=None, title="RRR: R² vs rank", sa
     if n_panels == 1:
         axes = [axes]
 
-    colors = {"full_r2": "#9ca3af", "minimal_r2": "#3b82f6", "recovery_r2": "#ef4444"}
+    colors = {"full_r2": "#9ca3af", "minimal_r2": "#3b82f6", "recovery_r2": "#ef4444", "pred_r2": "#10b981"}
     labels = {
         "full_r2": "full_r2 (ceiling)",
         "minimal_r2": "minimal_r2 (RRR)",
         "recovery_r2": "recovery_r2 (residual)",
+        "pred_r2": "pred_r2 (vs full model)",
     }
-    styles = {"full_r2": "--", "minimal_r2": "-", "recovery_r2": "-"}
-    metrics = [m for m in ["full_r2", "minimal_r2", "recovery_r2"] if m in summary_df.columns]
+    styles = {"full_r2": "--", "minimal_r2": "-", "recovery_r2": "-", "pred_r2": "-"}
+    metrics = [m for m in ["full_r2", "minimal_r2", "recovery_r2", "pred_r2"] if m in summary_df.columns]
 
     ax = axes[0]
     ks = summary_df["k"].values
@@ -441,10 +442,10 @@ def plot_srrr_rank_results(
 
     # Panel 2: R² metrics
     ax = axes[1]
-    colors = {"full_r2": "#9ca3af", "minimal_r2": "#3b82f6", "recovery_r2": "#ef4444"}
-    labels = {"full_r2": "full_r2", "minimal_r2": "minimal_r2", "recovery_r2": "recovery_r2"}
-    styles = {"full_r2": "--", "minimal_r2": "-", "recovery_r2": "-"}
-    for metric in ["full_r2", "minimal_r2", "recovery_r2"]:
+    colors = {"full_r2": "#9ca3af", "minimal_r2": "#3b82f6", "recovery_r2": "#ef4444", "pred_r2": "#10b981"}
+    labels = {"full_r2": "full_r2", "minimal_r2": "minimal_r2", "recovery_r2": "recovery_r2", "pred_r2": "pred_r2 (vs full model)"}
+    styles = {"full_r2": "--", "minimal_r2": "-", "recovery_r2": "-", "pred_r2": "-"}
+    for metric in ["full_r2", "minimal_r2", "recovery_r2", "pred_r2"]:
         if metric not in active.columns:
             continue
         ax.semilogx(ks, active[metric].values, color=colors[metric],
