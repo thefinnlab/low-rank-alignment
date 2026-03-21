@@ -12,6 +12,16 @@ import numpy as np
 import torch
 from tqdm import tqdm
 
+from utils.tensor_utils import to_numpy, to_torch
+
+# ---------------------------------------------------------------------------
+# Tensor contract
+# ---------------------------------------------------------------------------
+# All *public* functions in this module accept and return np.ndarray.
+# Internally, torch tensors are used for GPU-accelerated computation.
+# Use to_torch() to enter torch space and to_numpy() to leave it.
+# ---------------------------------------------------------------------------
+
 
 # ---------------------------------------------------------------------------
 # A. Data utilities
@@ -143,12 +153,12 @@ def fit_srrr_proxgd(
     n, n_dirs = X_proj_train.shape
     n_targets = Y_train.shape[1]
 
-    X = torch.tensor(X_proj_train, dtype=torch.float32, device=device)
-    Y = torch.tensor(Y_train, dtype=torch.float32, device=device)
+    X = to_torch(X_proj_train, dtype=torch.float32, device=device)
+    Y = to_torch(Y_train, dtype=torch.float32, device=device)
 
     # Initialise A
     if A_init is not None:
-        A = torch.tensor(A_init, dtype=torch.float32, device=device)
+        A = to_torch(A_init, dtype=torch.float32, device=device)
     else:
         rng = torch.Generator(device=device)
         rng.manual_seed(0)
@@ -156,7 +166,7 @@ def fit_srrr_proxgd(
 
     # Initialise B
     if B_init is not None:
-        B = torch.tensor(B_init, dtype=torch.float32, device=device)
+        B = to_torch(B_init, dtype=torch.float32, device=device)
     else:
         B = solve_B_closed_form(X, Y, A)
 
@@ -341,33 +351,33 @@ def fit_dense_rrr(
 
     if precomputed_Y_hat_ols is not None and precomputed_beta_full is not None:
         # Use pre-computed values from a saved encoding model (avoids re-training).
-        Y_hat_ols_np = precomputed_Y_hat_ols  # (n_train, n_targets)
-        beta_ols_np = precomputed_beta_full[selected_idx]  # (n_selected, n_targets)
-        Y_hat_ols = torch.tensor(Y_hat_ols_np, dtype=torch.float32, device=device)
-        beta_ols = torch.tensor(beta_ols_np, dtype=torch.float32, device=device)
+        # to_torch() calls to_numpy() first, so this is safe even if the inputs
+        # are torch tensors or himalaya arrays.
+        Y_hat_ols = to_torch(precomputed_Y_hat_ols, dtype=torch.float32, device=device)
+        beta_ols = to_torch(precomputed_beta_full[selected_idx], dtype=torch.float32, device=device)
     elif ridge_model is not None:
         # Use the already-fit ridge pipeline (StandardScaler + Ridge/RidgeCV).
         # Y_hat_ols comes from predict(), which correctly applies the scaler and
         # intercept — no separate OLS solve needed.
-        Y_hat_ols_np = ridge_model.predict(X_proj_train)  # (n, n_targets)
+        Y_hat_ols_np = to_numpy(ridge_model.predict(X_proj_train))  # (n, n_targets)
 
         # Recover beta in X_proj space by undoing the StandardScaler transform.
         # pipeline[0] = StandardScaler, pipeline[-1] = Ridge/RidgeCV
         # sklearn coef_ shape: (n_targets, n_features); himalaya: (n_features, n_targets)
         # Normalise to (n_features, n_targets) then divide by scale_.
-        coef = np.asarray(ridge_model[-1].coef_)           # handles GPU tensors
+        coef = to_numpy(ridge_model[-1].coef_)
         n_features_in = X_proj_train.shape[1]
         if coef.shape[0] != n_features_in:
             coef = coef.T                                  # → (n_features, n_targets)
         beta_full = coef / ridge_model[0].scale_[:, np.newaxis]    # (n_features, n_targets)
         beta_ols_np = beta_full[selected_idx]              # (n_selected, n_targets)
 
-        Y_hat_ols = torch.tensor(Y_hat_ols_np, dtype=torch.float32, device=device)
-        beta_ols = torch.tensor(beta_ols_np, dtype=torch.float32, device=device)
+        Y_hat_ols = to_torch(Y_hat_ols_np, dtype=torch.float32, device=device)
+        beta_ols = to_torch(beta_ols_np, dtype=torch.float32, device=device)
     else:
         X_sel = X_proj_train[:, selected_idx]  # (n, n_selected)
-        X = torch.tensor(X_sel, dtype=torch.float32, device=device)
-        Y = torch.tensor(Y_train, dtype=torch.float32, device=device)
+        X = to_torch(X_sel, dtype=torch.float32, device=device)
+        Y = to_torch(Y_train, dtype=torch.float32, device=device)
 
         # Step 1: Ridge OLS coefficients beta_ols: (n_selected, n_targets)
         gram = X.T @ X + ridge_alpha * torch.eye(n_selected, dtype=torch.float32, device=device)
@@ -503,7 +513,7 @@ def build_null_distribution(
         if model_constructor_fn is not None:
             model = model_constructor_fn()(i)
             model.fit(X_proj_train, Y_perm)
-            Y_hat = model.predict(X_proj_test)
+            Y_hat = to_numpy(model.predict(X_proj_test))
         else:
             result = fit_dense_rrr(
                 X_proj_train, Y_perm, k=k,
@@ -585,15 +595,15 @@ def run_sufficiency_test(
     if model_constructor_fn is not None:
         model = model_constructor_fn()(0)
         model.fit(X_proj_train, Y_resid_train)
-        Y_resid_hat = model.predict(X_proj_test)
+        Y_resid_hat = to_numpy(model.predict(X_proj_test))
     else:
         # OLS fallback (no external model dependency; used for testing)
         n_dirs = X_proj_test.shape[1]
-        X = torch.tensor(X_proj_test, dtype=torch.float64)
-        Yr = torch.tensor(Y_resid_test, dtype=torch.float64)
+        X = to_torch(X_proj_test, dtype=torch.float64)
+        Yr = to_torch(Y_resid_test, dtype=torch.float64)
         gram = X.T @ X + 1e-8 * torch.eye(n_dirs, dtype=torch.float64)
         coef = torch.linalg.solve(gram, X.T @ Yr)
-        Y_resid_hat = (X @ coef).numpy()
+        Y_resid_hat = to_numpy(X @ coef)
 
     recovery_r2 = float(compute_r2(Y_resid_test, Y_resid_hat).mean())
 

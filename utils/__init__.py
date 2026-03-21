@@ -1,6 +1,7 @@
 # Public API for the utils package.
 # Import the most commonly used functions for convenience.
 
+from utils.tensor_utils import to_numpy, to_torch
 from utils.config import EncodingConfig, SignificanceConfig, SVDConfig, SRRRConfig, RRRConfig, SVDMode, get_results_dir
 from utils.config_utils import (
     parse_override_args,
@@ -96,6 +97,9 @@ from utils.examples import (
 )
 
 __all__ = [
+    # tensor utils
+    "to_numpy",
+    "to_torch",
     # config
     "EncodingConfig",
     "SignificanceConfig",

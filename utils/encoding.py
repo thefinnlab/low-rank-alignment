@@ -8,6 +8,8 @@ from sklearn.model_selection import KFold
 from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import StandardScaler
 
+from utils.tensor_utils import to_numpy
+
 
 def train_encoding(
     X,
@@ -92,8 +94,7 @@ def train_encoding(
         if epochs_shape:
             corr = corr.reshape(epochs_shape)
 
-        if "torch" in get_backend().__name__:
-            corr = corr.numpy(force=True)
+        corr = to_numpy(corr)
 
         corrs.append(corr)
         models.append(model)
@@ -148,8 +149,7 @@ def absorb_scaler(encoding_model, num_electrodes, num_lags):
     ridge = encoding_model.named_steps["ridgecv"]
 
     # coef_ may be a torch tensor (torch backend) or numpy array (numpy backend).
-    coef = ridge.coef_
-    coef_np = coef.numpy(force=True) if hasattr(coef, "numpy") else np.asarray(coef)
+    coef_np = to_numpy(ridge.coef_)
 
     # coef_ shape from himalaya: (n_features, n_targets)
     raw_coefs_np = coef_np / scaler.scale_[:, np.newaxis]  # (n_features, n_targets)
@@ -157,8 +157,7 @@ def absorb_scaler(encoding_model, num_electrodes, num_lags):
     # himalaya Ridge does not fit an intercept; the de-standardization offset is:
     # intercept_raw = -(mean / scale) @ coef = -mean @ raw_coefs
     if hasattr(ridge, "intercept_"):
-        intercept = ridge.intercept_
-        intercept_np = intercept.numpy(force=True) if hasattr(intercept, "numpy") else np.asarray(intercept)
+        intercept_np = to_numpy(ridge.intercept_)
         raw_intercept = intercept_np - (scaler.mean_ @ raw_coefs_np)
     else:
         raw_intercept = -(scaler.mean_ @ raw_coefs_np)  # (n_targets,)
@@ -390,13 +389,13 @@ def build_per_fold_baselines(
             Y_test_parts.append((Y_sub_test - scaler_mean) / scaler_scale)
 
             # Predictions from saved model (already in scaled Y space)
-            Y_hat_all_train = np.asarray(model.predict(X_raw[train_idx]))
-            Y_hat_all_test = np.asarray(model.predict(X_raw[test_idx]))
+            Y_hat_all_train = to_numpy(model.predict(X_raw[train_idx]))
+            Y_hat_all_test = to_numpy(model.predict(X_raw[test_idx]))
             Y_hat_train_parts.append(Y_hat_all_train[:, col_idxs])
             Y_hat_test_parts.append(Y_hat_all_test[:, col_idxs])
 
             # Unscaled coefficients in raw embedding space
-            coef = np.asarray(model[-1].coef_)
+            coef = to_numpy(model[-1].coef_)
             if coef.shape[0] != n_embed:
                 coef = coef.T  # → (n_embed, n_all_cols)
             beta_sub_all = coef / model[0].scale_[:, np.newaxis]
