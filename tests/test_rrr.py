@@ -81,6 +81,41 @@ class TestSaveLoadRRRResult:
 # TestRunRRRForUnit
 # ---------------------------------------------------------------------------
 
+def _make_baselines(X, Y, test_idxs):
+    """Build per_fold_baselines from raw data using a fresh ridge model (for tests only).
+
+    Replicates the old per-fold scaler + ridge fit so that TestRunRRRForUnit
+    can call _run_rrr_for_unit without needing saved encoding_results.joblib files.
+    """
+    from sklearn.preprocessing import StandardScaler
+    from utils.encoding import get_ridge_model_constructor
+    n_words, n_embed = X.shape
+    baselines = []
+    for test_idx in test_idxs:
+        train_mask = np.ones(n_words, dtype=bool)
+        train_mask[test_idx] = False
+        train_idx = np.where(train_mask)[0]
+        scaler = StandardScaler()
+        Y_train = scaler.fit_transform(Y[train_idx])
+        Y_test = scaler.transform(Y[test_idx])
+        model = get_ridge_model_constructor()(0)
+        model.fit(X[train_idx], Y_train)
+        coef = np.asarray(model[-1].coef_)
+        if coef.shape[0] != n_embed:
+            coef = coef.T
+        beta_full_raw = (coef / model[0].scale_[:, np.newaxis]).astype(np.float32)
+        baselines.append({
+            "train_idx": train_idx,
+            "test_idx": test_idx,
+            "Y_train": Y_train,
+            "Y_test": Y_test,
+            "Y_hat_full_train": np.asarray(model.predict(X[train_idx])),
+            "Y_hat_full_test": np.asarray(model.predict(X[test_idx])),
+            "beta_full_raw": beta_full_raw,
+        })
+    return baselines
+
+
 class TestRunRRRForUnit:
     """Integration tests for _run_rrr_for_unit using synthetic data."""
 
@@ -105,8 +140,9 @@ class TestRunRRRForUnit:
         # Two-fold split
         test_idxs = [np.arange(0, n // 2), np.arange(n // 2, n)]
         config = self._make_config(rank_grid=[1, 3])
+        per_fold_baselines = _make_baselines(X, Y, test_idxs)
 
-        _run_rrr_for_unit(str(tmp_path), X, Y, test_idxs, config)
+        _run_rrr_for_unit(str(tmp_path), X, test_idxs, per_fold_baselines, config)
 
         csv_path = os.path.join(str(tmp_path), "grid_results.csv")
         assert os.path.exists(csv_path)
@@ -122,8 +158,9 @@ class TestRunRRRForUnit:
         n = X.shape[0]
         test_idxs = [np.arange(0, n // 2), np.arange(n // 2, n)]
         config = self._make_config(rank_grid=[2, 5])
+        per_fold_baselines = _make_baselines(X, Y, test_idxs)
 
-        _run_rrr_for_unit(str(tmp_path), X, Y, test_idxs, config)
+        _run_rrr_for_unit(str(tmp_path), X, test_idxs, per_fold_baselines, config)
 
         summary_path = os.path.join(str(tmp_path), "summary.csv")
         assert os.path.exists(summary_path)
@@ -146,8 +183,9 @@ class TestRunRRRForUnit:
 
         test_idxs = [np.arange(n // 2, n)]
         config = self._make_config(rank_grid=[1, 2, 3, 5])
+        per_fold_baselines = _make_baselines(X, Y, test_idxs)
 
-        _run_rrr_for_unit(str(tmp_path), X, Y, test_idxs, config)
+        _run_rrr_for_unit(str(tmp_path), X, test_idxs, per_fold_baselines, config)
 
         df = pd.read_csv(os.path.join(str(tmp_path), "grid_results.csv"))
         r2_by_k = df.groupby("k")["minimal_r2"].mean().sort_index()
@@ -167,8 +205,9 @@ class TestRunRRRForUnit:
 
         test_idxs = [np.arange(n // 2, n)]
         config = self._make_config(rank_grid=[1, 2, 3, 5])
+        per_fold_baselines = _make_baselines(X, Y, test_idxs)
 
-        _run_rrr_for_unit(str(tmp_path), X, Y, test_idxs, config)
+        _run_rrr_for_unit(str(tmp_path), X, test_idxs, per_fold_baselines, config)
 
         df = pd.read_csv(os.path.join(str(tmp_path), "grid_results.csv"))
         recovery_by_k = df.groupby("k")["recovery_r2"].mean().sort_index()
@@ -182,8 +221,9 @@ class TestRunRRRForUnit:
         n = X.shape[0]
         test_idxs = [np.arange(0, n // 2), np.arange(n // 2, n)]
         config = self._make_config(rank_grid=[2])
+        per_fold_baselines = _make_baselines(X, Y, test_idxs)
 
-        _run_rrr_for_unit(str(tmp_path), X, Y, test_idxs, config)
+        _run_rrr_for_unit(str(tmp_path), X, test_idxs, per_fold_baselines, config)
 
         for fold in range(2):
             result = load_rrr_result(str(tmp_path), k=2, fold=fold)

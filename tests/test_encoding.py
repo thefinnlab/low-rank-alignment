@@ -13,6 +13,9 @@ from utils.encoding import (
     load_all_subject_coefficients,
     save_encoding_results,
     save_subject_results,
+    _make_col_idxs,
+    build_enc_subjects_info,
+    build_per_fold_baselines,
 )
 
 
@@ -408,3 +411,162 @@ class TestLoadAllSubjectCoefficients:
             np.testing.assert_array_equal(coefs_all[fold_idx], args2["coefficients"][fold_idx])
         for fold_idx, fold_arr in enumerate(intercepts_all):
             np.testing.assert_array_equal(fold_arr, args2["intercepts"][fold_idx])
+
+
+# ---------------------------------------------------------------------------
+# TestMakeColIdxs
+# ---------------------------------------------------------------------------
+
+class TestMakeColIdxs:
+    def _make_enc_results(self, elec_names, n_lags=4):
+        lags = np.linspace(-2.0, 2.0, n_lags, endpoint=False)
+        return {"elec_names": elec_names, "lags": lags}
+
+    def test_single_electrode_correct_indices(self):
+        enc = self._make_enc_results(["A", "B", "C"], n_lags=3)
+        idxs = _make_col_idxs(enc, ["B"])
+        np.testing.assert_array_equal(idxs, [3, 4, 5])
+
+    def test_multiple_electrodes_in_order(self):
+        enc = self._make_enc_results(["A", "B", "C"], n_lags=2)
+        idxs = _make_col_idxs(enc, ["C", "A"])
+        np.testing.assert_array_equal(idxs, [4, 5, 0, 1])
+
+    def test_all_electrodes_identity(self):
+        enc = self._make_enc_results(["X", "Y"], n_lags=3)
+        idxs = _make_col_idxs(enc, ["X", "Y"])
+        np.testing.assert_array_equal(idxs, [0, 1, 2, 3, 4, 5])
+
+    def test_missing_electrode_raises(self):
+        enc = self._make_enc_results(["A", "B"], n_lags=2)
+        with pytest.raises(ValueError, match="not found"):
+            _make_col_idxs(enc, ["A", "Z"])
+
+
+# ---------------------------------------------------------------------------
+# TestBuildPerFoldBaselines
+# ---------------------------------------------------------------------------
+
+def _make_fitted_enc_results(rng, n_words, n_embed, elec_names, n_lags=3, n_folds=2):
+    """Build a minimal enc_results dict with real fitted pipelines and scalers."""
+    from himalaya.backend import set_backend
+    from himalaya.ridge import RidgeCV
+    from sklearn.pipeline import make_pipeline
+    from sklearn.preprocessing import StandardScaler
+
+    set_backend("numpy")
+
+    n_elec = len(elec_names)
+    n_targets = n_elec * n_lags
+    Y = rng.standard_normal((n_words, n_targets)).astype(np.float32)
+    X = rng.standard_normal((n_words, n_embed)).astype(np.float32)
+    lags = np.linspace(-2.0, 2.0, n_lags, endpoint=False)
+
+    fold_size = n_words // n_folds
+    models, scalers, test_idxs, train_idxs = [], [], [], []
+    for f in range(n_folds):
+        test_idx = np.arange(f * fold_size, (f + 1) * fold_size)
+        train_idx = np.concatenate([np.arange(0, f * fold_size), np.arange((f + 1) * fold_size, n_words)])
+        scaler = StandardScaler().fit(Y[train_idx])
+        Y_train_s = scaler.transform(Y[train_idx])
+        model = make_pipeline(StandardScaler(), RidgeCV(alphas=[0.1, 1.0]))
+        model.fit(X[train_idx], Y_train_s)
+        models.append(model)
+        scalers.append(scaler)
+        test_idxs.append(test_idx)
+        train_idxs.append(train_idx)
+
+    return {
+        "models": models,
+        "scalers": scalers,
+        "test_idxs": test_idxs,
+        "train_idxs": train_idxs,
+        "elec_names": elec_names,
+        "lags": lags,
+    }, X, Y
+
+
+class TestBuildPerFoldBaselines:
+    @pytest.fixture
+    def synthetic_setup(self):
+        rng = np.random.default_rng(77)
+        n_words, n_embed = 60, 6
+        elec_names = ["E0", "E1", "E2", "E3"]
+        n_lags = 3
+        enc_results, X, Y_full = _make_fitted_enc_results(
+            rng, n_words, n_embed, elec_names, n_lags=n_lags, n_folds=2
+        )
+        return enc_results, X, Y_full, n_words, n_embed, n_lags, elec_names
+
+    def _make_enc_subjects_info(self, enc_results, target_elecs):
+        col_idxs = _make_col_idxs(enc_results, target_elecs)
+        n_lags = len(enc_results["lags"])
+        n_target_cols = len(target_elecs) * n_lags
+        return [{
+            "models": enc_results["models"],
+            "scalers": enc_results["scalers"],
+            "col_idxs": col_idxs,
+            "y_col_start": 0,
+            "y_col_end": n_target_cols,
+        }]
+
+    def test_output_length_matches_n_folds(self, synthetic_setup):
+        enc_results, X, Y_full, n_words, n_embed, n_lags, elec_names = synthetic_setup
+        target_elecs = elec_names[:2]
+        n_targets = len(target_elecs) * n_lags
+        Y_target = Y_full[:, :n_targets]
+        enc_info = self._make_enc_subjects_info(enc_results, target_elecs)
+        baselines = build_per_fold_baselines(X, Y_target, enc_results["test_idxs"], enc_info)
+        assert len(baselines) == len(enc_results["test_idxs"])
+
+    def test_shapes_are_correct(self, synthetic_setup):
+        enc_results, X, Y_full, n_words, n_embed, n_lags, elec_names = synthetic_setup
+        target_elecs = elec_names[:2]
+        n_targets = len(target_elecs) * n_lags
+        Y_target = Y_full[:, :n_targets]
+        enc_info = self._make_enc_subjects_info(enc_results, target_elecs)
+        baselines = build_per_fold_baselines(X, Y_target, enc_results["test_idxs"], enc_info)
+
+        fold_size = n_words // 2
+        b = baselines[0]
+        assert b["Y_train"].shape == (n_words - fold_size, n_targets)
+        assert b["Y_test"].shape == (fold_size, n_targets)
+        assert b["Y_hat_full_train"].shape == (n_words - fold_size, n_targets)
+        assert b["Y_hat_full_test"].shape == (fold_size, n_targets)
+        assert b["beta_full_raw"].shape == (n_embed, n_targets)
+
+    def test_train_test_idx_partition_all_words(self, synthetic_setup):
+        enc_results, X, Y_full, n_words, n_embed, n_lags, elec_names = synthetic_setup
+        target_elecs = elec_names
+        n_targets = len(target_elecs) * n_lags
+        enc_info = self._make_enc_subjects_info(enc_results, target_elecs)
+        baselines = build_per_fold_baselines(X, Y_full, enc_results["test_idxs"], enc_info)
+
+        for b in baselines:
+            combined = np.sort(np.concatenate([b["train_idx"], b["test_idx"]]))
+            np.testing.assert_array_equal(combined, np.arange(n_words))
+
+    def test_build_enc_subjects_info_y_col_cursor(self, tmp_path):
+        """build_enc_subjects_info should accumulate y_col_start/end across subjects."""
+        rng = np.random.default_rng(5)
+        n_words, n_embed = 40, 4
+        n_lags = 2
+
+        # Save two subjects' enc_results to tmp_path
+        for sub_id, elec_names in [(1, ["A", "B"]), (2, ["C", "D", "E"])]:
+            enc_results, _, _ = _make_fitted_enc_results(
+                rng, n_words, n_embed, elec_names, n_lags=n_lags
+            )
+            import joblib, os
+            sub_dir = os.path.join(str(tmp_path), "subjects", f"sub_{sub_id}")
+            os.makedirs(sub_dir, exist_ok=True)
+            joblib.dump(enc_results, os.path.join(sub_dir, "encoding_results.joblib"))
+
+        target_elecs_per_sub = {1: ["A", "B"], 2: ["C", "D", "E"]}
+        info_list = build_enc_subjects_info(str(tmp_path), [1, 2], target_elecs_per_sub)
+
+        assert len(info_list) == 2
+        assert info_list[0]["y_col_start"] == 0
+        assert info_list[0]["y_col_end"] == 2 * n_lags   # 2 elecs × n_lags
+        assert info_list[1]["y_col_start"] == 2 * n_lags
+        assert info_list[1]["y_col_end"] == (2 + 3) * n_lags  # 5 elecs total

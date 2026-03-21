@@ -397,7 +397,7 @@ class TestRunSufficiencyTest:
             Y_hat_full=Y_test, Y_hat_min=Y_test, null_r2=null,
         )
         expected_keys = {"recovery_r2", "noise_floor", "sufficient", "p_value",
-                         "full_r2", "minimal_r2"}
+                         "full_r2", "minimal_r2", "pred_r2"}
         assert expected_keys == set(result.keys())
 
     def test_p_value_in_range(self, rng):
@@ -439,3 +439,82 @@ class TestFindKneeLambda:
             warnings.simplefilter("ignore", RuntimeWarning)
             knee = find_knee_lambda(lam_grid, r2_vals)
         assert knee == pytest.approx(0.1)
+
+
+# ---------------------------------------------------------------------------
+# TestFitDenseRRRPrecomputed
+# ---------------------------------------------------------------------------
+
+class TestFitDenseRRRPrecomputed:
+    """Tests for fit_dense_rrr's precomputed_Y_hat_ols / precomputed_beta_full path."""
+
+    @pytest.fixture
+    def fitted_model_and_data(self):
+        """Fit a small sklearn pipeline and return it along with train/test data."""
+        from himalaya.backend import set_backend
+        from himalaya.ridge import RidgeCV
+        from sklearn.pipeline import make_pipeline
+        from sklearn.preprocessing import StandardScaler
+
+        set_backend("numpy")
+
+        rng = np.random.default_rng(0)
+        n_train, n_dirs, n_targets = 60, 8, 4
+
+        X_train = rng.standard_normal((n_train, n_dirs)).astype(np.float32)
+        Y_train = rng.standard_normal((n_train, n_targets)).astype(np.float32)
+
+        model = make_pipeline(StandardScaler(), RidgeCV(alphas=[0.1, 1.0, 10.0]))
+        model.fit(X_train, Y_train)
+
+        coef = np.asarray(model[-1].coef_)
+        if coef.shape[0] != n_dirs:
+            coef = coef.T  # → (n_dirs, n_targets)
+        beta_full = (coef / model[0].scale_[:, np.newaxis]).astype(np.float32)
+        Y_hat_ols = np.asarray(model.predict(X_train)).astype(np.float32)
+
+        return model, X_train, Y_train, beta_full, Y_hat_ols, n_dirs, n_targets
+
+    def test_precomputed_matches_ridge_model_path(self, fitted_model_and_data):
+        """Precomputed path should give identical A/B to the ridge_model path."""
+        model, X_train, Y_train, beta_full, Y_hat_ols, n_dirs, n_targets = fitted_model_and_data
+        selected_idx = np.arange(n_dirs)
+        k = 2
+
+        result_model = fit_dense_rrr(
+            X_train, Y_train, k=k, selected_idx=selected_idx, ridge_model=model,
+        )
+        result_pre = fit_dense_rrr(
+            X_train, Y_train, k=k, selected_idx=selected_idx,
+            precomputed_Y_hat_ols=Y_hat_ols,
+            precomputed_beta_full=beta_full,
+        )
+
+        np.testing.assert_allclose(result_model["A_dense"], result_pre["A_dense"], atol=1e-4)
+        np.testing.assert_allclose(result_model["B_dense"], result_pre["B_dense"], atol=1e-4)
+
+    def test_precomputed_with_selected_subset(self, fitted_model_and_data):
+        """Precomputed path should work correctly when selected_idx is a subset."""
+        model, X_train, Y_train, beta_full, Y_hat_ols, n_dirs, n_targets = fitted_model_and_data
+        selected_idx = np.array([0, 2, 4])
+        k = 2
+
+        result = fit_dense_rrr(
+            X_train, Y_train, k=k, selected_idx=selected_idx,
+            precomputed_Y_hat_ols=Y_hat_ols,
+            precomputed_beta_full=beta_full,
+        )
+
+        assert result["A_dense"].shape == (len(selected_idx), k)
+        assert result["B_dense"].shape == (n_targets, k)
+
+    def test_fallback_to_internal_solve_when_no_precomputed(self, small_data):
+        """When neither ridge_model nor precomputed are given, internal solve is used."""
+        X, Y = small_data
+        selected_idx = np.arange(X.shape[1])
+        k = 2
+
+        result = fit_dense_rrr(X, Y, k=k, selected_idx=selected_idx)
+
+        assert result["A_dense"].shape == (X.shape[1], k)
+        assert result["B_dense"].shape == (Y.shape[1], k)

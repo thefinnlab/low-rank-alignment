@@ -286,12 +286,15 @@ def fit_dense_rrr(
     ridge_model=None,
     ridge_alpha: float = 1e-6,
     device: str | None = None,
+    precomputed_Y_hat_ols: np.ndarray | None = None,
+    precomputed_beta_full: np.ndarray | None = None,
 ) -> dict:
     """Fit dense (non-sparse) Reduced Rank Regression on the selected direction subset.
 
     Approach:
-      1. Obtain beta_ols (n_selected, n_targets): either from a pre-fit ridge_model
-         (preferred) or by solving an unregularized ridge system with ridge_alpha.
+      1. Obtain beta_ols (n_selected, n_targets): either from precomputed values
+         (preferred when using saved encoding models), a pre-fit ridge_model, or
+         by solving an unregularized ridge system with ridge_alpha.
       2. Compute Y_hat_ols = X @ beta_ols and take its rank-k SVD: U S Vh
       3. A_dense = beta_ols @ Vh_k^T   (n_selected, k)
          B_dense = Vh_k^T              (n_targets, k)
@@ -309,10 +312,14 @@ def fit_dense_rrr(
             and coefficients are used for beta_ols, avoiding a redundant and
             potentially under-regularised solve. ridge_alpha is ignored.
         ridge_alpha: Regularisation constant for the fallback internal solve (used
-            only when ridge_model is None). Note: when n_features > n_train this
-            value must be large enough to prevent overfitting — pass ridge_model
-            instead to reuse the cross-validated alpha from the outer loop.
+            only when ridge_model is None and precomputed values are not supplied).
         device: torch device string.
+        precomputed_Y_hat_ols: Optional (n_train, n_targets) array of OLS predictions
+            on the training set from a saved encoding model. When provided together
+            with precomputed_beta_full, the ridge_model path is skipped entirely.
+        precomputed_beta_full: Optional (n_dirs, n_targets) array of unscaled
+            coefficients in the input feature space. Rows are indexed by direction;
+            selected_idx is applied to slice the relevant subset.
 
     Returns:
         dict with keys:
@@ -332,7 +339,13 @@ def fit_dense_rrr(
             "selected_idx": selected_idx,
         }
 
-    if ridge_model is not None:
+    if precomputed_Y_hat_ols is not None and precomputed_beta_full is not None:
+        # Use pre-computed values from a saved encoding model (avoids re-training).
+        Y_hat_ols_np = precomputed_Y_hat_ols  # (n_train, n_targets)
+        beta_ols_np = precomputed_beta_full[selected_idx]  # (n_selected, n_targets)
+        Y_hat_ols = torch.tensor(Y_hat_ols_np, dtype=torch.float32, device=device)
+        beta_ols = torch.tensor(beta_ols_np, dtype=torch.float32, device=device)
+    elif ridge_model is not None:
         # Use the already-fit ridge pipeline (StandardScaler + Ridge/RidgeCV).
         # Y_hat_ols comes from predict(), which correctly applies the scaler and
         # intercept — no separate OLS solve needed.
