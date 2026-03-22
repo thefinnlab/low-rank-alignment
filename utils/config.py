@@ -141,8 +141,8 @@ class PartialRRRConfig:
     rrr_source_dir: str | None = None          # Where to find RRR A matrices; auto-resolved per mode
     mode: SVDMode = SVDMode.CROSS_SUBJECT
 
-    # Rank sweep — must match the rank_grid used in the original RRR run
-    rank_grid: list[int] = field(default_factory=lambda: [1, 2, 5, 10, 20, 50])
+    # Rank sweep — None discovers all ranks from rrr_source_dir; set to filter
+    rank_grid: list[int] | None = None
 
     # Per-region mode
     atlas_path: str | None = None              # Path to Destrieux 2009 .nii.gz; None = download via nilearn

@@ -10,4 +10,4 @@ output_dir: null
 partial_rrr_output_dir: null
 rrr_source_dir: null
 mode: cross_subject
-rank_grid: [1, 2, 5, 10, 20, 50]
+rank_grid: null  # null discovers all ranks from RRR output; set list to filter

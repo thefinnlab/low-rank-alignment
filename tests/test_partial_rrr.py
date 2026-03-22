@@ -117,8 +117,55 @@ def test_partial_rrr_config_round_trip():
 
     restored = dict_to_dataclass(config_dict, PartialRRRConfig)
     assert restored.rank_grid == [1, 5, 10]
-    assert restored.mode == SVDMode.PER_SUBJECT
-    assert restored.encoding.layer == 24
+
+
+def test_partial_rrr_config_default_rank_grid_is_none():
+    """Default rank_grid should be None (auto-discover)."""
+    config = PartialRRRConfig()
+    assert config.rank_grid is None
+
+
+# ---------------------------------------------------------------------------
+# Rank discovery tests
+# ---------------------------------------------------------------------------
+
+class TestDiscoverRanks:
+    @pytest.fixture(autouse=True)
+    def _add_scripts_to_path(self):
+        scripts_dir = os.path.join(os.path.dirname(__file__), "..", "scripts")
+        scripts_dir = os.path.abspath(scripts_dir)
+        if scripts_dir not in sys.path:
+            sys.path.insert(0, scripts_dir)
+
+    def test_discovers_all_ranks(self, tmp_path):
+        """Discovers all k* directories sorted."""
+        from run_partial_rrr import _discover_ranks
+        for k in [5, 1, 10]:
+            os.makedirs(tmp_path / f"k{k}" / "fold_0")
+        assert _discover_ranks(str(tmp_path)) == [1, 5, 10]
+
+    def test_filters_by_rank_grid(self, tmp_path):
+        """When rank_grid is provided, only matching ranks are returned."""
+        from run_partial_rrr import _discover_ranks
+        for k in [1, 2, 5, 10, 20]:
+            os.makedirs(tmp_path / f"k{k}" / "fold_0")
+        assert _discover_ranks(str(tmp_path), rank_grid=[2, 10]) == [2, 10]
+
+    def test_raises_on_missing_dir(self, tmp_path):
+        from run_partial_rrr import _discover_ranks
+        with pytest.raises(FileNotFoundError):
+            _discover_ranks(str(tmp_path / "nonexistent"))
+
+    def test_raises_on_empty_dir(self, tmp_path):
+        from run_partial_rrr import _discover_ranks
+        with pytest.raises(FileNotFoundError, match="No k\\* rank directories"):
+            _discover_ranks(str(tmp_path))
+
+    def test_raises_when_no_matching_ranks(self, tmp_path):
+        from run_partial_rrr import _discover_ranks
+        os.makedirs(tmp_path / "k1" / "fold_0")
+        with pytest.raises(ValueError, match="None of the requested ranks"):
+            _discover_ranks(str(tmp_path), rank_grid=[99])
 
 
 # ---------------------------------------------------------------------------

@@ -64,6 +64,50 @@ from utils.srrr import load_rrr_result
 # Core sweep
 # ---------------------------------------------------------------------------
 
+def _discover_ranks(rrr_source_dir, rank_grid=None):
+    """Discover available ranks from an RRR output directory.
+
+    Scans for subdirectories matching the ``k{rank}`` naming convention and
+    returns them sorted.  When *rank_grid* is provided, the discovered ranks
+    are filtered to only those present in *rank_grid*.
+
+    Args:
+        rrr_source_dir: Root directory containing ``k{rank}/`` subdirs.
+        rank_grid: Optional list of ranks to keep.  ``None`` keeps all.
+
+    Returns:
+        Sorted list of integer rank values.
+
+    Raises:
+        FileNotFoundError: If *rrr_source_dir* does not exist or contains
+            no ``k*`` subdirectories.
+    """
+    if not os.path.isdir(rrr_source_dir):
+        raise FileNotFoundError(f"RRR source directory not found: {rrr_source_dir}")
+
+    discovered = []
+    for name in os.listdir(rrr_source_dir):
+        if name.startswith("k") and os.path.isdir(os.path.join(rrr_source_dir, name)):
+            try:
+                discovered.append(int(name[1:]))
+            except ValueError:
+                continue
+
+    if not discovered:
+        raise FileNotFoundError(f"No k* rank directories found in {rrr_source_dir}")
+
+    discovered.sort()
+
+    if rank_grid is not None:
+        discovered = [k for k in discovered if k in rank_grid]
+        if not discovered:
+            raise ValueError(
+                f"None of the requested ranks {rank_grid} were found in {rrr_source_dir}"
+            )
+
+    return discovered
+
+
 def _run_partial_rrr_sweep(
     partial_rrr_dir,
     X,
@@ -72,7 +116,7 @@ def _run_partial_rrr_sweep(
     provided_idxs,
     n_elecs,
     n_lags,
-    rank_grid,
+    rank_grid=None,
 ):
     """Core loop: for each rank k, load A, partial out subspace, retrain ridge.
 
@@ -84,11 +128,12 @@ def _run_partial_rrr_sweep(
         provided_idxs: list of (train_idx, test_idx) tuples.
         n_elecs: number of electrodes.
         n_lags: number of time lags.
-        rank_grid: list of rank values to process.
+        rank_grid: Optional list of rank values to filter to. None discovers all.
 
     Returns:
         dict mapping k (int) → (n_folds, n_elecs, n_lags) correlations.
     """
+    rank_grid = _discover_ranks(rrr_source_dir, rank_grid)
     n_folds = len(provided_idxs)
     model_constructor = get_ridge_model_constructor()
 
@@ -96,7 +141,7 @@ def _run_partial_rrr_sweep(
     sweep_start = time.time()
 
     print(f"  RRR source:  {rrr_source_dir}")
-    print(f"  Rank grid:   {rank_grid}")
+    print(f"  Rank grid:   {rank_grid} ({len(rank_grid)} ranks)")
     print(f"  Folds:       {n_folds}")
     print(f"  Electrodes:  {n_elecs}, Lags: {n_lags}")
 
@@ -570,7 +615,7 @@ def main():
     print(f"Output dir:         {output_dir}")
     print(f"Partial RRR dir:    {partial_rrr_dir}")
     print(f"Mode:               {config.mode.value}")
-    print(f"Rank grid:          {config.rank_grid}")
+    print(f"Rank grid:          {config.rank_grid or 'auto-discover'}")
     print(f"Subjects:           {subject_ids}")
 
     # Load significance
