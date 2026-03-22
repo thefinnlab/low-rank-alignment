@@ -439,7 +439,9 @@ class TestRunSufficiencyTest:
         )
         expected_keys = {"recovery_r2", "noise_floor", "sufficient", "p_value",
                          "full_r2", "minimal_r2", "pred_r2",
-                         "full_corr", "minimal_corr", "recovery_corr"}
+                         "full_corr", "minimal_corr", "recovery_corr",
+                         "full_corr_per_target", "minimal_corr_per_target",
+                         "recovery_corr_per_target"}
         assert expected_keys == set(result.keys())
 
     def test_p_value_in_range(self, rng):
