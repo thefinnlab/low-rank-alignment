@@ -1,0 +1,38 @@
+encoding:
+  data_root: data/
+  model: gpt2xl
+  layer: 24
+  offset: 0
+  subjects: null
+  run_name: null
+  batch: false
+
+output_dir: null
+sae_output_dir: null
+rrr_source_dir: null
+mode: cross_subject
+
+# RRR rank to load
+k: 10
+
+# SAE architecture
+hidden_dim: 50
+l1_penalty: 0.001
+
+# Training mode: "end_to_end" or "alternating"
+training_mode: end_to_end
+regression_type: ols    # "ols" or "ridge"
+
+# End-to-end params
+learning_rate: 0.001
+num_epochs: 500
+batch_size: null
+
+# Alternating params
+sae_learning_rate: 0.001
+sae_steps_per_cycle: 50
+num_cycles: 20
+
+# Subject/region limiting (null = run all)
+max_subjects: null
+max_regions: null

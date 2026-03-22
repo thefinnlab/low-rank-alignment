@@ -1,0 +1,429 @@
+"""Sparse autoencoder model and training utilities for SAE-based encoding analysis."""
+
+import numpy as np
+import torch
+import torch.nn as nn
+from sklearn.preprocessing import StandardScaler
+from torch.utils.data import DataLoader, TensorDataset
+
+from utils.tensor_utils import to_numpy, to_torch
+from utils.srrr import compute_r2, compute_correlation
+
+
+class SAEEncoder(nn.Module):
+    """Single hidden-layer sparse encoder.
+
+    Maps k-dimensional RRR-projected embeddings to a wider hidden representation
+    via Linear + bias + ReLU.  Not a traditional autoencoder — there is no decoder;
+    the downstream regression head serves that role.
+
+    Args:
+        input_dim: Dimensionality of the RRR-projected input (k).
+        hidden_dim: Width of the overcomplete hidden layer (must be > input_dim).
+    """
+
+    def __init__(self, input_dim: int, hidden_dim: int):
+        super().__init__()
+        self.linear = nn.Linear(input_dim, hidden_dim)
+        self.relu = nn.ReLU()
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Return (batch, hidden_dim) non-negative activations."""
+        return self.relu(self.linear(x))
+
+
+class SAERegressorEndToEnd(nn.Module):
+    """SAE encoder + linear regression head, trained jointly.
+
+    Forward returns ``(predictions, activations)`` so the caller can compute
+    both MSE loss on predictions and L1 penalty on activations.
+
+    Args:
+        input_dim: Dimensionality of the RRR-projected input (k).
+        hidden_dim: Width of the SAE hidden layer.
+        output_dim: Number of regression targets (n_targets).
+    """
+
+    def __init__(self, input_dim: int, hidden_dim: int, output_dim: int):
+        super().__init__()
+        self.encoder = SAEEncoder(input_dim, hidden_dim)
+        self.regressor = nn.Linear(hidden_dim, output_dim)
+
+    def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        h = self.encoder(x)
+        return self.regressor(h), h
+
+
+def compute_sae_metrics(activations: torch.Tensor) -> dict:
+    """Compute SAE-specific metrics from hidden-layer activations.
+
+    Args:
+        activations: (n_samples, hidden_dim) non-negative tensor.
+
+    Returns:
+        Dict with scalar metrics and per-neuron activation_frequency array.
+    """
+    active = activations > 0
+    l0_sparsity = float(active.float().sum(dim=1).mean())
+    dead_neurons = float((activations.sum(dim=0) == 0).float().mean())
+    nonzero_vals = activations[active]
+    mean_activation = float(nonzero_vals.mean()) if nonzero_vals.numel() > 0 else 0.0
+    l1_loss = float(activations.abs().mean())
+    activation_frequency = to_numpy(active.float().mean(dim=0))
+
+    return {
+        "l0_sparsity": l0_sparsity,
+        "dead_neurons": dead_neurons,
+        "mean_activation": mean_activation,
+        "l1_loss": l1_loss,
+        "activation_frequency": activation_frequency,
+    }
+
+
+def _make_dataloader(X: torch.Tensor, Y: torch.Tensor, batch_size: int | None):
+    """Return a DataLoader or None (full-batch) depending on batch_size."""
+    if batch_size is None:
+        return None
+    return DataLoader(TensorDataset(X, Y), batch_size=batch_size, shuffle=True)
+
+
+def train_sae_end_to_end(
+    X_proj_train: np.ndarray,
+    Y_train: np.ndarray,
+    X_proj_test: np.ndarray,
+    Y_test: np.ndarray,
+    hidden_dim: int,
+    l1_penalty: float,
+    lr: float,
+    num_epochs: int,
+    batch_size: int | None = None,
+    device: str | None = None,
+) -> dict:
+    """Train SAE + regression end-to-end via backpropagation.
+
+    Loss = MSE(Y_pred, Y_true) + l1_penalty * mean(|activations|).
+
+    X_proj inputs are standardised internally (fit on train, transform test).
+
+    Args:
+        X_proj_train: (n_train, k) RRR-projected embeddings.
+        Y_train: (n_train, n_targets) scaled neural targets.
+        X_proj_test: (n_test, k) RRR-projected embeddings.
+        Y_test: (n_test, n_targets) scaled neural targets.
+        hidden_dim: SAE hidden layer width.
+        l1_penalty: L1 coefficient on activations.
+        lr: Adam learning rate.
+        num_epochs: Number of training epochs.
+        batch_size: Mini-batch size; None for full-batch.
+        device: Torch device string; auto-selects if None.
+
+    Returns:
+        Dict with keys:
+            encoder_state_dict: SAE encoder weights.
+            regressor_weight: (hidden_dim, n_targets) regression coefficients.
+            regressor_bias: (n_targets,) regression bias.
+            metrics: Dict of evaluation metrics on test set.
+            training_log: List of per-epoch metric dicts.
+    """
+    if device is None:
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+
+    scaler = StandardScaler()
+    X_train_s = scaler.fit_transform(X_proj_train)
+    X_test_s = scaler.transform(X_proj_test)
+
+    input_dim = X_train_s.shape[1]
+    n_targets = Y_train.shape[1]
+
+    X_tr = to_torch(X_train_s, dtype=torch.float32, device=device)
+    Y_tr = to_torch(Y_train, dtype=torch.float32, device=device)
+    X_te = to_torch(X_test_s, dtype=torch.float32, device=device)
+    Y_te = to_torch(Y_test, dtype=torch.float32, device=device)
+
+    model = SAERegressorEndToEnd(input_dim, hidden_dim, n_targets).to(device)
+    optimizer = torch.optim.Adam(model.parameters(), lr=lr)
+    mse_fn = nn.MSELoss()
+
+    dataloader = _make_dataloader(X_tr, Y_tr, batch_size)
+    training_log = []
+
+    for epoch in range(num_epochs):
+        model.train()
+        if dataloader is not None:
+            epoch_mse, epoch_l1, n_seen = 0.0, 0.0, 0
+            for X_batch, Y_batch in dataloader:
+                optimizer.zero_grad()
+                preds, acts = model(X_batch)
+                mse = mse_fn(preds, Y_batch)
+                l1 = acts.abs().mean()
+                loss = mse + l1_penalty * l1
+                loss.backward()
+                optimizer.step()
+                bs = X_batch.shape[0]
+                epoch_mse += mse.item() * bs
+                epoch_l1 += l1.item() * bs
+                n_seen += bs
+            epoch_mse /= n_seen
+            epoch_l1 /= n_seen
+        else:
+            optimizer.zero_grad()
+            preds, acts = model(X_tr)
+            mse = mse_fn(preds, Y_tr)
+            l1 = acts.abs().mean()
+            loss = mse + l1_penalty * l1
+            loss.backward()
+            optimizer.step()
+            epoch_mse = mse.item()
+            epoch_l1 = l1.item()
+
+        # Test metrics every epoch (cheap for small datasets)
+        model.eval()
+        with torch.no_grad():
+            preds_te, acts_te = model(X_te)
+            test_r2 = float(compute_r2(to_numpy(Y_te), to_numpy(preds_te)).mean())
+            test_corr = float(compute_correlation(to_numpy(Y_te), to_numpy(preds_te)).mean())
+
+        training_log.append({
+            "epoch": epoch,
+            "mse_loss": epoch_mse,
+            "l1_loss": epoch_l1,
+            "total_loss": epoch_mse + l1_penalty * epoch_l1,
+            "test_r2": test_r2,
+            "test_corr": test_corr,
+        })
+
+    # Final evaluation
+    model.eval()
+    with torch.no_grad():
+        preds_te, acts_te = model(X_te)
+        preds_tr, acts_tr = model(X_tr)
+
+    sae_metrics = compute_sae_metrics(acts_te)
+    test_r2 = float(compute_r2(to_numpy(Y_te), to_numpy(preds_te)).mean())
+    test_corr = float(compute_correlation(to_numpy(Y_te), to_numpy(preds_te)).mean())
+
+    metrics = {
+        "r2": test_r2,
+        "correlation": test_corr,
+        **sae_metrics,
+    }
+
+    return {
+        "encoder_state_dict": {k: v.cpu() for k, v in model.encoder.state_dict().items()},
+        "regressor_weight": to_numpy(model.regressor.weight.data),
+        "regressor_bias": to_numpy(model.regressor.bias.data),
+        "metrics": metrics,
+        "training_log": training_log,
+        "Y_hat_test": to_numpy(preds_te),
+        "Y_hat_train": to_numpy(preds_tr),
+    }
+
+
+def train_sae_alternating(
+    X_proj_train: np.ndarray,
+    Y_train: np.ndarray,
+    X_proj_test: np.ndarray,
+    Y_test: np.ndarray,
+    hidden_dim: int,
+    l1_penalty: float,
+    regression_type: str,
+    sae_lr: float,
+    sae_steps_per_cycle: int,
+    num_cycles: int,
+    batch_size: int | None = None,
+    device: str | None = None,
+) -> dict:
+    """Train SAE with alternating optimisation.
+
+    Each cycle: (1) train SAE encoder for ``sae_steps_per_cycle`` gradient steps
+    with frozen regression weights, (2) re-solve regression optimally on the
+    SAE's current activations (OLS or Ridge).
+
+    Cycle 0 initialises regression by solving on the raw (pre-SAE) projected
+    inputs to give meaningful gradients from the start.
+
+    X_proj inputs are standardised internally (fit on train, transform test).
+
+    Args:
+        X_proj_train: (n_train, k) RRR-projected embeddings.
+        Y_train: (n_train, n_targets) scaled neural targets.
+        X_proj_test: (n_test, k) RRR-projected embeddings.
+        Y_test: (n_test, n_targets) scaled neural targets.
+        hidden_dim: SAE hidden layer width.
+        l1_penalty: L1 coefficient on activations.
+        regression_type: "ols" or "ridge".
+        sae_lr: Adam learning rate for the SAE encoder.
+        sae_steps_per_cycle: Gradient steps per SAE training phase.
+        num_cycles: Number of alternating cycles.
+        batch_size: Mini-batch size; None for full-batch.
+        device: Torch device string; auto-selects if None.
+
+    Returns:
+        Same structure as train_sae_end_to_end.
+    """
+    if device is None:
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+
+    scaler = StandardScaler()
+    X_train_s = scaler.fit_transform(X_proj_train)
+    X_test_s = scaler.transform(X_proj_test)
+
+    input_dim = X_train_s.shape[1]
+    n_targets = Y_train.shape[1]
+
+    X_tr = to_torch(X_train_s, dtype=torch.float32, device=device)
+    Y_tr = to_torch(Y_train, dtype=torch.float32, device=device)
+    X_te = to_torch(X_test_s, dtype=torch.float32, device=device)
+    Y_te = to_torch(Y_test, dtype=torch.float32, device=device)
+
+    encoder = SAEEncoder(input_dim, hidden_dim).to(device)
+    optimizer = torch.optim.Adam(encoder.parameters(), lr=sae_lr)
+    mse_fn = nn.MSELoss()
+
+    # Regression weights: (hidden_dim, n_targets) and bias (n_targets,)
+    reg_W = torch.zeros(hidden_dim, n_targets, dtype=torch.float32, device=device)
+    reg_b = torch.zeros(n_targets, dtype=torch.float32, device=device)
+
+    # Cycle 0 init: solve regression on identity-mapped inputs.
+    # Since hidden_dim > input_dim, we pad the raw inputs with zeros.
+    _init_solve_regression(
+        X_tr, Y_tr, input_dim, hidden_dim, n_targets, regression_type, device,
+        reg_W, reg_b,
+    )
+
+    training_log = []
+
+    for cycle in range(num_cycles):
+        # Phase 1: Train SAE encoder with frozen regression weights
+        encoder.train()
+        frozen_W = reg_W.detach()
+        frozen_b = reg_b.detach()
+
+        dataloader = _make_dataloader(X_tr, Y_tr, batch_size)
+
+        for step in range(sae_steps_per_cycle):
+            if dataloader is not None:
+                for X_batch, Y_batch in dataloader:
+                    optimizer.zero_grad()
+                    h = encoder(X_batch)
+                    preds = h @ frozen_W + frozen_b
+                    mse = mse_fn(preds, Y_batch)
+                    l1 = h.abs().mean()
+                    loss = mse + l1_penalty * l1
+                    loss.backward()
+                    optimizer.step()
+            else:
+                optimizer.zero_grad()
+                h = encoder(X_tr)
+                preds = h @ frozen_W + frozen_b
+                mse = mse_fn(preds, Y_tr)
+                l1 = h.abs().mean()
+                loss = mse + l1_penalty * l1
+                loss.backward()
+                optimizer.step()
+
+        # Phase 2: Re-solve regression optimally on SAE activations
+        encoder.eval()
+        with torch.no_grad():
+            H_train = encoder(X_tr)
+
+        _solve_regression(H_train, Y_tr, regression_type, device, reg_W, reg_b)
+
+        # Log cycle metrics
+        with torch.no_grad():
+            H_test = encoder(X_te)
+            preds_te = H_test @ reg_W + reg_b
+            test_r2 = float(compute_r2(to_numpy(Y_te), to_numpy(preds_te)).mean())
+            test_corr = float(compute_correlation(to_numpy(Y_te), to_numpy(preds_te)).mean())
+
+            preds_tr = H_train @ reg_W + reg_b
+            train_mse = float(mse_fn(preds_tr, Y_tr))
+            train_l1 = float(H_train.abs().mean())
+
+        training_log.append({
+            "cycle": cycle,
+            "mse_loss": train_mse,
+            "l1_loss": train_l1,
+            "total_loss": train_mse + l1_penalty * train_l1,
+            "test_r2": test_r2,
+            "test_corr": test_corr,
+        })
+
+    # Final evaluation
+    encoder.eval()
+    with torch.no_grad():
+        H_test = encoder(X_te)
+        H_train = encoder(X_tr)
+        preds_te = H_test @ reg_W + reg_b
+        preds_tr = H_train @ reg_W + reg_b
+
+    sae_metrics = compute_sae_metrics(H_test)
+    test_r2 = float(compute_r2(to_numpy(Y_te), to_numpy(preds_te)).mean())
+    test_corr = float(compute_correlation(to_numpy(Y_te), to_numpy(preds_te)).mean())
+
+    metrics = {
+        "r2": test_r2,
+        "correlation": test_corr,
+        **sae_metrics,
+    }
+
+    return {
+        "encoder_state_dict": {k: v.cpu() for k, v in encoder.state_dict().items()},
+        "regressor_weight": to_numpy(reg_W),
+        "regressor_bias": to_numpy(reg_b),
+        "metrics": metrics,
+        "training_log": training_log,
+        "Y_hat_test": to_numpy(preds_te),
+        "Y_hat_train": to_numpy(preds_tr),
+    }
+
+
+def _init_solve_regression(
+    X_tr, Y_tr, input_dim, hidden_dim, n_targets, regression_type, device,
+    reg_W, reg_b,
+):
+    """Initialise regression weights by solving on raw (pre-SAE) inputs.
+
+    Pads the k-dim input to hidden_dim with zeros so the weight matrix has
+    the correct shape.
+    """
+    # Use raw X as a surrogate for SAE activations (identity init)
+    H_init = torch.zeros(X_tr.shape[0], hidden_dim, dtype=torch.float32, device=device)
+    H_init[:, :input_dim] = X_tr
+    _solve_regression(H_init, Y_tr, regression_type, device, reg_W, reg_b)
+
+
+def _solve_regression(H, Y, regression_type, device, reg_W, reg_b):
+    """Solve regression (OLS or Ridge) and write results into reg_W, reg_b in-place."""
+    H_np = to_numpy(H)
+    Y_np = to_numpy(Y)
+
+    if regression_type == "ridge":
+        from utils.encoding import get_ridge_model_constructor
+        model = get_ridge_model_constructor()(0)
+        model.fit(H_np, Y_np)
+        # Absorb StandardScaler into W, b so that H @ W + b ≈ Y.
+        # model.predict(H) = ((H - mean) / scale) @ coef_raw.T + intercept
+        # = H @ diag(1/scale) @ coef_raw.T + intercept - (mean/scale) @ coef_raw.T
+        coef_raw = to_numpy(model[-1].coef_)  # may be (n_targets, n_features) or transposed
+        n_features = H_np.shape[1]
+        if coef_raw.shape != (Y_np.shape[1], n_features):
+            coef_raw = coef_raw.T  # → (n_targets, n_features)
+        sc_mean = model[0].mean_   # (n_features,)
+        sc_scale = model[0].scale_ # (n_features,)
+        intercept = to_numpy(model[-1].intercept_)  # (n_targets,)
+        W = (coef_raw / sc_scale[np.newaxis, :]).T   # (n_features, n_targets)
+        b = intercept - (sc_mean / sc_scale) @ coef_raw.T  # (n_targets,)
+        reg_W.copy_(to_torch(W.astype(np.float32), device=device))
+        reg_b.copy_(to_torch(b.astype(np.float32), device=device))
+    else:
+        # OLS: H @ W + b ≈ Y  →  [H, 1] @ [W; b] ≈ Y
+        H_t = to_torch(H_np, dtype=torch.float32, device=device)
+        Y_t = to_torch(Y_np, dtype=torch.float32, device=device)
+        n = H_t.shape[0]
+        d = H_t.shape[1]
+        H_aug = torch.cat([H_t, torch.ones(n, 1, dtype=torch.float32, device=device)], dim=1)
+        gram = H_aug.T @ H_aug + 1e-6 * torch.eye(d + 1, dtype=torch.float32, device=device)
+        sol = torch.linalg.solve(gram, H_aug.T @ Y_t)  # (d+1, n_targets)
+        reg_W.copy_(sol[:d])
+        reg_b.copy_(sol[d])
