@@ -9,7 +9,7 @@ encoding:
 output_dir: null
 rrr_output_dir: null
 mode: per_region
-rank_grid: [1, 2, 5, 10, 20, 50]
+rank_grid: [1, 2, 5, 10, 20, 40, 100, 200, 400, 800, 1600]
 atlas_path: atlases/destrieux_2009/destrieux2009_rois_lateralized.nii.gz  # set to local .nii.gz path for offline use; null = download via nilearn
 atlas_region_groups:
   EAC: # Early Auditory Cortex

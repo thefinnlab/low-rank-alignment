@@ -174,8 +174,15 @@ def _run_rrr_for_unit(
     df.to_csv(os.path.join(rrr_unit_dir, "grid_results.csv"), index=False)
 
     # Summary: average over folds (only include columns that were computed)
-    agg_cols = ["full_r2", "minimal_r2", "recovery_r2", "pred_r2",
-                "full_corr", "minimal_corr", "recovery_corr"]
+    agg_cols = [
+        "full_r2",
+        "minimal_r2",
+        "recovery_r2",
+        "pred_r2",
+        "full_corr",
+        "minimal_corr",
+        "recovery_corr",
+    ]
     if config.compute_cca:
         agg_cols.append("cca_similarity")
     if config.compute_procrustes:
@@ -188,7 +195,7 @@ def _run_rrr_for_unit(
     plot_rrr_rank_results(
         summary,
         grid_df=df,
-        title=f"RRR: R² vs rank ({os.path.basename(rrr_unit_dir)})",
+        title=f"RRR: perf vs rank ({os.path.basename(rrr_unit_dir)})",
         save_path=os.path.join(rrr_unit_dir, "rank_analysis.png"),
     )
 

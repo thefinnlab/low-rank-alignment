@@ -18,9 +18,9 @@ def plot_svd_truncation_results(results, threshold=0.95, save_path=None):
     import matplotlib.pyplot as plt
 
     k_values = results["k_values"]
-    full_corrs = results["full_corrs"]          # (n_elecs, n_lags)
-    trunc_corrs = results["truncated_corrs"]    # (n_k, n_elecs, n_lags)
-    sig_mask = results["sig_mask"]              # (n_elecs, n_lags)
+    full_corrs = results["full_corrs"]  # (n_elecs, n_lags)
+    trunc_corrs = results["truncated_corrs"]  # (n_k, n_elecs, n_lags)
+    sig_mask = results["sig_mask"]  # (n_elecs, n_lags)
 
     best_k = find_best_k(results, threshold)
     best_ki = int(np.where(k_values == best_k)[0][0])
@@ -38,7 +38,9 @@ def plot_svd_truncation_results(results, threshold=0.95, save_path=None):
     ax.semilogx(k_values, sig_mean, "o-", color="steelblue", label="Sig")
     ax.semilogx(k_values, nonsig_mean, "o-", color="gray", label="Non-sig")
     ax.axhline(full_sig, color="steelblue", linestyle="--", alpha=0.5, label="Full sig")
-    ax.axhline(full_nonsig, color="gray", linestyle="--", alpha=0.5, label="Full non-sig")
+    ax.axhline(
+        full_nonsig, color="gray", linestyle="--", alpha=0.5, label="Full non-sig"
+    )
     ax.axvline(best_k, color="red", linestyle=":", label=f"best_k={best_k}")
     ax.set_xlabel("k (SVD components)")
     ax.set_ylabel("Mean Pearson r")
@@ -48,7 +50,9 @@ def plot_svd_truncation_results(results, threshold=0.95, save_path=None):
     # Panel 2: retention ratio
     ax = axes[0, 1]
     ax.semilogx(k_values, ratios, "o-", color="steelblue")
-    ax.axhline(threshold, color="orange", linestyle="--", label=f"Threshold {threshold:.0%}")
+    ax.axhline(
+        threshold, color="orange", linestyle="--", label=f"Threshold {threshold:.0%}"
+    )
     ax.axvline(best_k, color="red", linestyle=":", label=f"best_k={best_k}")
     ax.set_xlabel("k (SVD components)")
     ax.set_ylabel("Retention ratio")
@@ -58,12 +62,19 @@ def plot_svd_truncation_results(results, threshold=0.95, save_path=None):
 
     # Panel 3: per-electrode fractional drop at best_k
     ax = axes[1, 0]
-    full_elec = full_corrs.mean(axis=1)   # (n_elecs,)
+    full_elec = full_corrs.mean(axis=1)  # (n_elecs,)
     trunc_elec = trunc_corrs[best_ki].mean(axis=1)  # (n_elecs,)
     drop_elec = (full_elec - trunc_elec) / np.maximum(np.abs(full_elec), 1e-12)
     frac_sig_elec = sig_mask.mean(axis=1)  # (n_elecs,)
-    sc = ax.scatter(np.arange(len(drop_elec)), drop_elec, c=frac_sig_elec,
-                    cmap="viridis", s=10, vmin=0, vmax=1)
+    sc = ax.scatter(
+        np.arange(len(drop_elec)),
+        drop_elec,
+        c=frac_sig_elec,
+        cmap="viridis",
+        s=10,
+        vmin=0,
+        vmax=1,
+    )
     plt.colorbar(sc, ax=ax, label="Frac sig lags")
     ax.axhline(0, color="black", linewidth=0.5)
     ax.set_xlabel("Electrode index")
@@ -72,7 +83,7 @@ def plot_svd_truncation_results(results, threshold=0.95, save_path=None):
 
     # Panel 4: per-lag drop at best_k with sig-fraction overlay
     ax = axes[1, 1]
-    full_lag = full_corrs.mean(axis=0)   # (n_lags,)
+    full_lag = full_corrs.mean(axis=0)  # (n_lags,)
     trunc_lag = trunc_corrs[best_ki].mean(axis=0)  # (n_lags,)
     drop_lag = (full_lag - trunc_lag) / np.maximum(np.abs(full_lag), 1e-12)
     lags = np.arange(len(drop_lag))
@@ -98,7 +109,9 @@ def plot_svd_truncation_results(results, threshold=0.95, save_path=None):
         plt.show()
 
 
-def add_masked_corrs(corrs, mask, lags, ax=None, color="blue", label=None, linestyle=None):
+def add_masked_corrs(
+    corrs, mask, lags, ax=None, color="blue", label=None, linestyle=None
+):
     """Plot mean ± SEM of correlations, averaging only over electrodes selected by mask at each lag.
 
     At each lag position l, only electrodes where mask[:, l] is True contribute to the mean.
@@ -119,8 +132,8 @@ def add_masked_corrs(corrs, mask, lags, ax=None, color="blue", label=None, lines
         ax = plt.gca()
 
     # Apply mask: set excluded positions to NaN, then nanmean over electrodes per fold
-    masked = np.where(mask[np.newaxis], corrs, np.nan)          # (n_folds, n_elecs, n_lags)
-    per_fold = np.nanmean(masked, axis=1)                        # (n_folds, n_lags)
+    masked = np.where(mask[np.newaxis], corrs, np.nan)  # (n_folds, n_elecs, n_lags)
+    per_fold = np.nanmean(masked, axis=1)  # (n_folds, n_lags)
 
     mean = np.nanmean(per_fold, axis=0)
     n = np.sum(~np.isnan(per_fold), axis=0)
@@ -134,8 +147,9 @@ def add_masked_corrs(corrs, mask, lags, ax=None, color="blue", label=None, lines
     ax.fill_between(lags, mean - sem, mean + sem, alpha=0.2, color=color)
 
 
-def add_sig_proportion_histogram(sig_mask, lags, ax=None, color="coral", alpha=0.2,
-                                  label="Frac sig electrodes"):
+def add_sig_proportion_histogram(
+    sig_mask, lags, ax=None, color="coral", alpha=0.2, label="Frac sig electrodes"
+):
     """Add a background histogram of the fraction of significant electrodes at each lag.
 
     Draws bars on a twin y-axis so the histogram does not distort the correlation scale.
@@ -157,17 +171,24 @@ def add_sig_proportion_histogram(sig_mask, lags, ax=None, color="coral", alpha=0
     if ax is None:
         ax = plt.gca()
 
-    sig_frac = sig_mask.mean(axis=0)           # (n_lags,)
+    sig_frac = sig_mask.mean(axis=0)  # (n_lags,)
     lag_width = np.diff(lags).mean() if len(lags) > 1 else 1.0
 
     ax2 = ax.twinx()
-    ax2.bar(lags, sig_frac, width=lag_width * 0.9, color=color, alpha=alpha,
-            label=label, zorder=0)
+    ax2.bar(
+        lags,
+        sig_frac,
+        width=lag_width * 0.9,
+        color=color,
+        alpha=alpha,
+        label=label,
+        zorder=0,
+    )
     ax2.set_ylim(0, 1)
     ax2.set_ylabel("Frac sig electrodes", color=color)
     ax2.tick_params(axis="y", labelcolor=color)
     ax2.set_zorder(ax.get_zorder() - 1)
-    ax.patch.set_visible(False)                # let background bars show through
+    ax.patch.set_visible(False)  # let background bars show through
     return ax2
 
 
@@ -190,7 +211,7 @@ def plot_corrs_by_significance(corrs, sig_mask, lags, save_path=None):
     fig, axes = plt.subplots(1, 2, figsize=(14, 4), sharey=False)
 
     for ax, mask, title, color in [
-        (axes[0], sig_mask,  "Significant lags",   "steelblue"),
+        (axes[0], sig_mask, "Significant lags", "steelblue"),
         (axes[1], ~sig_mask, "Insignificant lags", "gray"),
     ]:
         ax2 = add_sig_proportion_histogram(sig_mask, lags, ax=ax)
@@ -214,7 +235,9 @@ def plot_corrs_by_significance(corrs, sig_mask, lags, save_path=None):
         plt.show()
 
 
-def add_corrs(corrs, lags, electrode=None, label=None, color="black", ax=None, linestyle=None):
+def add_corrs(
+    corrs, lags, electrode=None, label=None, color="black", ax=None, linestyle=None
+):
     """
     Plot mean ± SEM of correlation timecourses.
 
@@ -263,8 +286,14 @@ def plot_svd_corrs(corrs_trunc, full_corrs, lags, title, save_path, best_k):
 
     fig, ax = plt.subplots(figsize=(8, 4))
     add_corrs(full_corrs, lags, label="Full model", color="blue", ax=ax)
-    add_corrs(corrs_trunc, lags, label=f"SVD k={best_k}", color="steelblue",
-              linestyle="--", ax=ax)
+    add_corrs(
+        corrs_trunc,
+        lags,
+        label=f"SVD k={best_k}",
+        color="steelblue",
+        linestyle="--",
+        ax=ax,
+    )
     ax.axhline(0, color="black", linewidth=0.5)
     ax.set_xlabel("Lag (s)")
     ax.set_ylabel("Correlation")
@@ -279,7 +308,9 @@ def plot_svd_corrs(corrs_trunc, full_corrs, lags, title, save_path, best_k):
         plt.show()
 
 
-def plot_rrr_rank_results(summary_df, grid_df=None, title="RRR: R² vs rank", save_path=None):
+def plot_rrr_rank_results(
+    summary_df, grid_df=None, title="RRR: perf vs rank", save_path=None
+):
     """Multi-panel figure summarising RRR rank analysis.
 
     Row 1 (R² metrics — always shown):
@@ -309,7 +340,9 @@ def plot_rrr_rank_results(summary_df, grid_df=None, title="RRR: R² vs rank", sa
     import matplotlib.pyplot as plt
 
     has_folds = grid_df is not None
-    has_corr = "full_corr" in summary_df.columns and "minimal_corr" in summary_df.columns
+    has_corr = (
+        "full_corr" in summary_df.columns and "minimal_corr" in summary_df.columns
+    )
 
     n_cols = 4 if has_folds else 3
     n_rows = 2 if has_corr else 1
@@ -330,17 +363,40 @@ def plot_rrr_rank_results(summary_df, grid_df=None, title="RRR: R² vs rank", sa
     if has_folds:
         for _, fold_df in grid_df.groupby("fold"):
             fold_gap = fold_df["full_r2"].values - fold_df["minimal_r2"].values
-            ax1.semilogx(fold_df["k"], fold_gap, color="#f59e0b", alpha=0.2, linewidth=0.8)
+            ax1.semilogx(
+                fold_df["k"], fold_gap, color="#f59e0b", alpha=0.2, linewidth=0.8
+            )
         if "recovery_r2" in grid_df.columns:
             for _, fold_df in grid_df.groupby("fold"):
-                ax1.semilogx(fold_df["k"], fold_df["recovery_r2"],
-                             color="#ef4444", alpha=0.2, linewidth=0.8)
+                ax1.semilogx(
+                    fold_df["k"],
+                    fold_df["recovery_r2"],
+                    color="#ef4444",
+                    alpha=0.2,
+                    linewidth=0.8,
+                )
 
-    ax1.semilogx(ks, gap, color="#f59e0b", linestyle="-", marker="o", markersize=4,
-                 label="full_r2 − minimal_r2 (gap)", linewidth=1.5)
+    ax1.semilogx(
+        ks,
+        gap,
+        color="#f59e0b",
+        linestyle="-",
+        marker="o",
+        markersize=4,
+        label="full_r2 − minimal_r2 (gap)",
+        linewidth=1.5,
+    )
     if "recovery_r2" in summary_df.columns:
-        ax1.semilogx(ks, summary_df["recovery_r2"], color="#ef4444", linestyle="-",
-                     marker="o", markersize=4, label="recovery_r2 (residual)", linewidth=1.5)
+        ax1.semilogx(
+            ks,
+            summary_df["recovery_r2"],
+            color="#ef4444",
+            linestyle="-",
+            marker="o",
+            markersize=4,
+            label="recovery_r2 (residual)",
+            linewidth=1.5,
+        )
     ax1.axhline(0, color="black", linewidth=0.5, linestyle=":")
     ax1.set_xlabel("Rank k")
     ax1.set_ylabel("R²")
@@ -351,15 +407,41 @@ def plot_rrr_rank_results(summary_df, grid_df=None, title="RRR: R² vs rank", sa
     ax2 = axes[0, 1]
     if has_folds:
         for _, fold_df in grid_df.groupby("fold"):
-            ax2.semilogx(fold_df["k"], fold_df["full_r2"],
-                         color="#9ca3af", alpha=0.2, linewidth=0.8)
-            ax2.semilogx(fold_df["k"], fold_df["minimal_r2"],
-                         color="#3b82f6", alpha=0.2, linewidth=0.8)
+            ax2.semilogx(
+                fold_df["k"],
+                fold_df["full_r2"],
+                color="#9ca3af",
+                alpha=0.2,
+                linewidth=0.8,
+            )
+            ax2.semilogx(
+                fold_df["k"],
+                fold_df["minimal_r2"],
+                color="#3b82f6",
+                alpha=0.2,
+                linewidth=0.8,
+            )
 
-    ax2.semilogx(ks, summary_df["full_r2"], color="#9ca3af", linestyle="--",
-                 marker="o", markersize=4, label="full_r2 (ceiling)", linewidth=1.5)
-    ax2.semilogx(ks, summary_df["minimal_r2"], color="#3b82f6", linestyle="-",
-                 marker="o", markersize=4, label="minimal_r2 (RRR)", linewidth=1.5)
+    ax2.semilogx(
+        ks,
+        summary_df["full_r2"],
+        color="#9ca3af",
+        linestyle="--",
+        marker="o",
+        markersize=4,
+        label="full_r2 (ceiling)",
+        linewidth=1.5,
+    )
+    ax2.semilogx(
+        ks,
+        summary_df["minimal_r2"],
+        color="#3b82f6",
+        linestyle="-",
+        marker="o",
+        markersize=4,
+        label="minimal_r2 (RRR)",
+        linewidth=1.5,
+    )
     ax2.axhline(0, color="black", linewidth=0.5, linestyle=":")
     ax2.set_xlabel("Rank k")
     ax2.set_ylabel("R²")
@@ -373,10 +455,20 @@ def plot_rrr_rank_results(summary_df, grid_df=None, title="RRR: R² vs rank", sa
             fold_ratio = fold_df["minimal_r2"].values / np.where(
                 fold_df["full_r2"].values > 0, fold_df["full_r2"].values, np.nan
             )
-            ax3.semilogx(fold_df["k"], fold_ratio, color="#8b5cf6", alpha=0.2, linewidth=0.8)
+            ax3.semilogx(
+                fold_df["k"], fold_ratio, color="#8b5cf6", alpha=0.2, linewidth=0.8
+            )
 
-    ax3.semilogx(ks, ratio, color="#8b5cf6", linestyle="-", marker="o", markersize=4,
-                 label="minimal_r2 / full_r2", linewidth=1.5)
+    ax3.semilogx(
+        ks,
+        ratio,
+        color="#8b5cf6",
+        linestyle="-",
+        marker="o",
+        markersize=4,
+        label="minimal_r2 / full_r2",
+        linewidth=1.5,
+    )
     ax3.axhline(1, color="black", linewidth=0.5, linestyle=":")
     ax3.set_xlabel("Rank k")
     ax3.set_ylabel("Fraction of ceiling")
@@ -410,21 +502,60 @@ def plot_rrr_rank_results(summary_df, grid_df=None, title="RRR: R² vs rank", sa
         ax5 = axes[1, 0]
         if has_folds:
             for _, fold_df in grid_df.groupby("fold"):
-                ax5.semilogx(fold_df["k"], fold_df["full_corr"],
-                             color="#9ca3af", alpha=0.2, linewidth=0.8)
-                ax5.semilogx(fold_df["k"], fold_df["minimal_corr"],
-                             color="#10b981", alpha=0.2, linewidth=0.8)
+                ax5.semilogx(
+                    fold_df["k"],
+                    fold_df["full_corr"],
+                    color="#9ca3af",
+                    alpha=0.2,
+                    linewidth=0.8,
+                )
+                ax5.semilogx(
+                    fold_df["k"],
+                    fold_df["minimal_corr"],
+                    color="#10b981",
+                    alpha=0.2,
+                    linewidth=0.8,
+                )
                 if "recovery_corr" in fold_df.columns:
-                    ax5.semilogx(fold_df["k"], fold_df["recovery_corr"],
-                                 color="#ef4444", alpha=0.2, linewidth=0.8)
+                    ax5.semilogx(
+                        fold_df["k"],
+                        fold_df["recovery_corr"],
+                        color="#ef4444",
+                        alpha=0.2,
+                        linewidth=0.8,
+                    )
 
-        ax5.semilogx(ks, summary_df["full_corr"], color="#9ca3af", linestyle="--",
-                     marker="o", markersize=4, label="full_corr (ceiling)", linewidth=1.5)
-        ax5.semilogx(ks, summary_df["minimal_corr"], color="#10b981", linestyle="-",
-                     marker="o", markersize=4, label="minimal_corr (RRR)", linewidth=1.5)
+        ax5.semilogx(
+            ks,
+            summary_df["full_corr"],
+            color="#9ca3af",
+            linestyle="--",
+            marker="o",
+            markersize=4,
+            label="full_corr (ceiling)",
+            linewidth=1.5,
+        )
+        ax5.semilogx(
+            ks,
+            summary_df["minimal_corr"],
+            color="#10b981",
+            linestyle="-",
+            marker="o",
+            markersize=4,
+            label="minimal_corr (RRR)",
+            linewidth=1.5,
+        )
         if "recovery_corr" in summary_df.columns:
-            ax5.semilogx(ks, summary_df["recovery_corr"], color="#ef4444", linestyle="-",
-                         marker="o", markersize=4, label="recovery_corr (residual)", linewidth=1.5)
+            ax5.semilogx(
+                ks,
+                summary_df["recovery_corr"],
+                color="#ef4444",
+                linestyle="-",
+                marker="o",
+                markersize=4,
+                label="recovery_corr (residual)",
+                linewidth=1.5,
+            )
         ax5.axhline(0, color="black", linewidth=0.5, linestyle=":")
         ax5.set_xlabel("Rank k")
         ax5.set_ylabel("Correlation")
@@ -441,10 +572,24 @@ def plot_rrr_rank_results(summary_df, grid_df=None, title="RRR: R² vs rank", sa
                 fold_corr_ratio = fold_df["minimal_corr"].values / np.where(
                     fold_df["full_corr"].values > 0, fold_df["full_corr"].values, np.nan
                 )
-                ax6.semilogx(fold_df["k"], fold_corr_ratio, color="#8b5cf6", alpha=0.2, linewidth=0.8)
+                ax6.semilogx(
+                    fold_df["k"],
+                    fold_corr_ratio,
+                    color="#8b5cf6",
+                    alpha=0.2,
+                    linewidth=0.8,
+                )
 
-        ax6.semilogx(ks, corr_ratio, color="#8b5cf6", linestyle="-", marker="o", markersize=4,
-                     label="minimal_corr / full_corr", linewidth=1.5)
+        ax6.semilogx(
+            ks,
+            corr_ratio,
+            color="#8b5cf6",
+            linestyle="-",
+            marker="o",
+            markersize=4,
+            label="minimal_corr / full_corr",
+            linewidth=1.5,
+        )
         ax6.axhline(1, color="black", linewidth=0.5, linestyle=":")
         ax6.set_xlabel("Rank k")
         ax6.set_ylabel("Fraction of ceiling")
@@ -456,11 +601,24 @@ def plot_rrr_rank_results(summary_df, grid_df=None, title="RRR: R² vs rank", sa
         if "pred_r2" in summary_df.columns:
             if has_folds and "pred_r2" in grid_df.columns:
                 for _, fold_df in grid_df.groupby("fold"):
-                    ax7.semilogx(fold_df["k"], fold_df["pred_r2"],
-                                 color="#f97316", alpha=0.2, linewidth=0.8)
+                    ax7.semilogx(
+                        fold_df["k"],
+                        fold_df["pred_r2"],
+                        color="#f97316",
+                        alpha=0.2,
+                        linewidth=0.8,
+                    )
 
-            ax7.semilogx(ks, summary_df["pred_r2"], color="#f97316", linestyle="-",
-                         marker="o", markersize=4, label="pred_r2", linewidth=1.5)
+            ax7.semilogx(
+                ks,
+                summary_df["pred_r2"],
+                color="#f97316",
+                linestyle="-",
+                marker="o",
+                markersize=4,
+                label="pred_r2",
+                linewidth=1.5,
+            )
             ax7.axhline(1, color="black", linewidth=0.5, linestyle=":")
             ax7.set_xlabel("Rank k")
             ax7.set_ylabel("R² (Y_hat_full as target)")
@@ -556,8 +714,13 @@ def plot_srrr_rank_results(
         if suf_mask.any():
             first_k = int(active[suf_mask]["k"].min())
             first_i = list(ks).index(first_k)
-            ax.axvline(first_i, color="#16a34a", linestyle=":", linewidth=1.5,
-                       label=f"first sufficient k={first_k}")
+            ax.axvline(
+                first_i,
+                color="#16a34a",
+                linestyle=":",
+                linewidth=1.5,
+                label=f"first sufficient k={first_k}",
+            )
             ax.legend(fontsize=8)
     ax.set_xticks(range(len(ks)))
     ax.set_xticklabels([str(k) for k in ks])
@@ -568,15 +731,32 @@ def plot_srrr_rank_results(
 
     # Panel 2: R² metrics
     ax = axes[1]
-    colors = {"full_r2": "#9ca3af", "minimal_r2": "#3b82f6", "recovery_r2": "#ef4444", "pred_r2": "#10b981"}
-    labels = {"full_r2": "full_r2", "minimal_r2": "minimal_r2", "recovery_r2": "recovery_r2", "pred_r2": "pred_r2 (vs full model)"}
+    colors = {
+        "full_r2": "#9ca3af",
+        "minimal_r2": "#3b82f6",
+        "recovery_r2": "#ef4444",
+        "pred_r2": "#10b981",
+    }
+    labels = {
+        "full_r2": "full_r2",
+        "minimal_r2": "minimal_r2",
+        "recovery_r2": "recovery_r2",
+        "pred_r2": "pred_r2 (vs full model)",
+    }
     styles = {"full_r2": "--", "minimal_r2": "-", "recovery_r2": "-", "pred_r2": "-"}
     for metric in ["full_r2", "minimal_r2", "recovery_r2", "pred_r2"]:
         if metric not in active.columns:
             continue
-        ax.semilogx(ks, active[metric].values, color=colors[metric],
-                    linestyle=styles[metric], marker="o", markersize=4,
-                    label=labels[metric], linewidth=1.5)
+        ax.semilogx(
+            ks,
+            active[metric].values,
+            color=colors[metric],
+            linestyle=styles[metric],
+            marker="o",
+            markersize=4,
+            label=labels[metric],
+            linewidth=1.5,
+        )
     ax.axhline(0, color="black", linewidth=0.5, linestyle=":")
     ax.set_xlabel("Rank k")
     ax.set_ylabel("R²")
@@ -586,8 +766,14 @@ def plot_srrr_rank_results(
     # Panel 3: n_selected
     ax = axes[2]
     if "n_selected" in active.columns:
-        ax.semilogx(ks, active["n_selected"].values, color="#8b5cf6",
-                    marker="o", markersize=4, linewidth=1.5)
+        ax.semilogx(
+            ks,
+            active["n_selected"].values,
+            color="#8b5cf6",
+            marker="o",
+            markersize=4,
+            linewidth=1.5,
+        )
     ax.set_xlabel("Rank k")
     ax.set_ylabel("Avg. selected SVD directions")
     ax.set_title("Selected directions vs rank")

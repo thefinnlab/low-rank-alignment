@@ -9,4 +9,4 @@ encoding:
 output_dir: null
 rrr_output_dir: null
 mode: per_subject
-rank_grid: [1, 2, 5, 10, 20, 40, 100, 200]
+rank_grid: [1, 2, 5, 10, 20, 40, 100, 200, 400, 800, 1600]
