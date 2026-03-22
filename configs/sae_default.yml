@@ -27,6 +27,7 @@ regression_type: ols    # "ols" or "ridge"
 learning_rate: 0.001
 num_epochs: 500
 batch_size: null
+log_every: 10             # compute & display test metrics every N epochs/cycles
 
 # Alternating params
 sae_learning_rate: 0.001

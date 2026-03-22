@@ -236,6 +236,7 @@ class SAEConfig:
     learning_rate: float = 1e-3
     num_epochs: int = 500
     batch_size: int | None = None         # None = full batch
+    log_every: int = 10                   # Compute & display test metrics every N epochs/cycles
 
     # Alternating params
     sae_learning_rate: float = 1e-3

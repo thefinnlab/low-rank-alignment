@@ -135,6 +135,7 @@ def _run_sae_for_unit(
                 sae_steps_per_cycle=config.sae_steps_per_cycle,
                 num_cycles=config.num_cycles,
                 batch_size=config.batch_size,
+                log_every=config.log_every,
             )
         else:
             result = train_sae_end_to_end(
@@ -144,6 +145,7 @@ def _run_sae_for_unit(
                 lr=config.learning_rate,
                 num_epochs=config.num_epochs,
                 batch_size=config.batch_size,
+                log_every=config.log_every,
             )
 
         Y_hat_sae = result["Y_hat_test"]
@@ -194,9 +196,16 @@ def _run_sae_for_unit(
         npz_metrics["activation_frequency"] = m["activation_frequency"]
         np.savez(os.path.join(fold_dir, "metrics.npz"), **npz_metrics)
 
-        # Save training log
+        # Save training log and plot
         log_df = pd.DataFrame(result["training_log"])
         log_df.to_csv(os.path.join(fold_dir, "training_log.csv"), index=False)
+
+        from utils.plotting import plot_sae_training_curves
+        plot_sae_training_curves(
+            result["training_log"],
+            title=f"SAE training — k={k}, fold {fold_f}",
+            save_path=os.path.join(fold_dir, "training_curves.png"),
+        )
 
         all_rows.append(metrics)
         print(f"  Fold {fold_f} done in {time.time() - fold_start:.1f}s")

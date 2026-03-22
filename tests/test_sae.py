@@ -141,7 +141,7 @@ class TestTrainSAEEndToEnd:
         result = train_sae_end_to_end(
             X[:split], Y[:split], X[split:], Y[split:],
             hidden_dim=12, l1_penalty=1e-4, lr=1e-2,
-            num_epochs=50, device="cpu",
+            num_epochs=50, device="cpu", log_every=1,
         )
         log = result["training_log"]
         assert log[-1]["total_loss"] < log[0]["total_loss"]
@@ -153,7 +153,7 @@ class TestTrainSAEEndToEnd:
         result = train_sae_end_to_end(
             X[:split], Y[:split], X[split:], Y[split:],
             hidden_dim=10, l1_penalty=1e-3, lr=1e-3,
-            num_epochs=5, device="cpu",
+            num_epochs=5, device="cpu", log_every=1,
         )
         assert "encoder_state_dict" in result
         assert "regressor_weight" in result
@@ -175,13 +175,29 @@ class TestTrainSAEEndToEnd:
         result = train_sae_end_to_end(
             X[:split], Y[:split], X[split:], Y[split:],
             hidden_dim=10, l1_penalty=1e-3, lr=1e-3,
-            num_epochs=10, device="cpu",
+            num_epochs=10, device="cpu", log_every=1,
         )
         log = result["training_log"]
         assert len(log) == 10
         for entry in log:
             for key in ["epoch", "mse_loss", "l1_loss", "total_loss", "test_r2", "test_corr"]:
                 assert key in entry
+
+    def test_log_every_skips_test_metrics(self, small_data):
+        X, Y = small_data
+        n = X.shape[0]
+        split = n // 2
+        result = train_sae_end_to_end(
+            X[:split], Y[:split], X[split:], Y[split:],
+            hidden_dim=10, l1_penalty=1e-3, lr=1e-3,
+            num_epochs=10, device="cpu", log_every=5,
+        )
+        log = result["training_log"]
+        assert len(log) == 10
+        # Epoch 0 and 5 should have metrics (log_every=5), epoch 9 (last) too
+        assert log[0]["test_r2"] is not None
+        assert log[1]["test_r2"] is None
+        assert log[9]["test_r2"] is not None
 
     def test_l1_increases_sparsity(self, structured_data):
         X, Y = structured_data
@@ -191,12 +207,12 @@ class TestTrainSAEEndToEnd:
         result_low = train_sae_end_to_end(
             X[:split], Y[:split], X[split:], Y[split:],
             hidden_dim=12, l1_penalty=1e-5, lr=1e-2,
-            num_epochs=100, device="cpu",
+            num_epochs=100, device="cpu", log_every=100,
         )
         result_high = train_sae_end_to_end(
             X[:split], Y[:split], X[split:], Y[split:],
             hidden_dim=12, l1_penalty=1.0, lr=1e-2,
-            num_epochs=100, device="cpu",
+            num_epochs=100, device="cpu", log_every=100,
         )
         assert result_high["metrics"]["l0_sparsity"] <= result_low["metrics"]["l0_sparsity"]
 
@@ -237,7 +253,7 @@ class TestTrainSAEAlternating:
             X[:split], Y[:split], X[split:], Y[split:],
             hidden_dim=12, l1_penalty=1e-4, regression_type="ols",
             sae_lr=1e-2, sae_steps_per_cycle=20, num_cycles=10,
-            device="cpu",
+            device="cpu", log_every=1,
         )
         log = result["training_log"]
         assert log[-1]["total_loss"] < log[0]["total_loss"]
@@ -290,7 +306,7 @@ class TestTrainSAEAlternating:
             X[:split], Y[:split], X[split:], Y[split:],
             hidden_dim=10, l1_penalty=1e-3, regression_type="ols",
             sae_lr=1e-3, sae_steps_per_cycle=5, num_cycles=4,
-            device="cpu",
+            device="cpu", log_every=1,
         )
         log = result["training_log"]
         assert len(log) == 4
@@ -354,3 +370,37 @@ class TestSAEConfig:
         config = load_config(config_path, overrides, SAEConfig)
         assert config.hidden_dim == 100
         assert config.encoding.layer == 48
+
+
+# ---------------------------------------------------------------------------
+# TestPlotSAETrainingCurves
+# ---------------------------------------------------------------------------
+
+class TestPlotSAETrainingCurves:
+    def test_saves_png(self, tmp_path, structured_data):
+        from utils.plotting import plot_sae_training_curves
+        X, Y = structured_data
+        n = X.shape[0]
+        split = n // 2
+        result = train_sae_end_to_end(
+            X[:split], Y[:split], X[split:], Y[split:],
+            hidden_dim=12, l1_penalty=1e-3, lr=1e-2,
+            num_epochs=20, device="cpu", log_every=5,
+        )
+        save_path = str(tmp_path / "curves.png")
+        plot_sae_training_curves(result["training_log"], save_path=save_path)
+        assert os.path.exists(save_path)
+
+    def test_handles_all_logged(self, tmp_path, small_data):
+        from utils.plotting import plot_sae_training_curves
+        X, Y = small_data
+        n = X.shape[0]
+        split = n // 2
+        result = train_sae_end_to_end(
+            X[:split], Y[:split], X[split:], Y[split:],
+            hidden_dim=10, l1_penalty=1e-3, lr=1e-3,
+            num_epochs=5, device="cpu", log_every=1,
+        )
+        save_path = str(tmp_path / "curves_all.png")
+        plot_sae_training_curves(result["training_log"], save_path=save_path)
+        assert os.path.exists(save_path)

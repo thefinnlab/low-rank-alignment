@@ -5,6 +5,7 @@ import torch
 import torch.nn as nn
 from sklearn.preprocessing import StandardScaler
 from torch.utils.data import DataLoader, TensorDataset
+from tqdm import tqdm
 
 from utils.tensor_utils import to_numpy, to_torch
 from utils.srrr import compute_r2, compute_correlation
@@ -98,6 +99,7 @@ def train_sae_end_to_end(
     num_epochs: int,
     batch_size: int | None = None,
     device: str | None = None,
+    log_every: int = 10,
 ) -> dict:
     """Train SAE + regression end-to-end via backpropagation.
 
@@ -116,6 +118,7 @@ def train_sae_end_to_end(
         num_epochs: Number of training epochs.
         batch_size: Mini-batch size; None for full-batch.
         device: Torch device string; auto-selects if None.
+        log_every: Compute and display test metrics every N epochs.
 
     Returns:
         Dict with keys:
@@ -147,7 +150,8 @@ def train_sae_end_to_end(
     dataloader = _make_dataloader(X_tr, Y_tr, batch_size)
     training_log = []
 
-    for epoch in range(num_epochs):
+    pbar = tqdm(range(num_epochs), desc="  end_to_end", unit="ep", leave=True)
+    for epoch in pbar:
         model.train()
         if dataloader is not None:
             epoch_mse, epoch_l1, n_seen = 0.0, 0.0, 0
@@ -176,18 +180,29 @@ def train_sae_end_to_end(
             epoch_mse = mse.item()
             epoch_l1 = l1.item()
 
-        # Test metrics every epoch (cheap for small datasets)
-        model.eval()
-        with torch.no_grad():
-            preds_te, acts_te = model(X_te)
-            test_r2 = float(compute_r2(to_numpy(Y_te), to_numpy(preds_te)).mean())
-            test_corr = float(compute_correlation(to_numpy(Y_te), to_numpy(preds_te)).mean())
+        total_loss = epoch_mse + l1_penalty * epoch_l1
+
+        # Compute test metrics at log_every intervals and on the last epoch
+        is_log_step = (epoch % log_every == 0) or (epoch == num_epochs - 1)
+        if is_log_step:
+            model.eval()
+            with torch.no_grad():
+                preds_te, acts_te = model(X_te)
+                test_r2 = float(compute_r2(to_numpy(Y_te), to_numpy(preds_te)).mean())
+                test_corr = float(compute_correlation(to_numpy(Y_te), to_numpy(preds_te)).mean())
+                l0 = float((acts_te > 0).float().sum(dim=1).mean())
+            pbar.set_postfix(loss=f"{total_loss:.4f}", r2=f"{test_r2:.4f}",
+                             corr=f"{test_corr:.4f}", L0=f"{l0:.1f}")
+        else:
+            test_r2 = None
+            test_corr = None
+            pbar.set_postfix(loss=f"{total_loss:.4f}")
 
         training_log.append({
             "epoch": epoch,
             "mse_loss": epoch_mse,
             "l1_loss": epoch_l1,
-            "total_loss": epoch_mse + l1_penalty * epoch_l1,
+            "total_loss": total_loss,
             "test_r2": test_r2,
             "test_corr": test_corr,
         })
@@ -232,6 +247,7 @@ def train_sae_alternating(
     num_cycles: int,
     batch_size: int | None = None,
     device: str | None = None,
+    log_every: int = 1,
 ) -> dict:
     """Train SAE with alternating optimisation.
 
@@ -257,6 +273,7 @@ def train_sae_alternating(
         num_cycles: Number of alternating cycles.
         batch_size: Mini-batch size; None for full-batch.
         device: Torch device string; auto-selects if None.
+        log_every: Compute and display test metrics every N cycles.
 
     Returns:
         Same structure as train_sae_end_to_end.
@@ -293,7 +310,8 @@ def train_sae_alternating(
 
     training_log = []
 
-    for cycle in range(num_cycles):
+    pbar = tqdm(range(num_cycles), desc="  alternating", unit="cyc", leave=True)
+    for cycle in pbar:
         # Phase 1: Train SAE encoder with frozen regression weights
         encoder.train()
         frozen_W = reg_W.detach()
@@ -330,21 +348,32 @@ def train_sae_alternating(
         _solve_regression(H_train, Y_tr, regression_type, device, reg_W, reg_b)
 
         # Log cycle metrics
+        is_log_step = (cycle % log_every == 0) or (cycle == num_cycles - 1)
         with torch.no_grad():
-            H_test = encoder(X_te)
-            preds_te = H_test @ reg_W + reg_b
-            test_r2 = float(compute_r2(to_numpy(Y_te), to_numpy(preds_te)).mean())
-            test_corr = float(compute_correlation(to_numpy(Y_te), to_numpy(preds_te)).mean())
-
             preds_tr = H_train @ reg_W + reg_b
             train_mse = float(mse_fn(preds_tr, Y_tr))
             train_l1 = float(H_train.abs().mean())
+            total_loss = train_mse + l1_penalty * train_l1
+
+        if is_log_step:
+            with torch.no_grad():
+                H_test = encoder(X_te)
+                preds_te = H_test @ reg_W + reg_b
+                test_r2 = float(compute_r2(to_numpy(Y_te), to_numpy(preds_te)).mean())
+                test_corr = float(compute_correlation(to_numpy(Y_te), to_numpy(preds_te)).mean())
+                l0 = float((H_test > 0).float().sum(dim=1).mean())
+            pbar.set_postfix(loss=f"{total_loss:.4f}", r2=f"{test_r2:.4f}",
+                             corr=f"{test_corr:.4f}", L0=f"{l0:.1f}")
+        else:
+            test_r2 = None
+            test_corr = None
+            pbar.set_postfix(loss=f"{total_loss:.4f}")
 
         training_log.append({
             "cycle": cycle,
             "mse_loss": train_mse,
             "l1_loss": train_l1,
-            "total_loss": train_mse + l1_penalty * train_l1,
+            "total_loss": total_loss,
             "test_r2": test_r2,
             "test_corr": test_corr,
         })
