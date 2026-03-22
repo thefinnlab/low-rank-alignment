@@ -36,6 +36,7 @@ import pandas as pd
 from tqdm import tqdm
 
 from utils import (
+    build_global_sig_mask,
     load_embeddings,
     build_word_epochs,
     apply_offset,
@@ -74,6 +75,7 @@ def _run_rrr_for_unit(
     test_idxs: list,
     per_fold_baselines: list,
     config: RRRConfig,
+    sig_mask_flat: np.ndarray | None = None,
 ) -> pd.DataFrame:
     """Core RRR loop for one analysis unit (cross-subject, per-subject, or per-region).
 
@@ -125,6 +127,10 @@ def _run_rrr_for_unit(
             A = rrr_result["A_dense"]
             B = rrr_result["B_dense"]
 
+            # Effective rank of A (may be < k if A is rank-deficient)
+            sv = np.linalg.svd(A, compute_uv=False)
+            effective_rank = int(np.sum(sv > 1e-6 * sv[0])) if len(sv) > 0 and sv[0] > 0 else 0
+
             Y_hat_rrr = Y_hat_full @ B @ B.T
             Y_hat_rrr_train = Y_hat_ols_train @ B @ B.T
 
@@ -159,9 +165,19 @@ def _run_rrr_for_unit(
                 "full_corr": suf["full_corr"],
                 "minimal_corr": suf["minimal_corr"],
                 "recovery_corr": suf["recovery_corr"],
+                "effective_rank": effective_rank,
                 "fold": fold_f,
                 "k": k,
             }
+            if sig_mask_flat is not None:
+                for prefix in ("full_corr", "minimal_corr", "recovery_corr"):
+                    arr = suf[f"{prefix}_per_target"]
+                    metrics[f"{prefix}_sig"] = (
+                        float(arr[sig_mask_flat].mean()) if sig_mask_flat.any() else float("nan")
+                    )
+                    metrics[f"{prefix}_nonsig"] = (
+                        float(arr[~sig_mask_flat].mean()) if (~sig_mask_flat).any() else float("nan")
+                    )
             if cca_sim is not None:
                 metrics["cca_similarity"] = cca_sim
             if proc_sim is not None:
@@ -176,7 +192,13 @@ def _run_rrr_for_unit(
 
     # Summary: average over folds (only include columns that were computed)
     agg_cols = ["full_r2", "minimal_r2", "recovery_r2", "pred_r2",
-                "full_corr", "minimal_corr", "recovery_corr"]
+                "full_corr", "minimal_corr", "recovery_corr", "effective_rank"]
+    if sig_mask_flat is not None:
+        agg_cols.extend([
+            "full_corr_sig", "full_corr_nonsig",
+            "minimal_corr_sig", "minimal_corr_nonsig",
+            "recovery_corr_sig", "recovery_corr_nonsig",
+        ])
     if config.compute_cca:
         agg_cols.append("cca_similarity")
     if config.compute_procrustes:
@@ -194,6 +216,38 @@ def _run_rrr_for_unit(
     )
 
     return df
+
+
+# ---------------------------------------------------------------------------
+# Significance mask helper
+# ---------------------------------------------------------------------------
+
+
+def _build_sig_mask_flat_for_elecs(output_dir, elecs_per_sub, enc_results):
+    """Build a flat sig mask for a specific subset of electrodes per subject.
+
+    Used for per-region mode where only a subset of each subject's electrodes
+    are included. Returns None if significance_detailed.csv is not found.
+    """
+    sig_csv = os.path.join(output_dir, "significance_detailed.csv")
+    if not os.path.exists(sig_csv):
+        print("  significance_detailed.csv not found; skipping sig/non-sig split.")
+        return None
+
+    sig_detailed_df = pd.read_csv(sig_csv)
+    n_lags = len(enc_results["lags"])
+
+    # Build metadata_df matching the Y column layout for the given electrodes
+    rows = []
+    for sub_id in elecs_per_sub:
+        for elec in elecs_per_sub[sub_id]:
+            rows.append({"subject": sub_id, "electrode": elec})
+    metadata_df = pd.DataFrame(rows, columns=["subject", "electrode"])
+
+    sig_mask_2d = build_global_sig_mask(sig_detailed_df, metadata_df, n_lags)
+    sig_mask_flat = sig_mask_2d.ravel()
+    print(f"  Significant pairs: {sig_mask_flat.sum()} / {sig_mask_flat.size}")
+    return sig_mask_flat
 
 
 # ---------------------------------------------------------------------------
@@ -242,12 +296,20 @@ def _run_cross_subject_rrr(
         X_ref, Y_full, ref_test_idxs, enc_subjects_info
     )
 
+    # Build significance mask for sig/non-sig correlation split
+    sig_mask_flat = _build_sig_mask_flat_for_elecs(
+        output_dir,
+        {s: sig_electrodes[s] for s in subs_with_sig},
+        enc_results,
+    )
+
     _run_rrr_for_unit(
         rrr_unit_dir=rrr_dir,
         X_raw=X_ref,
         test_idxs=ref_test_idxs,
         per_fold_baselines=per_fold_baselines,
         config=config,
+        sig_mask_flat=sig_mask_flat,
     )
 
 
@@ -307,12 +369,17 @@ def _run_per_subject_rrr(
             X_arr, Y_sub, test_idxs, enc_subjects_info
         )
 
+        sig_mask_flat = _build_sig_mask_flat_for_elecs(
+            output_dir, {sub_id: sub_sig_elecs}, enc_results
+        )
+
         _run_rrr_for_unit(
             rrr_unit_dir=rrr_sub_dir,
             X_raw=X_arr,
             test_idxs=test_idxs,
             per_fold_baselines=per_fold_baselines,
             config=config,
+            sig_mask_flat=sig_mask_flat,
         )
 
 
@@ -383,12 +450,18 @@ def _run_per_region_rrr(
             X_ref, Y_full, ref_test_idxs, enc_subjects_info
         )
 
+        # Build sig mask for this region's electrodes
+        sig_mask_flat = _build_sig_mask_flat_for_elecs(
+            output_dir, per_subject_region_elecs, enc_results
+        )
+
         _run_rrr_for_unit(
             rrr_unit_dir=rrr_region_dir,
             X_raw=X_ref,
             test_idxs=ref_test_idxs,
             per_fold_baselines=per_fold_baselines,
             config=config,
+            sig_mask_flat=sig_mask_flat,
         )
 
 
