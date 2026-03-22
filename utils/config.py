@@ -93,6 +93,35 @@ class RRRConfig:
 
 
 @dataclass
+class PartialSVDConfig:
+    """Parameters for partial SVD analysis (run_partial_svd.py).
+
+    Removes contiguous windows of SVD directions from word embeddings and
+    retrains ridge regression to measure each direction's contribution to
+    encoding performance.
+
+    The four parallel-list parameters define sweeps.  For group-size index *i*,
+    windows slide from ``start_direction[i]`` to ``max_partial_direction[i]``
+    in increments of ``step_size[i]``, each window being
+    ``partial_group_sizes[i]`` wide.
+    """
+
+    encoding: EncodingConfig = field(default_factory=EncodingConfig)
+    output_dir: str | None = None
+    partial_svd_output_dir: str | None = None
+
+    # Sweep parameters (parallel lists, one entry per group-size sweep)
+    partial_group_sizes: list[int] = field(default_factory=lambda: [1])
+    max_partial_direction: list[int] = field(default_factory=lambda: [50])
+    start_direction: list[int] = field(default_factory=lambda: [0])
+    step_size: list[int] = field(default_factory=lambda: [1])
+
+    # Per-region plotting (optional)
+    atlas_path: str | None = None
+    atlas_region_groups: dict | None = None
+
+
+@dataclass
 class SRRRConfig:
     """Parameters for Sparse Reduced Rank Regression analysis (run_srrr.py).
 
