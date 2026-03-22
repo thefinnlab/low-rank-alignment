@@ -343,9 +343,12 @@ def plot_rrr_rank_results(
     has_corr = (
         "full_corr" in summary_df.columns and "minimal_corr" in summary_df.columns
     )
+    has_sig_split = "minimal_corr_sig" in summary_df.columns
+    has_effective_rank = "effective_rank" in summary_df.columns
+    has_row3 = has_sig_split or has_effective_rank
 
     n_cols = 4 if has_folds else 3
-    n_rows = 2 if has_corr else 1
+    n_rows = 1 + int(has_corr) + int(has_row3)
     fig, axes = plt.subplots(n_rows, n_cols, figsize=(7 * n_cols, 4.5 * n_rows))
     if n_rows == 1:
         axes = axes[np.newaxis, :]  # uniform 2D indexing
@@ -641,6 +644,186 @@ def plot_rrr_rank_results(
             ax8.set_title("Recovery corr per fold\n(lower = more sufficient)")
             plt.colorbar(im2, ax=ax8, label="recovery_corr")
 
+    # ===== Row 3: Sig/non-sig split + effective rank (when available) =====
+
+    row3_idx = 1 + int(has_corr)  # row index for row 3
+
+    if has_row3 and has_sig_split:
+        # --- Panel: Sig correlations vs k ---
+        ax_sig = axes[row3_idx, 0]
+        if has_folds:
+            for _, fold_df in grid_df.groupby("fold"):
+                ax_sig.semilogx(
+                    fold_df["k"],
+                    fold_df["minimal_corr_sig"],
+                    color="#10b981",
+                    alpha=0.2,
+                    linewidth=0.8,
+                )
+        ax_sig.semilogx(
+            ks,
+            summary_df["full_corr_sig"],
+            color="#9ca3af",
+            linestyle="--",
+            marker="o",
+            markersize=4,
+            label="full_corr_sig (ceiling)",
+            linewidth=1.5,
+        )
+        ax_sig.semilogx(
+            ks,
+            summary_df["minimal_corr_sig"],
+            color="#10b981",
+            linestyle="-",
+            marker="o",
+            markersize=4,
+            label="minimal_corr_sig (RRR)",
+            linewidth=1.5,
+        )
+        if "recovery_corr_sig" in summary_df.columns:
+            ax_sig.semilogx(
+                ks,
+                summary_df["recovery_corr_sig"],
+                color="#ef4444",
+                linestyle="-",
+                marker="o",
+                markersize=4,
+                label="recovery_corr_sig",
+                linewidth=1.5,
+            )
+        ax_sig.axhline(0, color="black", linewidth=0.5, linestyle=":")
+        ax_sig.set_xlabel("Rank k")
+        ax_sig.set_ylabel("Correlation")
+        ax_sig.set_title(f"{title}\n(significant lags)")
+        ax_sig.legend(fontsize=8)
+
+        # --- Panel: Non-sig correlations vs k ---
+        ax_nonsig = axes[row3_idx, 1]
+        if has_folds:
+            for _, fold_df in grid_df.groupby("fold"):
+                ax_nonsig.semilogx(
+                    fold_df["k"],
+                    fold_df["minimal_corr_nonsig"],
+                    color="#f97316",
+                    alpha=0.2,
+                    linewidth=0.8,
+                )
+        ax_nonsig.semilogx(
+            ks,
+            summary_df["full_corr_nonsig"],
+            color="#9ca3af",
+            linestyle="--",
+            marker="o",
+            markersize=4,
+            label="full_corr_nonsig (ceiling)",
+            linewidth=1.5,
+        )
+        ax_nonsig.semilogx(
+            ks,
+            summary_df["minimal_corr_nonsig"],
+            color="#f97316",
+            linestyle="-",
+            marker="o",
+            markersize=4,
+            label="minimal_corr_nonsig (RRR)",
+            linewidth=1.5,
+        )
+        if "recovery_corr_nonsig" in summary_df.columns:
+            ax_nonsig.semilogx(
+                ks,
+                summary_df["recovery_corr_nonsig"],
+                color="#ef4444",
+                linestyle="-",
+                marker="o",
+                markersize=4,
+                label="recovery_corr_nonsig",
+                linewidth=1.5,
+            )
+        ax_nonsig.axhline(0, color="black", linewidth=0.5, linestyle=":")
+        ax_nonsig.set_xlabel("Rank k")
+        ax_nonsig.set_ylabel("Correlation")
+        ax_nonsig.set_title(f"{title}\n(non-significant lags)")
+        ax_nonsig.legend(fontsize=8)
+
+        # --- Panel: Sig vs non-sig overlay ---
+        ax_overlay = axes[row3_idx, 2]
+        if has_folds:
+            for _, fold_df in grid_df.groupby("fold"):
+                ax_overlay.semilogx(
+                    fold_df["k"],
+                    fold_df["minimal_corr_sig"],
+                    color="#10b981",
+                    alpha=0.2,
+                    linewidth=0.8,
+                )
+                ax_overlay.semilogx(
+                    fold_df["k"],
+                    fold_df["minimal_corr_nonsig"],
+                    color="#f97316",
+                    alpha=0.2,
+                    linewidth=0.8,
+                )
+        ax_overlay.semilogx(
+            ks,
+            summary_df["minimal_corr_sig"],
+            color="#10b981",
+            linestyle="-",
+            marker="o",
+            markersize=4,
+            label="sig",
+            linewidth=1.5,
+        )
+        ax_overlay.semilogx(
+            ks,
+            summary_df["minimal_corr_nonsig"],
+            color="#f97316",
+            linestyle="-",
+            marker="o",
+            markersize=4,
+            label="non-sig",
+            linewidth=1.5,
+        )
+        ax_overlay.axhline(0, color="black", linewidth=0.5, linestyle=":")
+        ax_overlay.set_xlabel("Rank k")
+        ax_overlay.set_ylabel("Correlation")
+        ax_overlay.set_title(f"{title}\n(sig vs non-sig)")
+        ax_overlay.legend(fontsize=8)
+
+    if has_row3 and has_effective_rank:
+        # --- Panel: Effective rank vs k ---
+        col_idx = 3 if has_sig_split else 0
+        ax_rank = axes[row3_idx, col_idx]
+        if has_folds:
+            for _, fold_df in grid_df.groupby("fold"):
+                ax_rank.plot(
+                    fold_df["k"],
+                    fold_df["effective_rank"],
+                    color="#6366f1",
+                    alpha=0.2,
+                    linewidth=0.8,
+                    marker=".",
+                    markersize=3,
+                )
+        ax_rank.plot(
+            ks,
+            summary_df["effective_rank"],
+            color="#6366f1",
+            linestyle="-",
+            marker="o",
+            markersize=4,
+            label="effective rank",
+            linewidth=1.5,
+        )
+        # y = x reference line
+        k_range = np.array([ks.min(), ks.max()])
+        ax_rank.plot(
+            k_range, k_range, color="black", linewidth=0.8, linestyle=":", label="y = k"
+        )
+        ax_rank.set_xlabel("Configured rank k")
+        ax_rank.set_ylabel("Effective rank")
+        ax_rank.set_title(f"{title}\n(effective rank of A)")
+        ax_rank.legend(fontsize=8)
+
     fig.tight_layout()
 
     if save_path is not None:
@@ -786,6 +969,181 @@ def plot_srrr_rank_results(
         plt.close(fig)
         return None
     return fig
+
+
+def plot_partial_svd_sweep(
+    all_corrs,
+    baseline_corrs,
+    sig_mask,
+    group_sizes,
+    title="Partial SVD sweep",
+    save_path=None,
+):
+    """Two-panel figure showing correlation drop as SVD directions are partialled out.
+
+    Panel 1: Mean correlation (sig electrode-lag pairs) vs window start index.
+    Panel 2: Same for non-significant electrode-lag pairs.
+    One line per group size, with a dashed baseline.
+
+    Args:
+        all_corrs: dict mapping (group_size, window_start) → (n_folds, n_elecs, n_lags).
+        baseline_corrs: (n_folds, n_elecs, n_lags) from the full (un-partialled) model.
+        sig_mask: (n_elecs, n_lags) boolean significance mask.
+        group_sizes: list of group sizes to plot (one line each).
+        title: figure title.
+        save_path: if given, save figure here; otherwise call plt.show().
+    """
+    import matplotlib.pyplot as plt
+
+    colors = plt.cm.tab10(np.linspace(0, 1, max(len(group_sizes), 1)))
+
+    baseline_sig = baseline_corrs.mean(axis=0)[sig_mask].mean()
+    baseline_nonsig = baseline_corrs.mean(axis=0)[~sig_mask].mean()
+
+    fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+
+    for panel_idx, (ax, mask, mask_label, bl_val) in enumerate(
+        [
+            (axes[0], sig_mask, "Significant", baseline_sig),
+            (axes[1], ~sig_mask, "Non-significant", baseline_nonsig),
+        ]
+    ):
+        ax.axhline(bl_val, color="black", linestyle="--", alpha=0.5, label="Baseline")
+
+        for gi, gs in enumerate(group_sizes):
+            window_starts = sorted(ws for (g, ws) in all_corrs.keys() if g == gs)
+            if not window_starts:
+                continue
+            mean_corrs = []
+            for ws in window_starts:
+                corrs = all_corrs[(gs, ws)]  # (n_folds, n_elecs, n_lags)
+                mean_corrs.append(corrs.mean(axis=0)[mask].mean())
+            ax.plot(
+                window_starts,
+                mean_corrs,
+                "o-",
+                color=colors[gi],
+                label=f"group_size={gs}",
+                markersize=3,
+            )
+
+        ax.set_xlabel("Window start (SVD direction index)")
+        ax.set_ylabel("Mean Pearson r")
+        ax.set_title(f"{mask_label} electrodes")
+        ax.legend(fontsize=8)
+
+    fig.suptitle(title, fontsize=12)
+    fig.tight_layout()
+
+    if save_path is not None:
+        fig.savefig(save_path, dpi=150)
+        plt.close(fig)
+    else:
+        plt.show()
+
+
+def plot_partial_svd_lag_heatmap(
+    partialled_corrs,
+    baseline_corrs,
+    sig_mask,
+    lags,
+    title="Correlation drop per electrode-lag",
+    save_path=None,
+):
+    """Heatmap of correlation drop (baseline - partialled) for significant pairs.
+
+    Args:
+        partialled_corrs: (n_folds, n_elecs, n_lags) from one partialling window.
+        baseline_corrs: (n_folds, n_elecs, n_lags) full-model correlations.
+        sig_mask: (n_elecs, n_lags) boolean significance mask.
+        lags: 1-D array of lag values (seconds).
+        title: figure title.
+        save_path: if given, save figure here; otherwise call plt.show().
+    """
+    import matplotlib.pyplot as plt
+
+    drop = baseline_corrs.mean(axis=0) - partialled_corrs.mean(
+        axis=0
+    )  # (n_elecs, n_lags)
+    drop_masked = np.where(sig_mask, drop, np.nan)
+
+    # Keep only electrodes with at least one significant lag
+    has_sig = sig_mask.any(axis=1)
+    drop_filtered = drop_masked[has_sig]
+
+    fig, ax = plt.subplots(figsize=(12, max(4, drop_filtered.shape[0] * 0.15)))
+    im = ax.imshow(
+        drop_filtered,
+        aspect="auto",
+        cmap="RdBu_r",
+        extent=[lags[0], lags[-1], drop_filtered.shape[0] - 0.5, -0.5],
+    )
+    ax.set_xlabel("Lag (s)")
+    ax.set_ylabel("Electrode index (sig only)")
+    ax.set_title(title)
+    plt.colorbar(im, ax=ax, label="Correlation drop (baseline - partialled)")
+    fig.tight_layout()
+
+    if save_path is not None:
+        fig.savefig(save_path, dpi=150)
+        plt.close(fig)
+    else:
+        plt.show()
+
+
+def plot_partial_rrr_sweep(
+    all_corrs,
+    baseline_corrs,
+    sig_mask,
+    title="Partial RRR sweep",
+    save_path=None,
+):
+    """Two-panel figure showing correlation drop as RRR subspaces are partialled out.
+
+    Panel 1: Mean correlation (sig electrode-lag pairs) vs rank k.
+    Panel 2: Same for non-significant electrode-lag pairs.
+
+    Args:
+        all_corrs: dict mapping rank_k (int) → (n_folds, n_elecs, n_lags).
+        baseline_corrs: (n_folds, n_elecs, n_lags) from the full (un-partialled) model.
+        sig_mask: (n_elecs, n_lags) boolean significance mask.
+        title: figure title.
+        save_path: if given, save figure here; otherwise call plt.show().
+    """
+    import matplotlib.pyplot as plt
+
+    baseline_sig = baseline_corrs.mean(axis=0)[sig_mask].mean()
+    baseline_nonsig = baseline_corrs.mean(axis=0)[~sig_mask].mean()
+
+    rank_ks = sorted(all_corrs.keys())
+
+    fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+
+    for ax, mask, mask_label, bl_val in [
+        (axes[0], sig_mask, "Significant", baseline_sig),
+        (axes[1], ~sig_mask, "Non-significant", baseline_nonsig),
+    ]:
+        ax.axhline(bl_val, color="black", linestyle="--", alpha=0.5, label="Baseline")
+
+        mean_corrs = []
+        for k in rank_ks:
+            corrs = all_corrs[k]  # (n_folds, n_elecs, n_lags)
+            mean_corrs.append(corrs.mean(axis=0)[mask].mean())
+        ax.plot(rank_ks, mean_corrs, "o-", color="steelblue", markersize=4)
+
+        ax.set_xlabel("Rank k (RRR subspace dimension)")
+        ax.set_ylabel("Mean Pearson r")
+        ax.set_title(f"{mask_label} electrodes")
+        ax.legend(fontsize=8)
+
+    fig.suptitle(title, fontsize=12)
+    fig.tight_layout()
+
+    if save_path is not None:
+        fig.savefig(save_path, dpi=150)
+        plt.close(fig)
+    else:
+        plt.show()
 
 
 def plot_corrs_vs_arbitrary(corrs, corrs_arb, lags, save_path=None):

@@ -615,8 +615,10 @@ def run_sufficiency_test(
     minimal_r2 = float(compute_r2(Y_test, Y_hat_min).mean())
     pred_r2 = float(compute_r2(Y_hat_full, Y_hat_min).mean())
 
-    full_corr = float(compute_correlation(Y_test, Y_hat_full).mean())
-    minimal_corr = float(compute_correlation(Y_test, Y_hat_min).mean())
+    full_corr_arr = compute_correlation(Y_test, Y_hat_full)
+    minimal_corr_arr = compute_correlation(Y_test, Y_hat_min)
+    full_corr = float(full_corr_arr.mean())
+    minimal_corr = float(minimal_corr_arr.mean())
 
     Y_resid_test = Y_test - Y_hat_min
 
@@ -634,7 +636,8 @@ def run_sufficiency_test(
         Y_resid_hat = to_numpy(X @ coef)
 
     recovery_r2 = float(compute_r2(Y_resid_test, Y_resid_hat).mean())
-    recovery_corr = float(compute_correlation(Y_resid_test, Y_resid_hat).mean())
+    recovery_corr_arr = compute_correlation(Y_resid_test, Y_resid_hat)
+    recovery_corr = float(recovery_corr_arr.mean())
 
     if null_r2 is not None:
         noise_floor = float(np.percentile(null_r2, 100.0 * (1.0 - p_value_threshold)))
@@ -656,6 +659,9 @@ def run_sufficiency_test(
         "full_corr": full_corr,
         "minimal_corr": minimal_corr,
         "recovery_corr": recovery_corr,
+        "full_corr_per_target": full_corr_arr,
+        "minimal_corr_per_target": minimal_corr_arr,
+        "recovery_corr_per_target": recovery_corr_arr,
     }
 
 

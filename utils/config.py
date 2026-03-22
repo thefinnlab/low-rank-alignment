@@ -93,6 +93,63 @@ class RRRConfig:
 
 
 @dataclass
+class PartialSVDConfig:
+    """Parameters for partial SVD analysis (run_partial_svd.py).
+
+    Removes contiguous windows of SVD directions from word embeddings and
+    retrains ridge regression to measure each direction's contribution to
+    encoding performance.
+
+    The four parallel-list parameters define sweeps.  For group-size index *i*,
+    windows slide from ``start_direction[i]`` to ``max_partial_direction[i]``
+    in increments of ``step_size[i]``, each window being
+    ``partial_group_sizes[i]`` wide.
+    """
+
+    encoding: EncodingConfig = field(default_factory=EncodingConfig)
+    output_dir: str | None = None
+    partial_svd_output_dir: str | None = None
+
+    # Sweep parameters (parallel lists, one entry per group-size sweep)
+    partial_group_sizes: list[int] = field(default_factory=lambda: [1])
+    max_partial_direction: list[int] = field(default_factory=lambda: [50])
+    start_direction: list[int] = field(default_factory=lambda: [0])
+    step_size: list[int] = field(default_factory=lambda: [1])
+
+    # Per-region plotting (optional)
+    atlas_path: str | None = None
+    atlas_region_groups: dict | None = None
+
+
+@dataclass
+class PartialRRRConfig:
+    """Parameters for partial RRR analysis (run_partial_rrr.py).
+
+    Loads RRR-learned subspaces (A matrices) for each rank k, partials them
+    out of the word embeddings, and retrains ridge regression to measure how
+    much each rank-k subspace contributes to encoding performance.
+
+    Mode → RRR source / output directory mapping (defaults, overridable):
+        cross_subject : RRR in {output_dir}/rrr/,                  out {output_dir}/partial_rrr/
+        per_subject   : RRR in {output_dir}/per_subject_rrr/,      out {output_dir}/per_subject_partial_rrr/
+        per_region    : RRR in {output_dir}/per_region_rrr/,       out {output_dir}/per_region_partial_rrr/
+    """
+
+    encoding: EncodingConfig = field(default_factory=EncodingConfig)
+    output_dir: str | None = None              # Root results dir; auto from model/layer/offset if None
+    partial_rrr_output_dir: str | None = None  # Override for output subdir; default depends on mode
+    rrr_source_dir: str | None = None          # Where to find RRR A matrices; auto-resolved per mode
+    mode: SVDMode = SVDMode.CROSS_SUBJECT
+
+    # Rank sweep — None discovers all ranks from rrr_source_dir; set to filter
+    rank_grid: list[int] | None = None
+
+    # Per-region mode
+    atlas_path: str | None = None              # Path to Destrieux 2009 .nii.gz; None = download via nilearn
+    atlas_region_groups: dict | None = None    # Required when mode=per_region
+
+
+@dataclass
 class SRRRConfig:
     """Parameters for Sparse Reduced Rank Regression analysis (run_srrr.py).
 
