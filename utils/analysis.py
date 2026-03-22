@@ -209,11 +209,29 @@ def get_correlation_gpu(array_a, array_b, device=None):
     return corr_matrix.cpu()
 
 
+def partial_out_subspace(X, directions):
+    """Remove a subspace defined by direction vectors from embeddings.
+
+    Orthogonalizes the directions via QR decomposition (a no-op when they
+    are already orthonormal), then projects out the subspace:
+    X_partial = X - X @ Q @ Q.T.
+
+    Args:
+        X: (n_words, n_features) embedding matrix.
+        directions: (n_directions, n_features) — rows are direction vectors.
+
+    Returns:
+        np.ndarray: (n_words, n_features) with subspace projected out.
+    """
+    Q, _ = np.linalg.qr(directions.T)  # (n_features, n_directions) orthonormal cols
+    return X - X @ Q @ Q.T
+
+
 def partial_out_svd_directions(X, Vt, start, size):
     """Remove a contiguous block of SVD directions from embeddings.
 
-    Computes X_partial = X - X @ V_block.T @ V_block where
-    V_block = Vt[start:start+size].
+    Thin wrapper around :func:`partial_out_subspace` that slices
+    ``Vt[start:start+size]``.
 
     Args:
         X: (n_words, n_features) embedding matrix.
@@ -224,9 +242,7 @@ def partial_out_svd_directions(X, Vt, start, size):
     Returns:
         np.ndarray: (n_words, n_features) with specified directions projected out.
     """
-    V_block = Vt[start:start + size]  # (size, n_features)
-    projection = (X @ V_block.T) @ V_block  # (n_words, n_features)
-    return X - projection
+    return partial_out_subspace(X, Vt[start:start + size])
 
 
 def partial_out_direction(X, Y, directions, predictions_list, fold_indices, scalers):

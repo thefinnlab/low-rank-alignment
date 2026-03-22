@@ -710,6 +710,61 @@ def plot_partial_svd_lag_heatmap(
         plt.show()
 
 
+def plot_partial_rrr_sweep(
+    all_corrs,
+    baseline_corrs,
+    sig_mask,
+    title="Partial RRR sweep",
+    save_path=None,
+):
+    """Two-panel figure showing correlation drop as RRR subspaces are partialled out.
+
+    Panel 1: Mean correlation (sig electrode-lag pairs) vs rank k.
+    Panel 2: Same for non-significant electrode-lag pairs.
+
+    Args:
+        all_corrs: dict mapping rank_k (int) → (n_folds, n_elecs, n_lags).
+        baseline_corrs: (n_folds, n_elecs, n_lags) from the full (un-partialled) model.
+        sig_mask: (n_elecs, n_lags) boolean significance mask.
+        title: figure title.
+        save_path: if given, save figure here; otherwise call plt.show().
+    """
+    import matplotlib.pyplot as plt
+
+    baseline_sig = baseline_corrs.mean(axis=0)[sig_mask].mean()
+    baseline_nonsig = baseline_corrs.mean(axis=0)[~sig_mask].mean()
+
+    rank_ks = sorted(all_corrs.keys())
+
+    fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+
+    for ax, mask, mask_label, bl_val in [
+        (axes[0], sig_mask, "Significant", baseline_sig),
+        (axes[1], ~sig_mask, "Non-significant", baseline_nonsig),
+    ]:
+        ax.axhline(bl_val, color="black", linestyle="--", alpha=0.5, label="Baseline")
+
+        mean_corrs = []
+        for k in rank_ks:
+            corrs = all_corrs[k]  # (n_folds, n_elecs, n_lags)
+            mean_corrs.append(corrs.mean(axis=0)[mask].mean())
+        ax.plot(rank_ks, mean_corrs, "o-", color="steelblue", markersize=4)
+
+        ax.set_xlabel("Rank k (RRR subspace dimension)")
+        ax.set_ylabel("Mean Pearson r")
+        ax.set_title(f"{mask_label} electrodes")
+        ax.legend(fontsize=8)
+
+    fig.suptitle(title, fontsize=12)
+    fig.tight_layout()
+
+    if save_path is not None:
+        fig.savefig(save_path, dpi=150)
+        plt.close(fig)
+    else:
+        plt.show()
+
+
 def plot_corrs_vs_arbitrary(corrs, corrs_arb, lags, save_path=None):
     """
     Plot real encoding correlations (blue) vs arbitrary null (red).

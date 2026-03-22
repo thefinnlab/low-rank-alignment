@@ -41,7 +41,7 @@ from utils.analysis import partial_out_svd_directions
 from utils.atlas import build_electrode_region_map
 from utils.config import PartialSVDConfig, get_results_dir
 from utils.config_utils import parse_args, load_config
-from utils.encoding import load_encoding_results
+from utils.data_loaders import load_sig_electrodes, load_fold_indices
 from utils.plotting import plot_partial_svd_sweep, plot_partial_svd_lag_heatmap
 from utils.srrr import load_svd_decomposition
 
@@ -309,15 +309,8 @@ def main():
     print(f"Output dir:       {output_dir}")
     print(f"Partial SVD dir:  {partial_svd_dir}")
 
-    # -- Load significance CSVs --
-    sig_csv = os.path.join(output_dir, "all_subject_sig.csv")
-    if not os.path.exists(sig_csv):
-        raise FileNotFoundError(
-            f"all_subject_sig.csv not found at {sig_csv}. "
-            "Run run_significance.py first."
-        )
-    sig_df = pd.read_csv(sig_csv)
-    print(f"Loaded significance CSV: {len(sig_df):,} significant electrodes")
+    # -- Load significance --
+    sig_electrodes, sig_df = load_sig_electrodes(output_dir, subject_ids)
 
     sig_detailed_csv = os.path.join(output_dir, "significance_detailed.csv")
     if not os.path.exists(sig_detailed_csv):
@@ -326,17 +319,6 @@ def main():
             "Run run_significance.py first."
         )
     sig_detailed_df = pd.read_csv(sig_detailed_csv)
-
-    # Build subject → significant electrode list
-    sig_electrodes = {
-        sub_id: sig_df[sig_df["subject"] == sub_id]["elec"].tolist()
-        for sub_id in subject_ids
-    }
-    sig_electrodes = {s: e for s, e in sig_electrodes.items() if e}
-    if not sig_electrodes:
-        raise ValueError(
-            f"No significant electrodes found for subjects {subject_ids}."
-        )
 
     subs_with_sig = [s for s in subject_ids if s in sig_electrodes]
 
@@ -352,22 +334,7 @@ def main():
     print(f"  X: {X.shape}, Y: {Y.shape}")
 
     # -- Load fold indices from first subject's encoding results --
-    first_sub = subs_with_sig[0]
-    enc_results = load_encoding_results(
-        os.path.join(output_dir, "subjects", f"sub_{first_sub}", "encoding_results.joblib")
-    )
-    ref_test_idxs = enc_results["test_idxs"]
-    lags = enc_results.get("lags", None)
-
-    # Build provided_idxs for train_encoding
-    n_words = X.shape[0]
-    provided_idxs = []
-    for test_idx in ref_test_idxs:
-        train_mask = np.ones(n_words, dtype=bool)
-        train_mask[test_idx] = False
-        train_idx = np.where(train_mask)[0]
-        provided_idxs.append((train_idx, test_idx))
-
+    provided_idxs, lags = load_fold_indices(output_dir, subject_ids, sig_electrodes)
     n_folds = len(provided_idxs)
 
     # -- Load SVD --

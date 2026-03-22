@@ -122,6 +122,34 @@ class PartialSVDConfig:
 
 
 @dataclass
+class PartialRRRConfig:
+    """Parameters for partial RRR analysis (run_partial_rrr.py).
+
+    Loads RRR-learned subspaces (A matrices) for each rank k, partials them
+    out of the word embeddings, and retrains ridge regression to measure how
+    much each rank-k subspace contributes to encoding performance.
+
+    Mode → RRR source / output directory mapping (defaults, overridable):
+        cross_subject : RRR in {output_dir}/rrr/,                  out {output_dir}/partial_rrr/
+        per_subject   : RRR in {output_dir}/per_subject_rrr/,      out {output_dir}/per_subject_partial_rrr/
+        per_region    : RRR in {output_dir}/per_region_rrr/,       out {output_dir}/per_region_partial_rrr/
+    """
+
+    encoding: EncodingConfig = field(default_factory=EncodingConfig)
+    output_dir: str | None = None              # Root results dir; auto from model/layer/offset if None
+    partial_rrr_output_dir: str | None = None  # Override for output subdir; default depends on mode
+    rrr_source_dir: str | None = None          # Where to find RRR A matrices; auto-resolved per mode
+    mode: SVDMode = SVDMode.CROSS_SUBJECT
+
+    # Rank sweep — must match the rank_grid used in the original RRR run
+    rank_grid: list[int] = field(default_factory=lambda: [1, 2, 5, 10, 20, 50])
+
+    # Per-region mode
+    atlas_path: str | None = None              # Path to Destrieux 2009 .nii.gz; None = download via nilearn
+    atlas_region_groups: dict | None = None    # Required when mode=per_region
+
+
+@dataclass
 class SRRRConfig:
     """Parameters for Sparse Reduced Rank Regression analysis (run_srrr.py).
 
