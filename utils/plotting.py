@@ -509,6 +509,114 @@ def plot_srrr_rank_results(
     return fig
 
 
+def plot_partial_svd_sweep(
+    all_corrs,
+    baseline_corrs,
+    sig_mask,
+    group_sizes,
+    title="Partial SVD sweep",
+    save_path=None,
+):
+    """Two-panel figure showing correlation drop as SVD directions are partialled out.
+
+    Panel 1: Mean correlation (sig electrode-lag pairs) vs window start index.
+    Panel 2: Same for non-significant electrode-lag pairs.
+    One line per group size, with a dashed baseline.
+
+    Args:
+        all_corrs: dict mapping (group_size, window_start) → (n_folds, n_elecs, n_lags).
+        baseline_corrs: (n_folds, n_elecs, n_lags) from the full (un-partialled) model.
+        sig_mask: (n_elecs, n_lags) boolean significance mask.
+        group_sizes: list of group sizes to plot (one line each).
+        title: figure title.
+        save_path: if given, save figure here; otherwise call plt.show().
+    """
+    import matplotlib.pyplot as plt
+
+    colors = plt.cm.tab10(np.linspace(0, 1, max(len(group_sizes), 1)))
+
+    baseline_sig = baseline_corrs.mean(axis=0)[sig_mask].mean()
+    baseline_nonsig = baseline_corrs.mean(axis=0)[~sig_mask].mean()
+
+    fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+
+    for panel_idx, (ax, mask, mask_label, bl_val) in enumerate([
+        (axes[0], sig_mask, "Significant", baseline_sig),
+        (axes[1], ~sig_mask, "Non-significant", baseline_nonsig),
+    ]):
+        ax.axhline(bl_val, color="black", linestyle="--", alpha=0.5, label="Baseline")
+
+        for gi, gs in enumerate(group_sizes):
+            window_starts = sorted(
+                ws for (g, ws) in all_corrs.keys() if g == gs
+            )
+            if not window_starts:
+                continue
+            mean_corrs = []
+            for ws in window_starts:
+                corrs = all_corrs[(gs, ws)]  # (n_folds, n_elecs, n_lags)
+                mean_corrs.append(corrs.mean(axis=0)[mask].mean())
+            ax.plot(window_starts, mean_corrs, "o-", color=colors[gi],
+                    label=f"group_size={gs}", markersize=3)
+
+        ax.set_xlabel("Window start (SVD direction index)")
+        ax.set_ylabel("Mean Pearson r")
+        ax.set_title(f"{mask_label} electrodes")
+        ax.legend(fontsize=8)
+
+    fig.suptitle(title, fontsize=12)
+    fig.tight_layout()
+
+    if save_path is not None:
+        fig.savefig(save_path, dpi=150)
+        plt.close(fig)
+    else:
+        plt.show()
+
+
+def plot_partial_svd_lag_heatmap(
+    partialled_corrs,
+    baseline_corrs,
+    sig_mask,
+    lags,
+    title="Correlation drop per electrode-lag",
+    save_path=None,
+):
+    """Heatmap of correlation drop (baseline - partialled) for significant pairs.
+
+    Args:
+        partialled_corrs: (n_folds, n_elecs, n_lags) from one partialling window.
+        baseline_corrs: (n_folds, n_elecs, n_lags) full-model correlations.
+        sig_mask: (n_elecs, n_lags) boolean significance mask.
+        lags: 1-D array of lag values (seconds).
+        title: figure title.
+        save_path: if given, save figure here; otherwise call plt.show().
+    """
+    import matplotlib.pyplot as plt
+
+    drop = baseline_corrs.mean(axis=0) - partialled_corrs.mean(axis=0)  # (n_elecs, n_lags)
+    drop_masked = np.where(sig_mask, drop, np.nan)
+
+    # Keep only electrodes with at least one significant lag
+    has_sig = sig_mask.any(axis=1)
+    drop_filtered = drop_masked[has_sig]
+
+    fig, ax = plt.subplots(figsize=(12, max(4, drop_filtered.shape[0] * 0.15)))
+    im = ax.imshow(drop_filtered, aspect="auto", cmap="RdBu_r",
+                   extent=[lags[0], lags[-1], drop_filtered.shape[0] - 0.5, -0.5])
+    ax.set_xlabel("Lag (s)")
+    ax.set_ylabel("Electrode index (sig only)")
+    ax.set_title(title)
+    plt.colorbar(im, ax=ax, label="Correlation drop (baseline - partialled)")
+    fig.tight_layout()
+
+    if save_path is not None:
+        fig.savefig(save_path, dpi=150)
+        plt.close(fig)
+    else:
+        plt.show()
+
+
 def plot_corrs_vs_arbitrary(corrs, corrs_arb, lags, save_path=None):
     """
     Plot real encoding correlations (blue) vs arbitrary null (red).

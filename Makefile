@@ -85,6 +85,18 @@ rrr:
 	mkdir -p logs
 	$(CMD) scripts/run_rrr.py --config $(RRR_CONFIG) $(OVERRIDES)
 
+## Run partial SVD analysis (direction importance via partialling)
+## Usage:
+##   make partial-svd                                                     # default config
+##   make partial-svd PARTIAL_SVD_CONFIG=configs/partial_svd_per_region.yml  # per-region plots
+##   make partial-svd OVERRIDES="--partial_group_sizes=[1,5,20]"          # custom sweep
+##   make partial-svd CMD=python                                          # run locally
+PARTIAL_SVD_CONFIG ?= configs/partial_svd_default.yml
+
+partial-svd:
+	mkdir -p logs
+	$(CMD) scripts/run_partial_svd.py --config $(PARTIAL_SVD_CONFIG) $(OVERRIDES)
+
 ## Print out regions where electrode in data are located according to an atlas
 ## Usage:
 ## make print-regions DATA_ROOT=data RUN_DIR=results/my_run
@@ -99,4 +111,4 @@ sig-test:
 test:
 	python -m pytest tests/ -v
 
-.PHONY: sig train plots svd srrr rrr sig-test test
+.PHONY: sig train plots svd srrr rrr partial-svd sig-test test

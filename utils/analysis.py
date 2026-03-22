@@ -209,6 +209,26 @@ def get_correlation_gpu(array_a, array_b, device=None):
     return corr_matrix.cpu()
 
 
+def partial_out_svd_directions(X, Vt, start, size):
+    """Remove a contiguous block of SVD directions from embeddings.
+
+    Computes X_partial = X - X @ V_block.T @ V_block where
+    V_block = Vt[start:start+size].
+
+    Args:
+        X: (n_words, n_features) embedding matrix.
+        Vt: (n_dirs, n_features) right singular vectors.
+        start: starting direction index.
+        size: number of contiguous directions to remove.
+
+    Returns:
+        np.ndarray: (n_words, n_features) with specified directions projected out.
+    """
+    V_block = Vt[start:start + size]  # (size, n_features)
+    projection = (X @ V_block.T) @ V_block  # (n_words, n_features)
+    return X - projection
+
+
 def partial_out_direction(X, Y, directions, predictions_list, fold_indices, scalers):
     """
     Remove variance explained by a direction in embedding space from X and Y.
