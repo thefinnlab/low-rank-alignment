@@ -2,7 +2,7 @@
 # Import the most commonly used functions for convenience.
 
 from utils.tensor_utils import to_numpy, to_torch
-from utils.config import EncodingConfig, SignificanceConfig, SVDConfig, SRRRConfig, RRRConfig, PartialSVDConfig, SVDMode, get_results_dir
+from utils.config import EncodingConfig, SignificanceConfig, SVDConfig, SRRRConfig, RRRConfig, PartialSVDConfig, PartialRRRConfig, SVDMode, get_results_dir
 from utils.config_utils import (
     parse_override_args,
     get_nested_value,
@@ -20,6 +20,8 @@ from utils.data_loaders import (
     get_arbitrary_embeddings,
     build_word_epochs,
     build_XY_from_subjects,
+    load_sig_electrodes,
+    load_fold_indices,
 )
 from utils.embeddings import load_embeddings
 from utils.encoding import (
@@ -45,6 +47,7 @@ from utils.plotting import (
     plot_svd_corrs,
     plot_partial_svd_sweep,
     plot_partial_svd_lag_heatmap,
+    plot_partial_rrr_sweep,
 )
 from utils.significance import (
     batch_corrcoef,
@@ -57,6 +60,7 @@ from utils.analysis import (
     build_global_sig_mask,
     get_correlation_gpu,
     partial_out_direction,
+    partial_out_subspace,
     save_partial_results,
     load_partial_results,
     partial_out_svd_directions,
@@ -110,6 +114,7 @@ __all__ = [
     "SRRRConfig",
     "RRRConfig",
     "PartialSVDConfig",
+    "PartialRRRConfig",
     "SVDMode",
     "get_results_dir",
     "parse_override_args",
@@ -126,6 +131,8 @@ __all__ = [
     "get_arbitrary_embeddings",
     "build_word_epochs",
     "build_XY_from_subjects",
+    "load_sig_electrodes",
+    "load_fold_indices",
     # embeddings
     "load_embeddings",
     # encoding
@@ -150,6 +157,7 @@ __all__ = [
     "plot_svd_corrs",
     "plot_partial_svd_sweep",
     "plot_partial_svd_lag_heatmap",
+    "plot_partial_rrr_sweep",
     # significance
     "batch_corrcoef",
     "significant_lags_all_electrodes_gpu",
@@ -159,6 +167,7 @@ __all__ = [
     # analysis
     "build_global_sig_mask",
     "get_correlation_gpu",
+    "partial_out_subspace",
     "partial_out_svd_directions",
     "partial_out_direction",
     "save_partial_results",

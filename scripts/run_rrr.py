@@ -42,6 +42,7 @@ from utils import (
     build_XY_from_subjects,
     load_raws,
 )
+from utils.data_loaders import load_sig_electrodes
 from utils.atlas import build_electrode_region_map
 from utils.config import RRRConfig, SVDMode, get_results_dir
 from utils.config_utils import parse_args, load_config
@@ -425,27 +426,8 @@ def main():
     print(f"RRR dir:     {rrr_dir}")
     print(f"Mode:        {config.mode.value}")
 
-    # Load all_subject_sig.csv — one row per significant (subject, electrode)
-    sig_csv = os.path.join(output_dir, "all_subject_sig.csv")
-    if not os.path.exists(sig_csv):
-        raise FileNotFoundError(
-            f"all_subject_sig.csv not found at {sig_csv}. "
-            "Run run_significance.py first."
-        )
-    sig_df = pd.read_csv(sig_csv)
-    print(f"Loaded significance CSV: {len(sig_df):,} significant electrodes")
-
-    # Build subject → significant electrode list mapping
-    sig_electrodes = {
-        sub_id: sig_df[sig_df["subject"] == sub_id]["elec"].tolist()
-        for sub_id in subject_ids
-    }
-    sig_electrodes = {s: e for s, e in sig_electrodes.items() if e}
-
-    if not sig_electrodes:
-        raise ValueError(
-            f"No significant electrodes found for subjects {subject_ids} in {sig_csv}."
-        )
+    # Load significance CSV and build subject → electrode mapping
+    sig_electrodes, _ = load_sig_electrodes(output_dir, subject_ids)
 
     # Load embeddings
     print("Loading embeddings...")

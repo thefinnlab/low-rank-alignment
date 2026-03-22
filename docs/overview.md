@@ -10,7 +10,8 @@ This is a neuroscience encoding analysis pipeline that studies how GPT-2-XL lang
 4. **Partial SVD analysis** (`make partial-svd`) — removes contiguous windows of SVD directions from word embeddings and retrains ridge regression to measure how much each group contributes to encoding performance
 5. **SRRR analysis** (`make srrr`) — finds the minimal subset of SVD directions that explains all significant encoding variance, via stability selection and a statistical sufficiency test
 6. **RRR analysis** (`make rrr`) — raw-input RRR baseline: sweeps over ranks to find the minimal rank that captures full-ridge variance, directly in embedding space (no SVD projection)
-7. **Visualization** (`make plots`) — generates correlation plots with optional significance overlays
+7. **Partial RRR analysis** (`make partial-rrr`) — partials out RRR-learned subspaces from word embeddings and retrains ridge regression to measure how much each rank-k subspace contributes to encoding performance
+8. **Visualization** (`make plots`) — generates correlation plots with optional significance overlays
 
 ---
 
@@ -37,6 +38,7 @@ YAML config files passed to scripts via `--config`:
 | `svd_default.yml` | SVD on mid-layer (layer 24) with k values [1,2,5,…,1600] and 0.95 retention threshold |
 | `partial_svd_default.yml` | Partial SVD analysis: single-direction sweep up to direction 50 |
 | `partial_svd_per_region.yml` | Partial SVD variant with Destrieux atlas region plots |
+| `partial_rrr_default.yml` | Partial RRR analysis: cross-subject subspace importance (rank_grid [1,2,5,10,20,50]) |
 | `rrr_default.yml` | RRR cross-subject baseline (rank_grid [1,2,5,10,20,50]) |
 | `rrr_per_subject.yml` | Per-subject RRR variant |
 | `rrr_per_region.yml` | Per-region RRR variant with Destrieux atlas regions |
@@ -54,6 +56,7 @@ Main entry points for the pipeline:
 | `run_srrr.py` | SRRR analysis; reads SVD decompositions and finds minimal direction subset via stability selection and sufficiency testing; supports cross_subject, per_subject, and per_region modes |
 | `run_partial_svd.py` | Partial SVD analysis; removes windows of SVD directions from embeddings, retrains ridge regression, and measures correlation drop; generates cross-subject, per-subject, and per-region sweep plots |
 | `run_rrr.py` | RRR baseline; fits RRR directly from raw embeddings to neural targets (no SVD projection); sweeps over ranks with residual R², CCA, and Procrustes metrics; supports cross_subject, per_subject, and per_region modes |
+| `run_partial_rrr.py` | Partial RRR analysis; loads RRR-learned A matrices, partials out their subspaces from embeddings, retrains ridge, and measures correlation drop; supports cross_subject, per_subject, and per_region modes |
 
 ### `utils/`
 
@@ -61,9 +64,9 @@ Core library modules:
 
 | File | Purpose |
 |------|---------|
-| `config.py` | Dataclass definitions for `EncodingConfig`, `SignificanceConfig`, `SVDConfig`, `PartialSVDConfig`, `SRRRConfig`, `RRRConfig`; `get_results_dir()` for canonical output paths |
+| `config.py` | Dataclass definitions for `EncodingConfig`, `SignificanceConfig`, `SVDConfig`, `PartialSVDConfig`, `PartialRRRConfig`, `SRRRConfig`, `RRRConfig`; `get_results_dir()` for canonical output paths |
 | `config_utils.py` | Argument parsing and YAML loading with CLI override support (dot-notation, e.g. `--encoding.layer=48`) |
-| `data_loaders.py` | Loads iEEG BIDS data via MNE, GPT-2 embeddings from HDF5, builds word-aligned epochs, handles time offsets; `build_XY_from_subjects()` for stacking multi-subject neural data |
+| `data_loaders.py` | Loads iEEG BIDS data via MNE, GPT-2 embeddings from HDF5, builds word-aligned epochs, handles time offsets; `build_XY_from_subjects()` for stacking multi-subject neural data; `load_sig_electrodes()` and `load_fold_indices()` for shared data-loading across scripts |
 | `embeddings.py` | Loads contextual GPT-2-XL token embeddings from HDF5 and averages tokens per word |
 | `encoding.py` | K-fold cross-validation ridge regression (Himalaya backend), coefficient serialization, cross-subject aggregation |
 | `significance.py` | GPU-accelerated permutation testing, vectorized Pearson correlation, Benjamini-Hochberg FDR correction |
@@ -88,6 +91,7 @@ Unit tests with full pipeline coverage:
 | `test_srrr.py` | SRRR core functions: ProxGD, stability selection, sufficiency test, alignment metrics, I/O |
 | `test_partial_svd.py` | Partial SVD: `partial_out_svd_directions` orthogonality/idempotency, config round-trip, sweep window generation |
 | `test_rrr.py` | RRR utilities: `save_rrr_result`/`load_rrr_result` roundtrip, `_run_rrr_for_unit` integration, `build_XY_from_subjects` |
+| `test_partial_rrr.py` | Partial RRR: `partial_out_subspace` orthogonality/idempotency/non-orthonormal handling, sweep integration, save results, config round-trip |
 | `test_significance.py` | Permutation testing, FDR correction |
 | `test_examples.py` | Context building and table generation |
 

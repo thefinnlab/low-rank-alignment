@@ -323,6 +323,86 @@ def build_XY_from_subjects(
     return X_ref, np.concatenate(Y_cols, axis=1).astype(np.float32)
 
 
+def load_sig_electrodes(output_dir, subject_ids):
+    """Load significance CSV and build a subject → electrode list mapping.
+
+    Args:
+        output_dir: Root results directory containing ``all_subject_sig.csv``.
+        subject_ids: Subject IDs to include.
+
+    Returns:
+        sig_electrodes: dict mapping sub_id → list of significant electrode names.
+            Only subjects with at least one significant electrode are included.
+        sig_df: The loaded ``all_subject_sig.csv`` DataFrame.
+
+    Raises:
+        FileNotFoundError: If the significance CSV is missing.
+        ValueError: If no significant electrodes are found for any subject.
+    """
+    import os
+
+    sig_csv = os.path.join(output_dir, "all_subject_sig.csv")
+    if not os.path.exists(sig_csv):
+        raise FileNotFoundError(
+            f"all_subject_sig.csv not found at {sig_csv}. "
+            "Run run_significance.py first."
+        )
+    sig_df = pd.read_csv(sig_csv)
+    print(f"Loaded significance CSV: {len(sig_df):,} significant electrodes")
+
+    sig_electrodes = {
+        sub_id: sig_df[sig_df["subject"] == sub_id]["elec"].tolist()
+        for sub_id in subject_ids
+    }
+    sig_electrodes = {s: e for s, e in sig_electrodes.items() if e}
+
+    if not sig_electrodes:
+        raise ValueError(
+            f"No significant electrodes found for subjects {subject_ids} in {sig_csv}."
+        )
+
+    return sig_electrodes, sig_df
+
+
+def load_fold_indices(output_dir, subject_ids, sig_electrodes):
+    """Load cross-validation fold indices and lags from the first subject's encoding results.
+
+    Args:
+        output_dir: Root results directory.
+        subject_ids: Ordered subject IDs.
+        sig_electrodes: dict mapping sub_id → electrode list (used to find first
+            subject with data).
+
+    Returns:
+        provided_idxs: list of (train_idx, test_idx) tuples.
+        lags: lag array from encoding results, or None.
+    """
+    import os
+    from utils.encoding import load_encoding_results
+
+    subs_with_sig = [s for s in subject_ids if s in sig_electrodes]
+    first_sub = subs_with_sig[0]
+    enc_results = load_encoding_results(
+        os.path.join(output_dir, "subjects", f"sub_{first_sub}", "encoding_results.joblib")
+    )
+    ref_test_idxs = enc_results["test_idxs"]
+    lags = enc_results.get("lags", None)
+
+    # We need n_words to build train indices, but we don't have X yet.
+    # Use the encoding results' own data shape to infer it.
+    # The test_idxs partition all words, so we can infer n_words from them.
+    n_words = max(idx.max() for idx in ref_test_idxs) + 1
+
+    provided_idxs = []
+    for test_idx in ref_test_idxs:
+        train_mask = np.ones(n_words, dtype=bool)
+        train_mask[test_idx] = False
+        train_idx = np.where(train_mask)[0]
+        provided_idxs.append((train_idx, test_idx))
+
+    return provided_idxs, lags
+
+
 def get_arbitrary_embeddings(X, epochs, df_word):
     """
     Assign unique random embeddings per word type, preserving per-word consistency.
