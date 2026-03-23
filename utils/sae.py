@@ -120,6 +120,20 @@ def _compute_l1(acts: torch.Tensor, reg_weights: torch.Tensor | None = None) -> 
     return (acts.abs() * col_norms.unsqueeze(0)).mean()
 
 
+def _get_l1_coeff(l1_penalty: float, step: int, warmup_start: int, warmup_epochs: int) -> float:
+    """Compute the effective L1 coefficient at a given training step.
+
+    Returns 0 before warmup_start, linearly ramps to l1_penalty over
+    warmup_epochs steps, then stays at l1_penalty. When warmup_start=0
+    and warmup_epochs=0 (defaults), returns l1_penalty immediately.
+    """
+    if warmup_epochs <= 0 or step >= warmup_start + warmup_epochs:
+        return l1_penalty
+    if step < warmup_start:
+        return 0.0
+    return l1_penalty * (step - warmup_start) / warmup_epochs
+
+
 def _resample_dead_neurons(
     encoder: SAEEncoder,
     optimizer: torch.optim.Adam,
@@ -210,6 +224,8 @@ def train_sae_end_to_end(
     log_every: int = 10,
     resample_interval: int = 0,
     weight_l1_by_decoder_norm: bool = False,
+    l1_warmup_start: int = 0,
+    l1_warmup_epochs: int = 0,
 ) -> dict:
     """Train SAE + regression end-to-end via backpropagation.
 
@@ -236,6 +252,8 @@ def train_sae_end_to_end(
         log_every: Compute and display test metrics every N epochs.
         resample_interval: Resample dead neurons every N epochs (0 = disabled).
         weight_l1_by_decoder_norm: Weight L1 by regression column norms.
+        l1_warmup_start: Epoch at which L1 penalty begins ramping (0 = immediate).
+        l1_warmup_epochs: Epochs over which L1 linearly ramps to target (0 = no ramp).
 
     Returns:
         Dict with keys:
@@ -270,6 +288,7 @@ def train_sae_end_to_end(
     pbar = tqdm(range(num_epochs), desc="  end_to_end", unit="ep", leave=True)
     for epoch in pbar:
         model.train()
+        effective_l1 = _get_l1_coeff(l1_penalty, epoch, l1_warmup_start, l1_warmup_epochs)
         reg_w = model.regressor.weight.detach() if weight_l1_by_decoder_norm else None
         if dataloader is not None:
             epoch_mse, epoch_l1, n_seen = 0.0, 0.0, 0
@@ -278,7 +297,7 @@ def train_sae_end_to_end(
                 preds, acts = model(X_batch)
                 mse = mse_fn(preds, Y_batch)
                 l1 = _compute_l1(acts, reg_w)
-                loss = mse + l1_penalty * l1
+                loss = mse + effective_l1 * l1
                 loss.backward()
                 optimizer.step()
                 bs = X_batch.shape[0]
@@ -292,13 +311,13 @@ def train_sae_end_to_end(
             preds, acts = model(X_tr)
             mse = mse_fn(preds, Y_tr)
             l1 = _compute_l1(acts, reg_w)
-            loss = mse + l1_penalty * l1
+            loss = mse + effective_l1 * l1
             loss.backward()
             optimizer.step()
             epoch_mse = mse.item()
             epoch_l1 = l1.item()
 
-        total_loss = epoch_mse + l1_penalty * epoch_l1
+        total_loss = epoch_mse + effective_l1 * epoch_l1
 
         # Dead feature resampling
         n_resampled = 0
@@ -335,6 +354,7 @@ def train_sae_end_to_end(
             "epoch": epoch,
             "mse_loss": epoch_mse,
             "l1_loss": epoch_l1,
+            "effective_l1_coeff": effective_l1,
             "total_loss": total_loss,
             "test_r2": test_r2,
             "test_corr": test_corr,
@@ -388,6 +408,10 @@ def train_sae_alternating(
     log_every: int = 1,
     resample_interval: int = 0,
     weight_l1_by_decoder_norm: bool = False,
+    l1_warmup_start: int = 0,
+    l1_warmup_epochs: int = 0,
+    regression_momentum: float = 1.0,
+    input_jitter_std: float = 0.0,
 ) -> dict:
     """Train SAE with alternating optimisation.
 
@@ -419,6 +443,12 @@ def train_sae_alternating(
         log_every: Compute and display test metrics every N cycles.
         resample_interval: Resample dead neurons every N cycles (0 = disabled).
         weight_l1_by_decoder_norm: Weight L1 by regression column norms.
+        l1_warmup_start: Cycle at which L1 penalty begins ramping (0 = immediate).
+        l1_warmup_epochs: Cycles over which L1 linearly ramps to target (0 = no ramp).
+        regression_momentum: Proximal damping for regression updates.
+            W_next = (1 - η) * W_old + η * W_optimal. 1.0 = no damping (default).
+        input_jitter_std: Std of Gaussian noise added to X_proj during SAE
+            training. 0.0 = disabled (default).
 
     Returns:
         Same structure as train_sae_end_to_end.
@@ -456,6 +486,7 @@ def train_sae_alternating(
     for cycle in pbar:
         # Phase 1: Train SAE encoder with frozen regression weights
         encoder.train()
+        effective_l1 = _get_l1_coeff(l1_penalty, cycle, l1_warmup_start, l1_warmup_epochs)
         frozen_W = reg_W.detach()
         frozen_b = reg_b.detach()
         l1_weights = frozen_W if weight_l1_by_decoder_norm else None
@@ -466,20 +497,22 @@ def train_sae_alternating(
             if dataloader is not None:
                 for X_batch, Y_batch in dataloader:
                     optimizer.zero_grad()
-                    h = encoder(X_batch)
+                    X_in = (X_batch + torch.randn_like(X_batch) * input_jitter_std) if input_jitter_std > 0 else X_batch
+                    h = encoder(X_in)
                     preds = h @ frozen_W + frozen_b
                     mse = mse_fn(preds, Y_batch)
                     l1 = _compute_l1(h, l1_weights)
-                    loss = mse + l1_penalty * l1
+                    loss = mse + effective_l1 * l1
                     loss.backward()
                     optimizer.step()
             else:
                 optimizer.zero_grad()
-                h = encoder(X_tr)
+                X_in = (X_tr + torch.randn_like(X_tr) * input_jitter_std) if input_jitter_std > 0 else X_tr
+                h = encoder(X_in)
                 preds = h @ frozen_W + frozen_b
                 mse = mse_fn(preds, Y_tr)
                 l1 = _compute_l1(h, l1_weights)
-                loss = mse + l1_penalty * l1
+                loss = mse + effective_l1 * l1
                 loss.backward()
                 optimizer.step()
 
@@ -488,7 +521,13 @@ def train_sae_alternating(
         with torch.no_grad():
             H_train = encoder(X_tr)
 
-        reg_W, reg_b = solve_regression(H_train, Y_tr, regression_type, device)
+        opt_W, opt_b = solve_regression(H_train, Y_tr, regression_type, device)
+        if regression_momentum < 1.0:
+            eta = regression_momentum
+            reg_W = (1 - eta) * reg_W + eta * opt_W
+            reg_b = (1 - eta) * reg_b + eta * opt_b
+        else:
+            reg_W, reg_b = opt_W, opt_b
 
         # Dead feature resampling
         n_resampled = 0
@@ -508,7 +547,7 @@ def train_sae_alternating(
             preds_tr = H_train @ reg_W + reg_b
             train_mse = float(mse_fn(preds_tr, Y_tr))
             train_l1 = float(H_train.abs().mean())
-            total_loss = train_mse + l1_penalty * train_l1
+            total_loss = train_mse + effective_l1 * train_l1
 
         if is_log_step:
             with torch.no_grad():
@@ -530,6 +569,7 @@ def train_sae_alternating(
             "cycle": cycle,
             "mse_loss": train_mse,
             "l1_loss": train_l1,
+            "effective_l1_coeff": effective_l1,
             "total_loss": total_loss,
             "test_r2": test_r2,
             "test_corr": test_corr,

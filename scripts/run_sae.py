@@ -145,6 +145,10 @@ def _run_sae_for_unit(
                 log_every=config.log_every,
                 resample_interval=config.resample_interval,
                 weight_l1_by_decoder_norm=config.weight_l1_by_decoder_norm,
+                l1_warmup_start=config.l1_warmup_start,
+                l1_warmup_epochs=config.l1_warmup_epochs,
+                regression_momentum=config.regression_momentum,
+                input_jitter_std=config.input_jitter_std,
             )
         else:
             result = train_sae_end_to_end(
@@ -157,6 +161,8 @@ def _run_sae_for_unit(
                 log_every=config.log_every,
                 resample_interval=config.resample_interval,
                 weight_l1_by_decoder_norm=config.weight_l1_by_decoder_norm,
+                l1_warmup_start=config.l1_warmup_start,
+                l1_warmup_epochs=config.l1_warmup_epochs,
             )
 
         Y_hat_sae = result["Y_hat_test"]

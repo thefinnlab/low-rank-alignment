@@ -227,6 +227,8 @@ class SAEConfig:
     # SAE architecture
     hidden_dim: int = 50                  # Must be > k
     l1_penalty: float = 1e-3
+    l1_warmup_start: int = 0              # Epoch/cycle to begin L1 ramp (0 = immediate)
+    l1_warmup_epochs: int = 0             # Epochs/cycles to linearly ramp L1 to target (0 = no ramp)
 
     # Training mode
     training_mode: str = "end_to_end"     # "end_to_end" or "alternating"
@@ -242,6 +244,10 @@ class SAEConfig:
     sae_learning_rate: float = 1e-3
     sae_steps_per_cycle: int = 50
     num_cycles: int = 20
+    regression_momentum: float = 1.0      # Proximal damping: W = (1-η)W_old + η*W_optimal (1.0 = no damping)
+
+    # Input jitter (Gaussian noise on X_proj during SAE training, 0 = disabled)
+    input_jitter_std: float = 0.0
 
     # Dead feature resampling (0 = disabled)
     resample_interval: int = 0            # Resample dead neurons every N epochs/cycles
