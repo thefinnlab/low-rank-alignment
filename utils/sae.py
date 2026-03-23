@@ -297,16 +297,13 @@ def train_sae_alternating(
     optimizer = torch.optim.Adam(encoder.parameters(), lr=sae_lr)
     mse_fn = nn.MSELoss()
 
-    # Regression weights: (hidden_dim, n_targets) and bias (n_targets,)
-    reg_W = torch.zeros(hidden_dim, n_targets, dtype=torch.float32, device=device)
-    reg_b = torch.zeros(n_targets, dtype=torch.float32, device=device)
-
-    # Cycle 0 init: solve regression on identity-mapped inputs.
-    # Since hidden_dim > input_dim, we pad the raw inputs with zeros.
-    _init_solve_regression(
-        X_tr, Y_tr, input_dim, hidden_dim, n_targets, regression_type, device,
-        reg_W, reg_b,
-    )
+    # Cycle 0 init: run X through the randomly-initialised encoder and solve
+    # regression on those activations.  This gives every hidden unit non-zero
+    # regression weights from the start so no unit is born dead.
+    encoder.eval()
+    with torch.no_grad():
+        H_init = encoder(X_tr)
+    reg_W, reg_b = _solve_regression(H_init, Y_tr, regression_type, device)
 
     training_log = []
 
@@ -345,7 +342,7 @@ def train_sae_alternating(
         with torch.no_grad():
             H_train = encoder(X_tr)
 
-        _solve_regression(H_train, Y_tr, regression_type, device, reg_W, reg_b)
+        reg_W, reg_b = _solve_regression(H_train, Y_tr, regression_type, device)
 
         # Log cycle metrics
         is_log_step = (cycle % log_every == 0) or (cycle == num_cycles - 1)
@@ -407,23 +404,18 @@ def train_sae_alternating(
     }
 
 
-def _init_solve_regression(
-    X_tr, Y_tr, input_dim, hidden_dim, n_targets, regression_type, device,
-    reg_W, reg_b,
-):
-    """Initialise regression weights by solving on raw (pre-SAE) inputs.
+def _solve_regression(
+    H: torch.Tensor,
+    Y: torch.Tensor,
+    regression_type: str,
+    device: str,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Solve regression (OLS or Ridge) and return (W, b) tensors.
 
-    Pads the k-dim input to hidden_dim with zeros so the weight matrix has
-    the correct shape.
+    Returns:
+        reg_W: (hidden_dim, n_targets) weight tensor.
+        reg_b: (n_targets,) bias tensor.
     """
-    # Use raw X as a surrogate for SAE activations (identity init)
-    H_init = torch.zeros(X_tr.shape[0], hidden_dim, dtype=torch.float32, device=device)
-    H_init[:, :input_dim] = X_tr
-    _solve_regression(H_init, Y_tr, regression_type, device, reg_W, reg_b)
-
-
-def _solve_regression(H, Y, regression_type, device, reg_W, reg_b):
-    """Solve regression (OLS or Ridge) and write results into reg_W, reg_b in-place."""
     H_np = to_numpy(H)
     Y_np = to_numpy(Y)
 
@@ -443,8 +435,10 @@ def _solve_regression(H, Y, regression_type, device, reg_W, reg_b):
         intercept = to_numpy(model[-1].intercept_)  # (n_targets,)
         W = (coef_raw / sc_scale[np.newaxis, :]).T   # (n_features, n_targets)
         b = intercept - (sc_mean / sc_scale) @ coef_raw.T  # (n_targets,)
-        reg_W.copy_(to_torch(W.astype(np.float32), device=device))
-        reg_b.copy_(to_torch(b.astype(np.float32), device=device))
+        return (
+            to_torch(W.astype(np.float32), device=device),
+            to_torch(b.astype(np.float32), device=device),
+        )
     else:
         # OLS: H @ W + b ≈ Y  →  [H, 1] @ [W; b] ≈ Y
         H_t = to_torch(H_np, dtype=torch.float32, device=device)
@@ -454,5 +448,4 @@ def _solve_regression(H, Y, regression_type, device, reg_W, reg_b):
         H_aug = torch.cat([H_t, torch.ones(n, 1, dtype=torch.float32, device=device)], dim=1)
         gram = H_aug.T @ H_aug + 1e-6 * torch.eye(d + 1, dtype=torch.float32, device=device)
         sol = torch.linalg.solve(gram, H_aug.T @ Y_t)  # (d+1, n_targets)
-        reg_W.copy_(sol[:d])
-        reg_b.copy_(sol[d])
+        return sol[:d], sol[d]
