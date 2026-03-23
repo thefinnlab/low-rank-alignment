@@ -109,6 +109,19 @@ partial-rrr:
 	mkdir -p logs
 	$(CMD) scripts/run_partial_rrr.py --config $(PARTIAL_RRR_CONFIG) $(OVERRIDES)
 
+## Run SAE analysis (sparse autoencoder on RRR-projected embeddings)
+## Usage:
+##   make sae                                                               # default config
+##   make sae SAE_CONFIG=configs/sae_default.yml                           # explicit config
+##   make sae OVERRIDES="--k=20 --hidden_dim=100"                          # override params
+##   make sae OVERRIDES="--mode=per_subject --max_subjects=3"              # limit subjects
+##   make sae CMD=python                                                    # run locally
+SAE_CONFIG ?= configs/sae_default.yml
+
+sae:
+	mkdir -p logs
+	$(CMD) scripts/run_sae.py --config $(SAE_CONFIG) $(OVERRIDES)
+
 ## Print out regions where electrode in data are located according to an atlas
 ## Usage:
 ## make print-regions DATA_ROOT=data RUN_DIR=results/my_run
@@ -123,4 +136,4 @@ sig-test:
 test:
 	python -m pytest tests/ -v
 
-.PHONY: sig train plots svd srrr rrr partial-svd partial-rrr sig-test test
+.PHONY: sig train plots svd srrr rrr partial-svd partial-rrr sae sig-test test

@@ -2,7 +2,7 @@
 # Import the most commonly used functions for convenience.
 
 from utils.tensor_utils import to_numpy, to_torch
-from utils.config import EncodingConfig, SignificanceConfig, SVDConfig, SRRRConfig, RRRConfig, PartialSVDConfig, PartialRRRConfig, SVDMode, get_results_dir
+from utils.config import EncodingConfig, SignificanceConfig, SVDConfig, SRRRConfig, RRRConfig, PartialSVDConfig, PartialRRRConfig, SAEConfig, SVDMode, get_results_dir
 from utils.config_utils import (
     parse_override_args,
     get_nested_value,
@@ -48,6 +48,7 @@ from utils.plotting import (
     plot_partial_svd_sweep,
     plot_partial_svd_lag_heatmap,
     plot_partial_rrr_sweep,
+    plot_sae_training_curves,
 )
 from utils.significance import (
     batch_corrcoef,
@@ -95,6 +96,13 @@ from utils.srrr import (
     load_rrr_result,
     find_knee_lambda,
 )
+from utils.sae import (
+    SAEEncoder,
+    SAERegressorEndToEnd,
+    compute_sae_metrics,
+    train_sae_end_to_end,
+    train_sae_alternating,
+)
 from utils.examples import (
     _make_context,
     _sample,
@@ -115,6 +123,7 @@ __all__ = [
     "RRRConfig",
     "PartialSVDConfig",
     "PartialRRRConfig",
+    "SAEConfig",
     "SVDMode",
     "get_results_dir",
     "parse_override_args",
@@ -158,6 +167,7 @@ __all__ = [
     "plot_partial_svd_sweep",
     "plot_partial_svd_lag_heatmap",
     "plot_partial_rrr_sweep",
+    "plot_sae_training_curves",
     # significance
     "batch_corrcoef",
     "significant_lags_all_electrodes_gpu",
@@ -200,6 +210,12 @@ __all__ = [
     "save_rrr_result",
     "load_rrr_result",
     "find_knee_lambda",
+    # sae
+    "SAEEncoder",
+    "SAERegressorEndToEnd",
+    "compute_sae_metrics",
+    "train_sae_end_to_end",
+    "train_sae_alternating",
     # examples
     "_make_context",
     "_sample",

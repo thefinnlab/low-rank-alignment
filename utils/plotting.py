@@ -1172,3 +1172,108 @@ def plot_corrs_vs_arbitrary(corrs, corrs_arb, lags, save_path=None):
         plt.close(fig)
     else:
         plt.show()
+
+
+def plot_sae_corrs_vs_full(corrs_sae, corrs_full, lags, title=None, save_path=None):
+    """Plot SAE correlation timecourse vs full encoding model baseline.
+
+    Args:
+        corrs_sae: (n_folds, n_electrodes, n_lags) SAE per-target correlations.
+        corrs_full: (n_folds, n_electrodes, n_lags) full model per-target correlations.
+        lags: 1-D array of lag values (seconds).
+        title: Optional plot title.
+        save_path: If given, save figure here; otherwise call plt.show().
+    """
+    import matplotlib.pyplot as plt
+
+    fig, ax = plt.subplots(figsize=(8, 4))
+    add_corrs(corrs_full, lags, label="Full model", color="blue", ax=ax)
+    add_corrs(corrs_sae, lags, label="SAE", color="orange", ax=ax)
+    ax.axhline(0, color="black", linewidth=0.5)
+    ax.set_xlabel("Lag (s)")
+    ax.set_ylabel("Correlation")
+    if title:
+        ax.set_title(title)
+    ax.legend()
+    fig.tight_layout()
+
+    if save_path is not None:
+        fig.savefig(save_path, dpi=150)
+        plt.close(fig)
+    else:
+        plt.show()
+
+
+def plot_sae_training_curves(training_log, title="SAE training", save_path=None):
+    """Multi-panel figure of SAE training metrics vs epoch/cycle.
+
+    Panels:
+        1. Loss components (MSE, L1, total) vs step.
+        2. Test R² vs step.
+        3. Test correlation vs step.
+
+    Rows with None test metrics (skipped by log_every) are omitted from
+    panels 2 and 3.
+
+    Args:
+        training_log: List of dicts from train_sae_end_to_end or
+            train_sae_alternating.  Each dict has keys like epoch/cycle,
+            mse_loss, l1_loss, total_loss, test_r2, test_corr.
+        title: Figure title.
+        save_path: If given, save figure here and close; otherwise return Figure.
+
+    Returns:
+        matplotlib Figure when save_path is None, else None.
+    """
+    import matplotlib.pyplot as plt
+    import pandas as pd
+
+    df = pd.DataFrame(training_log)
+    step_col = "epoch" if "epoch" in df.columns else "cycle"
+    steps = df[step_col]
+
+    fig, axes = plt.subplots(1, 3, figsize=(15, 4))
+    fig.suptitle(title, fontsize=12)
+
+    # Panel 1: Loss components
+    ax = axes[0]
+    ax.plot(steps, df["total_loss"], label="total", linewidth=1.5)
+    ax.plot(steps, df["mse_loss"], label="MSE", linewidth=1, alpha=0.8)
+    ax.plot(steps, df["l1_loss"], label="L1", linewidth=1, alpha=0.8)
+    ax.set_xlabel(step_col)
+    ax.set_ylabel("loss")
+    ax.set_title("Loss components")
+    ax.legend(fontsize=8)
+    ax.grid(True, alpha=0.3)
+
+    # Filter to rows with test metrics computed
+    df_logged = df.dropna(subset=["test_r2"])
+    if len(df_logged) > 0:
+        log_steps = df_logged[step_col]
+
+        # Panel 2: Test R²
+        ax = axes[1]
+        ax.plot(log_steps, df_logged["test_r2"], marker=".", markersize=3, linewidth=1)
+        ax.set_xlabel(step_col)
+        ax.set_ylabel("R²")
+        ax.set_title("Test R²")
+        ax.grid(True, alpha=0.3)
+
+        # Panel 3: Test correlation
+        ax = axes[2]
+        ax.plot(log_steps, df_logged["test_corr"], marker=".", markersize=3, linewidth=1)
+        ax.set_xlabel(step_col)
+        ax.set_ylabel("correlation")
+        ax.set_title("Test correlation")
+        ax.grid(True, alpha=0.3)
+    else:
+        for ax in axes[1:]:
+            ax.set_visible(False)
+
+    fig.tight_layout()
+
+    if save_path is not None:
+        fig.savefig(save_path, dpi=150)
+        plt.close(fig)
+    else:
+        return fig

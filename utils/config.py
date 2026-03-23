@@ -198,3 +198,61 @@ class SRRRConfig:
     # Per-region mode
     atlas_path: str | None = None        # Path to Destrieux 2009 .nii.gz; None = download via nilearn
     atlas_region_groups: dict | None = None  # Required when mode=per_region
+
+
+@dataclass
+class SAEConfig:
+    """Parameters for SAE-based encoding analysis (run_sae.py).
+
+    Loads an RRR-learned subspace (A matrix) at a given rank k, projects word
+    embeddings into that k-dimensional space, applies a sparse autoencoder
+    (overcomplete hidden layer with ReLU + L1 penalty), and regresses onto
+    neural targets.
+
+    Mode → SAE output directory mapping (default, overridable via sae_output_dir):
+        cross_subject : {output_dir}/sae/
+        per_subject   : {output_dir}/per_subject_sae/
+        per_region    : {output_dir}/per_region_sae/
+    """
+
+    encoding: EncodingConfig = field(default_factory=EncodingConfig)
+    output_dir: str | None = None         # Root results dir; auto from model/layer/offset if None
+    sae_output_dir: str | None = None     # Override for SAE root subdir; default depends on mode
+    rrr_source_dir: str | None = None     # Where to find RRR A matrices; auto-resolved per mode
+    mode: SVDMode = SVDMode.CROSS_SUBJECT
+
+    # RRR rank to use
+    k: int = 10
+
+    # SAE architecture
+    hidden_dim: int = 50                  # Must be > k
+    l1_penalty: float = 1e-3
+
+    # Training mode
+    training_mode: str = "end_to_end"     # "end_to_end" or "alternating"
+    regression_type: str = "ols"          # "ols" or "ridge"
+
+    # End-to-end params
+    learning_rate: float = 1e-3
+    num_epochs: int = 500
+    batch_size: int | None = None         # None = full batch
+    log_every: int = 10                   # Compute & display test metrics every N epochs/cycles
+
+    # Alternating params
+    sae_learning_rate: float = 1e-3
+    sae_steps_per_cycle: int = 50
+    num_cycles: int = 20
+
+    # Dead feature resampling (0 = disabled)
+    resample_interval: int = 0            # Resample dead neurons every N epochs/cycles
+
+    # Norm-weighted L1 (Anthropic 2024): weight L1 by regression column norms
+    weight_l1_by_decoder_norm: bool = False
+
+    # Subject/region limiting
+    max_subjects: int | None = None       # Limit number of subjects to run
+    max_regions: int | None = None        # Limit number of regions to run
+
+    # Per-region mode
+    atlas_path: str | None = None
+    atlas_region_groups: dict | None = None
