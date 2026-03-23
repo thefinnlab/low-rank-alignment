@@ -321,15 +321,17 @@ def train_sae_end_to_end(
                 preds_te, acts_te = model(X_te)
                 test_r2 = float(compute_r2(to_numpy(Y_te), to_numpy(preds_te)).mean())
                 test_corr = float(compute_correlation(to_numpy(Y_te), to_numpy(preds_te)).mean())
-                l0 = float((acts_te > 0).float().sum(dim=1).mean())
+                step_sae_metrics = compute_sae_metrics(acts_te)
+                l0 = step_sae_metrics["l0_sparsity"]
             pbar.set_postfix(loss=f"{total_loss:.4f}", r2=f"{test_r2:.4f}",
                              corr=f"{test_corr:.4f}", L0=f"{l0:.1f}")
         else:
             test_r2 = None
             test_corr = None
+            step_sae_metrics = None
             pbar.set_postfix(loss=f"{total_loss:.4f}")
 
-        training_log.append({
+        log_entry = {
             "epoch": epoch,
             "mse_loss": epoch_mse,
             "l1_loss": epoch_l1,
@@ -337,7 +339,11 @@ def train_sae_end_to_end(
             "test_r2": test_r2,
             "test_corr": test_corr,
             "n_resampled": n_resampled,
-        })
+            "l0_sparsity": step_sae_metrics["l0_sparsity"] if step_sae_metrics else None,
+            "dead_neurons": step_sae_metrics["dead_neurons"] if step_sae_metrics else None,
+            "mean_activation": step_sae_metrics["mean_activation"] if step_sae_metrics else None,
+        }
+        training_log.append(log_entry)
 
     # Final evaluation
     model.eval()
@@ -442,7 +448,7 @@ def train_sae_alternating(
     encoder.eval()
     with torch.no_grad():
         H_init = encoder(X_tr)
-    reg_W, reg_b = _solve_regression(H_init, Y_tr, regression_type, device)
+    reg_W, reg_b = solve_regression(H_init, Y_tr, regression_type, device)
 
     training_log = []
 
@@ -482,7 +488,7 @@ def train_sae_alternating(
         with torch.no_grad():
             H_train = encoder(X_tr)
 
-        reg_W, reg_b = _solve_regression(H_train, Y_tr, regression_type, device)
+        reg_W, reg_b = solve_regression(H_train, Y_tr, regression_type, device)
 
         # Dead feature resampling
         n_resampled = 0
@@ -510,15 +516,17 @@ def train_sae_alternating(
                 preds_te = H_test @ reg_W + reg_b
                 test_r2 = float(compute_r2(to_numpy(Y_te), to_numpy(preds_te)).mean())
                 test_corr = float(compute_correlation(to_numpy(Y_te), to_numpy(preds_te)).mean())
-                l0 = float((H_test > 0).float().sum(dim=1).mean())
+                step_sae_metrics = compute_sae_metrics(H_test)
+                l0 = step_sae_metrics["l0_sparsity"]
             pbar.set_postfix(loss=f"{total_loss:.4f}", r2=f"{test_r2:.4f}",
                              corr=f"{test_corr:.4f}", L0=f"{l0:.1f}")
         else:
             test_r2 = None
             test_corr = None
+            step_sae_metrics = None
             pbar.set_postfix(loss=f"{total_loss:.4f}")
 
-        training_log.append({
+        log_entry = {
             "cycle": cycle,
             "mse_loss": train_mse,
             "l1_loss": train_l1,
@@ -526,7 +534,11 @@ def train_sae_alternating(
             "test_r2": test_r2,
             "test_corr": test_corr,
             "n_resampled": n_resampled,
-        })
+            "l0_sparsity": step_sae_metrics["l0_sparsity"] if step_sae_metrics else None,
+            "dead_neurons": step_sae_metrics["dead_neurons"] if step_sae_metrics else None,
+            "mean_activation": step_sae_metrics["mean_activation"] if step_sae_metrics else None,
+        }
+        training_log.append(log_entry)
 
     # Final evaluation
     encoder.eval()
@@ -557,7 +569,7 @@ def train_sae_alternating(
     }
 
 
-def _solve_regression(
+def solve_regression(
     H: torch.Tensor,
     Y: torch.Tensor,
     regression_type: str,

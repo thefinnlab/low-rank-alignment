@@ -67,6 +67,7 @@ from utils.srrr import (
 from utils.sae import (
     train_sae_end_to_end,
     train_sae_alternating,
+    solve_regression,
 )
 
 
@@ -106,6 +107,7 @@ def _run_sae_for_unit(
     all_rows = []
     fold_corrs_sae = []
     fold_corrs_full = []
+    fold_corrs_rrr = []
 
     for fold_f in range(n_folds):
         fold_start = time.time()
@@ -168,6 +170,18 @@ def _run_sae_for_unit(
             per_target_corr_full = compute_correlation(Y_test, Y_hat_full)
             fold_corrs_sae.append(per_target_corr_sae.reshape(n_electrodes, n_lags))
             fold_corrs_full.append(per_target_corr_full.reshape(n_electrodes, n_lags))
+
+            # RRR-direct baseline: regress from k-dim projected space to Y
+            # using the same regression approach as the SAE pipeline
+            regression_type = config.regression_type if config.training_mode == "alternating" else "ridge"
+            device = "cuda" if torch.cuda.is_available() else "cpu"
+            X_proj_train_t = torch.as_tensor(X_proj_train, dtype=torch.float32, device=device)
+            X_proj_test_t = torch.as_tensor(X_proj_test, dtype=torch.float32, device=device)
+            Y_train_t = torch.as_tensor(Y_train, dtype=torch.float32, device=device)
+            rrr_W, rrr_b = solve_regression(X_proj_train_t, Y_train_t, regression_type, device)
+            Y_hat_rrr = (X_proj_test_t @ rrr_W + rrr_b).cpu().numpy()
+            per_target_corr_rrr = compute_correlation(Y_test, Y_hat_rrr)
+            fold_corrs_rrr.append(per_target_corr_rrr.reshape(n_electrodes, n_lags))
 
         # Recovery test: partial out SAE predictions and retrain ridge on residuals
         suf = run_sufficiency_test(
@@ -236,21 +250,24 @@ def _run_sae_for_unit(
     summary = df[agg_cols].mean().to_frame().T
     summary.to_csv(os.path.join(sae_unit_dir, "summary.csv"), index=False)
 
-    # Correlation timecourse plot: SAE vs full model
+    # Correlation timecourse plot: SAE vs RRR-direct vs full model
     if n_electrodes is not None and fold_corrs_sae:
         from utils.plotting import plot_sae_corrs_vs_full
         corrs_sae = np.stack(fold_corrs_sae, axis=0)   # (n_folds, n_electrodes, n_lags)
         corrs_full = np.stack(fold_corrs_full, axis=0)  # (n_folds, n_electrodes, n_lags)
+        corrs_rrr = np.stack(fold_corrs_rrr, axis=0)    # (n_folds, n_electrodes, n_lags)
         n_lags = corrs_sae.shape[2]
         lags = np.linspace(-2.0, 2.0, n_lags, endpoint=False)
         plot_sae_corrs_vs_full(
             corrs_sae, corrs_full, lags,
-            title=f"SAE vs full model — k={k}",
+            corrs_rrr=corrs_rrr,
+            title=f"SAE vs RRR vs full model — k={k}",
             save_path=os.path.join(sae_unit_dir, "corrs_sae_vs_full.png"),
         )
         # Save correlation arrays for downstream use
         np.save(os.path.join(sae_unit_dir, "corrs_sae.npy"), corrs_sae)
         np.save(os.path.join(sae_unit_dir, "corrs_full.npy"), corrs_full)
+        np.save(os.path.join(sae_unit_dir, "corrs_rrr.npy"), corrs_rrr)
 
     return df
 

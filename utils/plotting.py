@@ -1174,13 +1174,16 @@ def plot_corrs_vs_arbitrary(corrs, corrs_arb, lags, save_path=None):
         plt.show()
 
 
-def plot_sae_corrs_vs_full(corrs_sae, corrs_full, lags, title=None, save_path=None):
+def plot_sae_corrs_vs_full(corrs_sae, corrs_full, lags, corrs_rrr=None,
+                           title=None, save_path=None):
     """Plot SAE correlation timecourse vs full encoding model baseline.
 
     Args:
         corrs_sae: (n_folds, n_electrodes, n_lags) SAE per-target correlations.
         corrs_full: (n_folds, n_electrodes, n_lags) full model per-target correlations.
         lags: 1-D array of lag values (seconds).
+        corrs_rrr: Optional (n_folds, n_electrodes, n_lags) RRR-direct regression
+            per-target correlations (linear regression from RRR subspace, no SAE).
         title: Optional plot title.
         save_path: If given, save figure here; otherwise call plt.show().
     """
@@ -1188,6 +1191,8 @@ def plot_sae_corrs_vs_full(corrs_sae, corrs_full, lags, title=None, save_path=No
 
     fig, ax = plt.subplots(figsize=(8, 4))
     add_corrs(corrs_full, lags, label="Full model", color="blue", ax=ax)
+    if corrs_rrr is not None:
+        add_corrs(corrs_rrr, lags, label="RRR direct", color="green", ax=ax)
     add_corrs(corrs_sae, lags, label="SAE", color="orange", ax=ax)
     ax.axhline(0, color="black", linewidth=0.5)
     ax.set_xlabel("Lag (s)")
@@ -1207,18 +1212,18 @@ def plot_sae_corrs_vs_full(corrs_sae, corrs_full, lags, title=None, save_path=No
 def plot_sae_training_curves(training_log, title="SAE training", save_path=None):
     """Multi-panel figure of SAE training metrics vs epoch/cycle.
 
-    Panels:
-        1. Loss components (MSE, L1, total) vs step.
-        2. Test R² vs step.
-        3. Test correlation vs step.
+    Panels (2 rows x 3 columns):
+        Row 1: Loss components, Test R², Test correlation.
+        Row 2: L0 sparsity, Dead neuron fraction, Mean activation.
 
-    Rows with None test metrics (skipped by log_every) are omitted from
-    panels 2 and 3.
+    Rows with None test/SAE metrics (skipped by log_every) are omitted from
+    panels that use those columns.
 
     Args:
         training_log: List of dicts from train_sae_end_to_end or
             train_sae_alternating.  Each dict has keys like epoch/cycle,
-            mse_loss, l1_loss, total_loss, test_r2, test_corr.
+            mse_loss, l1_loss, total_loss, test_r2, test_corr, l0_sparsity,
+            dead_neurons, mean_activation.
         title: Figure title.
         save_path: If given, save figure here and close; otherwise return Figure.
 
@@ -1232,11 +1237,11 @@ def plot_sae_training_curves(training_log, title="SAE training", save_path=None)
     step_col = "epoch" if "epoch" in df.columns else "cycle"
     steps = df[step_col]
 
-    fig, axes = plt.subplots(1, 3, figsize=(15, 4))
+    fig, axes = plt.subplots(2, 3, figsize=(15, 8))
     fig.suptitle(title, fontsize=12)
 
-    # Panel 1: Loss components
-    ax = axes[0]
+    # Row 1, Panel 1: Loss components
+    ax = axes[0, 0]
     ax.plot(steps, df["total_loss"], label="total", linewidth=1.5)
     ax.plot(steps, df["mse_loss"], label="MSE", linewidth=1, alpha=0.8)
     ax.plot(steps, df["l1_loss"], label="L1", linewidth=1, alpha=0.8)
@@ -1251,23 +1256,58 @@ def plot_sae_training_curves(training_log, title="SAE training", save_path=None)
     if len(df_logged) > 0:
         log_steps = df_logged[step_col]
 
-        # Panel 2: Test R²
-        ax = axes[1]
+        # Row 1, Panel 2: Test R²
+        ax = axes[0, 1]
         ax.plot(log_steps, df_logged["test_r2"], marker=".", markersize=3, linewidth=1)
         ax.set_xlabel(step_col)
         ax.set_ylabel("R²")
         ax.set_title("Test R²")
         ax.grid(True, alpha=0.3)
 
-        # Panel 3: Test correlation
-        ax = axes[2]
+        # Row 1, Panel 3: Test correlation
+        ax = axes[0, 2]
         ax.plot(log_steps, df_logged["test_corr"], marker=".", markersize=3, linewidth=1)
         ax.set_xlabel(step_col)
         ax.set_ylabel("correlation")
         ax.set_title("Test correlation")
         ax.grid(True, alpha=0.3)
     else:
-        for ax in axes[1:]:
+        for ax in axes[0, 1:]:
+            ax.set_visible(False)
+
+    # Row 2: SAE-specific metrics (only at logged steps)
+    has_sae_cols = "l0_sparsity" in df.columns
+    df_sae = df.dropna(subset=["l0_sparsity"]) if has_sae_cols else pd.DataFrame()
+
+    if len(df_sae) > 0:
+        sae_steps = df_sae[step_col]
+
+        # Row 2, Panel 1: L0 sparsity
+        ax = axes[1, 0]
+        ax.plot(sae_steps, df_sae["l0_sparsity"], marker=".", markersize=3, linewidth=1, color="tab:orange")
+        ax.set_xlabel(step_col)
+        ax.set_ylabel("L0 (avg active features)")
+        ax.set_title("L0 sparsity")
+        ax.grid(True, alpha=0.3)
+
+        # Row 2, Panel 2: Dead neuron fraction
+        ax = axes[1, 1]
+        ax.plot(sae_steps, df_sae["dead_neurons"], marker=".", markersize=3, linewidth=1, color="tab:red")
+        ax.set_xlabel(step_col)
+        ax.set_ylabel("fraction dead")
+        ax.set_title("Dead neuron fraction")
+        ax.set_ylim(-0.05, 1.05)
+        ax.grid(True, alpha=0.3)
+
+        # Row 2, Panel 3: Mean activation
+        ax = axes[1, 2]
+        ax.plot(sae_steps, df_sae["mean_activation"], marker=".", markersize=3, linewidth=1, color="tab:green")
+        ax.set_xlabel(step_col)
+        ax.set_ylabel("mean activation")
+        ax.set_title("Mean activation (non-zero)")
+        ax.grid(True, alpha=0.3)
+    else:
+        for ax in axes[1, :]:
             ax.set_visible(False)
 
     fig.tight_layout()
