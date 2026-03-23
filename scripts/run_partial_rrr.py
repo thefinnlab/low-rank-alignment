@@ -34,6 +34,7 @@ import os
 import time
 
 import matplotlib
+
 matplotlib.use("Agg")
 import numpy as np
 import pandas as pd
@@ -63,6 +64,7 @@ from utils.srrr import load_rrr_result
 # ---------------------------------------------------------------------------
 # Core sweep
 # ---------------------------------------------------------------------------
+
 
 def _discover_ranks(rrr_source_dir, rank_grid=None):
     """Discover available ranks from an RRR output directory.
@@ -181,6 +183,7 @@ def _run_partial_rrr_sweep(
 # Save / load
 # ---------------------------------------------------------------------------
 
+
 def _save_partial_rrr_results(
     partial_rrr_dir,
     all_results,
@@ -210,14 +213,16 @@ def _save_partial_rrr_results(
         mean_all = corrs.mean()
         mean_sig = corrs.mean(axis=0)[sig_mask].mean()
         mean_nonsig = corrs.mean(axis=0)[~sig_mask].mean()
-        rows.append({
-            "rank_k": k,
-            "mean_corr_all": mean_all,
-            "mean_corr_sig": mean_sig,
-            "mean_corr_nonsig": mean_nonsig,
-            "drop_sig": baseline_mean_sig - mean_sig,
-            "drop_nonsig": baseline_mean_nonsig - mean_nonsig,
-        })
+        rows.append(
+            {
+                "rank_k": k,
+                "mean_corr_all": mean_all,
+                "mean_corr_sig": mean_sig,
+                "mean_corr_nonsig": mean_nonsig,
+                "drop_sig": baseline_mean_sig - mean_sig,
+                "drop_nonsig": baseline_mean_nonsig - mean_nonsig,
+            }
+        )
 
     df = pd.DataFrame(rows)
     csv_path = os.path.join(partial_rrr_dir, "summary.csv")
@@ -226,11 +231,15 @@ def _save_partial_rrr_results(
     print(f"\nSaved partial_rrr_results.npz and summary.csv ({len(rows)} rows)")
     print(f"  Baseline mean corr (sig):     {baseline_mean_sig:.4f}")
     print(f"  Baseline mean corr (non-sig): {baseline_mean_nonsig:.4f}")
-    print(f"\n  {'k':>5s}  {'corr_sig':>10s}  {'corr_nonsig':>12s}  {'drop_sig':>10s}  {'drop_nonsig':>12s}")
+    print(
+        f"\n  {'k':>5s}  {'corr_sig':>10s}  {'corr_nonsig':>12s}  {'drop_sig':>10s}  {'drop_nonsig':>12s}"
+    )
     print(f"  {'-'*55}")
     for _, row in df.iterrows():
-        print(f"  {int(row['rank_k']):>5d}  {row['mean_corr_sig']:>10.4f}  {row['mean_corr_nonsig']:>12.4f}"
-              f"  {row['drop_sig']:>+10.4f}  {row['drop_nonsig']:>+12.4f}")
+        print(
+            f"  {int(row['rank_k']):>5d}  {row['mean_corr_sig']:>10.4f}  {row['mean_corr_nonsig']:>12.4f}"
+            f"  {row['drop_sig']:>+10.4f}  {row['drop_nonsig']:>+12.4f}"
+        )
 
     return df
 
@@ -238,6 +247,7 @@ def _save_partial_rrr_results(
 # ---------------------------------------------------------------------------
 # Plotting
 # ---------------------------------------------------------------------------
+
 
 def _generate_plots(
     partial_rrr_dir,
@@ -253,7 +263,9 @@ def _generate_plots(
     # -- Main sweep plot --
     print("\nGenerating sweep plot...")
     plot_partial_rrr_sweep(
-        all_results, baseline_corrs, sig_mask,
+        all_results,
+        baseline_corrs,
+        sig_mask,
         title="Partial RRR sweep",
         save_path=os.path.join(partial_rrr_dir, "sweep.png"),
     )
@@ -270,14 +282,13 @@ def _generate_plots(
         sig_mask_sub = sig_mask[sub_rows]
         baseline_sub = baseline_corrs[:, sub_rows, :]
 
-        sub_results = {
-            k: corrs[:, sub_rows, :]
-            for k, corrs in all_results.items()
-        }
+        sub_results = {k: corrs[:, sub_rows, :] for k, corrs in all_results.items()}
 
         print(f"  Generating subject {sub_id} sweep plot...")
         plot_partial_rrr_sweep(
-            sub_results, baseline_sub, sig_mask_sub,
+            sub_results,
+            baseline_sub,
+            sig_mask_sub,
             title=f"Subject {sub_id}: partial RRR sweep",
             save_path=os.path.join(sub_dir, "sweep.png"),
         )
@@ -287,14 +298,19 @@ def _generate_plots(
         print("\nBuilding electrode region map for plotting...")
         enc = config.encoding
         electrode_region_map = build_electrode_region_map(
-            subject_ids, enc.data_root, config.atlas_region_groups, config.atlas_path,
+            subject_ids,
+            enc.data_root,
+            config.atlas_region_groups,
+            config.atlas_path,
         )
 
         for region_name, sub_elec_map in electrode_region_map.items():
             region_rows = []
             for sub_id, elec_list in sub_elec_map.items():
                 elec_set = set(elec_list)
-                for row_i in metadata_df.index[metadata_df["subject"] == sub_id].tolist():
+                for row_i in metadata_df.index[
+                    metadata_df["subject"] == sub_id
+                ].tolist():
                     if metadata_df.loc[row_i, "electrode"] in elec_set:
                         region_rows.append(row_i)
 
@@ -308,13 +324,14 @@ def _generate_plots(
             baseline_region = baseline_corrs[:, region_rows, :]
 
             region_results = {
-                k: corrs[:, region_rows, :]
-                for k, corrs in all_results.items()
+                k: corrs[:, region_rows, :] for k, corrs in all_results.items()
             }
 
             print(f"  Generating region {region_name} sweep plot...")
             plot_partial_rrr_sweep(
-                region_results, baseline_region, sig_mask_region,
+                region_results,
+                baseline_region,
+                sig_mask_region,
                 title=f"Region {region_name}: partial RRR sweep",
                 save_path=os.path.join(region_dir, "sweep.png"),
             )
@@ -324,12 +341,21 @@ def _generate_plots(
 # Branch: cross-subject
 # ---------------------------------------------------------------------------
 
+
 def _run_cross_subject(
-    config, enc, output_dir, partial_rrr_dir, subject_ids,
-    sig_electrodes, aligned_embeddings, df_word,
+    config,
+    enc,
+    output_dir,
+    partial_rrr_dir,
+    subject_ids,
+    sig_electrodes,
+    aligned_embeddings,
+    df_word,
 ):
     """Partial RRR using all subjects' significant electrodes."""
-    subs_with_sig = [s for s in subject_ids if s in sig_electrodes and sig_electrodes[s]]
+    subs_with_sig = [
+        s for s in subject_ids if s in sig_electrodes and sig_electrodes[s]
+    ]
     if not subs_with_sig:
         print("  No significant electrodes found; skipping.")
         return
@@ -337,7 +363,11 @@ def _run_cross_subject(
     print(f"\nSubjects with significant electrodes: {subs_with_sig}")
     print("Building combined X, Y from all subjects...")
     X, Y = build_XY_from_subjects(
-        subject_ids, enc, sig_electrodes, aligned_embeddings, df_word,
+        subject_ids,
+        enc,
+        sig_electrodes,
+        aligned_embeddings,
+        df_word,
     )
     print(f"  X: {X.shape}, Y: {Y.shape}")
 
@@ -347,7 +377,8 @@ def _run_cross_subject(
     # Load baseline correlations
     print("Loading baseline correlations...")
     baseline_corrs, metadata_df = load_all_subject_correlations(
-        output_dir, subjects=subs_with_sig,
+        output_dir,
+        subjects=subs_with_sig,
     )
     n_elecs = baseline_corrs.shape[1]
     n_lags = baseline_corrs.shape[2]
@@ -365,21 +396,35 @@ def _run_cross_subject(
     # Run sweep
     print("\nStarting partial RRR sweep...")
     all_results = _run_partial_rrr_sweep(
-        partial_rrr_dir, X, Y, rrr_source_dir, provided_idxs,
-        n_elecs, n_lags, config.rank_grid,
+        partial_rrr_dir,
+        X,
+        Y,
+        rrr_source_dir,
+        provided_idxs,
+        n_elecs,
+        n_lags,
+        config.rank_grid,
     )
 
     # Save results
     print("\nSaving results...")
     _save_partial_rrr_results(
-        partial_rrr_dir, all_results, baseline_corrs, sig_mask,
+        partial_rrr_dir,
+        all_results,
+        baseline_corrs,
+        sig_mask,
     )
 
     # Generate plots
     print("\nGenerating plots...")
     _generate_plots(
-        partial_rrr_dir, all_results, baseline_corrs, sig_mask,
-        metadata_df, config, subs_with_sig,
+        partial_rrr_dir,
+        all_results,
+        baseline_corrs,
+        sig_mask,
+        metadata_df,
+        config,
+        subs_with_sig,
     )
 
 
@@ -387,9 +432,16 @@ def _run_cross_subject(
 # Branch: per-subject
 # ---------------------------------------------------------------------------
 
+
 def _run_per_subject(
-    config, enc, output_dir, partial_rrr_dir, subject_ids,
-    sig_electrodes, aligned_embeddings, df_word,
+    config,
+    enc,
+    output_dir,
+    partial_rrr_dir,
+    subject_ids,
+    sig_electrodes,
+    aligned_embeddings,
+    df_word,
 ):
     """Partial RRR independently per subject."""
     n_subjects = len(subject_ids)
@@ -410,17 +462,23 @@ def _run_per_subject(
         # Load data for this subject
         print("  Loading neural data...")
         enc_results = load_encoding_results(
-            os.path.join(output_dir, "subjects", f"sub_{sub_id}", "encoding_results.joblib")
+            os.path.join(
+                output_dir, "subjects", f"sub_{sub_id}", "encoding_results.joblib"
+            )
         )
         test_idxs = enc_results["test_idxs"]
 
         raws = load_raws(
-            [sub_id], enc.data_root, use_high_gamma=True,
+            [sub_id],
+            enc.data_root,
+            use_high_gamma=True,
             per_subject_electrodes={sub_id: sub_sig_elecs},
         )
         raw = raws[0]
         epochs, data = build_word_epochs(raw, df_word)
-        X_arr, Y_sub = apply_offset(aligned_embeddings[epochs.selection], data, enc.offset)
+        X_arr, Y_sub = apply_offset(
+            aligned_embeddings[epochs.selection], data, enc.offset
+        )
         del raws, raw, epochs, data
         gc.collect()
 
@@ -441,7 +499,8 @@ def _run_per_subject(
         # Load baseline correlations for this subject
         print("  Loading baseline correlations...")
         baseline_corrs, metadata_df = load_all_subject_correlations(
-            output_dir, subjects=[sub_id],
+            output_dir,
+            subjects=[sub_id],
         )
         print(f"  Baseline corrs: {baseline_corrs.shape}")
 
@@ -456,23 +515,36 @@ def _run_per_subject(
         if rrr_source_dir:
             rrr_source_dir = os.path.join(rrr_source_dir, "subjects", f"sub_{sub_id}")
         else:
-            rrr_source_dir = os.path.join(output_dir, "per_subject_rrr", "subjects", f"sub_{sub_id}")
+            rrr_source_dir = os.path.join(
+                output_dir, "per_subject_rrr", "subjects", f"sub_{sub_id}"
+            )
 
         # Run sweep
         print("\n  Starting partial RRR sweep...")
         sub_start = time.time()
         all_results = _run_partial_rrr_sweep(
-            sub_out_dir, X_arr, Y_sub, rrr_source_dir, provided_idxs,
-            n_elecs_sub, n_lags, config.rank_grid,
+            sub_out_dir,
+            X_arr,
+            Y_sub,
+            rrr_source_dir,
+            provided_idxs,
+            n_elecs_sub,
+            n_lags,
+            config.rank_grid,
         )
 
         _save_partial_rrr_results(
-            sub_out_dir, all_results, baseline_corrs, sig_mask,
+            sub_out_dir,
+            all_results,
+            baseline_corrs,
+            sig_mask,
         )
 
         # Simple sweep plot (no sub-breakdowns for per-subject mode)
         plot_partial_rrr_sweep(
-            all_results, baseline_corrs, sig_mask,
+            all_results,
+            baseline_corrs,
+            sig_mask,
             title=f"Subject {sub_id}: partial RRR sweep",
             save_path=os.path.join(sub_out_dir, "sweep.png"),
         )
@@ -483,9 +555,16 @@ def _run_per_subject(
 # Branch: per-region
 # ---------------------------------------------------------------------------
 
+
 def _run_per_region(
-    config, enc, output_dir, partial_rrr_dir, subject_ids,
-    sig_electrodes, aligned_embeddings, df_word,
+    config,
+    enc,
+    output_dir,
+    partial_rrr_dir,
+    subject_ids,
+    sig_electrodes,
+    aligned_embeddings,
+    df_word,
 ):
     """Partial RRR independently per atlas region."""
     print("Loading fold indices...")
@@ -493,7 +572,8 @@ def _run_per_region(
 
     print("Building electrode region map...")
     electrode_region_map = build_electrode_region_map(
-        subject_ids, enc.data_root,
+        subject_ids,
+        enc.data_root,
         getattr(config, "atlas_region_groups", None),
         getattr(config, "atlas_path", None),
     )
@@ -513,29 +593,38 @@ def _run_per_region(
             sub_id: [e for e in elecs if e in set(sig_electrodes.get(sub_id, []))]
             for sub_id, elecs in sub_elec_map.items()
         }
-        per_subject_region_elecs = {s: e for s, e in per_subject_region_elecs.items() if e}
+        per_subject_region_elecs = {
+            s: e for s, e in per_subject_region_elecs.items() if e
+        }
 
         if not per_subject_region_elecs:
             print(f"  No significant electrodes in region; skipping.")
             continue
 
         total_elecs = sum(len(e) for e in per_subject_region_elecs.values())
-        print(f"  Subjects: {list(per_subject_region_elecs.keys())}, "
-              f"Electrodes: {total_elecs}")
+        print(
+            f"  Subjects: {list(per_subject_region_elecs.keys())}, "
+            f"Electrodes: {total_elecs}"
+        )
 
         os.makedirs(region_out_dir, exist_ok=True)
 
         print("  Building X, Y...")
         subs_in_region = list(per_subject_region_elecs.keys())
         X, Y = build_XY_from_subjects(
-            subs_in_region, enc, per_subject_region_elecs, aligned_embeddings, df_word,
+            subs_in_region,
+            enc,
+            per_subject_region_elecs,
+            aligned_embeddings,
+            df_word,
         )
         print(f"  X: {X.shape}, Y: {Y.shape}")
 
         # Load baseline correlations for this region's subjects/electrodes
         print("  Loading baseline correlations...")
         baseline_corrs, metadata_df = load_all_subject_correlations(
-            output_dir, subjects=subs_in_region,
+            output_dir,
+            subjects=subs_in_region,
         )
 
         # Filter to only this region's electrodes
@@ -567,22 +656,35 @@ def _run_per_region(
         if rrr_source_dir:
             rrr_source_dir = os.path.join(rrr_source_dir, "regions", region_name)
         else:
-            rrr_source_dir = os.path.join(output_dir, "per_region_rrr", "regions", region_name)
+            rrr_source_dir = os.path.join(
+                output_dir, "per_region_rrr", "regions", region_name
+            )
 
         # Run sweep
         print("\n  Starting partial RRR sweep...")
         region_start = time.time()
         all_results = _run_partial_rrr_sweep(
-            region_out_dir, X, Y, rrr_source_dir, provided_idxs,
-            n_elecs_region, n_lags, config.rank_grid,
+            region_out_dir,
+            X,
+            Y,
+            rrr_source_dir,
+            provided_idxs,
+            n_elecs_region,
+            n_lags,
+            config.rank_grid,
         )
 
         _save_partial_rrr_results(
-            region_out_dir, all_results, baseline_region, sig_mask_region,
+            region_out_dir,
+            all_results,
+            baseline_region,
+            sig_mask_region,
         )
 
         plot_partial_rrr_sweep(
-            all_results, baseline_region, sig_mask_region,
+            all_results,
+            baseline_region,
+            sig_mask_region,
             title=f"Region {region_name}: partial RRR sweep",
             save_path=os.path.join(region_out_dir, "sweep.png"),
         )
@@ -592,6 +694,7 @@ def _run_per_region(
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
+
 
 def main():
     args, overrides = parse_args("Partial RRR: subspace importance via partialling")
@@ -614,7 +717,7 @@ def main():
     os.makedirs(partial_rrr_dir, exist_ok=True)
     print(f"Output dir:         {output_dir}")
     print(f"Partial RRR dir:    {partial_rrr_dir}")
-    print(f"Mode:               {config.mode.value}")
+    print(f"Mode:               {config.mode}")
     print(f"Rank grid:          {config.rank_grid or 'auto-discover'}")
     print(f"Subjects:           {subject_ids}")
 
@@ -630,10 +733,14 @@ def main():
     print(f"  Embeddings: {aligned_embeddings.shape}")
 
     branch_kwargs = dict(
-        config=config, enc=enc, output_dir=output_dir,
-        partial_rrr_dir=partial_rrr_dir, subject_ids=subject_ids,
+        config=config,
+        enc=enc,
+        output_dir=output_dir,
+        partial_rrr_dir=partial_rrr_dir,
+        subject_ids=subject_ids,
         sig_electrodes=sig_electrodes,
-        aligned_embeddings=aligned_embeddings, df_word=df_word,
+        aligned_embeddings=aligned_embeddings,
+        df_word=df_word,
     )
 
     if config.mode == SVDMode.PER_REGION:

@@ -1,0 +1,13 @@
+encoding:
+  data_root: data/
+  model: gpt2xl
+  layer: 24
+  offset: 0
+  subjects: null
+  run_name: null
+  batch: false
+output_dir: null
+partial_rrr_output_dir: null
+rrr_source_dir: null
+mode: per_subject
+rank_grid: null  # null discovers all ranks from RRR output; set list to filter

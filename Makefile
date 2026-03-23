@@ -7,17 +7,17 @@ PREFIX   = significance
 JOB_NAME ?= "$(PREFIX)-$(USR)-$(DT)"
 
 # Flip to `python` to run locally instead of submitting to Slurm
-CMD = sbatch --job-name=$(JOB_NAME) submit.sh
-# CMD = python
+# CMD = sbatch --job-name=$(JOB_NAME) submit.sh
+CMD = python
 
 export PYTHONPATH := $(CURDIR)
 
 # ── Config defaults (override on the command line) ────────────────────────────
-ENCODING_CONFIG ?= configs/encoding_mid.yml
-SIG_CONFIG      ?= configs/significance_default.yml
-SVD_CONFIG      ?= configs/svd_default.yml
-SRRR_CONFIG     ?= configs/srrr_default.yml
-RRR_CONFIG      ?= configs/rrr_default.yml
+ENCODING_CONFIG ?= configs/encoding/encoding_mid.yml
+SIG_CONFIG      ?= configs/significance/significance_default.yml
+SVD_CONFIG      ?= configs/svd/svd_default.yml
+SRRR_CONFIG     ?= configs/srrr/srrr_default.yml
+RRR_CONFIG      ?= configs/rrr/rrr_default.yml
 RUN_DIR         ?=   # required for plots: RUN_DIR=results/my_run
 DATA_ROOT       ?= data
 ATLAS_PATH      ?= atlases/destrieux_2009/destrieux2009_rois_lateralized.nii.gz
@@ -58,7 +58,7 @@ plots:
 ## Run SVD analysis on encoding model weights
 ## Usage:
 ##   make svd                                                          # default config
-##   make svd SVD_CONFIG=configs/svd_default.yml                      # explicit config
+##   make svd SVD_CONFIG=configs/svd/svd_default.yml                      # explicit config
 ##   make svd OVERRIDES="--per_subject_svd=true"                      # per-subject mode
 ##   make svd CMD=python                                               # run locally
 svd:
@@ -68,7 +68,7 @@ svd:
 ## Run SRRR analysis to find minimal subset of SVD directions
 ## Usage:
 ##   make srrr                                                         # default config
-##   make srrr SRRR_CONFIG=configs/srrr_default.yml                   # explicit config
+##   make srrr SRRR_CONFIG=configs/srrr/srrr_default.yml                   # explicit config
 ##   make srrr OVERRIDES="--mode=per_subject"                         # per-subject mode
 ##   make srrr CMD=python                                              # run locally
 srrr:
@@ -78,7 +78,7 @@ srrr:
 ## Run RRR analysis (raw-input baseline: no SVD projection)
 ## Usage:
 ##   make rrr                                                          # default config
-##   make rrr RRR_CONFIG=configs/rrr_per_subject.yml                  # per-subject mode
+##   make rrr RRR_CONFIG=configs/rrr/rrr_default.yml                  # per-subject mode
 ##   make rrr OVERRIDES="--mode=per_region"                           # per-region mode
 ##   make rrr CMD=python                                               # run locally
 rrr:
@@ -103,7 +103,7 @@ partial-svd:
 ##   make partial-rrr PARTIAL_RRR_CONFIG=configs/partial_rrr_default.yml  # explicit config
 ##   make partial-rrr OVERRIDES="--mode=per_subject"                      # per-subject mode
 ##   make partial-rrr CMD=python                                           # run locally
-PARTIAL_RRR_CONFIG ?= configs/partial_rrr_default.yml
+PARTIAL_RRR_CONFIG ?= configs/partial_rrr/partial_rrr_default.yml
 
 partial-rrr:
 	mkdir -p logs
@@ -112,11 +112,11 @@ partial-rrr:
 ## Run SAE analysis (sparse autoencoder on RRR-projected embeddings)
 ## Usage:
 ##   make sae                                                               # default config
-##   make sae SAE_CONFIG=configs/sae_default.yml                           # explicit config
+##   make sae SAE_CONFIG=configs/sae/sae_default.yml                           # explicit config
 ##   make sae OVERRIDES="--k=20 --hidden_dim=100"                          # override params
 ##   make sae OVERRIDES="--mode=per_subject --max_subjects=3"              # limit subjects
 ##   make sae CMD=python                                                    # run locally
-SAE_CONFIG ?= configs/sae_default.yml
+SAE_CONFIG ?= configs/sae/sae_default.yml
 
 sae:
 	mkdir -p logs

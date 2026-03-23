@@ -124,7 +124,7 @@ def _run_sae_for_unit(
         test_idx = baseline["test_idx"]
 
         X_proj_train = X_raw[train_idx] @ A  # (n_train, k)
-        X_proj_test = X_raw[test_idx] @ A    # (n_test, k)
+        X_proj_test = X_raw[test_idx] @ A  # (n_test, k)
         Y_train = baseline["Y_train"]
         Y_test = baseline["Y_test"]
         Y_hat_full = baseline["Y_hat_full_test"]
@@ -134,7 +134,10 @@ def _run_sae_for_unit(
         # Train SAE + regression
         if config.training_mode == "alternating":
             result = train_sae_alternating(
-                X_proj_train, Y_train, X_proj_test, Y_test,
+                X_proj_train,
+                Y_train,
+                X_proj_test,
+                Y_test,
                 hidden_dim=config.hidden_dim,
                 l1_penalty=config.l1_penalty,
                 regression_type=config.regression_type,
@@ -152,7 +155,10 @@ def _run_sae_for_unit(
             )
         else:
             result = train_sae_end_to_end(
-                X_proj_train, Y_train, X_proj_test, Y_test,
+                X_proj_train,
+                Y_train,
+                X_proj_test,
+                Y_test,
                 hidden_dim=config.hidden_dim,
                 l1_penalty=config.l1_penalty,
                 lr=config.learning_rate,
@@ -179,12 +185,22 @@ def _run_sae_for_unit(
 
             # RRR-direct baseline: regress from k-dim projected space to Y
             # using the same regression approach as the SAE pipeline
-            regression_type = config.regression_type if config.training_mode == "alternating" else "ridge"
+            regression_type = (
+                config.regression_type
+                if config.training_mode == "alternating"
+                else "ridge"
+            )
             device = "cuda" if torch.cuda.is_available() else "cpu"
-            X_proj_train_t = torch.as_tensor(X_proj_train, dtype=torch.float32, device=device)
-            X_proj_test_t = torch.as_tensor(X_proj_test, dtype=torch.float32, device=device)
+            X_proj_train_t = torch.as_tensor(
+                X_proj_train, dtype=torch.float32, device=device
+            )
+            X_proj_test_t = torch.as_tensor(
+                X_proj_test, dtype=torch.float32, device=device
+            )
             Y_train_t = torch.as_tensor(Y_train, dtype=torch.float32, device=device)
-            rrr_W, rrr_b = solve_regression(X_proj_train_t, Y_train_t, regression_type, device)
+            rrr_W, rrr_b = solve_regression(
+                X_proj_train_t, Y_train_t, regression_type, device
+            )
             Y_hat_rrr = (X_proj_test_t @ rrr_W + rrr_b).cpu().numpy()
             per_target_corr_rrr = compute_correlation(Y_test, Y_hat_rrr)
             fold_corrs_rrr.append(per_target_corr_rrr.reshape(n_electrodes, n_lags))
@@ -199,6 +215,9 @@ def _run_sae_for_unit(
             Y_hat_min=Y_hat_sae,
             null_r2=None,
             model_constructor_fn=get_ridge_model_constructor,
+        )
+        print(
+            f"  Recovery test R²: {suf['recovery_r2']:.4f}, corr: {suf['recovery_corr']:.4f}"
         )
 
         # Load RRR baseline metrics at same k for comparison
@@ -226,8 +245,12 @@ def _run_sae_for_unit(
         fold_dir = os.path.join(sae_unit_dir, f"k{k}", f"fold_{fold_f}")
         os.makedirs(fold_dir, exist_ok=True)
 
-        torch.save(result["encoder_state_dict"], os.path.join(fold_dir, "sae_weights.pt"))
-        np.save(os.path.join(fold_dir, "regression_weights.npy"), result["regressor_weight"])
+        torch.save(
+            result["encoder_state_dict"], os.path.join(fold_dir, "sae_weights.pt")
+        )
+        np.save(
+            os.path.join(fold_dir, "regression_weights.npy"), result["regressor_weight"]
+        )
 
         # Save metrics (scalars + activation_frequency array)
         npz_metrics = {mk: mv for mk, mv in metrics.items()}
@@ -239,6 +262,7 @@ def _run_sae_for_unit(
         log_df.to_csv(os.path.join(fold_dir, "training_log.csv"), index=False)
 
         from utils.plotting import plot_sae_training_curves
+
         plot_sae_training_curves(
             result["training_log"],
             title=f"SAE training — k={k}, fold {fold_f}",
@@ -259,13 +283,18 @@ def _run_sae_for_unit(
     # Correlation timecourse plot: SAE vs RRR-direct vs full model
     if n_electrodes is not None and fold_corrs_sae:
         from utils.plotting import plot_sae_corrs_vs_full
-        corrs_sae = np.stack(fold_corrs_sae, axis=0)   # (n_folds, n_electrodes, n_lags)
-        corrs_full = np.stack(fold_corrs_full, axis=0)  # (n_folds, n_electrodes, n_lags)
-        corrs_rrr = np.stack(fold_corrs_rrr, axis=0)    # (n_folds, n_electrodes, n_lags)
+
+        corrs_sae = np.stack(fold_corrs_sae, axis=0)  # (n_folds, n_electrodes, n_lags)
+        corrs_full = np.stack(
+            fold_corrs_full, axis=0
+        )  # (n_folds, n_electrodes, n_lags)
+        corrs_rrr = np.stack(fold_corrs_rrr, axis=0)  # (n_folds, n_electrodes, n_lags)
         n_lags = corrs_sae.shape[2]
         lags = np.linspace(-2.0, 2.0, n_lags, endpoint=False)
         plot_sae_corrs_vs_full(
-            corrs_sae, corrs_full, lags,
+            corrs_sae,
+            corrs_full,
+            lags,
             corrs_rrr=corrs_rrr,
             title=f"SAE vs RRR vs full model — k={k}",
             save_path=os.path.join(sae_unit_dir, "corrs_sae_vs_full.png"),
@@ -468,9 +497,7 @@ def _run_per_region_sae(
             continue
 
         subs_in_region = list(per_subject_region_elecs.keys())
-        region_n_electrodes = sum(
-            len(e) for e in per_subject_region_elecs.values()
-        )
+        region_n_electrodes = sum(len(e) for e in per_subject_region_elecs.values())
         X_ref, Y_full = build_XY_from_subjects(
             subs_in_region,
             enc,
@@ -548,6 +575,7 @@ def main():
     # Save config for reproducibility
     config_save_path = os.path.join(sae_dir, "config.yml")
     from dataclasses import asdict
+
     with open(config_save_path, "w") as f:
         yaml.dump(asdict(config), f, default_flow_style=False)
 
