@@ -793,6 +793,36 @@ def plot_corrs_vs_arbitrary(corrs, corrs_arb, lags, save_path=None):
         plt.show()
 
 
+def plot_sae_corrs_vs_full(corrs_sae, corrs_full, lags, title=None, save_path=None):
+    """Plot SAE correlation timecourse vs full encoding model baseline.
+
+    Args:
+        corrs_sae: (n_folds, n_electrodes, n_lags) SAE per-target correlations.
+        corrs_full: (n_folds, n_electrodes, n_lags) full model per-target correlations.
+        lags: 1-D array of lag values (seconds).
+        title: Optional plot title.
+        save_path: If given, save figure here; otherwise call plt.show().
+    """
+    import matplotlib.pyplot as plt
+
+    fig, ax = plt.subplots(figsize=(8, 4))
+    add_corrs(corrs_full, lags, label="Full model", color="blue", ax=ax)
+    add_corrs(corrs_sae, lags, label="SAE", color="orange", ax=ax)
+    ax.axhline(0, color="black", linewidth=0.5)
+    ax.set_xlabel("Lag (s)")
+    ax.set_ylabel("Correlation")
+    if title:
+        ax.set_title(title)
+    ax.legend()
+    fig.tight_layout()
+
+    if save_path is not None:
+        fig.savefig(save_path, dpi=150)
+        plt.close(fig)
+    else:
+        plt.show()
+
+
 def plot_sae_training_curves(training_log, title="SAE training", save_path=None):
     """Multi-panel figure of SAE training metrics vs epoch/cycle.
 

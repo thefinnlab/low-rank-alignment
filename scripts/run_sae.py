@@ -82,6 +82,7 @@ def _run_sae_for_unit(
     test_idxs: list,
     per_fold_baselines: list,
     config: SAEConfig,
+    n_electrodes: int | None = None,
 ) -> pd.DataFrame:
     """Core SAE loop for one analysis unit (cross-subject, per-subject, or per-region).
 
@@ -92,6 +93,8 @@ def _run_sae_for_unit(
         test_idxs: List of test index arrays, one per fold.
         per_fold_baselines: Output of build_per_fold_baselines.
         config: SAEConfig.
+        n_electrodes: Number of electrodes (for reshaping per-target correlations
+            into (n_electrodes, n_lags) for the timecourse plot). None to skip plot.
 
     Returns:
         DataFrame of per-fold metrics for grid_results.csv.
@@ -101,6 +104,8 @@ def _run_sae_for_unit(
     n_folds = len(test_idxs)
     k = config.k
     all_rows = []
+    fold_corrs_sae = []
+    fold_corrs_full = []
 
     for fold_f in range(n_folds):
         fold_start = time.time()
@@ -154,6 +159,15 @@ def _run_sae_for_unit(
 
         Y_hat_sae = result["Y_hat_test"]
         Y_hat_sae_train = result["Y_hat_train"]
+
+        # Per-target correlations for timecourse plot
+        if n_electrodes is not None:
+            n_targets = Y_test.shape[1]
+            n_lags = n_targets // n_electrodes
+            per_target_corr_sae = compute_correlation(Y_test, Y_hat_sae)
+            per_target_corr_full = compute_correlation(Y_test, Y_hat_full)
+            fold_corrs_sae.append(per_target_corr_sae.reshape(n_electrodes, n_lags))
+            fold_corrs_full.append(per_target_corr_full.reshape(n_electrodes, n_lags))
 
         # Recovery test: partial out SAE predictions and retrain ridge on residuals
         suf = run_sufficiency_test(
@@ -222,6 +236,22 @@ def _run_sae_for_unit(
     summary = df[agg_cols].mean().to_frame().T
     summary.to_csv(os.path.join(sae_unit_dir, "summary.csv"), index=False)
 
+    # Correlation timecourse plot: SAE vs full model
+    if n_electrodes is not None and fold_corrs_sae:
+        from utils.plotting import plot_sae_corrs_vs_full
+        corrs_sae = np.stack(fold_corrs_sae, axis=0)   # (n_folds, n_electrodes, n_lags)
+        corrs_full = np.stack(fold_corrs_full, axis=0)  # (n_folds, n_electrodes, n_lags)
+        n_lags = corrs_sae.shape[2]
+        lags = np.linspace(-2.0, 2.0, n_lags, endpoint=False)
+        plot_sae_corrs_vs_full(
+            corrs_sae, corrs_full, lags,
+            title=f"SAE vs full model — k={k}",
+            save_path=os.path.join(sae_unit_dir, "corrs_sae_vs_full.png"),
+        )
+        # Save correlation arrays for downstream use
+        np.save(os.path.join(sae_unit_dir, "corrs_sae.npy"), corrs_sae)
+        np.save(os.path.join(sae_unit_dir, "corrs_full.npy"), corrs_full)
+
     return df
 
 
@@ -263,6 +293,7 @@ def _run_cross_subject_sae(
         aligned_embeddings,
         df_word,
     )
+    total_electrodes = sum(len(sig_electrodes[s]) for s in subs_with_sig)
     print(f"  X: {X_ref.shape}, Y: {Y_full.shape}")
 
     enc_subjects_info = build_enc_subjects_info(
@@ -279,6 +310,7 @@ def _run_cross_subject_sae(
         test_idxs=ref_test_idxs,
         per_fold_baselines=per_fold_baselines,
         config=config,
+        n_electrodes=total_electrodes,
     )
 
 
@@ -328,6 +360,7 @@ def _run_per_subject_sae(
         )
         raw = raws[0]
         epochs, data = build_word_epochs(raw, df_word)
+        n_elecs_sub = data.shape[1]
         X_arr, Y_sub = apply_offset(
             aligned_embeddings[epochs.selection], data, enc.offset
         )
@@ -351,6 +384,7 @@ def _run_per_subject_sae(
             test_idxs=test_idxs,
             per_fold_baselines=per_fold_baselines,
             config=config,
+            n_electrodes=n_elecs_sub,
         )
 
 
@@ -411,6 +445,9 @@ def _run_per_region_sae(
             continue
 
         subs_in_region = list(per_subject_region_elecs.keys())
+        region_n_electrodes = sum(
+            len(e) for e in per_subject_region_elecs.values()
+        )
         X_ref, Y_full = build_XY_from_subjects(
             subs_in_region,
             enc,
@@ -434,6 +471,7 @@ def _run_per_region_sae(
             test_idxs=ref_test_idxs,
             per_fold_baselines=per_fold_baselines,
             config=config,
+            n_electrodes=region_n_electrodes,
         )
 
 

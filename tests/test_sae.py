@@ -570,6 +570,18 @@ class TestComputeL1:
 # TestWeightedL1Integration
 # ---------------------------------------------------------------------------
 
+class TestPlotSAECorrsVsFull:
+    def test_saves_png(self, tmp_path, rng):
+        from utils.plotting import plot_sae_corrs_vs_full
+        n_folds, n_electrodes, n_lags = 2, 5, 10
+        corrs_sae = rng.standard_normal((n_folds, n_electrodes, n_lags)).astype(np.float32)
+        corrs_full = rng.standard_normal((n_folds, n_electrodes, n_lags)).astype(np.float32)
+        lags = np.linspace(-2.0, 2.0, n_lags, endpoint=False)
+        save_path = str(tmp_path / "corrs_plot.png")
+        plot_sae_corrs_vs_full(corrs_sae, corrs_full, lags, save_path=save_path)
+        assert os.path.exists(save_path)
+
+
 class TestWeightedL1Integration:
     def test_end_to_end_with_weighted_l1(self, structured_data):
         X, Y = structured_data
