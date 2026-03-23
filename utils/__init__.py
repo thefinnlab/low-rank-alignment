@@ -49,6 +49,7 @@ from utils.plotting import (
     plot_partial_svd_lag_heatmap,
     plot_partial_rrr_sweep,
     plot_sae_training_curves,
+    plot_sae_recovery_summary,
 )
 from utils.significance import (
     batch_corrcoef,
@@ -168,6 +169,7 @@ __all__ = [
     "plot_partial_svd_lag_heatmap",
     "plot_partial_rrr_sweep",
     "plot_sae_training_curves",
+    "plot_sae_recovery_summary",
     # significance
     "batch_corrcoef",
     "significant_lags_all_electrodes_gpu",

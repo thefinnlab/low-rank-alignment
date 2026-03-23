@@ -1209,12 +1209,15 @@ def plot_sae_corrs_vs_full(corrs_sae, corrs_full, lags, corrs_rrr=None,
         plt.show()
 
 
-def plot_sae_training_curves(training_log, title="SAE training", save_path=None):
+def plot_sae_training_curves(training_log, title="SAE training", save_path=None,
+                             rrr_recovery_corr=None):
     """Multi-panel figure of SAE training metrics vs epoch/cycle.
 
-    Panels (2 rows x 3 columns):
+    Panels (up to 3 rows x 3 columns):
         Row 1: Loss components, Test R², Test correlation.
         Row 2: L0 sparsity, Dead neuron fraction, Mean activation.
+        Row 3: Recovery correlation (sufficiency test during training).
+            Only shown when training log contains recovery_corr.
 
     Rows with None test/SAE metrics (skipped by log_every) are omitted from
     panels that use those columns.
@@ -1223,9 +1226,12 @@ def plot_sae_training_curves(training_log, title="SAE training", save_path=None)
         training_log: List of dicts from train_sae_end_to_end or
             train_sae_alternating.  Each dict has keys like epoch/cycle,
             mse_loss, l1_loss, total_loss, test_r2, test_corr, l0_sparsity,
-            dead_neurons, mean_activation.
+            dead_neurons, mean_activation.  Optionally recovery_corr,
+            recovery_r2 when a log_callback was provided during training.
         title: Figure title.
         save_path: If given, save figure here and close; otherwise return Figure.
+        rrr_recovery_corr: If given, draw a horizontal dashed line at this value
+            in the recovery correlation panel (RRR baseline for comparison).
 
     Returns:
         matplotlib Figure when save_path is None, else None.
@@ -1237,7 +1243,13 @@ def plot_sae_training_curves(training_log, title="SAE training", save_path=None)
     step_col = "epoch" if "epoch" in df.columns else "cycle"
     steps = df[step_col]
 
-    fig, axes = plt.subplots(2, 3, figsize=(15, 8))
+    # Determine whether row 3 (recovery) is needed
+    has_recovery = "recovery_corr" in df.columns
+    df_recovery = df.dropna(subset=["recovery_corr"]) if has_recovery else pd.DataFrame()
+    show_row3 = len(df_recovery) > 0
+
+    n_rows = 3 if show_row3 else 2
+    fig, axes = plt.subplots(n_rows, 3, figsize=(15, 4 * n_rows))
     fig.suptitle(title, fontsize=12)
 
     # Row 1, Panel 1: Loss components
@@ -1309,6 +1321,113 @@ def plot_sae_training_curves(training_log, title="SAE training", save_path=None)
     else:
         for ax in axes[1, :]:
             ax.set_visible(False)
+
+    # Row 3: Recovery correlation (sufficiency test during training)
+    if show_row3:
+        recovery_steps = df_recovery[step_col]
+
+        # Panel 1: Recovery correlation
+        ax = axes[2, 0]
+        ax.plot(recovery_steps, df_recovery["recovery_corr"],
+                marker=".", markersize=3, linewidth=1, color="tab:purple",
+                label="SAE recovery corr")
+        if rrr_recovery_corr is not None and not np.isnan(rrr_recovery_corr):
+            ax.axhline(rrr_recovery_corr, color="tab:gray", linestyle="--",
+                        linewidth=1.5, label="RRR recovery corr")
+        ax.set_xlabel(step_col)
+        ax.set_ylabel("recovery corr")
+        ax.set_title("Sufficiency: recovery correlation")
+        ax.legend(fontsize=8)
+        ax.grid(True, alpha=0.3)
+
+        # Panel 2: Recovery R²
+        if "recovery_r2" in df_recovery.columns:
+            ax = axes[2, 1]
+            ax.plot(recovery_steps, df_recovery["recovery_r2"],
+                    marker=".", markersize=3, linewidth=1, color="tab:purple")
+            ax.set_xlabel(step_col)
+            ax.set_ylabel("recovery R²")
+            ax.set_title("Sufficiency: recovery R²")
+            ax.grid(True, alpha=0.3)
+        else:
+            axes[2, 1].set_visible(False)
+
+        # Panel 3: unused
+        axes[2, 2].set_visible(False)
+
+    fig.tight_layout()
+
+    if save_path is not None:
+        fig.savefig(save_path, dpi=150)
+        plt.close(fig)
+    else:
+        return fig
+
+
+def plot_sae_recovery_summary(grid_results_df, title="SAE vs RRR recovery",
+                              save_path=None):
+    """Summary figure comparing SAE vs RRR recovery and prediction quality.
+
+    Panel 1: Per-fold recovery correlation (lower = model captures more variance).
+    Panel 2: Per-fold prediction correlation (higher = better predictions).
+
+    Args:
+        grid_results_df: DataFrame with columns fold, recovery_corr,
+            rrr_recovery_corr, correlation, rrr_baseline_corr.
+        title: Figure title.
+        save_path: If given, save figure here and close; otherwise return Figure.
+
+    Returns:
+        matplotlib Figure when save_path is None, else None.
+    """
+    import matplotlib.pyplot as plt
+
+    df = grid_results_df.sort_values("fold")
+    folds = df["fold"].values
+    x = np.arange(len(folds))
+    width = 0.35
+
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 5))
+    fig.suptitle(title, fontsize=12)
+
+    # Panel 1: Recovery correlation (lower is better)
+    ax1.bar(x - width / 2, df["rrr_recovery_corr"], width,
+            label="RRR", color="tab:gray", alpha=0.7)
+    ax1.bar(x + width / 2, df["recovery_corr"], width,
+            label="SAE", color="tab:purple", alpha=0.7)
+    rrr_mean = df["rrr_recovery_corr"].mean()
+    sae_mean = df["recovery_corr"].mean()
+    ax1.axhline(rrr_mean, color="tab:gray", linestyle="--", linewidth=1, alpha=0.6)
+    ax1.axhline(sae_mean, color="tab:purple", linestyle="--", linewidth=1, alpha=0.6)
+    ax1.set_xlabel("Fold")
+    ax1.set_ylabel("Recovery correlation")
+    ax1.set_title(f"Sufficiency (lower = better)\n"
+                  f"RRR mean: {rrr_mean:.4f}, SAE mean: {sae_mean:.4f}")
+    ax1.set_xticks(x)
+    ax1.set_xticklabels([str(f) for f in folds])
+    ax1.legend(fontsize=8)
+    ax1.grid(True, alpha=0.3, axis="y")
+
+    # Panel 2: Prediction correlation (higher is better)
+    if "rrr_baseline_corr" in df.columns and "correlation" in df.columns:
+        ax2.bar(x - width / 2, df["rrr_baseline_corr"], width,
+                label="RRR", color="tab:gray", alpha=0.7)
+        ax2.bar(x + width / 2, df["correlation"], width,
+                label="SAE", color="tab:orange", alpha=0.7)
+        rrr_corr_mean = df["rrr_baseline_corr"].mean()
+        sae_corr_mean = df["correlation"].mean()
+        ax2.axhline(rrr_corr_mean, color="tab:gray", linestyle="--", linewidth=1, alpha=0.6)
+        ax2.axhline(sae_corr_mean, color="tab:orange", linestyle="--", linewidth=1, alpha=0.6)
+        ax2.set_xlabel("Fold")
+        ax2.set_ylabel("Prediction correlation")
+        ax2.set_title(f"Prediction quality (higher = better)\n"
+                      f"RRR mean: {rrr_corr_mean:.4f}, SAE mean: {sae_corr_mean:.4f}")
+        ax2.set_xticks(x)
+        ax2.set_xticklabels([str(f) for f in folds])
+        ax2.legend(fontsize=8)
+        ax2.grid(True, alpha=0.3, axis="y")
+    else:
+        ax2.set_visible(False)
 
     fig.tight_layout()
 
