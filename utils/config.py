@@ -255,6 +255,9 @@ class SAEConfig:
     # Norm-weighted L1 (Anthropic 2024): weight L1 by regression column norms
     weight_l1_by_decoder_norm: bool = False
 
+    # Track recovery correlation during training (expensive — runs sufficiency test at each log step)
+    track_recovery_during_training: bool = False
+
     # Subject/region limiting
     max_subjects: int | None = None       # Limit number of subjects to run
     max_regions: int | None = None        # Limit number of regions to run

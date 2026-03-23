@@ -131,6 +131,19 @@ def _run_sae_for_unit(
 
         print(f"  X_proj_train: {X_proj_train.shape}, Y_train: {Y_train.shape}")
 
+        # Build optional sufficiency callback for tracking recovery during training
+        log_callback = None
+        if config.track_recovery_during_training:
+            def _sufficiency_callback(Y_hat_train, Y_hat_test):
+                suf = run_sufficiency_test(
+                    X_raw[train_idx], Y_train - Y_hat_train,
+                    X_raw[test_idx], Y_test,
+                    Y_hat_full=Y_hat_full, Y_hat_min=Y_hat_test,
+                    null_r2=None, model_constructor_fn=get_ridge_model_constructor,
+                )
+                return {"recovery_corr": suf["recovery_corr"], "recovery_r2": suf["recovery_r2"]}
+            log_callback = _sufficiency_callback
+
         # Train SAE + regression
         if config.training_mode == "alternating":
             result = train_sae_alternating(
@@ -149,6 +162,7 @@ def _run_sae_for_unit(
                 l1_warmup_epochs=config.l1_warmup_epochs,
                 regression_momentum=config.regression_momentum,
                 input_jitter_std=config.input_jitter_std,
+                log_callback=log_callback,
             )
         else:
             result = train_sae_end_to_end(
@@ -163,6 +177,7 @@ def _run_sae_for_unit(
                 weight_l1_by_decoder_norm=config.weight_l1_by_decoder_norm,
                 l1_warmup_start=config.l1_warmup_start,
                 l1_warmup_epochs=config.l1_warmup_epochs,
+                log_callback=log_callback,
             )
 
         Y_hat_sae = result["Y_hat_test"]
@@ -205,6 +220,7 @@ def _run_sae_for_unit(
         rrr_baseline_metrics = rrr_result.get("metrics", {})
         rrr_baseline_r2 = float(rrr_baseline_metrics.get("minimal_r2", np.nan))
         rrr_baseline_corr = float(rrr_baseline_metrics.get("minimal_corr", np.nan))
+        rrr_recovery_corr = float(rrr_baseline_metrics.get("recovery_corr", np.nan))
 
         # Assemble metrics row
         m = result["metrics"]
@@ -220,6 +236,7 @@ def _run_sae_for_unit(
             "recovery_corr": suf["recovery_corr"],
             "rrr_baseline_r2": rrr_baseline_r2,
             "rrr_baseline_corr": rrr_baseline_corr,
+            "rrr_recovery_corr": rrr_recovery_corr,
         }
 
         # Save per-fold outputs
@@ -243,6 +260,7 @@ def _run_sae_for_unit(
             result["training_log"],
             title=f"SAE training — k={k}, fold {fold_f}",
             save_path=os.path.join(fold_dir, "training_curves.png"),
+            rrr_recovery_corr=rrr_recovery_corr,
         )
 
         all_rows.append(metrics)
@@ -255,6 +273,15 @@ def _run_sae_for_unit(
     agg_cols = [c for c in df.columns if c != "fold"]
     summary = df[agg_cols].mean().to_frame().T
     summary.to_csv(os.path.join(sae_unit_dir, "summary.csv"), index=False)
+
+    # Recovery summary plot: SAE vs RRR across folds
+    if "recovery_corr" in df.columns and "rrr_recovery_corr" in df.columns:
+        from utils.plotting import plot_sae_recovery_summary
+        plot_sae_recovery_summary(
+            df,
+            title=f"SAE vs RRR recovery — k={k}",
+            save_path=os.path.join(sae_unit_dir, "recovery_summary.png"),
+        )
 
     # Correlation timecourse plot: SAE vs RRR-direct vs full model
     if n_electrodes is not None and fold_corrs_sae:

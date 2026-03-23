@@ -226,6 +226,7 @@ def train_sae_end_to_end(
     weight_l1_by_decoder_norm: bool = False,
     l1_warmup_start: int = 0,
     l1_warmup_epochs: int = 0,
+    log_callback=None,
 ) -> dict:
     """Train SAE + regression end-to-end via backpropagation.
 
@@ -254,6 +255,8 @@ def train_sae_end_to_end(
         weight_l1_by_decoder_norm: Weight L1 by regression column norms.
         l1_warmup_start: Epoch at which L1 penalty begins ramping (0 = immediate).
         l1_warmup_epochs: Epochs over which L1 linearly ramps to target (0 = no ramp).
+        log_callback: Optional callable(Y_hat_train, Y_hat_test) -> dict of extra
+            metrics to merge into the training log at each log step.
 
     Returns:
         Dict with keys:
@@ -342,12 +345,19 @@ def train_sae_end_to_end(
                 test_corr = float(compute_correlation(to_numpy(Y_te), to_numpy(preds_te)).mean())
                 step_sae_metrics = compute_sae_metrics(acts_te)
                 l0 = step_sae_metrics["l0_sparsity"]
+            if log_callback is not None:
+                with torch.no_grad():
+                    preds_tr_cb, _ = model(X_tr)
+                extra = log_callback(to_numpy(preds_tr_cb), to_numpy(preds_te))
+            else:
+                extra = {}
             pbar.set_postfix(loss=f"{total_loss:.4f}", r2=f"{test_r2:.4f}",
                              corr=f"{test_corr:.4f}", L0=f"{l0:.1f}")
         else:
             test_r2 = None
             test_corr = None
             step_sae_metrics = None
+            extra = {}
             pbar.set_postfix(loss=f"{total_loss:.4f}")
 
         log_entry = {
@@ -362,6 +372,7 @@ def train_sae_end_to_end(
             "l0_sparsity": step_sae_metrics["l0_sparsity"] if step_sae_metrics else None,
             "dead_neurons": step_sae_metrics["dead_neurons"] if step_sae_metrics else None,
             "mean_activation": step_sae_metrics["mean_activation"] if step_sae_metrics else None,
+            **extra,
         }
         training_log.append(log_entry)
 
@@ -412,6 +423,7 @@ def train_sae_alternating(
     l1_warmup_epochs: int = 0,
     regression_momentum: float = 1.0,
     input_jitter_std: float = 0.0,
+    log_callback=None,
 ) -> dict:
     """Train SAE with alternating optimisation.
 
@@ -449,6 +461,8 @@ def train_sae_alternating(
             W_next = (1 - η) * W_old + η * W_optimal. 1.0 = no damping (default).
         input_jitter_std: Std of Gaussian noise added to X_proj during SAE
             training. 0.0 = disabled (default).
+        log_callback: Optional callable(Y_hat_train, Y_hat_test) -> dict of extra
+            metrics to merge into the training log at each log step.
 
     Returns:
         Same structure as train_sae_end_to_end.
@@ -557,12 +571,17 @@ def train_sae_alternating(
                 test_corr = float(compute_correlation(to_numpy(Y_te), to_numpy(preds_te)).mean())
                 step_sae_metrics = compute_sae_metrics(H_test)
                 l0 = step_sae_metrics["l0_sparsity"]
+            if log_callback is not None:
+                extra = log_callback(to_numpy(preds_tr), to_numpy(preds_te))
+            else:
+                extra = {}
             pbar.set_postfix(loss=f"{total_loss:.4f}", r2=f"{test_r2:.4f}",
                              corr=f"{test_corr:.4f}", L0=f"{l0:.1f}")
         else:
             test_r2 = None
             test_corr = None
             step_sae_metrics = None
+            extra = {}
             pbar.set_postfix(loss=f"{total_loss:.4f}")
 
         log_entry = {
@@ -577,6 +596,7 @@ def train_sae_alternating(
             "l0_sparsity": step_sae_metrics["l0_sparsity"] if step_sae_metrics else None,
             "dead_neurons": step_sae_metrics["dead_neurons"] if step_sae_metrics else None,
             "mean_activation": step_sae_metrics["mean_activation"] if step_sae_metrics else None,
+            **extra,
         }
         training_log.append(log_entry)
 
