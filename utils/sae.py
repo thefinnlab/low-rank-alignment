@@ -89,6 +89,37 @@ def _make_dataloader(X: torch.Tensor, Y: torch.Tensor, batch_size: int | None):
     return DataLoader(TensorDataset(X, Y), batch_size=batch_size, shuffle=True)
 
 
+def _compute_l1(acts: torch.Tensor, reg_weights: torch.Tensor | None = None) -> torch.Tensor:
+    """Compute L1 penalty on activations, optionally weighted by regression column norms.
+
+    When reg_weights is provided, computes the decoder-norm-weighted L1 from
+    Anthropic (2024): mean(|h_i| * ||W_reg[i, :]||). This prevents the model
+    from shrinking activations and inflating regression weights to cheat the
+    L1 penalty.
+
+    Args:
+        acts: (batch, hidden_dim) non-negative activations.
+        reg_weights: Regression weight matrix. Shape (hidden_dim, n_targets) or
+            (n_targets, hidden_dim) — the per-hidden-unit norm is computed along
+            the targets axis. None for unweighted L1.
+
+    Returns:
+        Scalar L1 loss.
+    """
+    if reg_weights is None:
+        return acts.abs().mean()
+
+    # Compute per-hidden-unit norm of regression weights
+    if reg_weights.shape[0] == acts.shape[1]:
+        # (hidden_dim, n_targets) — norm along targets axis
+        col_norms = reg_weights.norm(dim=1)
+    else:
+        # (n_targets, hidden_dim) — norm along targets axis
+        col_norms = reg_weights.norm(dim=0)
+
+    return (acts.abs() * col_norms.unsqueeze(0)).mean()
+
+
 def _resample_dead_neurons(
     encoder: SAEEncoder,
     optimizer: torch.optim.Adam,
@@ -178,10 +209,16 @@ def train_sae_end_to_end(
     device: str | None = None,
     log_every: int = 10,
     resample_interval: int = 0,
+    weight_l1_by_decoder_norm: bool = False,
 ) -> dict:
     """Train SAE + regression end-to-end via backpropagation.
 
-    Loss = MSE(Y_pred, Y_true) + l1_penalty * mean(|activations|).
+    Loss = MSE(Y_pred, Y_true) + l1_penalty * L1(activations).
+
+    When weight_l1_by_decoder_norm is True, the L1 term is weighted by
+    regression column norms (Anthropic 2024): mean(|h_i| * ||W_reg[i, :]||).
+    This prevents the model from shrinking activations while inflating
+    regression weights to circumvent the sparsity penalty.
 
     X_proj inputs are standardised internally (fit on train, transform test).
 
@@ -198,6 +235,7 @@ def train_sae_end_to_end(
         device: Torch device string; auto-selects if None.
         log_every: Compute and display test metrics every N epochs.
         resample_interval: Resample dead neurons every N epochs (0 = disabled).
+        weight_l1_by_decoder_norm: Weight L1 by regression column norms.
 
     Returns:
         Dict with keys:
@@ -232,13 +270,14 @@ def train_sae_end_to_end(
     pbar = tqdm(range(num_epochs), desc="  end_to_end", unit="ep", leave=True)
     for epoch in pbar:
         model.train()
+        reg_w = model.regressor.weight.detach() if weight_l1_by_decoder_norm else None
         if dataloader is not None:
             epoch_mse, epoch_l1, n_seen = 0.0, 0.0, 0
             for X_batch, Y_batch in dataloader:
                 optimizer.zero_grad()
                 preds, acts = model(X_batch)
                 mse = mse_fn(preds, Y_batch)
-                l1 = acts.abs().mean()
+                l1 = _compute_l1(acts, reg_w)
                 loss = mse + l1_penalty * l1
                 loss.backward()
                 optimizer.step()
@@ -252,7 +291,7 @@ def train_sae_end_to_end(
             optimizer.zero_grad()
             preds, acts = model(X_tr)
             mse = mse_fn(preds, Y_tr)
-            l1 = acts.abs().mean()
+            l1 = _compute_l1(acts, reg_w)
             loss = mse + l1_penalty * l1
             loss.backward()
             optimizer.step()
@@ -342,6 +381,7 @@ def train_sae_alternating(
     device: str | None = None,
     log_every: int = 1,
     resample_interval: int = 0,
+    weight_l1_by_decoder_norm: bool = False,
 ) -> dict:
     """Train SAE with alternating optimisation.
 
@@ -351,6 +391,9 @@ def train_sae_alternating(
 
     Cycle 0 initialises regression by solving on the raw (pre-SAE) projected
     inputs to give meaningful gradients from the start.
+
+    When weight_l1_by_decoder_norm is True, the L1 term is weighted by
+    regression column norms (Anthropic 2024): mean(|h_i| * ||W_reg[i, :]||).
 
     X_proj inputs are standardised internally (fit on train, transform test).
 
@@ -369,6 +412,7 @@ def train_sae_alternating(
         device: Torch device string; auto-selects if None.
         log_every: Compute and display test metrics every N cycles.
         resample_interval: Resample dead neurons every N cycles (0 = disabled).
+        weight_l1_by_decoder_norm: Weight L1 by regression column norms.
 
     Returns:
         Same structure as train_sae_end_to_end.
@@ -408,6 +452,7 @@ def train_sae_alternating(
         encoder.train()
         frozen_W = reg_W.detach()
         frozen_b = reg_b.detach()
+        l1_weights = frozen_W if weight_l1_by_decoder_norm else None
 
         dataloader = _make_dataloader(X_tr, Y_tr, batch_size)
 
@@ -418,7 +463,7 @@ def train_sae_alternating(
                     h = encoder(X_batch)
                     preds = h @ frozen_W + frozen_b
                     mse = mse_fn(preds, Y_batch)
-                    l1 = h.abs().mean()
+                    l1 = _compute_l1(h, l1_weights)
                     loss = mse + l1_penalty * l1
                     loss.backward()
                     optimizer.step()
@@ -427,7 +472,7 @@ def train_sae_alternating(
                 h = encoder(X_tr)
                 preds = h @ frozen_W + frozen_b
                 mse = mse_fn(preds, Y_tr)
-                l1 = h.abs().mean()
+                l1 = _compute_l1(h, l1_weights)
                 loss = mse + l1_penalty * l1
                 loss.backward()
                 optimizer.step()

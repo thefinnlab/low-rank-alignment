@@ -246,6 +246,9 @@ class SAEConfig:
     # Dead feature resampling (0 = disabled)
     resample_interval: int = 0            # Resample dead neurons every N epochs/cycles
 
+    # Norm-weighted L1 (Anthropic 2024): weight L1 by regression column norms
+    weight_l1_by_decoder_norm: bool = False
+
     # Subject/region limiting
     max_subjects: int | None = None       # Limit number of subjects to run
     max_regions: int | None = None        # Limit number of regions to run

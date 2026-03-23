@@ -14,6 +14,7 @@ from utils.sae import (
     train_sae_end_to_end,
     train_sae_alternating,
     _resample_dead_neurons,
+    _compute_l1,
 )
 
 
@@ -518,3 +519,81 @@ class TestResamplingIntegration:
         log = result["training_log"]
         assert len(log) == 6
         assert all("n_resampled" in entry for entry in log)
+
+
+# ---------------------------------------------------------------------------
+# TestComputeL1
+# ---------------------------------------------------------------------------
+
+class TestComputeL1:
+    def test_unweighted_matches_abs_mean(self):
+        acts = torch.tensor([[1.0, 2.0, 0.0], [3.0, 0.0, 1.0]])
+        result = _compute_l1(acts)
+        expected = acts.abs().mean()
+        assert torch.allclose(result, expected)
+
+    def test_unweighted_with_none(self):
+        acts = torch.tensor([[1.0, 2.0], [3.0, 4.0]])
+        result = _compute_l1(acts, None)
+        expected = acts.abs().mean()
+        assert torch.allclose(result, expected)
+
+    def test_weighted_scales_by_column_norms(self):
+        acts = torch.tensor([[1.0, 2.0], [3.0, 4.0]])
+        # reg_weights shape (hidden_dim=2, n_targets=3)
+        reg_weights = torch.tensor([[3.0, 4.0, 0.0], [0.0, 0.0, 1.0]])
+        # Column norms: [5.0, 1.0]
+        result = _compute_l1(acts, reg_weights)
+        expected = (acts.abs() * torch.tensor([[5.0, 1.0]])).mean()
+        assert torch.allclose(result, expected)
+
+    def test_weighted_handles_transposed_reg_weights(self):
+        acts = torch.tensor([[1.0, 2.0], [3.0, 4.0]])
+        # reg_weights shape (n_targets=3, hidden_dim=2)
+        reg_weights = torch.tensor([[3.0, 0.0], [4.0, 0.0], [0.0, 1.0]])
+        # Column norms (dim=0): [5.0, 1.0]
+        result = _compute_l1(acts, reg_weights)
+        expected = (acts.abs() * torch.tensor([[5.0, 1.0]])).mean()
+        assert torch.allclose(result, expected)
+
+    def test_weighted_larger_than_unweighted_when_norms_gt_1(self):
+        torch.manual_seed(42)
+        acts = torch.rand(10, 5)
+        # Large regression weights → norms > 1 → weighted L1 > unweighted
+        reg_weights = torch.randn(5, 8) * 5
+        weighted = _compute_l1(acts, reg_weights)
+        unweighted = _compute_l1(acts)
+        assert weighted > unweighted
+
+
+# ---------------------------------------------------------------------------
+# TestWeightedL1Integration
+# ---------------------------------------------------------------------------
+
+class TestWeightedL1Integration:
+    def test_end_to_end_with_weighted_l1(self, structured_data):
+        X, Y = structured_data
+        n = X.shape[0]
+        split = n // 2
+        result = train_sae_end_to_end(
+            X[:split], Y[:split], X[split:], Y[split:],
+            hidden_dim=12, l1_penalty=1e-4, lr=1e-2,
+            num_epochs=30, device="cpu", log_every=1,
+            weight_l1_by_decoder_norm=True,
+        )
+        log = result["training_log"]
+        assert log[-1]["total_loss"] < log[0]["total_loss"]
+
+    def test_alternating_with_weighted_l1(self, structured_data):
+        X, Y = structured_data
+        n = X.shape[0]
+        split = n // 2
+        result = train_sae_alternating(
+            X[:split], Y[:split], X[split:], Y[split:],
+            hidden_dim=12, l1_penalty=1e-4, regression_type="ols",
+            sae_lr=1e-2, sae_steps_per_cycle=10, num_cycles=6,
+            device="cpu", log_every=1,
+            weight_l1_by_decoder_norm=True,
+        )
+        log = result["training_log"]
+        assert log[-1]["total_loss"] < log[0]["total_loss"]
