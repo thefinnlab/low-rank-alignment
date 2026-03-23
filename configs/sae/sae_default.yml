@@ -11,6 +11,7 @@ output_dir: null
 sae_output_dir: null
 rrr_source_dir: null
 mode: per_subject
+track_recovery_during_training: true
 
 # RRR rank to load
 k: 5
@@ -29,7 +30,7 @@ regression_type: ridge    # "ols" or "ridge"
 learning_rate: 0.0001
 num_epochs: 2000
 batch_size: null
-log_every: 10             # compute & display test metrics every N epochs/cycles
+log_every: 100             # compute & display test metrics every N epochs/cycles
 
 # Alternating params
 sae_learning_rate: 0.0001

@@ -37,6 +37,41 @@ def build_global_sig_mask(sig_df: pd.DataFrame, metadata_df: pd.DataFrame, n_lag
     return mask
 
 
+def build_sig_mask_flat_for_elecs(output_dir, elecs_per_sub, enc_results):
+    """Build a flat sig mask for a specific subset of electrodes per subject.
+
+    Loads significance_detailed.csv from output_dir and constructs a 1-D
+    boolean mask aligned to the Y column layout implied by elecs_per_sub.
+
+    Args:
+        output_dir: Root results directory containing significance_detailed.csv.
+        elecs_per_sub: Dict mapping subject_id → list of electrode names.
+        enc_results: Encoding results dict (must contain 'lags').
+
+    Returns:
+        1-D boolean array of shape (n_electrodes * n_lags,), or None if
+        significance_detailed.csv is not found.
+    """
+    sig_csv = os.path.join(output_dir, "significance_detailed.csv")
+    if not os.path.exists(sig_csv):
+        print("  significance_detailed.csv not found; skipping sig/non-sig split.")
+        return None
+
+    sig_detailed_df = pd.read_csv(sig_csv)
+    n_lags = len(enc_results["lags"])
+
+    rows = []
+    for sub_id in elecs_per_sub:
+        for elec in elecs_per_sub[sub_id]:
+            rows.append({"subject": sub_id, "electrode": elec})
+    metadata_df = pd.DataFrame(rows, columns=["subject", "electrode"])
+
+    sig_mask_2d = build_global_sig_mask(sig_detailed_df, metadata_df, n_lags)
+    sig_mask_flat = sig_mask_2d.ravel()
+    print(f"  Significant pairs: {sig_mask_flat.sum()} / {sig_mask_flat.size}")
+    return sig_mask_flat
+
+
 def find_dominant_directions(weights, n_directions=None):
     """Find dominant directions in weight space via SVD.
 

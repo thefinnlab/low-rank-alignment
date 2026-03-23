@@ -9,6 +9,7 @@ from utils.analysis import (
     find_dominant_directions,
     compute_truncated_correlations,
     find_best_k,
+    build_sig_mask_flat_for_elecs,
 )
 
 
@@ -366,3 +367,85 @@ class TestFindBestK:
         ratios = [0.97, 0.98, 0.99]
         results = self._make_results(k_values, ratios)
         assert find_best_k(results, threshold=0.95) == 1
+
+
+# ---------------------------------------------------------------------------
+# build_sig_mask_flat_for_elecs
+# ---------------------------------------------------------------------------
+
+class TestBuildSigMaskFlatForElecs:
+    def test_returns_none_when_csv_missing(self, tmp_path):
+        enc_results = {"lags": np.arange(5)}
+        result = build_sig_mask_flat_for_elecs(
+            str(tmp_path), {1: ["e1"]}, enc_results
+        )
+        assert result is None
+
+    def test_correct_shape_and_values(self, tmp_path):
+        import pandas as pd
+
+        n_lags = 3
+        # Create significance CSV: subject 1, electrode e1, lags 0 and 2 significant
+        sig_rows = [
+            {"subject": 1, "electrode": "e1", "lag_idx": 0, "sig": True},
+            {"subject": 1, "electrode": "e1", "lag_idx": 1, "sig": False},
+            {"subject": 1, "electrode": "e1", "lag_idx": 2, "sig": True},
+            {"subject": 1, "electrode": "e2", "lag_idx": 0, "sig": False},
+            {"subject": 1, "electrode": "e2", "lag_idx": 1, "sig": True},
+            {"subject": 1, "electrode": "e2", "lag_idx": 2, "sig": False},
+        ]
+        sig_df = pd.DataFrame(sig_rows)
+        sig_df.to_csv(tmp_path / "significance_detailed.csv", index=False)
+
+        enc_results = {"lags": np.arange(n_lags)}
+        elecs_per_sub = {1: ["e1", "e2"]}
+
+        mask = build_sig_mask_flat_for_elecs(str(tmp_path), elecs_per_sub, enc_results)
+
+        assert mask is not None
+        assert mask.shape == (2 * n_lags,)  # 2 electrodes * 3 lags
+        # e1: [True, False, True], e2: [False, True, False]
+        expected = np.array([True, False, True, False, True, False])
+        np.testing.assert_array_equal(mask, expected)
+
+    def test_respects_electrode_subset(self, tmp_path):
+        import pandas as pd
+
+        n_lags = 2
+        sig_rows = [
+            {"subject": 1, "electrode": "e1", "lag_idx": 0, "sig": True},
+            {"subject": 1, "electrode": "e1", "lag_idx": 1, "sig": True},
+            {"subject": 1, "electrode": "e2", "lag_idx": 0, "sig": False},
+            {"subject": 1, "electrode": "e2", "lag_idx": 1, "sig": False},
+        ]
+        sig_df = pd.DataFrame(sig_rows)
+        sig_df.to_csv(tmp_path / "significance_detailed.csv", index=False)
+
+        enc_results = {"lags": np.arange(n_lags)}
+
+        # Only request e2
+        mask = build_sig_mask_flat_for_elecs(str(tmp_path), {1: ["e2"]}, enc_results)
+        assert mask.shape == (n_lags,)
+        np.testing.assert_array_equal(mask, [False, False])
+
+    def test_multi_subject(self, tmp_path):
+        import pandas as pd
+
+        n_lags = 2
+        sig_rows = [
+            {"subject": 1, "electrode": "e1", "lag_idx": 0, "sig": True},
+            {"subject": 1, "electrode": "e1", "lag_idx": 1, "sig": False},
+            {"subject": 2, "electrode": "e1", "lag_idx": 0, "sig": False},
+            {"subject": 2, "electrode": "e1", "lag_idx": 1, "sig": True},
+        ]
+        sig_df = pd.DataFrame(sig_rows)
+        sig_df.to_csv(tmp_path / "significance_detailed.csv", index=False)
+
+        enc_results = {"lags": np.arange(n_lags)}
+        elecs_per_sub = {1: ["e1"], 2: ["e1"]}
+
+        mask = build_sig_mask_flat_for_elecs(str(tmp_path), elecs_per_sub, enc_results)
+        assert mask.shape == (2 * n_lags,)
+        # sub1-e1: [True, False], sub2-e1: [False, True]
+        expected = np.array([True, False, False, True])
+        np.testing.assert_array_equal(mask, expected)
