@@ -34,6 +34,9 @@ sae_learning_rate: 0.001
 sae_steps_per_cycle: 50
 num_cycles: 20
 
+# Dead feature resampling (0 = disabled)
+resample_interval: 0
+
 # Subject/region limiting (null = run all)
 max_subjects: null
 max_regions: null

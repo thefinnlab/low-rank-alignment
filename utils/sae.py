@@ -26,6 +26,7 @@ class SAEEncoder(nn.Module):
     def __init__(self, input_dim: int, hidden_dim: int):
         super().__init__()
         self.linear = nn.Linear(input_dim, hidden_dim)
+        nn.init.zeros_(self.linear.bias)
         self.relu = nn.ReLU()
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -88,6 +89,82 @@ def _make_dataloader(X: torch.Tensor, Y: torch.Tensor, batch_size: int | None):
     return DataLoader(TensorDataset(X, Y), batch_size=batch_size, shuffle=True)
 
 
+def _resample_dead_neurons(
+    encoder: SAEEncoder,
+    optimizer: torch.optim.Adam,
+    X: torch.Tensor,
+    losses_per_sample: torch.Tensor,
+    dead_neuron_mask: torch.Tensor,
+) -> int:
+    """Resample dead encoder neurons following Anthropic (2023).
+
+    For each dead neuron:
+      - Sample a training input weighted by squared per-sample loss.
+      - Set decoder (encoder weight row) to that input, normalized to unit norm.
+      - Scale encoder weight to 0.2x the average norm of alive neurons.
+      - Set encoder bias to zero.
+      - Reset Adam optimizer state for modified parameters.
+
+    Args:
+        encoder: The SAEEncoder module.
+        optimizer: Adam optimizer for the encoder.
+        X: (n_samples, input_dim) training inputs.
+        losses_per_sample: (n_samples,) per-sample loss values.
+        dead_neuron_mask: (hidden_dim,) boolean tensor, True for dead neurons.
+
+    Returns:
+        Number of neurons resampled.
+    """
+    dead_indices = dead_neuron_mask.nonzero(as_tuple=True)[0]
+    n_dead = len(dead_indices)
+    if n_dead == 0:
+        return 0
+
+    device = X.device
+    weight = encoder.linear.weight  # (hidden_dim, input_dim)
+    bias = encoder.linear.bias      # (hidden_dim,)
+
+    # Compute alive neuron average norm for scaling
+    alive_mask = ~dead_neuron_mask
+    if alive_mask.any():
+        alive_norms = weight[alive_mask].norm(dim=1)
+        avg_alive_norm = float(alive_norms.mean())
+    else:
+        avg_alive_norm = float(weight.norm(dim=1).mean())
+
+    # Sampling probabilities proportional to squared loss
+    probs = losses_per_sample ** 2
+    probs = probs / probs.sum()
+
+    # Sample one input per dead neuron
+    sample_indices = torch.multinomial(probs, n_dead, replacement=True)
+
+    with torch.no_grad():
+        for i, dead_idx in enumerate(dead_indices):
+            sampled_input = X[sample_indices[i]]  # (input_dim,)
+            norm = sampled_input.norm()
+            if norm > 0:
+                direction = sampled_input / norm
+            else:
+                direction = torch.randn_like(sampled_input)
+                direction = direction / direction.norm()
+
+            # Set encoder weight row to normalized input scaled to 0.2x alive avg
+            weight[dead_idx] = direction * (0.2 * avg_alive_norm)
+            bias[dead_idx] = 0.0
+
+    # Reset Adam state for encoder parameters
+    for param in [weight, bias]:
+        state = optimizer.state.get(param, {})
+        if state:
+            state["exp_avg"].zero_()
+            state["exp_avg_sq"].zero_()
+            if "step" in state:
+                state["step"] = torch.tensor(0.0) if isinstance(state["step"], torch.Tensor) else 0
+
+    return n_dead
+
+
 def train_sae_end_to_end(
     X_proj_train: np.ndarray,
     Y_train: np.ndarray,
@@ -100,6 +177,7 @@ def train_sae_end_to_end(
     batch_size: int | None = None,
     device: str | None = None,
     log_every: int = 10,
+    resample_interval: int = 0,
 ) -> dict:
     """Train SAE + regression end-to-end via backpropagation.
 
@@ -119,6 +197,7 @@ def train_sae_end_to_end(
         batch_size: Mini-batch size; None for full-batch.
         device: Torch device string; auto-selects if None.
         log_every: Compute and display test metrics every N epochs.
+        resample_interval: Resample dead neurons every N epochs (0 = disabled).
 
     Returns:
         Dict with keys:
@@ -182,6 +261,19 @@ def train_sae_end_to_end(
 
         total_loss = epoch_mse + l1_penalty * epoch_l1
 
+        # Dead feature resampling
+        n_resampled = 0
+        if resample_interval > 0 and (epoch + 1) % resample_interval == 0 and epoch < num_epochs - 1:
+            model.eval()
+            with torch.no_grad():
+                preds_full, acts_full = model(X_tr)
+                dead_mask = acts_full.sum(dim=0) == 0
+                if dead_mask.any():
+                    per_sample_loss = (preds_full - Y_tr).pow(2).mean(dim=1)
+                    n_resampled = _resample_dead_neurons(
+                        model.encoder, optimizer, X_tr, per_sample_loss, dead_mask,
+                    )
+
         # Compute test metrics at log_every intervals and on the last epoch
         is_log_step = (epoch % log_every == 0) or (epoch == num_epochs - 1)
         if is_log_step:
@@ -205,6 +297,7 @@ def train_sae_end_to_end(
             "total_loss": total_loss,
             "test_r2": test_r2,
             "test_corr": test_corr,
+            "n_resampled": n_resampled,
         })
 
     # Final evaluation
@@ -248,6 +341,7 @@ def train_sae_alternating(
     batch_size: int | None = None,
     device: str | None = None,
     log_every: int = 1,
+    resample_interval: int = 0,
 ) -> dict:
     """Train SAE with alternating optimisation.
 
@@ -274,6 +368,7 @@ def train_sae_alternating(
         batch_size: Mini-batch size; None for full-batch.
         device: Torch device string; auto-selects if None.
         log_every: Compute and display test metrics every N cycles.
+        resample_interval: Resample dead neurons every N cycles (0 = disabled).
 
     Returns:
         Same structure as train_sae_end_to_end.
@@ -344,6 +439,18 @@ def train_sae_alternating(
 
         reg_W, reg_b = _solve_regression(H_train, Y_tr, regression_type, device)
 
+        # Dead feature resampling
+        n_resampled = 0
+        if resample_interval > 0 and (cycle + 1) % resample_interval == 0 and cycle < num_cycles - 1:
+            with torch.no_grad():
+                dead_mask = H_train.sum(dim=0) == 0
+                if dead_mask.any():
+                    preds_tr_tmp = H_train @ reg_W + reg_b
+                    per_sample_loss = (preds_tr_tmp - Y_tr).pow(2).mean(dim=1)
+                    n_resampled = _resample_dead_neurons(
+                        encoder, optimizer, X_tr, per_sample_loss, dead_mask,
+                    )
+
         # Log cycle metrics
         is_log_step = (cycle % log_every == 0) or (cycle == num_cycles - 1)
         with torch.no_grad():
@@ -373,6 +480,7 @@ def train_sae_alternating(
             "total_loss": total_loss,
             "test_r2": test_r2,
             "test_corr": test_corr,
+            "n_resampled": n_resampled,
         })
 
     # Final evaluation

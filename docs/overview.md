@@ -75,7 +75,7 @@ Core library modules:
 | `significance.py` | GPU-accelerated permutation testing, vectorized Pearson correlation, Benjamini-Hochberg FDR correction |
 | `analysis.py` | SVD decomposition of weights, truncated correlation evaluation, best-k selection, residualization utilities |
 | `srrr.py` | Core SRRR/RRR functions: ProxGD optimizer, stability selection, `fit_dense_rrr`, sufficiency test, alignment metrics (CCA, Procrustes), I/O helpers for both SRRR and RRR outputs |
-| `sae.py` | SAE model (`SAEEncoder`, `SAERegressorEndToEnd`), training functions (`train_sae_end_to_end`, `train_sae_alternating`), and SAE-specific metrics (L0 sparsity, dead neurons, activation frequency) |
+| `sae.py` | SAE model (`SAEEncoder`, `SAERegressorEndToEnd`), training functions (`train_sae_end_to_end`, `train_sae_alternating`), dead feature resampling (`_resample_dead_neurons`), and SAE-specific metrics (L0 sparsity, dead neurons, activation frequency). Encoder bias is initialized to zero to prevent dead-on-init features. |
 | `plotting.py` | Matplotlib helpers for correlation vs lag plots, significance overlays, SVD truncation analysis figures |
 | `examples.py` | Generates context windows and markdown tables of example words for qualitative analysis |
 | `__init__.py` | Public API — re-exports all key functions for convenient imports |
@@ -96,7 +96,7 @@ Unit tests with full pipeline coverage:
 | `test_partial_svd.py` | Partial SVD: `partial_out_svd_directions` orthogonality/idempotency, config round-trip, sweep window generation |
 | `test_rrr.py` | RRR utilities: `save_rrr_result`/`load_rrr_result` roundtrip, `_run_rrr_for_unit` integration, `build_XY_from_subjects` |
 | `test_partial_rrr.py` | Partial RRR: `partial_out_subspace` orthogonality/idempotency/non-orthonormal handling, sweep integration, save results, config round-trip |
-| `test_sae.py` | SAE: encoder shape/ReLU, end-to-end and alternating training (loss decrease, OLS/ridge), metrics computation, config round-trip |
+| `test_sae.py` | SAE: encoder shape/ReLU, zero-bias init, dead feature resampling, end-to-end and alternating training (loss decrease, OLS/ridge, resampling integration), metrics computation, config round-trip |
 | `test_significance.py` | Permutation testing, FDR correction |
 | `test_examples.py` | Context building and table generation |
 

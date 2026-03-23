@@ -13,6 +13,7 @@ from utils.sae import (
     compute_sae_metrics,
     train_sae_end_to_end,
     train_sae_alternating,
+    _resample_dead_neurons,
 )
 
 
@@ -404,3 +405,116 @@ class TestPlotSAETrainingCurves:
         save_path = str(tmp_path / "curves_all.png")
         plot_sae_training_curves(result["training_log"], save_path=save_path)
         assert os.path.exists(save_path)
+
+
+# ---------------------------------------------------------------------------
+# TestSAEEncoderInit
+# ---------------------------------------------------------------------------
+
+class TestSAEEncoderInit:
+    def test_bias_initialized_to_zero(self):
+        encoder = SAEEncoder(input_dim=4, hidden_dim=10)
+        assert torch.allclose(encoder.linear.bias, torch.zeros(10))
+
+    def test_weights_nonzero(self):
+        encoder = SAEEncoder(input_dim=4, hidden_dim=10)
+        assert not torch.allclose(encoder.linear.weight, torch.zeros(10, 4))
+
+
+# ---------------------------------------------------------------------------
+# TestResampleDeadNeurons
+# ---------------------------------------------------------------------------
+
+class TestResampleDeadNeurons:
+    def test_resamples_dead_neurons(self):
+        torch.manual_seed(42)
+        encoder = SAEEncoder(input_dim=4, hidden_dim=10)
+        optimizer = torch.optim.Adam(encoder.parameters(), lr=1e-3)
+
+        # Force 3 neurons to be dead by zeroing their weights and setting large negative bias
+        with torch.no_grad():
+            encoder.linear.weight[0:3] = 0.0
+            encoder.linear.bias[0:3] = -100.0
+
+        X = torch.randn(50, 4)
+        losses = torch.rand(50)
+        dead_mask = torch.zeros(10, dtype=torch.bool)
+        dead_mask[0:3] = True
+
+        n = _resample_dead_neurons(encoder, optimizer, X, losses, dead_mask)
+        assert n == 3
+
+        # Verify dead neurons now have nonzero weights and zero bias
+        assert encoder.linear.weight[0:3].norm() > 0
+        assert torch.allclose(encoder.linear.bias[0:3], torch.zeros(3))
+
+    def test_no_dead_neurons_is_noop(self):
+        encoder = SAEEncoder(input_dim=4, hidden_dim=10)
+        optimizer = torch.optim.Adam(encoder.parameters(), lr=1e-3)
+
+        X = torch.randn(50, 4)
+        losses = torch.rand(50)
+        dead_mask = torch.zeros(10, dtype=torch.bool)
+
+        weight_before = encoder.linear.weight.clone()
+        n = _resample_dead_neurons(encoder, optimizer, X, losses, dead_mask)
+        assert n == 0
+        assert torch.allclose(encoder.linear.weight, weight_before)
+
+    def test_resampled_norm_is_scaled(self):
+        torch.manual_seed(42)
+        encoder = SAEEncoder(input_dim=4, hidden_dim=10)
+        optimizer = torch.optim.Adam(encoder.parameters(), lr=1e-3)
+
+        # Make one neuron dead
+        with torch.no_grad():
+            encoder.linear.weight[0] = 0.0
+            encoder.linear.bias[0] = -100.0
+
+        X = torch.randn(50, 4)
+        losses = torch.rand(50)
+        dead_mask = torch.zeros(10, dtype=torch.bool)
+        dead_mask[0] = True
+
+        alive_avg_norm = encoder.linear.weight[1:].norm(dim=1).mean().item()
+        _resample_dead_neurons(encoder, optimizer, X, losses, dead_mask)
+
+        resampled_norm = encoder.linear.weight[0].norm().item()
+        expected_norm = 0.2 * alive_avg_norm
+        assert abs(resampled_norm - expected_norm) < 1e-5
+
+
+# ---------------------------------------------------------------------------
+# TestResamplingIntegration
+# ---------------------------------------------------------------------------
+
+class TestResamplingIntegration:
+    def test_end_to_end_with_resampling(self, structured_data):
+        X, Y = structured_data
+        n = X.shape[0]
+        split = n // 2
+        result = train_sae_end_to_end(
+            X[:split], Y[:split], X[split:], Y[split:],
+            hidden_dim=12, l1_penalty=1e-4, lr=1e-2,
+            num_epochs=20, device="cpu", log_every=1,
+            resample_interval=5,
+        )
+        log = result["training_log"]
+        assert len(log) == 20
+        # n_resampled key should be present in every log entry
+        assert all("n_resampled" in entry for entry in log)
+
+    def test_alternating_with_resampling(self, structured_data):
+        X, Y = structured_data
+        n = X.shape[0]
+        split = n // 2
+        result = train_sae_alternating(
+            X[:split], Y[:split], X[split:], Y[split:],
+            hidden_dim=12, l1_penalty=1e-4, regression_type="ols",
+            sae_lr=1e-2, sae_steps_per_cycle=10, num_cycles=6,
+            device="cpu", log_every=1,
+            resample_interval=2,
+        )
+        log = result["training_log"]
+        assert len(log) == 6
+        assert all("n_resampled" in entry for entry in log)

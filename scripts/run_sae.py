@@ -136,6 +136,7 @@ def _run_sae_for_unit(
                 num_cycles=config.num_cycles,
                 batch_size=config.batch_size,
                 log_every=config.log_every,
+                resample_interval=config.resample_interval,
             )
         else:
             result = train_sae_end_to_end(
@@ -146,6 +147,7 @@ def _run_sae_for_unit(
                 num_epochs=config.num_epochs,
                 batch_size=config.batch_size,
                 log_every=config.log_every,
+                resample_interval=config.resample_interval,
             )
 
         Y_hat_sae = result["Y_hat_test"]

@@ -243,6 +243,9 @@ class SAEConfig:
     sae_steps_per_cycle: int = 50
     num_cycles: int = 20
 
+    # Dead feature resampling (0 = disabled)
+    resample_interval: int = 0            # Resample dead neurons every N epochs/cycles
+
     # Subject/region limiting
     max_subjects: int | None = None       # Limit number of subjects to run
     max_regions: int | None = None        # Limit number of regions to run
