@@ -43,6 +43,7 @@ from utils import (
     build_XY_from_subjects,
     load_raws,
 )
+from utils.analysis import build_sig_mask_flat_for_elecs
 from utils.data_loaders import load_sig_electrodes
 from utils.atlas import build_electrode_region_map
 from utils.config import RRRConfig, SVDMode, get_results_dir
@@ -242,32 +243,6 @@ def _run_rrr_for_unit(
 # ---------------------------------------------------------------------------
 
 
-def _build_sig_mask_flat_for_elecs(output_dir, elecs_per_sub, enc_results):
-    """Build a flat sig mask for a specific subset of electrodes per subject.
-
-    Used for per-region mode where only a subset of each subject's electrodes
-    are included. Returns None if significance_detailed.csv is not found.
-    """
-    sig_csv = os.path.join(output_dir, "significance_detailed.csv")
-    if not os.path.exists(sig_csv):
-        print("  significance_detailed.csv not found; skipping sig/non-sig split.")
-        return None
-
-    sig_detailed_df = pd.read_csv(sig_csv)
-    n_lags = len(enc_results["lags"])
-
-    # Build metadata_df matching the Y column layout for the given electrodes
-    rows = []
-    for sub_id in elecs_per_sub:
-        for elec in elecs_per_sub[sub_id]:
-            rows.append({"subject": sub_id, "electrode": elec})
-    metadata_df = pd.DataFrame(rows, columns=["subject", "electrode"])
-
-    sig_mask_2d = build_global_sig_mask(sig_detailed_df, metadata_df, n_lags)
-    sig_mask_flat = sig_mask_2d.ravel()
-    print(f"  Significant pairs: {sig_mask_flat.sum()} / {sig_mask_flat.size}")
-    return sig_mask_flat
-
 
 # ---------------------------------------------------------------------------
 # Branch: cross-subject RRR
@@ -316,7 +291,7 @@ def _run_cross_subject_rrr(
     )
 
     # Build significance mask for sig/non-sig correlation split
-    sig_mask_flat = _build_sig_mask_flat_for_elecs(
+    sig_mask_flat = build_sig_mask_flat_for_elecs(
         output_dir,
         {s: sig_electrodes[s] for s in subs_with_sig},
         enc_results,
@@ -388,7 +363,7 @@ def _run_per_subject_rrr(
             X_arr, Y_sub, test_idxs, enc_subjects_info
         )
 
-        sig_mask_flat = _build_sig_mask_flat_for_elecs(
+        sig_mask_flat = build_sig_mask_flat_for_elecs(
             output_dir, {sub_id: sub_sig_elecs}, enc_results
         )
 
@@ -470,7 +445,7 @@ def _run_per_region_rrr(
         )
 
         # Build sig mask for this region's electrodes
-        sig_mask_flat = _build_sig_mask_flat_for_elecs(
+        sig_mask_flat = build_sig_mask_flat_for_elecs(
             output_dir, per_subject_region_elecs, enc_results
         )
 
