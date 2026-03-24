@@ -305,7 +305,8 @@ def _run_sae_for_unit(
             )
 
         # Save per-fold outputs
-        fold_dir = os.path.join(sae_unit_dir, f"k{k}", f"fold_{fold_f}")
+        k_dir = os.path.join(sae_unit_dir, f"k{k}")
+        fold_dir = os.path.join(k_dir, f"fold_{fold_f}")
         os.makedirs(fold_dir, exist_ok=True)
 
         torch.save(
@@ -349,12 +350,12 @@ def _run_sae_for_unit(
         print(f"  Fold {fold_f} done in {time.time() - fold_start:.1f}s")
 
     df = pd.DataFrame(all_rows)
-    df.to_csv(os.path.join(sae_unit_dir, "grid_results.csv"), index=False)
+    df.to_csv(os.path.join(k_dir, "grid_results.csv"), index=False)
 
     # Summary: average over folds
     agg_cols = [c for c in df.columns if c != "fold"]
     summary = df[agg_cols].mean().to_frame().T
-    summary.to_csv(os.path.join(sae_unit_dir, "summary.csv"), index=False)
+    summary.to_csv(os.path.join(k_dir, "summary.csv"), index=False)
 
     # Recovery summary plot: SAE vs RRR across folds
     if "recovery_corr" in df.columns and "rrr_recovery_corr" in df.columns:
@@ -363,7 +364,7 @@ def _run_sae_for_unit(
         plot_sae_recovery_summary(
             df,
             title=f"SAE vs RRR recovery — k={k}",
-            save_path=os.path.join(sae_unit_dir, "recovery_summary.png"),
+            save_path=os.path.join(k_dir, "recovery_summary.png"),
         )
 
     # Correlation timecourse plot: SAE vs RRR-direct vs full model
@@ -383,12 +384,12 @@ def _run_sae_for_unit(
             lags,
             corrs_rrr=corrs_rrr,
             title=f"SAE vs RRR vs full model — k={k}",
-            save_path=os.path.join(sae_unit_dir, "corrs_sae_vs_full.png"),
+            save_path=os.path.join(k_dir, "corrs_sae_vs_full.png"),
         )
         # Save correlation arrays for downstream use
-        np.save(os.path.join(sae_unit_dir, "corrs_sae.npy"), corrs_sae)
-        np.save(os.path.join(sae_unit_dir, "corrs_full.npy"), corrs_full)
-        np.save(os.path.join(sae_unit_dir, "corrs_rrr.npy"), corrs_rrr)
+        np.save(os.path.join(k_dir, "corrs_sae.npy"), corrs_sae)
+        np.save(os.path.join(k_dir, "corrs_full.npy"), corrs_full)
+        np.save(os.path.join(k_dir, "corrs_rrr.npy"), corrs_rrr)
 
     return df
 
@@ -676,7 +677,9 @@ def main():
     print(f"k={config.k}, hidden_dim={config.hidden_dim}, l1={config.l1_penalty}")
 
     # Save config for reproducibility
-    config_save_path = os.path.join(sae_dir, "config.yml")
+    k_dir = os.path.join(sae_dir, f"k{config.k}")
+    os.makedirs(k_dir, exist_ok=True)
+    config_save_path = os.path.join(k_dir, "config.yml")
     from dataclasses import asdict
 
     with open(config_save_path, "w") as f:
