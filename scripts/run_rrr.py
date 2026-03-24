@@ -54,6 +54,7 @@ from utils.encoding import (
     build_enc_subjects_info,
     build_per_fold_baselines,
 )
+from utils.sae import solve_regression
 from utils.srrr import (
     compute_cca_similarity,
     compute_procrustes_similarity,
@@ -160,6 +161,48 @@ def _run_rrr_for_unit(
                 else None
             )
 
+            # --- Non-reduced-rank ridge from k-dim subspace ---
+            import torch
+
+            device = "cuda" if torch.cuda.is_available() else "cpu"
+            X_proj_train = X_train @ A  # (n_train, k)
+            X_proj_test = X_test @ A  # (n_test, k)
+            nr_W, nr_b = solve_regression(
+                torch.as_tensor(X_proj_train, dtype=torch.float32, device=device),
+                torch.as_tensor(Y_train, dtype=torch.float32, device=device),
+                "ridge",
+                device,
+            )
+            X_proj_test_t = torch.as_tensor(
+                X_proj_test, dtype=torch.float32, device=device
+            )
+            X_proj_train_t = torch.as_tensor(
+                X_proj_train, dtype=torch.float32, device=device
+            )
+            Y_hat_nr = (X_proj_test_t @ nr_W + nr_b).cpu().numpy()
+            Y_hat_nr_train = (X_proj_train_t @ nr_W + nr_b).cpu().numpy()
+
+            nr_suf = run_sufficiency_test(
+                X_train,
+                Y_train - Y_hat_nr_train,
+                X_test,
+                Y_test,
+                Y_hat_full=Y_hat_full,
+                Y_hat_min=Y_hat_nr,
+                null_r2=None,
+                model_constructor_fn=get_ridge_model_constructor,
+            )
+            nr_cca_sim = (
+                compute_cca_similarity(Y_hat_full, Y_hat_nr)
+                if config.compute_cca
+                else None
+            )
+            nr_proc_sim = (
+                compute_procrustes_similarity(Y_hat_full, Y_hat_nr)
+                if config.compute_procrustes
+                else None
+            )
+
             metrics = {
                 "full_r2": suf["full_r2"],
                 "minimal_r2": suf["minimal_r2"],
@@ -189,6 +232,37 @@ def _run_rrr_for_unit(
                 metrics["cca_similarity"] = cca_sim
             if proc_sim is not None:
                 metrics["procrustes_similarity"] = proc_sim
+
+            # Non-reduced-rank metrics
+            metrics.update(
+                {
+                    "nr_r2": nr_suf["minimal_r2"],
+                    "nr_corr": nr_suf["minimal_corr"],
+                    "nr_recovery_r2": nr_suf["recovery_r2"],
+                    "nr_recovery_corr": nr_suf["recovery_corr"],
+                    "nr_pred_r2": nr_suf["pred_r2"],
+                }
+            )
+            if sig_mask_flat is not None:
+                for col_name, suf_key in [
+                    ("nr_corr", "minimal_corr_per_target"),
+                    ("nr_recovery_corr", "recovery_corr_per_target"),
+                ]:
+                    arr = nr_suf[suf_key]
+                    metrics[f"{col_name}_sig"] = (
+                        float(arr[sig_mask_flat].mean())
+                        if sig_mask_flat.any()
+                        else float("nan")
+                    )
+                    metrics[f"{col_name}_nonsig"] = (
+                        float(arr[~sig_mask_flat].mean())
+                        if (~sig_mask_flat).any()
+                        else float("nan")
+                    )
+            if nr_cca_sim is not None:
+                metrics["nr_cca_similarity"] = nr_cca_sim
+            if nr_proc_sim is not None:
+                metrics["nr_procrustes_similarity"] = nr_proc_sim
             save_rrr_result(rrr_unit_dir, k=k, fold=fold_f, A=A, B=B, metrics=metrics)
             all_rows.append(metrics)
 
@@ -207,6 +281,11 @@ def _run_rrr_for_unit(
         "minimal_corr",
         "recovery_corr",
         "effective_rank",
+        "nr_r2",
+        "nr_corr",
+        "nr_recovery_r2",
+        "nr_recovery_corr",
+        "nr_pred_r2",
     ]
     if sig_mask_flat is not None:
         agg_cols.extend(
@@ -217,12 +296,16 @@ def _run_rrr_for_unit(
                 "minimal_corr_nonsig",
                 "recovery_corr_sig",
                 "recovery_corr_nonsig",
+                "nr_corr_sig",
+                "nr_corr_nonsig",
+                "nr_recovery_corr_sig",
+                "nr_recovery_corr_nonsig",
             ]
         )
     if config.compute_cca:
-        agg_cols.append("cca_similarity")
+        agg_cols.extend(["cca_similarity", "nr_cca_similarity"])
     if config.compute_procrustes:
-        agg_cols.append("procrustes_similarity")
+        agg_cols.extend(["procrustes_similarity", "nr_procrustes_similarity"])
     summary = df.groupby("k")[agg_cols].mean().reset_index()
     summary.to_csv(os.path.join(rrr_unit_dir, "summary.csv"), index=False)
 
@@ -233,6 +316,31 @@ def _run_rrr_for_unit(
         grid_df=df,
         title=f"RRR: perf vs rank ({os.path.basename(rrr_unit_dir)})",
         save_path=os.path.join(rrr_unit_dir, "rank_analysis.png"),
+    )
+
+    # Non-reduced-rank plot: rename nr_ columns to standard names and reuse plotter
+    nr_col_map = {
+        "nr_r2": "minimal_r2",
+        "nr_corr": "minimal_corr",
+        "nr_recovery_r2": "recovery_r2",
+        "nr_recovery_corr": "recovery_corr",
+        "nr_pred_r2": "pred_r2",
+        "nr_corr_sig": "minimal_corr_sig",
+        "nr_corr_nonsig": "minimal_corr_nonsig",
+        "nr_recovery_corr_sig": "recovery_corr_sig",
+        "nr_recovery_corr_nonsig": "recovery_corr_nonsig",
+        "nr_cca_similarity": "cca_similarity",
+        "nr_procrustes_similarity": "procrustes_similarity",
+    }
+    # Drop original reduced-rank columns, then rename nr_ columns into their place
+    drop_cols = [v for v in nr_col_map.values() if v in df.columns]
+    nr_grid = df.drop(columns=drop_cols).rename(columns=nr_col_map)
+    nr_summary = summary.drop(columns=drop_cols).rename(columns=nr_col_map)
+    plot_rrr_rank_results(
+        nr_summary,
+        grid_df=nr_grid,
+        title=f"RRR (non-reduced ridge): perf vs rank ({os.path.basename(rrr_unit_dir)})",
+        save_path=os.path.join(rrr_unit_dir, "rank_analysis_nr.png"),
     )
 
     return df
