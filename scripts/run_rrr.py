@@ -222,6 +222,7 @@ def _run_rrr_for_unit(
                 "ridge",
                 device,
                 standardize=False,
+                alphas=np.logspace(-2, 10, 13),
             )
             X_proj_train_t = torch.as_tensor(
                 X_proj_train, dtype=torch.float32, device=device

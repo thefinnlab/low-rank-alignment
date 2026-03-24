@@ -424,6 +424,7 @@ def train_sae_alternating(
     regression_momentum: float = 1.0,
     input_jitter_std: float = 0.0,
     log_callback=None,
+    ridge_alphas: np.ndarray | None = None,
 ) -> dict:
     """Train SAE with alternating optimisation.
 
@@ -463,6 +464,9 @@ def train_sae_alternating(
             training. 0.0 = disabled (default).
         log_callback: Optional callable(Y_hat_train, Y_hat_test) -> dict of extra
             metrics to merge into the training log at each log step.
+        ridge_alphas: Optional array of ridge alpha values for RidgeCV. Overrides
+            the default grid (logspace(1, 10)) which may over-regularise when the
+            number of features is small.
 
     Returns:
         Same structure as train_sae_end_to_end.
@@ -492,7 +496,7 @@ def train_sae_alternating(
     encoder.eval()
     with torch.no_grad():
         H_init = encoder(X_tr)
-    reg_W, reg_b = solve_regression(H_init, Y_tr, regression_type, device)
+    reg_W, reg_b = solve_regression(H_init, Y_tr, regression_type, device, alphas=ridge_alphas)
 
     training_log = []
 
@@ -535,7 +539,7 @@ def train_sae_alternating(
         with torch.no_grad():
             H_train = encoder(X_tr)
 
-        opt_W, opt_b = solve_regression(H_train, Y_tr, regression_type, device)
+        opt_W, opt_b = solve_regression(H_train, Y_tr, regression_type, device, alphas=ridge_alphas)
         if regression_momentum < 1.0:
             eta = regression_momentum
             reg_W = (1 - eta) * reg_W + eta * opt_W
@@ -635,6 +639,7 @@ def solve_regression(
     regression_type: str,
     device: str,
     standardize: bool = True,
+    alphas: np.ndarray | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Solve regression (OLS or Ridge) and return (W, b) tensors.
 
@@ -643,6 +648,8 @@ def solve_regression(
             Set to False when features already have a meaningful variance
             structure (e.g. SVD-derived projections) that should not be
             equalised.
+        alphas: Optional array of ridge alpha values for RidgeCV. When
+            provided, overrides the default grid from get_ridge_model_constructor.
 
     Returns:
         reg_W: (hidden_dim, n_targets) weight tensor.
@@ -655,6 +662,8 @@ def solve_regression(
         from utils.encoding import get_ridge_model_constructor
         if standardize:
             model = get_ridge_model_constructor()(0)
+            if alphas is not None:
+                model[-1].alphas = alphas
             model.fit(H_np, Y_np)
             # Absorb StandardScaler into W, b so that H @ W + b ≈ Y.
             # model.predict(H) = ((H - mean) / scale) @ coef_raw.T + intercept
@@ -672,6 +681,8 @@ def solve_regression(
             # Ridge without StandardScaler — appropriate when feature variance
             # carries signal (e.g. SVD-ordered projections).
             ridge_model = get_ridge_model_constructor()(0)[-1]  # RidgeCV only
+            if alphas is not None:
+                ridge_model.alphas = alphas
             ridge_model.fit(H_np, Y_np)
             coef_raw = to_numpy(ridge_model.coef_)
             n_features = H_np.shape[1]

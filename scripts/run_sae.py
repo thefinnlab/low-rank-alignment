@@ -274,6 +274,7 @@ def _run_sae_for_unit(
                 regression_momentum=config.regression_momentum,
                 input_jitter_std=config.input_jitter_std,
                 log_callback=log_callback,
+                ridge_alphas=np.logspace(-2, 10, 13),
             )
         else:
             result = train_sae_end_to_end(
