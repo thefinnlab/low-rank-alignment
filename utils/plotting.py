@@ -1309,7 +1309,18 @@ def plot_sae_training_curves(training_log, title="SAE training", save_path=None,
 
         # Row 1, Panel 3: Test correlation
         ax = axes[0, 2]
-        ax.plot(log_steps, df_logged["test_corr"], marker=".", markersize=3, linewidth=1)
+        ax.plot(log_steps, df_logged["test_corr"], marker=".", markersize=3, linewidth=1, label="all")
+        # Sig/nonsig correlation split (from log callback)
+        has_corr_sig = "test_corr_sig" in df_logged.columns
+        df_corr_sig = df_logged.dropna(subset=["test_corr_sig"]) if has_corr_sig else pd.DataFrame()
+        if len(df_corr_sig) > 0:
+            ax.plot(df_corr_sig[step_col], df_corr_sig["test_corr_sig"],
+                    marker=".", markersize=2, linewidth=0.8, alpha=0.7,
+                    color="tab:blue", label="sig")
+            ax.plot(df_corr_sig[step_col], df_corr_sig["test_corr_nonsig"],
+                    marker=".", markersize=2, linewidth=0.8, alpha=0.7,
+                    color="tab:red", label="nonsig")
+            ax.legend(fontsize=7)
         ax.set_xlabel(step_col)
         ax.set_ylabel("correlation")
         ax.set_title("Test correlation")
@@ -1516,6 +1527,187 @@ def plot_sae_recovery_summary(grid_results_df, title="SAE vs RRR recovery",
                             "Sufficiency — nonsig targets (lower = better)",
                             color="tab:red")
 
+    fig.tight_layout()
+
+    if save_path is not None:
+        fig.savefig(save_path, dpi=150)
+        plt.close(fig)
+    else:
+        return fig
+
+
+# ---------------------------------------------------------------------------
+# Sweep summary plots
+# ---------------------------------------------------------------------------
+
+# Metrics to include in sweep summary, with direction (True = higher is better)
+_SWEEP_METRICS = [
+    ("correlation", True),
+    ("correlation_sig", True),
+    ("correlation_nonsig", True),
+    ("r2", True),
+    ("recovery_corr", False),
+    ("recovery_corr_sig", False),
+    ("recovery_corr_nonsig", False),
+    ("l0_sparsity", False),
+    ("dead_neurons", False),
+    ("mean_activation", None),  # None = no direction, informational
+]
+
+# Map final metric names → training log column names for start/end bars
+_METRIC_TO_TRAINING_COL = {
+    "correlation": "test_corr",
+    "correlation_sig": "test_corr_sig",
+    "correlation_nonsig": "test_corr_nonsig",
+    "r2": "test_r2",
+    "l0_sparsity": "l0_sparsity",
+    "dead_neurons": "dead_frac",
+    "recovery_corr": "recovery_corr",
+    "recovery_corr_sig": "recovery_corr_sig",
+    "recovery_corr_nonsig": "recovery_corr_nonsig",
+}
+
+
+def plot_sae_sweep_summary(combined_df, sweep_param, save_path=None,
+                           title_prefix=""):
+    """Summary figure showing how metrics vary with a swept hyperparameter.
+
+    For each metric subplot:
+    - X-axis: values of sweep_param.
+    - Best point (opaque, large): best fold-averaged metric across all other
+      swept param combinations.
+    - Other points (translucent, small): remaining combinations.
+    - Start-to-end bar: vertical line from training start to end value for the
+      best combination, showing training improvement.
+
+    Args:
+        combined_df: DataFrame with columns for sweep params, metrics, and
+            optionally {training_col}_start / {training_col}_end columns.
+        sweep_param: Name of the swept parameter to plot on x-axis.
+        save_path: If given, save figure here and close.
+        title_prefix: Prefix for figure title (e.g. "k=5").
+
+    Returns:
+        matplotlib Figure when save_path is None, else None.
+    """
+    import matplotlib.pyplot as plt
+    import pandas as pd
+
+    # Determine which metrics are actually present
+    available = [(m, d) for m, d in _SWEEP_METRICS if m in combined_df.columns]
+    if not available:
+        return None
+
+    n_metrics = len(available)
+    n_cols = min(3, n_metrics)
+    n_rows = (n_metrics + n_cols - 1) // n_cols
+    fig, axes = plt.subplots(n_rows, n_cols, figsize=(5 * n_cols, 4 * n_rows),
+                             squeeze=False)
+
+    # Identify other swept params (columns that have multiple unique values
+    # and aren't the current sweep_param or standard metric/fold columns)
+    metric_cols = {m for m, _ in _SWEEP_METRICS}
+    meta_cols = {"fold", "k", sweep_param}
+    # Add training start/end columns to non-grouping set
+    for tc in _METRIC_TO_TRAINING_COL.values():
+        meta_cols.add(f"{tc}_start")
+        meta_cols.add(f"{tc}_end")
+    other_sweep_params = [
+        c for c in combined_df.columns
+        if c not in metric_cols and c not in meta_cols
+        and combined_df[c].nunique() > 1
+        and not c.endswith("_start") and not c.endswith("_end")
+    ]
+
+    # Group by sweep_param + other sweep params, average over folds
+    group_cols = [sweep_param] + other_sweep_params
+    # Include start/end columns in aggregation
+    agg_cols = [m for m, _ in available]
+    for m, _ in available:
+        tc = _METRIC_TO_TRAINING_COL.get(m)
+        if tc:
+            for suffix in ("_start", "_end"):
+                col = f"{tc}{suffix}"
+                if col in combined_df.columns:
+                    agg_cols.append(col)
+    agg_cols = list(dict.fromkeys(agg_cols))  # deduplicate preserving order
+
+    grouped = combined_df.groupby(group_cols, as_index=False)[agg_cols].mean()
+
+    param_values = sorted(grouped[sweep_param].unique())
+
+    for idx, (metric_name, higher_is_better) in enumerate(available):
+        row, col = divmod(idx, n_cols)
+        ax = axes[row, col]
+
+        for pval in param_values:
+            subset = grouped[grouped[sweep_param] == pval]
+            values = subset[metric_name].dropna().values
+            if len(values) == 0:
+                continue
+
+            x = pval
+
+            # Determine best value
+            if higher_is_better is None:
+                best_idx = 0  # arbitrary for informational metrics
+            elif higher_is_better:
+                best_idx = np.argmax(values)
+            else:
+                best_idx = np.argmin(values)
+
+            best_val = values[best_idx]
+
+            # Plot non-best points (translucent)
+            other_vals = np.delete(values, best_idx)
+            if len(other_vals) > 0:
+                ax.scatter([x] * len(other_vals), other_vals,
+                           color="tab:blue", alpha=0.25, s=20, zorder=2)
+
+            # Plot best point (opaque)
+            ax.scatter([x], [best_val], color="tab:blue", alpha=1.0, s=60,
+                       zorder=3, edgecolors="black", linewidth=0.5)
+
+            # Start-to-end training bar for best combo
+            tc = _METRIC_TO_TRAINING_COL.get(metric_name)
+            if tc:
+                start_col = f"{tc}_start"
+                end_col = f"{tc}_end"
+                if start_col in subset.columns and end_col in subset.columns:
+                    best_row = subset.iloc[best_idx]
+                    start_v = best_row.get(start_col)
+                    end_v = best_row.get(end_col)
+                    if pd.notna(start_v) and pd.notna(end_v):
+                        ax.plot([x, x], [start_v, end_v],
+                                color="tab:gray", linewidth=2, alpha=0.5,
+                                zorder=1, solid_capstyle="round")
+                        # Small marker at start
+                        ax.scatter([x], [start_v], color="tab:gray",
+                                   marker="_", s=40, zorder=1, alpha=0.7)
+
+        ax.set_xlabel(sweep_param)
+        ax.set_ylabel(metric_name)
+        direction = ""
+        if higher_is_better is True:
+            direction = " (↑)"
+        elif higher_is_better is False:
+            direction = " (↓)"
+        ax.set_title(f"{metric_name}{direction}")
+        ax.grid(True, alpha=0.3)
+
+        # Use numeric x-axis ticks at actual param values
+        ax.set_xticks(param_values)
+        ax.set_xticklabels([str(v) for v in param_values], fontsize=8)
+
+    # Hide unused axes
+    for idx in range(n_metrics, n_rows * n_cols):
+        row, col = divmod(idx, n_cols)
+        axes[row, col].set_visible(False)
+
+    title = f"Sweep summary: {sweep_param}"
+    if title_prefix:
+        title = f"{title_prefix} — {title}"
+    fig.suptitle(title, fontsize=12)
     fig.tight_layout()
 
     if save_path is not None:

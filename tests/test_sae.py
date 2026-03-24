@@ -3,6 +3,7 @@
 import os
 
 import numpy as np
+import pandas as pd
 import pytest
 import torch
 import yaml
@@ -609,3 +610,133 @@ class TestWeightedL1Integration:
         )
         log = result["training_log"]
         assert log[-1]["total_loss"] < log[0]["total_loss"]
+
+
+# ---------------------------------------------------------------------------
+# TestSweepHelpers
+# ---------------------------------------------------------------------------
+
+class TestSweepHelpers:
+    """Tests for sweep detection, experiment_subdir, and make_scalar_config."""
+
+    def test_detect_sweep_params_no_sweep(self):
+        from utils.config import SAEConfig
+        from scripts.run_sae import _detect_sweep_params
+
+        config = SAEConfig(k=5, hidden_dim=50, l1_penalty=0.01)
+        k_values, sweep_params = _detect_sweep_params(config)
+        assert k_values == [5]
+        assert sweep_params == {}
+
+    def test_detect_sweep_params_with_lists(self):
+        from utils.config import SAEConfig
+        from scripts.run_sae import _detect_sweep_params
+
+        config = SAEConfig(k=5, hidden_dim=[10, 20], l1_penalty=[0.01, 0.1])
+        k_values, sweep_params = _detect_sweep_params(config)
+        assert k_values == [5]
+        assert sweep_params == {"hidden_dim": [10, 20], "l1_penalty": [0.01, 0.1]}
+
+    def test_detect_sweep_params_k_as_list(self):
+        from utils.config import SAEConfig
+        from scripts.run_sae import _detect_sweep_params
+
+        config = SAEConfig(k=[5, 10], hidden_dim=50)
+        k_values, sweep_params = _detect_sweep_params(config)
+        assert k_values == [5, 10]
+        assert sweep_params == {}
+
+    def test_detect_sweep_ignores_legitimate_list_fields(self):
+        """Fields typed as list (e.g. encoding.subjects) should not be treated as sweep params."""
+        from utils.config import SAEConfig, EncodingConfig
+        from scripts.run_sae import _detect_sweep_params
+
+        config = SAEConfig(
+            encoding=EncodingConfig(subjects=[1, 2, 3]),
+            k=5, hidden_dim=50,
+        )
+        k_values, sweep_params = _detect_sweep_params(config)
+        assert sweep_params == {}
+
+    def test_build_experiment_subdir_single_param(self):
+        from scripts.run_sae import _build_experiment_subdir
+
+        result = _build_experiment_subdir({"hidden_dim": 10})
+        assert result == "hidden_dim=10"
+
+    def test_build_experiment_subdir_multiple_params_sorted(self):
+        from scripts.run_sae import _build_experiment_subdir
+
+        # Keys should be sorted alphabetically regardless of insertion order
+        result = _build_experiment_subdir({"l1_penalty": 0.01, "hidden_dim": 10})
+        assert result == os.path.join("hidden_dim=10", "l1_penalty=0.01")
+
+    def test_build_experiment_subdir_empty(self):
+        from scripts.run_sae import _build_experiment_subdir
+
+        assert _build_experiment_subdir({}) is None
+
+    def test_make_scalar_config(self):
+        from utils.config import SAEConfig
+        from scripts.run_sae import _make_scalar_config
+
+        config = SAEConfig(k=[5, 10], hidden_dim=[10, 20], l1_penalty=[0.01, 0.1])
+        scalar = _make_scalar_config(config, k_value=5, overrides={"hidden_dim": 10, "l1_penalty": 0.01})
+        assert scalar.k == 5
+        assert scalar.hidden_dim == 10
+        assert scalar.l1_penalty == 0.01
+        # Original should be unchanged
+        assert config.k == [5, 10]
+        assert config.hidden_dim == [10, 20]
+
+
+# ---------------------------------------------------------------------------
+# TestPlotSAESweepSummary
+# ---------------------------------------------------------------------------
+
+class TestPlotSAESweepSummary:
+    def test_saves_png(self, tmp_path):
+        from utils.plotting import plot_sae_sweep_summary
+
+        # Synthetic sweep results DataFrame
+        rows = []
+        for hd in [10, 20, 30]:
+            for l1 in [0.01, 0.1]:
+                for fold in range(3):
+                    rows.append({
+                        "fold": fold,
+                        "hidden_dim": hd,
+                        "l1_penalty": l1,
+                        "k": 5,
+                        "correlation": np.random.rand(),
+                        "r2": np.random.rand(),
+                        "l0_sparsity": np.random.rand() * 10,
+                        "dead_neurons": np.random.rand(),
+                        "mean_activation": np.random.rand(),
+                        "recovery_corr": np.random.rand(),
+                        "test_corr_start": np.random.rand() * 0.1,
+                        "test_corr_end": np.random.rand(),
+                    })
+        df = pd.DataFrame(rows)
+        save_path = str(tmp_path / "sweep_hidden_dim.png")
+        plot_sae_sweep_summary(df, sweep_param="hidden_dim", save_path=save_path,
+                               title_prefix="k=5")
+        assert os.path.exists(save_path)
+
+    def test_returns_figure_when_no_save_path(self, tmp_path):
+        import matplotlib
+        matplotlib.use("Agg")
+        from utils.plotting import plot_sae_sweep_summary
+
+        rows = []
+        for hd in [10, 20]:
+            for fold in range(2):
+                rows.append({
+                    "fold": fold, "hidden_dim": hd, "k": 5,
+                    "correlation": np.random.rand(), "r2": np.random.rand(),
+                })
+        df = pd.DataFrame(rows)
+        fig = plot_sae_sweep_summary(df, sweep_param="hidden_dim")
+        assert fig is not None
+        import matplotlib.pyplot as plt
+        plt.close(fig)

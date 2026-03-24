@@ -59,7 +59,7 @@ Main entry points for the pipeline:
 | `run_partial_svd.py` | Partial SVD analysis; removes windows of SVD directions from embeddings, retrains ridge regression, and measures correlation drop; generates cross-subject, per-subject, and per-region sweep plots |
 | `run_rrr.py` | RRR baseline; fits RRR directly from raw embeddings to neural targets (no SVD projection); sweeps over ranks with residual R², CCA, and Procrustes metrics; supports cross_subject, per_subject, and per_region modes |
 | `run_partial_rrr.py` | Partial RRR analysis; loads RRR-learned A matrices, partials out their subspaces from embeddings, retrains ridge, and measures correlation drop; supports cross_subject, per_subject, and per_region modes |
-| `run_sae.py` | SAE analysis; projects embeddings into RRR k-dim subspace, trains sparse autoencoder + regression (end-to-end or alternating), evaluates with correlation/R²/recovery metrics; supports cross_subject, per_subject, and per_region modes |
+| `run_sae.py` | SAE analysis; projects embeddings into RRR k-dim subspace, trains sparse autoencoder + regression (end-to-end or alternating), evaluates with correlation/R²/recovery metrics; supports cross_subject, per_subject, and per_region modes. **Hyperparameter sweeps**: set any scalar config param as a list (e.g. `hidden_dim: [5, 10, 30]`, `l1_penalty: [0.005, 0.01]`) to run all combinations. Results are organized hierarchically under k directories (e.g. `sae/k5/hidden_dim=5/l1_penalty=0.005/`). Summary plots at each k directory show how metrics vary per swept parameter. |
 
 ### `utils/`
 
@@ -96,7 +96,7 @@ Unit tests with full pipeline coverage:
 | `test_partial_svd.py` | Partial SVD: `partial_out_svd_directions` orthogonality/idempotency, config round-trip, sweep window generation |
 | `test_rrr.py` | RRR utilities: `save_rrr_result`/`load_rrr_result` roundtrip, `_run_rrr_for_unit` integration, `build_XY_from_subjects` |
 | `test_partial_rrr.py` | Partial RRR: `partial_out_subspace` orthogonality/idempotency/non-orthonormal handling, sweep integration, save results, config round-trip |
-| `test_sae.py` | SAE: encoder shape/ReLU, zero-bias init, dead feature resampling, end-to-end and alternating training (loss decrease, OLS/ridge, resampling integration), metrics computation, config round-trip |
+| `test_sae.py` | SAE: encoder shape/ReLU, zero-bias init, dead feature resampling, end-to-end and alternating training (loss decrease, OLS/ridge, resampling integration), metrics computation, config round-trip, sweep detection helpers, sweep summary plot |
 | `test_significance.py` | Permutation testing, FDR correction |
 | `test_examples.py` | Context building and table generation |
 

@@ -32,9 +32,13 @@ Output layout per unit:
             sae_weights.pt, regression_weights.npy, metrics.npz, training_log.csv
 """
 
+import copy
 import gc
+import itertools
 import os
 import time
+from dataclasses import asdict, fields
+from typing import get_type_hints, get_origin, get_args, Union
 
 import numpy as np
 import pandas as pd
@@ -73,6 +77,66 @@ from utils.sae import (
 
 
 # ---------------------------------------------------------------------------
+# Sweep helpers
+# ---------------------------------------------------------------------------
+
+
+def _resolve_type(hint):
+    """Unwrap Optional[X] → X; return hint unchanged otherwise."""
+    origin = get_origin(hint)
+    if origin is Union:
+        args = [a for a in get_args(hint) if a is not type(None)]
+        if len(args) == 1:
+            return args[0]
+    return hint
+
+
+_SCALAR_TYPES = (int, float, str, bool)
+
+
+def _detect_sweep_params(config: SAEConfig):
+    """Detect which SAEConfig fields are set to lists (indicating a sweep).
+
+    Returns:
+        k_values: list of k values to sweep (single-element if scalar).
+        sweep_params: OrderedDict mapping param name → list of values (excludes k).
+    """
+    hints = get_type_hints(SAEConfig)
+    k_values = [config.k] if not isinstance(config.k, list) else config.k
+    sweep_params = {}
+    for f in fields(SAEConfig):
+        if f.name == "k":
+            continue
+        resolved = _resolve_type(hints[f.name])
+        if not isinstance(resolved, type) or not issubclass(resolved, _SCALAR_TYPES):
+            continue
+        value = getattr(config, f.name)
+        if isinstance(value, list):
+            sweep_params[f.name] = value
+    return k_values, sweep_params
+
+
+def _build_experiment_subdir(param_dict: dict) -> str | None:
+    """Build hierarchical subdir path from sweep param values.
+
+    Keys are sorted alphabetically for consistent ordering across runs.
+    Returns None if param_dict is empty.
+    """
+    if not param_dict:
+        return None
+    return os.path.join(*(f"{k}={v}" for k, v in sorted(param_dict.items())))
+
+
+def _make_scalar_config(config: SAEConfig, k_value, overrides: dict) -> SAEConfig:
+    """Return a copy of config with k and sweep params set to scalar values."""
+    cfg = copy.deepcopy(config)
+    cfg.k = k_value
+    for name, value in overrides.items():
+        setattr(cfg, name, value)
+    return cfg
+
+
+# ---------------------------------------------------------------------------
 # Core per-unit loop
 # ---------------------------------------------------------------------------
 
@@ -86,6 +150,7 @@ def _run_sae_for_unit(
     config: SAEConfig,
     n_electrodes: int | None = None,
     sig_mask_flat: np.ndarray | None = None,
+    experiment_subdir: str | None = None,
 ) -> pd.DataFrame:
     """Core SAE loop for one analysis unit (cross-subject, per-subject, or per-region).
 
@@ -100,6 +165,8 @@ def _run_sae_for_unit(
             into (n_electrodes, n_lags) for the timecourse plot). None to skip plot.
         sig_mask_flat: Optional (n_targets,) boolean mask indicating significant
             electrode-lag pairs.  Used to split recovery metrics into sig/nonsig.
+        experiment_subdir: Optional subdirectory under k_dir for sweep experiments
+            (e.g. "hidden_dim=5/l1_penalty=0.005"). None = write directly to k_dir.
 
     Returns:
         DataFrame of per-fold metrics for grid_results.csv.
@@ -135,40 +202,56 @@ def _run_sae_for_unit(
 
         print(f"  X_proj_train: {X_proj_train.shape}, Y_train: {Y_train.shape}")
 
-        # Build optional sufficiency callback for tracking recovery during training
+        # Build optional log callback for per-step metrics during training.
+        # Always active when sig_mask_flat is available (for corr sig/nonsig).
+        # Optionally includes the expensive sufficiency test.
         log_callback = None
-        if config.track_recovery_during_training:
+        if sig_mask_flat is not None or config.track_recovery_during_training:
 
-            def _sufficiency_callback(Y_hat_train, Y_hat_test):
-                suf = run_sufficiency_test(
-                    X_raw[train_idx],
-                    Y_train - Y_hat_train,
-                    X_raw[test_idx],
-                    Y_test,
-                    Y_hat_full=Y_hat_full,
-                    Y_hat_min=Y_hat_test,
-                    null_r2=None,
-                    model_constructor_fn=get_ridge_model_constructor,
-                )
-                extra = {
-                    "recovery_corr": suf["recovery_corr"],
-                    "recovery_r2": suf["recovery_r2"],
-                }
+            def _log_callback(Y_hat_train, Y_hat_test):
+                extra = {}
+                # Correlation sig/nonsig split
                 if sig_mask_flat is not None:
-                    arr = suf["recovery_corr_per_target"]
-                    extra["recovery_corr_sig"] = (
-                        float(arr[sig_mask_flat].mean())
+                    per_target = compute_correlation(Y_test, Y_hat_test)
+                    extra["test_corr_sig"] = (
+                        float(per_target[sig_mask_flat].mean())
                         if sig_mask_flat.any()
                         else float("nan")
                     )
-                    extra["recovery_corr_nonsig"] = (
-                        float(arr[~sig_mask_flat].mean())
+                    extra["test_corr_nonsig"] = (
+                        float(per_target[~sig_mask_flat].mean())
                         if (~sig_mask_flat).any()
                         else float("nan")
                     )
+                # Sufficiency test (expensive)
+                if config.track_recovery_during_training:
+                    suf = run_sufficiency_test(
+                        X_raw[train_idx],
+                        Y_train - Y_hat_train,
+                        X_raw[test_idx],
+                        Y_test,
+                        Y_hat_full=Y_hat_full,
+                        Y_hat_min=Y_hat_test,
+                        null_r2=None,
+                        model_constructor_fn=get_ridge_model_constructor,
+                    )
+                    extra["recovery_corr"] = suf["recovery_corr"]
+                    extra["recovery_r2"] = suf["recovery_r2"]
+                    if sig_mask_flat is not None:
+                        arr = suf["recovery_corr_per_target"]
+                        extra["recovery_corr_sig"] = (
+                            float(arr[sig_mask_flat].mean())
+                            if sig_mask_flat.any()
+                            else float("nan")
+                        )
+                        extra["recovery_corr_nonsig"] = (
+                            float(arr[~sig_mask_flat].mean())
+                            if (~sig_mask_flat).any()
+                            else float("nan")
+                        )
                 return extra
 
-            log_callback = _sufficiency_callback
+            log_callback = _log_callback
 
         # Train SAE + regression
         if config.training_mode == "alternating":
@@ -284,6 +367,19 @@ def _run_sae_for_unit(
             "rrr_recovery_corr": rrr_recovery_corr,
         }
         if sig_mask_flat is not None:
+            # Prediction correlation sig/nonsig split
+            per_target_corr = compute_correlation(Y_test, Y_hat_sae)
+            metrics["correlation_sig"] = (
+                float(per_target_corr[sig_mask_flat].mean())
+                if sig_mask_flat.any()
+                else float("nan")
+            )
+            metrics["correlation_nonsig"] = (
+                float(per_target_corr[~sig_mask_flat].mean())
+                if (~sig_mask_flat).any()
+                else float("nan")
+            )
+            # Recovery correlation sig/nonsig split
             for prefix in ("recovery_corr",):
                 arr = suf[f"{prefix}_per_target"]
                 metrics[f"{prefix}_sig"] = (
@@ -306,6 +402,8 @@ def _run_sae_for_unit(
 
         # Save per-fold outputs
         k_dir = os.path.join(sae_unit_dir, f"k{k}")
+        if experiment_subdir:
+            k_dir = os.path.join(k_dir, experiment_subdir)
         fold_dir = os.path.join(k_dir, f"fold_{fold_f}")
         os.makedirs(fold_dir, exist_ok=True)
 
@@ -321,9 +419,16 @@ def _run_sae_for_unit(
         npz_metrics["activation_frequency"] = m["activation_frequency"]
         np.savez(os.path.join(fold_dir, "metrics.npz"), **npz_metrics)
 
-        # Save training log and plot
+        # Save training log and extract start/end values for sweep summary
         log_df = pd.DataFrame(result["training_log"])
         log_df.to_csv(os.path.join(fold_dir, "training_log.csv"), index=False)
+
+        for tl_metric in _TRAINING_LOG_METRICS:
+            if tl_metric in log_df.columns:
+                col = log_df[tl_metric].dropna()
+                if len(col) > 0:
+                    metrics[f"{tl_metric}_start"] = float(col.iloc[0])
+                    metrics[f"{tl_metric}_end"] = float(col.iloc[-1])
 
         from utils.plotting import plot_sae_training_curves
 
@@ -415,6 +520,7 @@ def _run_cross_subject_sae(
     sig_electrodes,
     aligned_embeddings,
     df_word,
+    experiment_subdir=None,
 ):
     """SAE on RRR-projected embeddings using all subjects' significant electrodes."""
     enc_results = load_encoding_results(
@@ -454,7 +560,7 @@ def _run_cross_subject_sae(
         enc_results,
     )
 
-    _run_sae_for_unit(
+    return _run_sae_for_unit(
         sae_unit_dir=sae_dir,
         rrr_unit_dir=rrr_source_dir,
         X_raw=X_ref,
@@ -463,6 +569,7 @@ def _run_cross_subject_sae(
         config=config,
         n_electrodes=total_electrodes,
         sig_mask_flat=sig_mask_flat,
+        experiment_subdir=experiment_subdir,
     )
 
 
@@ -481,8 +588,10 @@ def _run_per_subject_sae(
     sig_electrodes,
     aligned_embeddings,
     df_word,
+    experiment_subdir=None,
 ):
     """SAE on RRR-projected embeddings independently per subject."""
+    unit_dfs = []
     subjects_to_run = subject_ids
     if config.max_subjects is not None:
         subjects_to_run = subjects_to_run[: config.max_subjects]
@@ -533,16 +642,21 @@ def _run_per_subject_sae(
             output_dir, {sub_id: sub_sig_elecs}, enc_results
         )
 
-        _run_sae_for_unit(
-            sae_unit_dir=sae_sub_dir,
-            rrr_unit_dir=rrr_sub_dir,
-            X_raw=X_arr,
-            test_idxs=test_idxs,
-            per_fold_baselines=per_fold_baselines,
-            config=config,
-            n_electrodes=n_elecs_sub,
-            sig_mask_flat=sig_mask_flat,
+        unit_dfs.append(
+            _run_sae_for_unit(
+                sae_unit_dir=sae_sub_dir,
+                rrr_unit_dir=rrr_sub_dir,
+                X_raw=X_arr,
+                test_idxs=test_idxs,
+                per_fold_baselines=per_fold_baselines,
+                config=config,
+                n_electrodes=n_elecs_sub,
+                sig_mask_flat=sig_mask_flat,
+                experiment_subdir=experiment_subdir,
+            )
         )
+
+    return unit_dfs
 
 
 # ---------------------------------------------------------------------------
@@ -560,6 +674,7 @@ def _run_per_region_sae(
     sig_electrodes,
     aligned_embeddings,
     df_word,
+    experiment_subdir=None,
 ):
     """SAE on RRR-projected embeddings independently per atlas region."""
     enc_results = load_encoding_results(
@@ -578,6 +693,7 @@ def _run_per_region_sae(
     )
     print(f"  Regions found: {list(electrode_region_map.keys())}")
 
+    unit_dfs = []
     regions_to_run = list(electrode_region_map.items())
     if config.max_regions is not None:
         regions_to_run = regions_to_run[: config.max_regions]
@@ -623,21 +739,44 @@ def _run_per_region_sae(
             output_dir, per_subject_region_elecs, enc_results
         )
 
-        _run_sae_for_unit(
-            sae_unit_dir=sae_region_dir,
-            rrr_unit_dir=rrr_region_dir,
-            X_raw=X_ref,
-            test_idxs=ref_test_idxs,
-            per_fold_baselines=per_fold_baselines,
-            config=config,
-            n_electrodes=region_n_electrodes,
-            sig_mask_flat=sig_mask_flat,
+        unit_dfs.append(
+            _run_sae_for_unit(
+                sae_unit_dir=sae_region_dir,
+                rrr_unit_dir=rrr_region_dir,
+                X_raw=X_ref,
+                test_idxs=ref_test_idxs,
+                per_fold_baselines=per_fold_baselines,
+                config=config,
+                n_electrodes=region_n_electrodes,
+                sig_mask_flat=sig_mask_flat,
+                experiment_subdir=experiment_subdir,
+            )
         )
+
+    return unit_dfs
+
+
+# Metrics to extract start/end values from training logs
+_TRAINING_LOG_METRICS = [
+    "test_corr", "test_r2", "l0_sparsity", "dead_frac",
+    "test_corr_sig", "test_corr_nonsig",
+    "recovery_corr", "recovery_corr_sig", "recovery_corr_nonsig",
+]
 
 
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
+
+
+def _dispatch_branch(config, branch_kwargs):
+    """Call the appropriate branch function based on config.mode."""
+    if config.mode == SVDMode.PER_REGION:
+        return _run_per_region_sae(**branch_kwargs)
+    elif config.mode == SVDMode.PER_SUBJECT:
+        return _run_per_subject_sae(**branch_kwargs)
+    else:
+        return _run_cross_subject_sae(**branch_kwargs)
 
 
 def main():
@@ -680,16 +819,6 @@ def main():
     print(f"RRR source dir:  {rrr_source_dir}")
     print(f"Mode:            {config.mode.value}")
     print(f"Training mode:   {config.training_mode}")
-    print(f"k={config.k}, hidden_dim={config.hidden_dim}, l1={config.l1_penalty}")
-
-    # Save config for reproducibility
-    k_dir = os.path.join(sae_dir, f"k{config.k}")
-    os.makedirs(k_dir, exist_ok=True)
-    config_save_path = os.path.join(k_dir, "config.yml")
-    from dataclasses import asdict
-
-    with open(config_save_path, "w") as f:
-        yaml.dump(asdict(config), f, default_flow_style=False)
 
     # Load significance CSV and build subject → electrode mapping
     sig_electrodes, _ = load_sig_electrodes(output_dir, subject_ids)
@@ -698,24 +827,128 @@ def main():
     print("Loading embeddings...")
     aligned_embeddings, df_word = load_embeddings(enc.data_root, enc.layer)
 
-    branch_kwargs = dict(
-        config=config,
-        enc=enc,
-        output_dir=output_dir,
-        sae_dir=sae_dir,
-        rrr_source_dir=rrr_source_dir,
-        subject_ids=subject_ids,
-        sig_electrodes=sig_electrodes,
-        aligned_embeddings=aligned_embeddings,
-        df_word=df_word,
-    )
+    # Detect sweep parameters
+    k_values, sweep_params = _detect_sweep_params(config)
+    is_sweep = bool(sweep_params) or len(k_values) > 1
 
-    if config.mode == SVDMode.PER_REGION:
-        _run_per_region_sae(**branch_kwargs)
-    elif config.mode == SVDMode.PER_SUBJECT:
-        _run_per_subject_sae(**branch_kwargs)
+    if not is_sweep:
+        # --- No sweep: existing behaviour ---
+        print(f"k={config.k}, hidden_dim={config.hidden_dim}, l1={config.l1_penalty}")
+
+        # Save config for reproducibility
+        k_dir = os.path.join(sae_dir, f"k{config.k}")
+        os.makedirs(k_dir, exist_ok=True)
+        with open(os.path.join(k_dir, "config.yml"), "w") as f:
+            yaml.dump(asdict(config), f, default_flow_style=False)
+
+        branch_kwargs = dict(
+            config=config,
+            enc=enc,
+            output_dir=output_dir,
+            sae_dir=sae_dir,
+            rrr_source_dir=rrr_source_dir,
+            subject_ids=subject_ids,
+            sig_electrodes=sig_electrodes,
+            aligned_embeddings=aligned_embeddings,
+            df_word=df_word,
+        )
+        _dispatch_branch(config, branch_kwargs)
     else:
-        _run_cross_subject_sae(**branch_kwargs)
+        # --- Sweep mode ---
+        print(f"k values: {k_values}")
+        if sweep_params:
+            for name, vals in sweep_params.items():
+                print(f"  sweep {name}: {vals}")
+
+        combos = list(itertools.product(*sweep_params.values())) if sweep_params else [()]
+        combo_keys = list(sweep_params.keys())
+        total_experiments = len(k_values) * len(combos)
+        print(f"Total experiments: {total_experiments}")
+
+        # Save the full sweep config (with list values) at the sae_dir level
+        with open(os.path.join(sae_dir, "sweep_config.yml"), "w") as f:
+            yaml.dump(asdict(config), f, default_flow_style=False)
+
+        all_k_results = []
+
+        for k_val in k_values:
+            print(f"\n{'='*60}\nk = {k_val}\n{'='*60}")
+            k_dir = os.path.join(sae_dir, f"k{k_val}")
+            os.makedirs(k_dir, exist_ok=True)
+            k_experiment_results = []
+
+            for combo_i, combo in enumerate(combos):
+                param_dict = dict(zip(combo_keys, combo))
+                scalar_config = _make_scalar_config(config, k_val, param_dict)
+                experiment_subdir = _build_experiment_subdir(param_dict)
+
+                exp_label = ", ".join(f"{k}={v}" for k, v in sorted(param_dict.items()))
+                print(f"\n--- Experiment {combo_i + 1}/{len(combos)}: k={k_val}, {exp_label} ---")
+
+                # Save per-experiment config
+                exp_dir = os.path.join(k_dir, experiment_subdir) if experiment_subdir else k_dir
+                os.makedirs(exp_dir, exist_ok=True)
+                with open(os.path.join(exp_dir, "config.yml"), "w") as f:
+                    yaml.dump(asdict(scalar_config), f, default_flow_style=False)
+
+                branch_kwargs = dict(
+                    config=scalar_config,
+                    enc=enc,
+                    output_dir=output_dir,
+                    sae_dir=sae_dir,
+                    rrr_source_dir=rrr_source_dir,
+                    subject_ids=subject_ids,
+                    sig_electrodes=sig_electrodes,
+                    aligned_embeddings=aligned_embeddings,
+                    df_word=df_word,
+                    experiment_subdir=experiment_subdir,
+                )
+                df_result = _dispatch_branch(scalar_config, branch_kwargs)
+
+                # Normalise result to a single DataFrame
+                if isinstance(df_result, list):
+                    df_result = pd.concat(df_result, ignore_index=True) if df_result else pd.DataFrame()
+                if df_result is not None and not df_result.empty:
+                    for pname, pval in param_dict.items():
+                        df_result[pname] = pval
+                    df_result["k"] = k_val
+                    k_experiment_results.append(df_result)
+
+                gc.collect()
+
+            if k_experiment_results:
+                combined_k = pd.concat(k_experiment_results, ignore_index=True)
+                combined_k.to_csv(os.path.join(k_dir, "sweep_results.csv"), index=False)
+                all_k_results.append(combined_k)
+
+                # Generate per-k summary plots (one per swept param)
+                if sweep_params:
+                    from utils.plotting import plot_sae_sweep_summary
+
+                    for param_name in sweep_params:
+                        plot_sae_sweep_summary(
+                            combined_k,
+                            sweep_param=param_name,
+                            save_path=os.path.join(k_dir, f"sweep_{param_name}.png"),
+                            title_prefix=f"k={k_val}",
+                        )
+
+        # Root-level summary if multiple k values
+        if len(k_values) > 1 and all_k_results:
+            full_combined = pd.concat(all_k_results, ignore_index=True)
+            full_combined.to_csv(os.path.join(sae_dir, "sweep_results.csv"), index=False)
+
+            from utils.plotting import plot_sae_sweep_summary
+
+            # Summary per swept param across k values
+            sweep_params_with_k = {"k": k_values, **sweep_params}
+            for param_name in sweep_params_with_k:
+                plot_sae_sweep_summary(
+                    full_combined,
+                    sweep_param=param_name,
+                    save_path=os.path.join(sae_dir, f"sweep_{param_name}.png"),
+                    title_prefix="all k",
+                )
 
     print("\nDone.")
 
