@@ -221,6 +221,7 @@ def _run_rrr_for_unit(
                 torch.as_tensor(Y_train, dtype=torch.float32, device=device),
                 "ridge",
                 device,
+                standardize=False,
             )
             X_proj_train_t = torch.as_tensor(
                 X_proj_train, dtype=torch.float32, device=device
@@ -265,6 +266,7 @@ def _run_rrr_for_unit(
                 "nr_recovery_r2": nr_suf["recovery_r2"],
                 "nr_recovery_corr": nr_suf["recovery_corr"],
                 "nr_pred_r2": nr_suf["pred_r2"],
+                "nr_corr_per_target": nr_suf["minimal_corr_per_target"],
             })
             if sig_mask_flat is not None:
                 _add_sig_nonsig_corrs(metrics, nr_suf, sig_mask_flat, [

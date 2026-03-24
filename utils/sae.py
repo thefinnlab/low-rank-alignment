@@ -634,8 +634,15 @@ def solve_regression(
     Y: torch.Tensor,
     regression_type: str,
     device: str,
+    standardize: bool = True,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Solve regression (OLS or Ridge) and return (W, b) tensors.
+
+    Args:
+        standardize: When True (default), apply StandardScaler before ridge.
+            Set to False when features already have a meaningful variance
+            structure (e.g. SVD-derived projections) that should not be
+            equalised.
 
     Returns:
         reg_W: (hidden_dim, n_targets) weight tensor.
@@ -646,20 +653,33 @@ def solve_regression(
 
     if regression_type == "ridge":
         from utils.encoding import get_ridge_model_constructor
-        model = get_ridge_model_constructor()(0)
-        model.fit(H_np, Y_np)
-        # Absorb StandardScaler into W, b so that H @ W + b ≈ Y.
-        # model.predict(H) = ((H - mean) / scale) @ coef_raw.T + intercept
-        # = H @ diag(1/scale) @ coef_raw.T + intercept - (mean/scale) @ coef_raw.T
-        coef_raw = to_numpy(model[-1].coef_)  # may be (n_targets, n_features) or transposed
-        n_features = H_np.shape[1]
-        if coef_raw.shape != (Y_np.shape[1], n_features):
-            coef_raw = coef_raw.T  # → (n_targets, n_features)
-        sc_mean = model[0].mean_   # (n_features,)
-        sc_scale = model[0].scale_ # (n_features,)
-        intercept = to_numpy(model[-1].intercept_)  # (n_targets,)
-        W = (coef_raw / sc_scale[np.newaxis, :]).T   # (n_features, n_targets)
-        b = intercept - (sc_mean / sc_scale) @ coef_raw.T  # (n_targets,)
+        if standardize:
+            model = get_ridge_model_constructor()(0)
+            model.fit(H_np, Y_np)
+            # Absorb StandardScaler into W, b so that H @ W + b ≈ Y.
+            # model.predict(H) = ((H - mean) / scale) @ coef_raw.T + intercept
+            # = H @ diag(1/scale) @ coef_raw.T + intercept - (mean/scale) @ coef_raw.T
+            coef_raw = to_numpy(model[-1].coef_)  # may be (n_targets, n_features) or transposed
+            n_features = H_np.shape[1]
+            if coef_raw.shape != (Y_np.shape[1], n_features):
+                coef_raw = coef_raw.T  # → (n_targets, n_features)
+            sc_mean = model[0].mean_   # (n_features,)
+            sc_scale = model[0].scale_ # (n_features,)
+            intercept = to_numpy(model[-1].intercept_)  # (n_targets,)
+            W = (coef_raw / sc_scale[np.newaxis, :]).T   # (n_features, n_targets)
+            b = intercept - (sc_mean / sc_scale) @ coef_raw.T  # (n_targets,)
+        else:
+            # Ridge without StandardScaler — appropriate when feature variance
+            # carries signal (e.g. SVD-ordered projections).
+            ridge_model = get_ridge_model_constructor()(0)[-1]  # RidgeCV only
+            ridge_model.fit(H_np, Y_np)
+            coef_raw = to_numpy(ridge_model.coef_)
+            n_features = H_np.shape[1]
+            if coef_raw.shape != (Y_np.shape[1], n_features):
+                coef_raw = coef_raw.T  # → (n_targets, n_features)
+            intercept = to_numpy(ridge_model.intercept_)
+            W = coef_raw.T  # (n_features, n_targets)
+            b = intercept   # (n_targets,)
         return (
             to_torch(W.astype(np.float32), device=device),
             to_torch(b.astype(np.float32), device=device),

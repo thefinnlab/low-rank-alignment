@@ -72,7 +72,6 @@ from utils.srrr import (
 from utils.sae import (
     train_sae_end_to_end,
     train_sae_alternating,
-    solve_regression,
 )
 
 
@@ -307,27 +306,13 @@ def _run_sae_for_unit(
             fold_corrs_sae.append(per_target_corr_sae.reshape(n_electrodes, n_lags))
             fold_corrs_full.append(per_target_corr_full.reshape(n_electrodes, n_lags))
 
-            # RRR-direct baseline: regress from k-dim projected space to Y
-            # using the same regression approach as the SAE pipeline
-            regression_type = (
-                config.regression_type
-                if config.training_mode == "alternating"
-                else "ridge"
-            )
-            device = "cuda" if torch.cuda.is_available() else "cpu"
-            X_proj_train_t = torch.as_tensor(
-                X_proj_train, dtype=torch.float32, device=device
-            )
-            X_proj_test_t = torch.as_tensor(
-                X_proj_test, dtype=torch.float32, device=device
-            )
-            Y_train_t = torch.as_tensor(Y_train, dtype=torch.float32, device=device)
-            rrr_W, rrr_b = solve_regression(
-                X_proj_train_t, Y_train_t, regression_type, device
-            )
-            Y_hat_rrr = (X_proj_test_t @ rrr_W + rrr_b).cpu().numpy()
-            per_target_corr_rrr = compute_correlation(Y_test, Y_hat_rrr)
-            fold_corrs_rrr.append(per_target_corr_rrr.reshape(n_electrodes, n_lags))
+            # NR ridge baseline: load per-target correlations from saved RRR results
+            rrr_metrics = rrr_result.get("metrics", {})
+            nr_corr_per_target = rrr_metrics.get("nr_corr_per_target")
+            if nr_corr_per_target is not None:
+                fold_corrs_rrr.append(
+                    np.asarray(nr_corr_per_target).reshape(n_electrodes, n_lags)
+                )
 
         # Recovery test: partial out SAE predictions and retrain ridge on residuals
         suf = run_sufficiency_test(
@@ -344,11 +329,11 @@ def _run_sae_for_unit(
             f"  Recovery test R²: {suf['recovery_r2']:.4f}, corr: {suf['recovery_corr']:.4f}"
         )
 
-        # Load RRR baseline metrics at same k for comparison
+        # Load NR ridge baseline metrics at same k for comparison
         rrr_baseline_metrics = rrr_result.get("metrics", {})
-        rrr_baseline_r2 = float(rrr_baseline_metrics.get("minimal_r2", np.nan))
-        rrr_baseline_corr = float(rrr_baseline_metrics.get("minimal_corr", np.nan))
-        rrr_recovery_corr = float(rrr_baseline_metrics.get("recovery_corr", np.nan))
+        rrr_baseline_r2 = float(rrr_baseline_metrics.get("nr_r2", np.nan))
+        rrr_baseline_corr = float(rrr_baseline_metrics.get("nr_corr", np.nan))
+        rrr_recovery_corr = float(rrr_baseline_metrics.get("nr_recovery_corr", np.nan))
 
         # Assemble metrics row
         m = result["metrics"]
