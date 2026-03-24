@@ -378,6 +378,11 @@ def _run_sae_for_unit(
         corrs_rrr = np.stack(fold_corrs_rrr, axis=0)  # (n_folds, n_electrodes, n_lags)
         n_lags = corrs_sae.shape[2]
         lags = np.linspace(-2.0, 2.0, n_lags, endpoint=False)
+        sig_mask_2d = (
+            sig_mask_flat.reshape(n_electrodes, n_lags)
+            if sig_mask_flat is not None
+            else None
+        )
         plot_sae_corrs_vs_full(
             corrs_sae,
             corrs_full,
@@ -385,6 +390,7 @@ def _run_sae_for_unit(
             corrs_rrr=corrs_rrr,
             title=f"SAE vs RRR vs full model — k={k}",
             save_path=os.path.join(k_dir, "corrs_sae_vs_full.png"),
+            sig_mask=sig_mask_2d,
         )
         # Save correlation arrays for downstream use
         np.save(os.path.join(k_dir, "corrs_sae.npy"), corrs_sae)

@@ -258,10 +258,10 @@ def add_corrs(
     if electrode is not None:
         data = corrs[:, electrode, :]  # (n_folds, n_lags)
     else:
-        data = corrs.mean(axis=1)  # average over electrodes → (n_folds, n_lags)
+        data = np.nanmean(corrs, axis=1)  # average over electrodes → (n_folds, n_lags)
 
-    mean = data.mean(axis=0)
-    sem = data.std(axis=0) / np.sqrt(data.shape[0])
+    mean = np.nanmean(data, axis=0)
+    sem = np.nanstd(data, axis=0) / np.sqrt(data.shape[0])
 
     kwargs = dict(color=color, label=label)
     if linestyle is not None:
@@ -1175,7 +1175,7 @@ def plot_corrs_vs_arbitrary(corrs, corrs_arb, lags, save_path=None):
 
 
 def plot_sae_corrs_vs_full(corrs_sae, corrs_full, lags, corrs_rrr=None,
-                           title=None, save_path=None):
+                           title=None, save_path=None, sig_mask=None):
     """Plot SAE correlation timecourse vs full encoding model baseline.
 
     Args:
@@ -1186,20 +1186,47 @@ def plot_sae_corrs_vs_full(corrs_sae, corrs_full, lags, corrs_rrr=None,
             per-target correlations (linear regression from RRR subspace, no SAE).
         title: Optional plot title.
         save_path: If given, save figure here; otherwise call plt.show().
+        sig_mask: Optional (n_electrodes, n_lags) boolean mask of significant pairs.
+            When provided, two additional panels are added for sig-only and nonsig-only.
     """
     import matplotlib.pyplot as plt
 
-    fig, ax = plt.subplots(figsize=(8, 4))
-    add_corrs(corrs_full, lags, label="Full model", color="blue", ax=ax)
-    if corrs_rrr is not None:
-        add_corrs(corrs_rrr, lags, label="RRR direct", color="green", ax=ax)
-    add_corrs(corrs_sae, lags, label="SAE", color="orange", ax=ax)
-    ax.axhline(0, color="black", linewidth=0.5)
-    ax.set_xlabel("Lag (s)")
-    ax.set_ylabel("Correlation")
-    if title:
-        ax.set_title(title)
-    ax.legend()
+    ncols = 3 if sig_mask is not None else 1
+    fig, axes = plt.subplots(1, ncols, figsize=(8 * ncols, 4), squeeze=False)
+
+    def _plot_panel(ax, corrs_sae_p, corrs_full_p, corrs_rrr_p, panel_title):
+        add_corrs(corrs_full_p, lags, label="Full model", color="blue", ax=ax)
+        if corrs_rrr_p is not None:
+            add_corrs(corrs_rrr_p, lags, label="RRR direct", color="green", ax=ax)
+        add_corrs(corrs_sae_p, lags, label="SAE", color="orange", ax=ax)
+        ax.axhline(0, color="black", linewidth=0.5)
+        ax.set_xlabel("Lag (s)")
+        ax.set_ylabel("Correlation")
+        ax.set_title(panel_title)
+        ax.legend()
+
+    # Panel 1: all electrode-lag pairs
+    panel_title = title or "All"
+    _plot_panel(axes[0, 0], corrs_sae, corrs_full, corrs_rrr, panel_title)
+
+    if sig_mask is not None:
+        mask = sig_mask[None, :, :]  # broadcast to (1, n_electrodes, n_lags)
+
+        # Panel 2: significant pairs only
+        corrs_sae_sig = np.where(mask, corrs_sae, np.nan)
+        corrs_full_sig = np.where(mask, corrs_full, np.nan)
+        corrs_rrr_sig = np.where(mask, corrs_rrr, np.nan) if corrs_rrr is not None else None
+        _plot_panel(axes[0, 1], corrs_sae_sig, corrs_full_sig, corrs_rrr_sig,
+                    "Significant only")
+
+        # Panel 3: non-significant pairs only
+        nonsig = ~mask
+        corrs_sae_nonsig = np.where(nonsig, corrs_sae, np.nan)
+        corrs_full_nonsig = np.where(nonsig, corrs_full, np.nan)
+        corrs_rrr_nonsig = np.where(nonsig, corrs_rrr, np.nan) if corrs_rrr is not None else None
+        _plot_panel(axes[0, 2], corrs_sae_nonsig, corrs_full_nonsig, corrs_rrr_nonsig,
+                    "Non-significant only")
+
     fig.tight_layout()
 
     if save_path is not None:
