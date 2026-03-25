@@ -335,7 +335,7 @@ class TestPredictFromFactors:
 # ---------------------------------------------------------------------------
 
 class TestBuildNullDistribution:
-    def test_shape(self, small_data):
+    def test_shape_ols(self, small_data):
         X, Y = small_data
         n_train = 40
         X_train, X_test = X[:n_train], X[n_train:]
@@ -345,6 +345,19 @@ class TestBuildNullDistribution:
             X_train, Y_train, X_test, Y_test,
             regression_type="ols",
             k=2, n_permutations=n_perms, device="cpu", seed=0,
+        )
+        assert null.shape == (n_perms,)
+
+    def test_shape_ridge(self, small_data):
+        X, Y = small_data
+        n_train = 40
+        X_train, X_test = X[:n_train], X[n_train:]
+        Y_train, Y_test = Y[:n_train], Y[n_train:]
+        n_perms = 8
+        null = build_null_distribution(
+            X_train, Y_train, X_test, Y_test,
+            regression_type="ridge",
+            n_permutations=n_perms, device="cpu", seed=0,
         )
         assert null.shape == (n_perms,)
 
@@ -403,7 +416,7 @@ class TestRunSufficiencyTest:
         Y_test = rng.standard_normal((n_test, n_targets)).astype(np.float64)
         return X_train, Y_train, X_test, Y_test
 
-    def test_sufficient_when_min_equals_full(self, rng):
+    def test_sufficient_when_min_equals_full_ridge(self, rng):
         X_train, Y_train, X_test, Y_test = self._split(rng, 30, 20, 8, 4)
         null = self._make_null(rng)
         # When Y_hat_min == Y_test, residuals are zero → recovery_r2 ≈ 0
@@ -411,14 +424,14 @@ class TestRunSufficiencyTest:
         result = run_sufficiency_test(
             X_train, Y_resid_train, X_test, Y_test,
             Y_hat_full=Y_test, Y_hat_min=Y_test, null_r2=null,
-            regression_type="ols",
+            regression_type="ridge",
         )
         assert result["sufficient"]
 
-    def test_not_sufficient_when_large_residual(self, rng):
+    def test_not_sufficient_when_large_residual_ridge(self, rng):
         n_dirs, n_targets = 6, 3
-        X_train = rng.standard_normal((40, n_dirs)).astype(np.float64)
-        X_test = rng.standard_normal((20, n_dirs)).astype(np.float64)
+        X_train = rng.standard_normal((40, n_dirs)).astype(np.float32)
+        X_test = rng.standard_normal((20, n_dirs)).astype(np.float32)
         # Y linearly recoverable from X
         Y_train = X_train[:, :n_targets]
         Y_test = X_test[:, :n_targets]
@@ -431,7 +444,7 @@ class TestRunSufficiencyTest:
         result = run_sufficiency_test(
             X_train, Y_resid_train, X_test, Y_test,
             Y_hat_full=Y_hat_full, Y_hat_min=Y_hat_min, null_r2=null,
-            regression_type="ols",
+            regression_type="ridge",
         )
         assert not result["sufficient"]
 
