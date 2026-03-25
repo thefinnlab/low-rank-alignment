@@ -23,8 +23,10 @@ Output layout per unit (subject or region):
     {rrr_unit_dir}/
         grid_results.csv
         summary.csv
+        fold_{f}/
+            A.npy, B.npy          (full-rank factor matrices, shared across k)
         k{k}/fold_{f}/
-            A.npy, B.npy, metrics.npz
+            metrics.npz
 """
 
 import gc
@@ -62,6 +64,7 @@ from utils.srrr import (
     fit_dense_rrr,
     predict_from_factors,
     run_sufficiency_test,
+    save_rrr_factors,
     save_rrr_result,
 )
 
@@ -181,20 +184,31 @@ def _run_rrr_for_unit(
         Y_hat_full = baseline["Y_hat_full_test"]
         Y_hat_ols_train = baseline["Y_hat_full_train"]
 
+        # Fit RRR once at max rank — the SVD is identical for all k values;
+        # only the truncation point differs.
+        max_k = max(config.rank_grid)
+        rrr_result = fit_dense_rrr(
+            X_train,
+            Y_train,
+            k=max_k,
+            selected_idx=selected_idx,
+            precomputed_Y_hat_ols=Y_hat_ols_train,
+            precomputed_beta_full=baseline["beta_full_raw"],
+        )
+        A_full = rrr_result["A_dense"]
+        B_full = rrr_result["B_dense"]
+        save_rrr_factors(rrr_unit_dir, fold=fold_f, A=A_full, B=B_full)
+
+        import torch
+
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+
         print(f"  Running {len(config.rank_grid)} rank(s): {config.rank_grid}")
         for k in tqdm(
             config.rank_grid, desc=f"  fold {fold_f}", leave=True, unit="rank"
         ):
-            rrr_result = fit_dense_rrr(
-                X_train,
-                Y_train,
-                k=k,
-                selected_idx=selected_idx,
-                precomputed_Y_hat_ols=Y_hat_ols_train,
-                precomputed_beta_full=baseline["beta_full_raw"],
-            )
-            A = rrr_result["A_dense"]
-            B = rrr_result["B_dense"]
+            A = A_full[:, :k]
+            B = B_full[:, :k]
 
             # Effective rank of A (may be < k if A is rank-deficient)
             sv = np.linalg.svd(A, compute_uv=False)
@@ -211,9 +225,6 @@ def _run_rrr_for_unit(
             )
 
             # Non-reduced-rank ridge from k-dim subspace
-            import torch
-
-            device = "cuda" if torch.cuda.is_available() else "cpu"
             X_proj_train = X_train @ A  # (n_train, k)
             X_proj_test = X_test @ A  # (n_test, k)
             nr_W, nr_b = solve_regression(
@@ -278,7 +289,7 @@ def _run_rrr_for_unit(
                 metrics["nr_cca_similarity"] = nr_cca_sim
             if nr_proc_sim is not None:
                 metrics["nr_procrustes_similarity"] = nr_proc_sim
-            save_rrr_result(rrr_unit_dir, k=k, fold=fold_f, A=A, B=B, metrics=metrics)
+            save_rrr_result(rrr_unit_dir, k=k, fold=fold_f, metrics=metrics)
             all_rows.append(metrics)
 
         print(f"  Fold {fold_f} done in {time.time() - fold_start:.1f}s")
