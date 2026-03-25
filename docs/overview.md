@@ -109,6 +109,7 @@ Exploratory Jupyter notebooks (not part of the main pipeline):
 | `cluster-extraction.py` | Cluster analysis on neural/embedding data |
 | `dictionary.py` | Word dictionary and vocabulary analysis |
 | `word-analysis.py` | Word-level qualitative analysis |
+| `rrr-srrr-review.py` | Interactive marimo notebook for RRR interpretability: direction word activations, B-matrix temporal/spatial visualization (nilearn brain maps), cross-fold consistency, cross-source comparison, cross-region electrode similarity, and activation statistics |
 | `svd-interpretability.py` | Interactive marimo notebook for SVD direction interpretability, fold consistency, cross-source comparison, and subspace analyses |
 
 ### `processed_data/`

@@ -13,6 +13,7 @@ def load_raws(
     signal_unit=None,
     per_subject_electrodes=None,
     channel_reg_ex=None,
+    no_preload=False,
 ):
     """
     Loads raw iEEG data with YAML-configurable preprocessing.
@@ -47,7 +48,7 @@ def load_raws(
         if not os.path.exists(file_path):
             raise FileNotFoundError(f"Data file not found: {file_path}")
 
-        raw = mne.io.read_raw_fif(file_path, preload=True, verbose=False)
+        raw = mne.io.read_raw_fif(file_path, preload=not no_preload, verbose=False)
 
         if target_sr is not None:
             if int(raw.info["sfreq"]) != int(target_sr):
