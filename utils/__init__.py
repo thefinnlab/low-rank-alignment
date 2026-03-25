@@ -1,7 +1,7 @@
 # Public API for the utils package.
 # Import the most commonly used functions for convenience.
 
-from utils.constants import RIDGE_ALPHAS
+from utils.constants import RIDGE_ALPHAS, refine_alpha_grid, check_alpha_grid_boundaries
 from utils.tensor_utils import to_numpy, to_torch
 from utils.config import EncodingConfig, SignificanceConfig, SVDConfig, SRRRConfig, RRRConfig, PartialSVDConfig, PartialRRRConfig, SAEConfig, SVDMode, get_results_dir
 from utils.config_utils import (
@@ -38,6 +38,8 @@ from utils.encoding import (
     save_subject_results,
     load_all_subject_correlations,
     load_all_subject_coefficients,
+    extract_best_alphas,
+    train_encoding_two_pass,
 )
 from utils.plotting import (
     add_corrs,
@@ -50,6 +52,8 @@ from utils.plotting import (
     plot_partial_rrr_sweep,
     plot_sae_training_curves,
     plot_sae_recovery_summary,
+    plot_alpha_diagnostics,
+    plot_alpha_vs_rank,
 )
 from utils.significance import (
     batch_corrcoef,
@@ -116,6 +120,8 @@ from utils.examples import (
 __all__ = [
     # constants
     "RIDGE_ALPHAS",
+    "refine_alpha_grid",
+    "check_alpha_grid_boundaries",
     # tensor utils
     "to_numpy",
     "to_torch",
@@ -161,6 +167,8 @@ __all__ = [
     "save_subject_results",
     "load_all_subject_correlations",
     "load_all_subject_coefficients",
+    "extract_best_alphas",
+    "train_encoding_two_pass",
     # plotting
     "add_corrs",
     "plot_corrs_vs_arbitrary",
@@ -172,6 +180,8 @@ __all__ = [
     "plot_partial_rrr_sweep",
     "plot_sae_training_curves",
     "plot_sae_recovery_summary",
+    "plot_alpha_diagnostics",
+    "plot_alpha_vs_rank",
     # significance
     "batch_corrcoef",
     "significant_lags_all_electrodes_gpu",

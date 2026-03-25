@@ -640,7 +640,8 @@ def solve_regression(
     device: str,
     standardize: bool = True,
     alphas: np.ndarray | None = None,
-) -> tuple[torch.Tensor, torch.Tensor]:
+    return_alphas: bool = False,
+) -> tuple[torch.Tensor, torch.Tensor] | tuple[torch.Tensor, torch.Tensor, np.ndarray]:
     """Solve regression (OLS or Ridge) and return (W, b) tensors.
 
     Args:
@@ -650,10 +651,16 @@ def solve_regression(
             equalised.
         alphas: Optional array of ridge alpha values for RidgeCV. When
             provided, overrides the default grid from get_ridge_model_constructor.
+        return_alphas: When True and regression_type is ``"ridge"``, return a
+            3-tuple ``(W, b, best_alphas)`` where *best_alphas* is a 1-D
+            numpy array of per-target selected alphas. Default False preserves
+            the original 2-tuple return.
 
     Returns:
         reg_W: (hidden_dim, n_targets) weight tensor.
         reg_b: (n_targets,) bias tensor.
+        best_alphas: (n_targets,) numpy array (only when return_alphas=True
+            and regression_type="ridge").
     """
     H_np = to_numpy(H)
     Y_np = to_numpy(Y)
@@ -675,6 +682,7 @@ def solve_regression(
             intercept = to_numpy(model[-1].intercept_)  # (n_targets,)
             W = (coef_raw / sc_scale[np.newaxis, :]).T   # (n_features, n_targets)
             b = intercept - (sc_mean / sc_scale) @ coef_raw.T  # (n_targets,)
+            best_alphas_out = to_numpy(model[-1].best_alphas_) if return_alphas else None
         else:
             # Ridge without StandardScaler — appropriate when feature variance
             # carries signal (e.g. SVD-ordered projections).
@@ -687,10 +695,14 @@ def solve_regression(
             intercept = to_numpy(ridge_model.intercept_)
             W = coef_raw.T  # (n_features, n_targets)
             b = intercept   # (n_targets,)
-        return (
+            best_alphas_out = to_numpy(ridge_model.best_alphas_) if return_alphas else None
+        result = (
             to_torch(W.astype(np.float32), device=device),
             to_torch(b.astype(np.float32), device=device),
         )
+        if return_alphas:
+            return result + (best_alphas_out,)
+        return result
     else:
         # OLS: H @ W + b ≈ Y  →  [H, 1] @ [W; b] ≈ Y
         H_t = to_torch(H_np, dtype=torch.float32, device=device)
