@@ -661,9 +661,7 @@ def solve_regression(
     if regression_type == "ridge":
         from utils.encoding import get_ridge_model_constructor
         if standardize:
-            model = get_ridge_model_constructor()(0)
-            if alphas is not None:
-                model[-1].alphas = alphas
+            model = get_ridge_model_constructor(alphas=alphas)(0)
             model.fit(H_np, Y_np)
             # Absorb StandardScaler into W, b so that H @ W + b ≈ Y.
             # model.predict(H) = ((H - mean) / scale) @ coef_raw.T + intercept
@@ -680,9 +678,7 @@ def solve_regression(
         else:
             # Ridge without StandardScaler — appropriate when feature variance
             # carries signal (e.g. SVD-ordered projections).
-            ridge_model = get_ridge_model_constructor()(0)[-1]  # RidgeCV only
-            if alphas is not None:
-                ridge_model.alphas = alphas
+            ridge_model = get_ridge_model_constructor(alphas=alphas)(0)[-1]  # RidgeCV only
             ridge_model.fit(H_np, Y_np)
             coef_raw = to_numpy(ridge_model.coef_)
             n_features = H_np.shape[1]

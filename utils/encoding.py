@@ -225,13 +225,18 @@ def get_all_targets_test_set(test_idxs, Y, num_electrodes, num_lags):
     return all_targets
 
 
-def get_ridge_model_constructor():
+def get_ridge_model_constructor(alphas=None):
     """
     Return a factory function for StandardScaler + RidgeCV pipelines.
-    Uses alphas = np.logspace(1, 10, 10) and inner 5-fold CV (no shuffle).
     Compatible with the model_constructor_fn arg of train_encoding().
     Sets the himalaya torch_cuda backend if CUDA is available.
+
+    Args:
+        alphas: Ridge alpha grid for RidgeCV. When None, uses RIDGE_ALPHAS
+            from utils.constants.
     """
+    from utils.constants import RIDGE_ALPHAS
+
     try:
         from himalaya.ridge import RidgeCV
         from himalaya.backend import set_backend
@@ -242,7 +247,8 @@ def get_ridge_model_constructor():
     except ImportError:
         from sklearn.linear_model import RidgeCV
 
-    alphas = np.logspace(1, 10, 10)
+    if alphas is None:
+        alphas = RIDGE_ALPHAS
     inner_cv = KFold(n_splits=5, shuffle=False)
 
     def create_model(_):

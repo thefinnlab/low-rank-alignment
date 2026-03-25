@@ -67,6 +67,7 @@ Core library modules:
 
 | File | Purpose |
 |------|---------|
+| `constants.py` | Project-wide constants; `RIDGE_ALPHAS` — default alpha grid for RidgeCV used across all ridge regression training |
 | `config.py` | Dataclass definitions for `EncodingConfig`, `SignificanceConfig`, `SVDConfig`, `PartialSVDConfig`, `PartialRRRConfig`, `SRRRConfig`, `RRRConfig`, `SAEConfig`; `get_results_dir()` for canonical output paths |
 | `config_utils.py` | Argument parsing and YAML loading with CLI override support (dot-notation, e.g. `--encoding.layer=48`) |
 | `data_loaders.py` | Loads iEEG BIDS data via MNE, GPT-2 embeddings from HDF5, builds word-aligned epochs, handles time offsets; `build_XY_from_subjects()` for stacking multi-subject neural data; `load_sig_electrodes()` and `load_fold_indices()` for shared data-loading across scripts |

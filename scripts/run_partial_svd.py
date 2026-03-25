@@ -35,12 +35,12 @@ from utils import (
     build_XY_from_subjects,
     load_all_subject_correlations,
     train_encoding,
-    get_ridge_model_constructor,
 )
 from utils.analysis import partial_out_svd_directions
 from utils.atlas import build_electrode_region_map
 from utils.config import PartialSVDConfig, get_results_dir
 from utils.config_utils import parse_args, load_config
+from utils.encoding import get_ridge_model_constructor
 from utils.data_loaders import load_sig_electrodes, load_fold_indices
 from utils.plotting import plot_partial_svd_sweep, plot_partial_svd_lag_heatmap
 from utils.srrr import load_svd_decomposition
@@ -77,7 +77,8 @@ def _run_partial_svd_sweep(
     """
     n_folds = len(provided_idxs)
     n_dirs_available = Vt_per_fold.shape[1]
-    model_constructor = get_ridge_model_constructor()
+    alphas = np.array(config.encoding.ridge_alphas) if config.encoding.ridge_alphas is not None else None
+    model_constructor = get_ridge_model_constructor(alphas=alphas)
 
     all_results = {}
     n_sweeps = len(config.partial_group_sizes)

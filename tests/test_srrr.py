@@ -343,6 +343,7 @@ class TestBuildNullDistribution:
         n_perms = 8
         null = build_null_distribution(
             X_train, Y_train, X_test, Y_test,
+            regression_type="ols",
             k=2, n_permutations=n_perms, device="cpu", seed=0,
         )
         assert null.shape == (n_perms,)
@@ -356,6 +357,7 @@ class TestBuildNullDistribution:
         Y_train, Y_test = Y[:40], Y[40:]
         null = build_null_distribution(
             X_train, Y_train, X_test, Y_test,
+            regression_type="ols",
             k=2, n_permutations=20, device="cpu", seed=1,
         )
         assert np.abs(null.mean()) < 0.5  # Should be small under null
@@ -370,6 +372,7 @@ class TestBuildNullDistribution:
         # First call — computes and caches
         null1 = build_null_distribution(
             X_train, Y_train, X_test, Y_test,
+            regression_type="ols",
             k=2, n_permutations=5, device="cpu", seed=42,
             cache_path=cache_file,
         )
@@ -378,6 +381,7 @@ class TestBuildNullDistribution:
         # Second call — loads from cache (should be identical)
         null2 = build_null_distribution(
             X_train, Y_train, X_test, Y_test,
+            regression_type="ols",
             k=2, n_permutations=5, device="cpu", seed=99,  # different seed shouldn't matter
             cache_path=cache_file,
         )
@@ -407,6 +411,7 @@ class TestRunSufficiencyTest:
         result = run_sufficiency_test(
             X_train, Y_resid_train, X_test, Y_test,
             Y_hat_full=Y_test, Y_hat_min=Y_test, null_r2=null,
+            regression_type="ols",
         )
         assert result["sufficient"]
 
@@ -426,6 +431,7 @@ class TestRunSufficiencyTest:
         result = run_sufficiency_test(
             X_train, Y_resid_train, X_test, Y_test,
             Y_hat_full=Y_hat_full, Y_hat_min=Y_hat_min, null_r2=null,
+            regression_type="ols",
         )
         assert not result["sufficient"]
 
@@ -436,6 +442,7 @@ class TestRunSufficiencyTest:
         result = run_sufficiency_test(
             X_train, Y_resid_train, X_test, Y_test,
             Y_hat_full=Y_test, Y_hat_min=Y_test, null_r2=null,
+            regression_type="ols",
         )
         expected_keys = {"recovery_r2", "noise_floor", "sufficient", "p_value",
                          "full_r2", "minimal_r2", "pred_r2",
@@ -451,6 +458,7 @@ class TestRunSufficiencyTest:
         result = run_sufficiency_test(
             X_train, Y_resid_train, X_test, Y_test,
             Y_hat_full=Y_test, Y_hat_min=Y_test, null_r2=null,
+            regression_type="ols",
         )
         assert 0.0 <= result["p_value"] <= 1.0
 

@@ -25,7 +25,6 @@ from utils import (
     get_arbitrary_embeddings,
     get_models_coefficients,
     load_embeddings,
-    get_ridge_model_constructor,
     build_word_epochs,
     apply_offset,
     save_subject_results,
@@ -33,6 +32,7 @@ from utils import (
 )
 from utils.config import EncodingConfig, get_results_dir
 from utils.config_utils import parse_args, load_config
+from utils.encoding import get_ridge_model_constructor
 
 
 # ---------------------------------------------------------------------------
@@ -179,7 +179,8 @@ def main():
     print(f"Loading embeddings (layer {layer_int})...")
     aligned_embeddings, df_word = load_embeddings(config.data_root, layer_int)
 
-    model_constructor = get_ridge_model_constructor()
+    alphas = np.array(config.ridge_alphas) if config.ridge_alphas is not None else None
+    model_constructor = get_ridge_model_constructor(alphas=alphas)
 
     if config.batch:
         _run_batch(sig_elecs, subject_ids, aligned_embeddings, df_word,

@@ -21,7 +21,6 @@ from utils import (
     get_all_predictions_and_targets_test_set,
     significant_lags_all_electrodes_gpu,
     load_embeddings,
-    get_ridge_model_constructor,
     build_word_epochs,
     apply_offset,
     get_models_coefficients,
@@ -29,6 +28,7 @@ from utils import (
 )
 from utils.config import SignificanceConfig, get_results_dir
 from utils.config_utils import parse_args, load_config
+from utils.encoding import get_ridge_model_constructor
 
 
 # ---------------------------------------------------------------------------
@@ -61,7 +61,8 @@ def main():
     #   original sfreq=512 → np.arange(-2*512, 2*512, 1) / 512, then every 16th sample
     lag_sec = np.arange(-2 * 512, 2 * 512, 16) / 512  # length 64
 
-    model_constructor = get_ridge_model_constructor()
+    alphas = np.array(enc.ridge_alphas) if enc.ridge_alphas is not None else None
+    model_constructor = get_ridge_model_constructor(alphas=alphas)
 
     all_rows = []
 
