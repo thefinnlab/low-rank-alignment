@@ -1755,10 +1755,15 @@ def plot_alpha_diagnostics(
     ax.set_title("Selected alpha distribution")
     ax.legend(fontsize=7)
 
-    # Panel 2: per-fold boxplot
+    # Panel 2: per-fold violin plot (scales to 100K+ targets without outlier clutter)
     ax = axes[1]
     log_per_fold = [np.log10(a[a > 0]) for a in per_fold_alphas]
-    ax.boxplot(log_per_fold, labels=[f"Fold {i}" for i in range(len(per_fold_alphas))])
+    parts = ax.violinplot(log_per_fold, showmedians=True, showextrema=True)
+    for pc in parts["bodies"]:
+        pc.set_facecolor("steelblue")
+        pc.set_alpha(0.6)
+    ax.set_xticks(range(1, len(per_fold_alphas) + 1))
+    ax.set_xticklabels([f"Fold {i}" for i in range(len(per_fold_alphas))])
     ax.set_ylabel("log10(alpha)")
     ax.set_title("Per-fold alpha distribution")
 
@@ -1822,9 +1827,14 @@ def plot_alpha_vs_rank(
 
     fig, axes = plt.subplots(1, 2, figsize=(13, 5))
 
-    # Panel 1: boxplot per rank
+    # Panel 1: violin plot per rank (scales to 100K+ targets without outlier clutter)
     ax = axes[0]
-    ax.boxplot(log_data, labels=[str(k) for k in ranks])
+    parts = ax.violinplot(log_data, showmedians=True, showextrema=True)
+    for pc in parts["bodies"]:
+        pc.set_facecolor("steelblue")
+        pc.set_alpha(0.6)
+    ax.set_xticks(range(1, len(ranks) + 1))
+    ax.set_xticklabels([str(k) for k in ranks])
     ax.axhline(np.log10(alpha_grid.min()), color="red", linestyle="--", alpha=0.4)
     ax.axhline(np.log10(alpha_grid.max()), color="red", linestyle="--", alpha=0.4)
     ax.set_xlabel("Rank k")
