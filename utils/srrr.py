@@ -792,36 +792,57 @@ def load_srrr_result(output_dir: str, k: int, lam: float, fold: int) -> dict:
     }
 
 
+def save_rrr_factors(
+    output_dir: str,
+    fold: int,
+    A: np.ndarray,
+    B: np.ndarray,
+) -> None:
+    """Save full-rank RRR factor matrices for one fold.
+
+    Writes to {output_dir}/fold_{fold}/:
+        A.npy  (n_embed, max_k)
+        B.npy  (n_targets, max_k)
+
+    Args:
+        output_dir: Root RRR output directory.
+        fold: Fold index.
+        A: (n_embed, max_k) full-rank direction factor matrix.
+        B: (n_targets, max_k) full-rank output factor matrix.
+    """
+    fold_dir = os.path.join(output_dir, f"fold_{fold}")
+    os.makedirs(fold_dir, exist_ok=True)
+    np.save(os.path.join(fold_dir, "A.npy"), A)
+    np.save(os.path.join(fold_dir, "B.npy"), B)
+
+
 def save_rrr_result(
     output_dir: str,
     k: int,
     fold: int,
-    A: np.ndarray,
-    B: np.ndarray,
     metrics: dict,
 ) -> None:
-    """Save RRR results for one (k, fold) combination.
+    """Save RRR metrics for one (k, fold) combination.
 
     Writes to {output_dir}/k{k}/fold_{fold}/:
-        A.npy, B.npy, metrics.npz
+        metrics.npz
 
     Args:
         output_dir: Root RRR output directory.
         k: Rank.
         fold: Fold index.
-        A: (n_embed, k) direction factor matrix.
-        B: (n_targets, k) output factor matrix.
         metrics: Dict of scalar metrics.
     """
     fold_dir = os.path.join(output_dir, f"k{k}", f"fold_{fold}")
     os.makedirs(fold_dir, exist_ok=True)
-    np.save(os.path.join(fold_dir, "A.npy"), A)
-    np.save(os.path.join(fold_dir, "B.npy"), B)
     np.savez(os.path.join(fold_dir, "metrics.npz"), **{k_: np.array(v) for k_, v in metrics.items() if v is not None})
 
 
 def load_rrr_result(output_dir: str, k: int, fold: int) -> dict:
     """Load RRR results for one (k, fold) combination.
+
+    Loads full-rank A/B from {output_dir}/fold_{fold}/ and truncates to rank k.
+    Loads metrics from {output_dir}/k{k}/fold_{fold}/.
 
     Args:
         output_dir: Root RRR output directory.
@@ -829,13 +850,16 @@ def load_rrr_result(output_dir: str, k: int, fold: int) -> dict:
         fold: Fold index.
 
     Returns:
-        dict with keys: A, B, metrics (dict).
+        dict with keys: A (n_embed, k), B (n_targets, k), metrics (dict).
     """
-    fold_dir = os.path.join(output_dir, f"k{k}", f"fold_{fold}")
-    metrics_npz = np.load(os.path.join(fold_dir, "metrics.npz"))
+    factors_dir = os.path.join(output_dir, f"fold_{fold}")
+    metrics_dir = os.path.join(output_dir, f"k{k}", f"fold_{fold}")
+    metrics_npz = np.load(os.path.join(metrics_dir, "metrics.npz"))
+    A_full = np.load(os.path.join(factors_dir, "A.npy"))
+    B_full = np.load(os.path.join(factors_dir, "B.npy"))
     return {
-        "A": np.load(os.path.join(fold_dir, "A.npy")),
-        "B": np.load(os.path.join(fold_dir, "B.npy")),
+        "A": A_full[:, :k],
+        "B": B_full[:, :k],
         "metrics": dict(metrics_npz),
     }
 

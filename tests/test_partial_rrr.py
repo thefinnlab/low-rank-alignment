@@ -9,7 +9,7 @@ import pytest
 from utils.analysis import partial_out_subspace, partial_out_svd_directions
 from utils.config import PartialRRRConfig, SVDMode
 from utils.config_utils import dict_to_dataclass
-from utils.srrr import save_rrr_result
+from utils.srrr import save_rrr_factors, save_rrr_result
 
 
 # ---------------------------------------------------------------------------
@@ -202,11 +202,13 @@ class TestPartialRRRSweep:
 
         # Create synthetic A/B matrices and save as RRR results
         rrr_dir = str(tmp_path / "rrr")
-        for k in rank_grid:
-            for f in range(n_folds):
-                A = rng.standard_normal((n_embed, k)).astype(np.float32)
-                B = rng.standard_normal((n_targets, k)).astype(np.float32)
-                save_rrr_result(rrr_dir, k=k, fold=f, A=A, B=B, metrics={"full_r2": 0.5})
+        max_k = max(rank_grid)
+        for f in range(n_folds):
+            A_full = rng.standard_normal((n_embed, max_k)).astype(np.float32)
+            B_full = rng.standard_normal((n_targets, max_k)).astype(np.float32)
+            save_rrr_factors(rrr_dir, fold=f, A=A_full, B=B_full)
+            for k in rank_grid:
+                save_rrr_result(rrr_dir, k=k, fold=f, metrics={"full_r2": 0.5})
 
         out_dir = str(tmp_path / "partial_rrr")
         os.makedirs(out_dir)
@@ -243,11 +245,10 @@ class TestPartialRRRSweep:
 
         # Use the true A directions as the RRR result
         rrr_dir = str(tmp_path / "rrr")
-        for k in rank_grid:
-            for f in range(n_folds):
-                A = A_true[:, :k]
-                B = B_true[:, :k]
-                save_rrr_result(rrr_dir, k=k, fold=f, A=A, B=B, metrics={"full_r2": 0.5})
+        for f in range(n_folds):
+            save_rrr_factors(rrr_dir, fold=f, A=A_true, B=B_true)
+            for k in rank_grid:
+                save_rrr_result(rrr_dir, k=k, fold=f, metrics={"full_r2": 0.5})
 
         out_dir = str(tmp_path / "partial_rrr")
         os.makedirs(out_dir)

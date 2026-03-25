@@ -7,7 +7,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from utils.srrr import save_rrr_result, load_rrr_result
+from utils.srrr import save_rrr_factors, save_rrr_result, load_rrr_result
 
 
 # ---------------------------------------------------------------------------
@@ -34,9 +34,9 @@ def small_data(rng):
 
 class TestSaveLoadRRRResult:
     def test_roundtrip(self, tmp_path, rng):
-        k, fold = 3, 0
-        A = rng.standard_normal((10, k)).astype(np.float32)
-        B = rng.standard_normal((5, k)).astype(np.float32)
+        max_k, k, fold = 5, 3, 0
+        A_full = rng.standard_normal((10, max_k)).astype(np.float32)
+        B_full = rng.standard_normal((5, max_k)).astype(np.float32)
         metrics = {
             "full_r2": 0.5,
             "minimal_r2": 0.4,
@@ -50,34 +50,54 @@ class TestSaveLoadRRRResult:
             "k": k,
         }
 
-        save_rrr_result(str(tmp_path), k=k, fold=fold, A=A, B=B, metrics=metrics)
+        save_rrr_factors(str(tmp_path), fold=fold, A=A_full, B=B_full)
+        save_rrr_result(str(tmp_path), k=k, fold=fold, metrics=metrics)
         result = load_rrr_result(str(tmp_path), k=k, fold=fold)
 
-        np.testing.assert_array_almost_equal(result["A"], A)
-        np.testing.assert_array_almost_equal(result["B"], B)
+        np.testing.assert_array_almost_equal(result["A"], A_full[:, :k])
+        np.testing.assert_array_almost_equal(result["B"], B_full[:, :k])
         assert abs(float(result["metrics"]["full_r2"]) - 0.5) < 1e-5
         assert abs(float(result["metrics"]["recovery_r2"]) - 0.05) < 1e-5
 
     def test_directory_created(self, tmp_path):
-        A = np.zeros((4, 2), dtype=np.float32)
-        B = np.zeros((3, 2), dtype=np.float32)
-        save_rrr_result(str(tmp_path), k=5, fold=1, A=A, B=B, metrics={"full_r2": 0.1})
-        fold_dir = os.path.join(str(tmp_path), "k5", "fold_1")
-        assert os.path.isdir(fold_dir)
-        assert os.path.exists(os.path.join(fold_dir, "A.npy"))
-        assert os.path.exists(os.path.join(fold_dir, "B.npy"))
-        assert os.path.exists(os.path.join(fold_dir, "metrics.npz"))
+        A = np.zeros((4, 5), dtype=np.float32)
+        B = np.zeros((3, 5), dtype=np.float32)
+        save_rrr_factors(str(tmp_path), fold=1, A=A, B=B)
+        save_rrr_result(str(tmp_path), k=5, fold=1, metrics={"full_r2": 0.1})
+        factors_dir = os.path.join(str(tmp_path), "fold_1")
+        metrics_dir = os.path.join(str(tmp_path), "k5", "fold_1")
+        assert os.path.isdir(factors_dir)
+        assert os.path.exists(os.path.join(factors_dir, "A.npy"))
+        assert os.path.exists(os.path.join(factors_dir, "B.npy"))
+        assert os.path.isdir(metrics_dir)
+        assert os.path.exists(os.path.join(metrics_dir, "metrics.npz"))
 
     def test_multiple_folds_independent(self, tmp_path, rng):
-        k = 2
+        max_k, k = 4, 2
         for fold in range(3):
-            A = rng.standard_normal((6, k)).astype(np.float32)
-            B = rng.standard_normal((4, k)).astype(np.float32)
-            save_rrr_result(str(tmp_path), k=k, fold=fold, A=A, B=B, metrics={"full_r2": float(fold)})
+            A = rng.standard_normal((6, max_k)).astype(np.float32)
+            B = rng.standard_normal((4, max_k)).astype(np.float32)
+            save_rrr_factors(str(tmp_path), fold=fold, A=A, B=B)
+            save_rrr_result(str(tmp_path), k=k, fold=fold, metrics={"full_r2": float(fold)})
 
         for fold in range(3):
             result = load_rrr_result(str(tmp_path), k=k, fold=fold)
             assert abs(float(result["metrics"]["full_r2"]) - fold) < 1e-5
+
+    def test_truncation_across_k_values(self, tmp_path, rng):
+        """Loading different k values from the same full-rank factors truncates correctly."""
+        max_k, fold = 5, 0
+        A_full = rng.standard_normal((10, max_k)).astype(np.float32)
+        B_full = rng.standard_normal((8, max_k)).astype(np.float32)
+        save_rrr_factors(str(tmp_path), fold=fold, A=A_full, B=B_full)
+
+        for k in [1, 3, 5]:
+            save_rrr_result(str(tmp_path), k=k, fold=fold, metrics={"k": k})
+            result = load_rrr_result(str(tmp_path), k=k, fold=fold)
+            assert result["A"].shape == (10, k)
+            assert result["B"].shape == (8, k)
+            np.testing.assert_array_almost_equal(result["A"], A_full[:, :k])
+            np.testing.assert_array_almost_equal(result["B"], B_full[:, :k])
 
 
 # ---------------------------------------------------------------------------
@@ -229,6 +249,12 @@ class TestRunRRRForUnit:
         _run_rrr_for_unit(str(tmp_path), X, test_idxs, per_fold_baselines, config)
 
         for fold in range(2):
+            # Full-rank factors saved at fold level
+            factors_dir = os.path.join(str(tmp_path), f"fold_{fold}")
+            assert os.path.exists(os.path.join(factors_dir, "A.npy"))
+            assert os.path.exists(os.path.join(factors_dir, "B.npy"))
+
+            # load_rrr_result truncates to requested k
             result = load_rrr_result(str(tmp_path), k=2, fold=fold)
             assert result["A"].shape[1] == 2
             assert result["B"].shape[1] == 2
