@@ -260,6 +260,73 @@ def get_ridge_model_constructor(alphas=None):
     return create_model
 
 
+def extract_best_alphas(model) -> np.ndarray:
+    """Extract per-target best alphas from a fitted Pipeline containing RidgeCV.
+
+    Args:
+        model: Fitted sklearn Pipeline with a 'ridgecv' step (as created by
+            get_ridge_model_constructor).
+
+    Returns:
+        1-D numpy array of shape (n_targets,) with the selected alpha per target.
+    """
+    ridge = model.named_steps["ridgecv"]
+    return to_numpy(ridge.best_alphas_)
+
+
+def train_encoding_two_pass(
+    X,
+    Y,
+    alphas=None,
+    n_refined=20,
+    margin_decades=1.0,
+    **train_kwargs,
+):
+    """Train encoding with coarse alphas, then re-train with a refined grid.
+
+    Pass 1: Train with the coarse alpha grid (default RIDGE_ALPHAS).
+    Extracts best_alphas_ from all folds, calls refine_alpha_grid to build
+    a tighter grid, then re-trains with the refined grid on the same folds.
+
+    Args:
+        X: Feature array or list of per-fold arrays (passed to train_encoding).
+        Y: Target array (passed to train_encoding).
+        alphas: Initial coarse alpha grid. None → RIDGE_ALPHAS.
+        n_refined: Number of points in the refined grid.
+        margin_decades: Extra decades beyond observed range.
+        **train_kwargs: Forwarded to train_encoding (epochs_shape, etc.).
+
+    Returns:
+        Tuple of (corrs, models, tr_idxs, test_idxs, scalers, coarse_best_alphas,
+        refined_grid) where the first five match train_encoding's return value.
+    """
+    from utils.constants import refine_alpha_grid
+
+    # Pass 1: coarse sweep
+    model_constructor = get_ridge_model_constructor(alphas=alphas)
+    corrs, models, tr_idxs, test_idxs, scalers = train_encoding(
+        X, Y, model_constructor, **train_kwargs
+    )
+    coarse_best = np.concatenate([extract_best_alphas(m) for m in models])
+
+    # Build refined grid
+    refined_grid = refine_alpha_grid(
+        coarse_best, n_points=n_refined, margin_decades=margin_decades
+    )
+
+    # Pass 2: refined sweep on same folds
+    model_constructor_2 = get_ridge_model_constructor(alphas=refined_grid)
+    corrs, models, _, _, scalers = train_encoding(
+        X,
+        Y,
+        model_constructor_2,
+        provided_idxs=list(zip(tr_idxs, test_idxs)),
+        provided_scalers=scalers,
+        **train_kwargs,
+    )
+    return corrs, models, tr_idxs, test_idxs, scalers, coarse_best, refined_grid
+
+
 def save_encoding_results(results: dict, filepath: str) -> None:
     """Persist results dict to disk via joblib.dump."""
     import joblib
