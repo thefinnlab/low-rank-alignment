@@ -46,7 +46,6 @@ from utils import (
     build_XY_from_subjects,
     load_all_subject_correlations,
     train_encoding,
-    get_ridge_model_constructor,
     load_raws,
     build_word_epochs,
     apply_offset,
@@ -55,6 +54,7 @@ from utils.analysis import partial_out_subspace
 from utils.atlas import build_electrode_region_map
 from utils.config import PartialRRRConfig, SVDMode, get_results_dir
 from utils.config_utils import parse_args, load_config
+from utils.encoding import get_ridge_model_constructor
 from utils.data_loaders import load_sig_electrodes, load_fold_indices
 from utils.encoding import load_encoding_results
 from utils.plotting import plot_partial_rrr_sweep
@@ -119,6 +119,7 @@ def _run_partial_rrr_sweep(
     n_elecs,
     n_lags,
     rank_grid=None,
+    alphas=None,
 ):
     """Core loop: for each rank k, load A, partial out subspace, retrain ridge.
 
@@ -137,7 +138,7 @@ def _run_partial_rrr_sweep(
     """
     rank_grid = _discover_ranks(rrr_source_dir, rank_grid)
     n_folds = len(provided_idxs)
-    model_constructor = get_ridge_model_constructor()
+    model_constructor = get_ridge_model_constructor(alphas=alphas)
 
     all_results = {}
     sweep_start = time.time()
@@ -395,6 +396,7 @@ def _run_cross_subject(
 
     # Run sweep
     print("\nStarting partial RRR sweep...")
+    alphas = np.array(config.encoding.ridge_alphas) if config.encoding.ridge_alphas is not None else None
     all_results = _run_partial_rrr_sweep(
         partial_rrr_dir,
         X,
@@ -404,6 +406,7 @@ def _run_cross_subject(
         n_elecs,
         n_lags,
         config.rank_grid,
+        alphas=alphas,
     )
 
     # Save results
@@ -522,6 +525,7 @@ def _run_per_subject(
         # Run sweep
         print("\n  Starting partial RRR sweep...")
         sub_start = time.time()
+        alphas = np.array(config.encoding.ridge_alphas) if config.encoding.ridge_alphas is not None else None
         all_results = _run_partial_rrr_sweep(
             sub_out_dir,
             X_arr,
@@ -531,6 +535,7 @@ def _run_per_subject(
             n_elecs_sub,
             n_lags,
             config.rank_grid,
+            alphas=alphas,
         )
 
         _save_partial_rrr_results(
@@ -663,6 +668,7 @@ def _run_per_region(
         # Run sweep
         print("\n  Starting partial RRR sweep...")
         region_start = time.time()
+        alphas = np.array(config.encoding.ridge_alphas) if config.encoding.ridge_alphas is not None else None
         all_results = _run_partial_rrr_sweep(
             region_out_dir,
             X,
@@ -672,6 +678,7 @@ def _run_per_region(
             n_elecs_region,
             n_lags,
             config.rank_grid,
+            alphas=alphas,
         )
 
         _save_partial_rrr_results(

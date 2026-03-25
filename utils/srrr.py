@@ -490,7 +490,8 @@ def build_null_distribution(
     Y_train: np.ndarray,
     X_proj_test: np.ndarray,
     Y_test: np.ndarray,
-    model_constructor_fn=None,
+    regression_type: str = "ridge",
+    alphas: np.ndarray | None = None,
     k: int = 2,
     n_permutations: int = 5000,
     cache_path: str | None = None,
@@ -507,34 +508,45 @@ def build_null_distribution(
         Y_train: (n_train, n_targets).
         X_proj_test: (n_test, n_dirs).
         Y_test: (n_test, n_targets).
-        model_constructor_fn: Callable returning a fresh sklearn-compatible model
-            on each call (e.g. ``get_ridge_model_constructor()``). When None,
+        regression_type: ``"ridge"`` (default) or ``"ols"``. When ``"ols"``,
             falls back to full-dim dense RRR of rank ``k`` (used for testing).
-        k: Rank for the RRR fallback; ignored when model_constructor_fn is given.
+        alphas: Ridge alpha grid for RidgeCV. When None, uses RIDGE_ALPHAS
+            from utils.constants. Ignored when regression_type is ``"ols"``.
+        k: Rank for the RRR fallback; ignored when regression_type is ``"ridge"``.
         n_permutations: Number of permutations.
         cache_path: If given, load from file if it exists; save after computing.
         seed: Random seed.
-        device: torch device string (only used by the RRR fallback path).
+        device: torch device string.
 
     Returns:
         null_r2: (n_permutations,) array of mean R^2 values under the null.
     """
+    from utils.sae import solve_regression
+
     if cache_path is not None and os.path.exists(cache_path):
         return np.load(cache_path)
+
+    if device is None:
+        device = "cuda" if torch.cuda.is_available() else "cpu"
 
     rng = np.random.default_rng(seed)
     n_dirs = X_proj_train.shape[1]
     all_idx = np.arange(X_proj_train.shape[0])
     null_r2 = np.zeros(n_permutations)
 
+    X_test_t = to_torch(X_proj_test, dtype=torch.float32, device=device)
+
     for i in tqdm(range(n_permutations), desc="Null distribution", unit="perm"):
         perm_idx = rng.permutation(all_idx)
         Y_perm = Y_train[perm_idx]
 
-        if model_constructor_fn is not None:
-            model = model_constructor_fn()(i)
-            model.fit(X_proj_train, Y_perm)
-            Y_hat = to_numpy(model.predict(X_proj_test))
+        if regression_type == "ridge":
+            W, b = solve_regression(
+                to_torch(X_proj_train, dtype=torch.float32, device=device),
+                to_torch(Y_perm, dtype=torch.float32, device=device),
+                "ridge", device, standardize=True, alphas=alphas,
+            )
+            Y_hat = to_numpy(X_test_t @ W + b)
         else:
             result = fit_dense_rrr(
                 X_proj_train, Y_perm, k=k,
@@ -569,7 +581,9 @@ def run_sufficiency_test(
     Y_hat_min: np.ndarray,
     null_r2: np.ndarray,
     p_value_threshold: float = 0.05,
-    model_constructor_fn=None,
+    regression_type: str = "ridge",
+    alphas: np.ndarray | None = None,
+    device: str | None = None,
 ) -> dict:
     """Test whether the minimal model's predictions are sufficient.
 
@@ -577,7 +591,7 @@ def run_sufficiency_test(
     that a full-dim model can recover out-of-sample.
 
     Procedure:
-      1. Fit model_constructor_fn on (X_proj_train, Y_resid_train)
+      1. Fit ridge (or OLS) on (X_proj_train, Y_resid_train)
       2. Predict on X_proj_test; evaluate mean recovery R^2 against Y_test - Y_hat_min
       3. Compare recovery_r2 to null distribution noise floor
 
@@ -591,9 +605,10 @@ def run_sufficiency_test(
         Y_hat_min: (n_test, n_targets) minimal model predictions.
         null_r2: (n_permutations,) null mean R^2 values.
         p_value_threshold: Alpha level for noise floor percentile.
-        model_constructor_fn: Callable returning a factory function that creates
-            a fresh sklearn-compatible model (e.g. ``get_ridge_model_constructor``).
-            When None, falls back to OLS for backward-compatible testing.
+        regression_type: ``"ridge"`` (default) or ``"ols"``.
+        alphas: Ridge alpha grid for RidgeCV. When None, uses RIDGE_ALPHAS
+            from utils.constants. Ignored when regression_type is ``"ols"``.
+        device: torch device string.
 
     Returns:
         dict with keys:
@@ -611,6 +626,11 @@ def run_sufficiency_test(
             recovery_corr: float — mean Pearson correlation of residual model with
                 Y_test - Y_hat_min
     """
+    from utils.sae import solve_regression
+
+    if device is None:
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+
     full_r2 = float(compute_r2(Y_test, Y_hat_full).mean())
     minimal_r2 = float(compute_r2(Y_test, Y_hat_min).mean())
     pred_r2 = float(compute_r2(Y_hat_full, Y_hat_min).mean())
@@ -622,18 +642,13 @@ def run_sufficiency_test(
 
     Y_resid_test = Y_test - Y_hat_min
 
-    if model_constructor_fn is not None:
-        model = model_constructor_fn()(0)
-        model.fit(X_proj_train, Y_resid_train)
-        Y_resid_hat = to_numpy(model.predict(X_proj_test))
-    else:
-        # OLS fallback (no external model dependency; used for testing)
-        n_dirs = X_proj_test.shape[1]
-        X = to_torch(X_proj_test, dtype=torch.float64)
-        Yr = to_torch(Y_resid_test, dtype=torch.float64)
-        gram = X.T @ X + 1e-8 * torch.eye(n_dirs, dtype=torch.float64)
-        coef = torch.linalg.solve(gram, X.T @ Yr)
-        Y_resid_hat = to_numpy(X @ coef)
+    W, b = solve_regression(
+        to_torch(X_proj_train, dtype=torch.float32, device=device),
+        to_torch(Y_resid_train, dtype=torch.float32, device=device),
+        regression_type, device, standardize=True, alphas=alphas,
+    )
+    X_test_t = to_torch(X_proj_test, dtype=torch.float32, device=device)
+    Y_resid_hat = to_numpy(X_test_t @ W + b)
 
     recovery_r2 = float(compute_r2(Y_resid_test, Y_resid_hat).mean())
     recovery_corr_arr = compute_correlation(Y_resid_test, Y_resid_hat)

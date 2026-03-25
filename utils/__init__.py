@@ -1,6 +1,7 @@
 # Public API for the utils package.
 # Import the most commonly used functions for convenience.
 
+from utils.constants import RIDGE_ALPHAS
 from utils.tensor_utils import to_numpy, to_torch
 from utils.config import EncodingConfig, SignificanceConfig, SVDConfig, SRRRConfig, RRRConfig, PartialSVDConfig, PartialRRRConfig, SAEConfig, SVDMode, get_results_dir
 from utils.config_utils import (
@@ -31,7 +32,6 @@ from utils.encoding import (
     get_models_coefficients,
     get_all_targets_test_set,
     get_all_predictions_and_targets_test_set,
-    get_ridge_model_constructor,
     save_encoding_results,
     load_encoding_results,
     apply_offset,
@@ -114,6 +114,8 @@ from utils.examples import (
 )
 
 __all__ = [
+    # constants
+    "RIDGE_ALPHAS",
     # tensor utils
     "to_numpy",
     "to_torch",
@@ -153,7 +155,6 @@ __all__ = [
     "get_models_coefficients",
     "get_all_targets_test_set",
     "get_all_predictions_and_targets_test_set",
-    "get_ridge_model_constructor",
     "save_encoding_results",
     "load_encoding_results",
     "apply_offset",

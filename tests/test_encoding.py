@@ -162,7 +162,21 @@ class TestGetRidgeModelConstructor:
         model = constructor(0)
         assert "ridgecv" in model.named_steps
         ridge = model.named_steps["ridgecv"]
-        assert len(ridge.alphas) == 10
+        assert len(ridge.alphas) == 13
+
+    def test_default_alphas_match_constant(self):
+        from utils.constants import RIDGE_ALPHAS
+        constructor = get_ridge_model_constructor()
+        model = constructor(0)
+        ridge = model.named_steps["ridgecv"]
+        np.testing.assert_array_equal(ridge.alphas, RIDGE_ALPHAS)
+
+    def test_custom_alphas(self):
+        custom = np.array([1.0, 10.0, 100.0])
+        constructor = get_ridge_model_constructor(alphas=custom)
+        model = constructor(0)
+        ridge = model.named_steps["ridgecv"]
+        np.testing.assert_array_equal(ridge.alphas, custom)
 
     def test_each_call_returns_new_model(self):
         constructor = get_ridge_model_constructor()

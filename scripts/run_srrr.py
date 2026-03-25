@@ -53,7 +53,6 @@ from utils.config import SRRRConfig, SVDMode, get_results_dir
 from utils.config_utils import parse_args, load_config
 from utils.encoding import (
     load_encoding_results,
-    get_ridge_model_constructor,
     build_enc_subjects_info,
     build_per_fold_baselines,
 )
@@ -101,6 +100,9 @@ def _run_srrr_for_unit(
     """
     os.makedirs(srrr_unit_dir, exist_ok=True)
 
+    enc = config.encoding
+    alphas = np.array(enc.ridge_alphas) if enc.ridge_alphas is not None else None
+
     n_folds = len(test_idxs)
     Vt_arr = load_svd_decomposition(svd_dir, n_folds)  # (n_folds, n_dirs, n_embed)
 
@@ -142,7 +144,8 @@ def _run_srrr_for_unit(
                 Y_train,
                 X_proj_test,
                 Y_test,
-                model_constructor_fn=get_ridge_model_constructor,
+                regression_type="ridge",
+                alphas=alphas,
                 n_permutations=config.n_permutations,
                 cache_path=null_cache,
                 seed=fold_f,
@@ -222,7 +225,8 @@ def _run_srrr_for_unit(
                 Y_hat_min=Y_hat_min,
                 null_r2=null_r2,
                 p_value_threshold=config.p_value_threshold,
-                model_constructor_fn=get_ridge_model_constructor,
+                regression_type="ridge",
+                alphas=alphas,
             )
             cca_sim = (
                 compute_cca_similarity(Y_hat_full, Y_hat_min)

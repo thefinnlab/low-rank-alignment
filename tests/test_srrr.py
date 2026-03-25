@@ -335,7 +335,7 @@ class TestPredictFromFactors:
 # ---------------------------------------------------------------------------
 
 class TestBuildNullDistribution:
-    def test_shape(self, small_data):
+    def test_shape_ols(self, small_data):
         X, Y = small_data
         n_train = 40
         X_train, X_test = X[:n_train], X[n_train:]
@@ -343,7 +343,21 @@ class TestBuildNullDistribution:
         n_perms = 8
         null = build_null_distribution(
             X_train, Y_train, X_test, Y_test,
+            regression_type="ols",
             k=2, n_permutations=n_perms, device="cpu", seed=0,
+        )
+        assert null.shape == (n_perms,)
+
+    def test_shape_ridge(self, small_data):
+        X, Y = small_data
+        n_train = 40
+        X_train, X_test = X[:n_train], X[n_train:]
+        Y_train, Y_test = Y[:n_train], Y[n_train:]
+        n_perms = 8
+        null = build_null_distribution(
+            X_train, Y_train, X_test, Y_test,
+            regression_type="ridge",
+            n_permutations=n_perms, device="cpu", seed=0,
         )
         assert null.shape == (n_perms,)
 
@@ -356,6 +370,7 @@ class TestBuildNullDistribution:
         Y_train, Y_test = Y[:40], Y[40:]
         null = build_null_distribution(
             X_train, Y_train, X_test, Y_test,
+            regression_type="ols",
             k=2, n_permutations=20, device="cpu", seed=1,
         )
         assert np.abs(null.mean()) < 0.5  # Should be small under null
@@ -370,6 +385,7 @@ class TestBuildNullDistribution:
         # First call — computes and caches
         null1 = build_null_distribution(
             X_train, Y_train, X_test, Y_test,
+            regression_type="ols",
             k=2, n_permutations=5, device="cpu", seed=42,
             cache_path=cache_file,
         )
@@ -378,6 +394,7 @@ class TestBuildNullDistribution:
         # Second call — loads from cache (should be identical)
         null2 = build_null_distribution(
             X_train, Y_train, X_test, Y_test,
+            regression_type="ols",
             k=2, n_permutations=5, device="cpu", seed=99,  # different seed shouldn't matter
             cache_path=cache_file,
         )
@@ -399,7 +416,7 @@ class TestRunSufficiencyTest:
         Y_test = rng.standard_normal((n_test, n_targets)).astype(np.float64)
         return X_train, Y_train, X_test, Y_test
 
-    def test_sufficient_when_min_equals_full(self, rng):
+    def test_sufficient_when_min_equals_full_ridge(self, rng):
         X_train, Y_train, X_test, Y_test = self._split(rng, 30, 20, 8, 4)
         null = self._make_null(rng)
         # When Y_hat_min == Y_test, residuals are zero → recovery_r2 ≈ 0
@@ -407,13 +424,14 @@ class TestRunSufficiencyTest:
         result = run_sufficiency_test(
             X_train, Y_resid_train, X_test, Y_test,
             Y_hat_full=Y_test, Y_hat_min=Y_test, null_r2=null,
+            regression_type="ridge",
         )
         assert result["sufficient"]
 
-    def test_not_sufficient_when_large_residual(self, rng):
+    def test_not_sufficient_when_large_residual_ridge(self, rng):
         n_dirs, n_targets = 6, 3
-        X_train = rng.standard_normal((40, n_dirs)).astype(np.float64)
-        X_test = rng.standard_normal((20, n_dirs)).astype(np.float64)
+        X_train = rng.standard_normal((40, n_dirs)).astype(np.float32)
+        X_test = rng.standard_normal((20, n_dirs)).astype(np.float32)
         # Y linearly recoverable from X
         Y_train = X_train[:, :n_targets]
         Y_test = X_test[:, :n_targets]
@@ -426,6 +444,7 @@ class TestRunSufficiencyTest:
         result = run_sufficiency_test(
             X_train, Y_resid_train, X_test, Y_test,
             Y_hat_full=Y_hat_full, Y_hat_min=Y_hat_min, null_r2=null,
+            regression_type="ridge",
         )
         assert not result["sufficient"]
 
@@ -436,6 +455,7 @@ class TestRunSufficiencyTest:
         result = run_sufficiency_test(
             X_train, Y_resid_train, X_test, Y_test,
             Y_hat_full=Y_test, Y_hat_min=Y_test, null_r2=null,
+            regression_type="ols",
         )
         expected_keys = {"recovery_r2", "noise_floor", "sufficient", "p_value",
                          "full_r2", "minimal_r2", "pred_r2",
@@ -451,6 +471,7 @@ class TestRunSufficiencyTest:
         result = run_sufficiency_test(
             X_train, Y_resid_train, X_test, Y_test,
             Y_hat_full=Y_test, Y_hat_min=Y_test, null_r2=null,
+            regression_type="ols",
         )
         assert 0.0 <= result["p_value"] <= 1.0
 

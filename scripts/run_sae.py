@@ -58,7 +58,6 @@ from utils.config import SAEConfig, SVDMode, get_results_dir
 from utils.config_utils import parse_args, load_config
 from utils.encoding import (
     load_encoding_results,
-    get_ridge_model_constructor,
     build_enc_subjects_info,
     build_per_fold_baselines,
 )
@@ -172,6 +171,9 @@ def _run_sae_for_unit(
     """
     os.makedirs(sae_unit_dir, exist_ok=True)
 
+    enc = config.encoding
+    alphas = np.array(enc.ridge_alphas) if enc.ridge_alphas is not None else None
+
     n_folds = len(test_idxs)
     k = config.k
     all_rows = []
@@ -232,7 +234,8 @@ def _run_sae_for_unit(
                         Y_hat_full=Y_hat_full,
                         Y_hat_min=Y_hat_test,
                         null_r2=None,
-                        model_constructor_fn=get_ridge_model_constructor,
+                        regression_type="ridge",
+                        alphas=alphas,
                     )
                     extra["recovery_corr"] = suf["recovery_corr"]
                     extra["recovery_r2"] = suf["recovery_r2"]
@@ -274,7 +277,7 @@ def _run_sae_for_unit(
                 regression_momentum=config.regression_momentum,
                 input_jitter_std=config.input_jitter_std,
                 log_callback=log_callback,
-                ridge_alphas=np.logspace(-2, 10, 13),
+                ridge_alphas=alphas,
             )
         else:
             result = train_sae_end_to_end(
@@ -324,7 +327,8 @@ def _run_sae_for_unit(
             Y_hat_full=Y_hat_full,
             Y_hat_min=Y_hat_sae,
             null_r2=None,
-            model_constructor_fn=get_ridge_model_constructor,
+            regression_type="ridge",
+            alphas=alphas,
         )
         print(
             f"  Recovery test R²: {suf['recovery_r2']:.4f}, corr: {suf['recovery_corr']:.4f}"

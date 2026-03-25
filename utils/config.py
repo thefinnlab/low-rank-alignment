@@ -31,6 +31,7 @@ class EncodingConfig:
     subjects: list[int] | None = None   # None → defaults to 1–9 at runtime
     run_name: str | None = None  # Output dir; auto-generated from model/layer/offset if None
     batch: bool = False      # Process subjects one at a time (lower peak RAM)
+    ridge_alphas: list[float] | None = None  # None → use RIDGE_ALPHAS from constants.py
 
 
 @dataclass

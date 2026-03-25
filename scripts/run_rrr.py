@@ -52,7 +52,6 @@ from utils.config import RRRConfig, SVDMode, get_results_dir
 from utils.config_utils import parse_args, load_config
 from utils.encoding import (
     load_encoding_results,
-    get_ridge_model_constructor,
     build_enc_subjects_info,
     build_per_fold_baselines,
 )
@@ -83,6 +82,7 @@ def _run_prediction_metrics(
     Y_test: np.ndarray,
     Y_hat_full: np.ndarray,
     config: RRRConfig,
+    alphas: np.ndarray | None = None,
 ) -> tuple[dict, float | None, float | None]:
     """Run sufficiency test and optional alignment metrics for a minimal model.
 
@@ -97,7 +97,8 @@ def _run_prediction_metrics(
         Y_hat_full=Y_hat_full,
         Y_hat_min=Y_hat_min,
         null_r2=None,
-        model_constructor_fn=get_ridge_model_constructor,
+        regression_type="ridge",
+        alphas=alphas,
     )
     cca_sim = (
         compute_cca_similarity(Y_hat_full, Y_hat_min) if config.compute_cca else None
@@ -164,6 +165,9 @@ def _run_rrr_for_unit(
     """
     os.makedirs(rrr_unit_dir, exist_ok=True)
 
+    enc = config.encoding
+    alphas = np.array(enc.ridge_alphas) if enc.ridge_alphas is not None else None
+
     n_folds = len(test_idxs)
     n_embed = X_raw.shape[1]
     selected_idx = np.arange(n_embed)
@@ -221,7 +225,7 @@ def _run_rrr_for_unit(
 
             suf, cca_sim, proc_sim = _run_prediction_metrics(
                 Y_hat_rrr, Y_hat_rrr_train, Y_train, X_train, X_test, Y_test,
-                Y_hat_full, config,
+                Y_hat_full, config, alphas=alphas,
             )
 
             # Non-reduced-rank ridge from k-dim subspace
@@ -233,7 +237,7 @@ def _run_rrr_for_unit(
                 "ridge",
                 device,
                 standardize=False,
-                alphas=np.logspace(-2, 10, 13),
+                alphas=alphas,
             )
             X_proj_train_t = torch.as_tensor(
                 X_proj_train, dtype=torch.float32, device=device
@@ -246,7 +250,7 @@ def _run_rrr_for_unit(
 
             nr_suf, nr_cca_sim, nr_proc_sim = _run_prediction_metrics(
                 Y_hat_nr, Y_hat_nr_train, Y_train, X_train, X_test, Y_test,
-                Y_hat_full, config,
+                Y_hat_full, config, alphas=alphas,
             )
 
             metrics = {
