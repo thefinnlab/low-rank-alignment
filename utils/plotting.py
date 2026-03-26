@@ -1791,8 +1791,15 @@ def plot_ablation_pct_zeroed(
         ax.grid(True, alpha=0.3)
 
     fig.suptitle(title, fontsize=12)
-    
-    
+    fig.tight_layout()
+
+    if save_path is not None:
+        fig.savefig(save_path, dpi=150)
+        plt.close(fig)
+    else:
+        return fig
+
+
 def plot_alpha_diagnostics(
     per_fold_alphas: list[np.ndarray],
     alpha_grid: np.ndarray,
@@ -1948,8 +1955,17 @@ def plot_ablation_vs_rank(
             ax.set_xlabel("k (rank)")
             ax.legend(fontsize=7, loc="best")
             ax.grid(True, alpha=0.3)
-            
-            
+
+    fig.suptitle(title, fontsize=13)
+    fig.tight_layout()
+
+    if save_path is not None:
+        fig.savefig(save_path, dpi=150)
+        plt.close(fig)
+    else:
+        return fig
+
+
 def plot_alpha_vs_rank(
     rank_alpha_dict: dict[int, np.ndarray],
     alpha_grid: np.ndarray,

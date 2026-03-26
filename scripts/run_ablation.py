@@ -294,12 +294,21 @@ def _run_ablation_for_unit(
                         "mask_type": "none",
                         "pct_zeroed": 0.0,
                     }
-                    for col in ["full_r2", "minimal_r2", "recovery_r2", "pred_r2",
-                                "full_corr", "minimal_corr", "recovery_corr",
-                                "nr_r2", "nr_corr", "nr_recovery_r2",
-                                "nr_recovery_corr", "nr_pred_r2"]:
+                    # Use full-model metrics as-is
+                    for col in ["full_r2", "full_corr"]:
                         if col in row.index:
                             baseline_metrics[col] = float(row[col])
+                    # Use nr_ (non-reduced-rank ridge on subspace) as the baseline
+                    nr_to_standard = {
+                        "nr_r2": "minimal_r2",
+                        "nr_corr": "minimal_corr",
+                        "nr_recovery_r2": "recovery_r2",
+                        "nr_recovery_corr": "recovery_corr",
+                        "nr_pred_r2": "pred_r2",
+                    }
+                    for nr_col, std_col in nr_to_standard.items():
+                        if nr_col in row.index:
+                            baseline_metrics[std_col] = float(row[nr_col])
                     all_rows.append(baseline_metrics)
 
             rng = np.random.default_rng(42)
