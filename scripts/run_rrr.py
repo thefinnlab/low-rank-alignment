@@ -55,7 +55,6 @@ from utils.encoding import (
     build_enc_subjects_info,
     build_per_fold_baselines,
 )
-from utils.sae import solve_regression
 from utils.srrr import (
     compute_r2,
     fit_dense_rrr,
@@ -64,6 +63,7 @@ from utils.srrr import (
     save_rrr_result,
 )
 from utils.rrr_utils import add_sig_nonsig_corrs, run_prediction_metrics
+from utils.subspace_utils import evaluate_subspace_ridge, build_nr_metrics_dict
 
 
 # ---------------------------------------------------------------------------
@@ -164,37 +164,16 @@ def _run_rrr_for_unit(
             )
 
             # Non-reduced-rank ridge from k-dim subspace
-            X_proj_train = X_train @ A  # (n_train, k)
-            X_proj_test = X_test @ A  # (n_test, k)
-            _nr_result = solve_regression(
-                torch.as_tensor(X_proj_train, dtype=torch.float32, device=device),
-                torch.as_tensor(Y_train, dtype=torch.float32, device=device),
-                "ridge",
-                device,
-                standardize=False,
+            nr_result = evaluate_subspace_ridge(
+                A, X_train, X_test, Y_train, Y_test, Y_hat_full,
                 alphas=alphas,
-                return_alphas=config.log_alphas,
-            )
-            if config.log_alphas:
-                nr_W, nr_b, nr_best_alphas = _nr_result
-                rank_alpha_dict[k] = nr_best_alphas
-            else:
-                nr_W, nr_b = _nr_result
-            X_proj_train_t = torch.as_tensor(
-                X_proj_train, dtype=torch.float32, device=device
-            )
-            X_proj_test_t = torch.as_tensor(
-                X_proj_test, dtype=torch.float32, device=device
-            )
-            Y_hat_nr = (X_proj_test_t @ nr_W + nr_b).cpu().numpy()
-            Y_hat_nr_train = (X_proj_train_t @ nr_W + nr_b).cpu().numpy()
-
-            nr_suf, nr_cca_sim, nr_proc_sim = run_prediction_metrics(
-                Y_hat_nr, Y_hat_nr_train, Y_train, X_train, X_test, Y_test,
-                Y_hat_full, alphas=alphas,
                 compute_cca=config.compute_cca,
                 compute_procrustes=config.compute_procrustes,
+                log_alphas=config.log_alphas,
+                device=device,
             )
+            if config.log_alphas and nr_result["best_alphas"] is not None:
+                rank_alpha_dict[k] = nr_result["best_alphas"]
 
             metrics = {
                 "full_r2": suf["full_r2"],
@@ -219,23 +198,7 @@ def _run_rrr_for_unit(
             if proc_sim is not None:
                 metrics["procrustes_similarity"] = proc_sim
 
-            metrics.update({
-                "nr_r2": nr_suf["minimal_r2"],
-                "nr_corr": nr_suf["minimal_corr"],
-                "nr_recovery_r2": nr_suf["recovery_r2"],
-                "nr_recovery_corr": nr_suf["recovery_corr"],
-                "nr_pred_r2": nr_suf["pred_r2"],
-                "nr_corr_per_target": nr_suf["minimal_corr_per_target"],
-            })
-            if sig_mask_flat is not None:
-                add_sig_nonsig_corrs(metrics, nr_suf, sig_mask_flat, [
-                    ("nr_corr", "minimal_corr_per_target"),
-                    ("nr_recovery_corr", "recovery_corr_per_target"),
-                ])
-            if nr_cca_sim is not None:
-                metrics["nr_cca_similarity"] = nr_cca_sim
-            if nr_proc_sim is not None:
-                metrics["nr_procrustes_similarity"] = nr_proc_sim
+            metrics.update(build_nr_metrics_dict(nr_result, sig_mask_flat))
             save_rrr_result(rrr_unit_dir, k=k, fold=fold_f, metrics=metrics)
             all_rows.append(metrics)
 
