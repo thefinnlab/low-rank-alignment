@@ -99,6 +99,40 @@ class RRRConfig:
 
 
 @dataclass
+class PCAConfig:
+    """Parameters for PCA-based subspace analysis (run_pca.py).
+
+    Computes PCA on word embeddings to find a low-dimensional input subspace,
+    then trains ridge regression from the projected embeddings to neural targets.
+    Sweeps over a rank grid analogous to RRR.
+
+    Mode → output directory mapping (default, overridable via pca_output_dir):
+        cross_subject : {output_dir}/pca/
+        per_subject   : {output_dir}/per_subject_pca/
+        per_region    : {output_dir}/per_region_pca/
+    """
+
+    encoding: EncodingConfig = field(default_factory=EncodingConfig)
+    output_dir: str | None = None         # Root results dir; auto from model/layer/offset if None
+    pca_output_dir: str | None = None     # Override for PCA root subdir; default depends on mode
+    mode: SVDMode = SVDMode.CROSS_SUBJECT
+
+    # Rank sweep
+    rank_grid: list[int] = field(default_factory=lambda: [1, 2, 5, 10, 20, 40, 100, 200, 400, 800, 1600])
+
+    # Optional metrics (expensive; disabled by default)
+    compute_cca: bool = False
+    compute_procrustes: bool = False
+
+    # Alpha diagnostics
+    log_alphas: bool = False
+
+    # Per-region mode
+    atlas_path: str | None = None
+    atlas_region_groups: dict | None = None
+
+
+@dataclass
 class PartialSVDConfig:
     """Parameters for partial SVD analysis (run_partial_svd.py).
 
