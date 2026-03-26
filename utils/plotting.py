@@ -1717,6 +1717,82 @@ def plot_sae_sweep_summary(combined_df, sweep_param, save_path=None,
         return fig
 
 
+# ---------------------------------------------------------------------------
+# RRR Latent Space Ablation plots
+# ---------------------------------------------------------------------------
+
+
+def plot_ablation_pct_zeroed(
+    summary_df,
+    title="Ablation: perf vs % data zeroed",
+    save_path=None,
+):
+    """Plot ablation performance vs percentage of data zeroed for a single k.
+
+    Three panels: minimal_corr, minimal_r2, recovery_corr vs pct_zeroed.
+    Each mask type (tail, center, random) gets its own color gradient.
+    The unmasked RRR baseline (mask_type='none') is a horizontal dashed line.
+
+    Args:
+        summary_df: DataFrame for a single k value with columns
+            [center_pct, mask_type, pct_zeroed, minimal_corr, minimal_r2, recovery_corr].
+        title: Figure title.
+        save_path: If given, save figure here; otherwise return the Figure.
+    """
+    import matplotlib.pyplot as plt
+    import matplotlib
+
+    metrics = ["minimal_corr", "minimal_r2", "recovery_corr"]
+    labels = ["Minimal Correlation", "Minimal R\u00b2", "Recovery Correlation"]
+
+    fig, axes = plt.subplots(1, len(metrics), figsize=(6 * len(metrics), 5))
+    if len(metrics) == 1:
+        axes = [axes]
+
+    cmap_map = {"tail": "Reds", "center": "Blues", "random": "Greys"}
+
+    baseline = summary_df[summary_df["mask_type"] == "none"]
+    ablated = summary_df[summary_df["mask_type"] != "none"]
+
+    for ax, metric, label in zip(axes, metrics, labels):
+        if len(baseline) > 0 and metric in baseline.columns:
+            bl_val = baseline[metric].mean()
+            ax.axhline(bl_val, color="black", linestyle="--", linewidth=1.5,
+                        label="unmasked RRR", zorder=5)
+
+        for mask_type in ["tail", "center", "random"]:
+            mask_df = ablated[ablated["mask_type"] == mask_type]
+            if mask_df.empty or metric not in mask_df.columns:
+                continue
+
+            cmap = matplotlib.colormaps.get_cmap(cmap_map.get(mask_type, "viridis"))
+            sorted_df = mask_df.sort_values("pct_zeroed")
+            pct_vals = sorted_df["pct_zeroed"].values
+            metric_vals = sorted_df[metric].values
+            center_pcts = sorted_df["center_pct"].values
+            unique_pcts = np.unique(center_pcts)
+            n_pcts = len(unique_pcts)
+
+            color_start, color_end = 0.3, 0.85
+            colors = [cmap(color_start + (color_end - color_start) * i / max(n_pcts - 1, 1))
+                      for i in range(n_pcts)]
+
+            ax.plot(pct_vals, metric_vals, color=cmap(0.6), linewidth=1.5,
+                    alpha=0.7, label=mask_type)
+            for j in range(len(pct_vals)):
+                cpct = center_pcts[j]
+                pct_idx = int(np.where(unique_pcts == cpct)[0][0])
+                ax.scatter(pct_vals[j], metric_vals[j], color=colors[pct_idx],
+                           s=40, zorder=4, edgecolors="white", linewidths=0.5)
+
+        ax.set_xlabel("% Data Zeroed")
+        ax.set_ylabel(label)
+        ax.legend(fontsize=8)
+        ax.grid(True, alpha=0.3)
+
+    fig.suptitle(title, fontsize=12)
+    
+    
 def plot_alpha_diagnostics(
     per_fold_alphas: list[np.ndarray],
     alpha_grid: np.ndarray,
@@ -1800,6 +1876,80 @@ def plot_alpha_diagnostics(
         return fig
 
 
+def plot_ablation_vs_rank(
+    summary_df,
+    title="Ablation vs rank",
+    save_path=None,
+):
+    """Plot ablation performance vs rank k with separate panels per condition.
+
+    3x3 panel grid: rows = (minimal_corr, minimal_r2, recovery_corr),
+    cols = (tail, center, random).  Within each panel, one line per
+    center_pct value colored along a gradient.  Black dashed line =
+    unmasked RRR performance vs k.
+
+    Args:
+        summary_df: DataFrame with columns [k, center_pct, mask_type, ...].
+        title: Figure title.
+        save_path: If given, save figure here; otherwise return the Figure.
+    """
+    import matplotlib.pyplot as plt
+    import matplotlib
+
+    metrics = ["minimal_corr", "minimal_r2", "recovery_corr"]
+    metric_labels = ["Minimal Correlation", "Minimal R\u00b2", "Recovery Correlation"]
+    mask_types = ["tail", "center", "random"]
+    cmap_map = {"tail": "Reds", "center": "Blues", "random": "Greys"}
+
+    n_rows = len(metrics)
+    n_cols = len(mask_types)
+    fig, axes = plt.subplots(n_rows, n_cols, figsize=(6 * n_cols, 4.5 * n_rows))
+    if n_rows == 1:
+        axes = axes[np.newaxis, :]
+
+    baseline = summary_df[summary_df["mask_type"] == "none"]
+    ablated = summary_df[summary_df["mask_type"] != "none"]
+
+    for row, (metric, metric_label) in enumerate(zip(metrics, metric_labels)):
+        for col, mask_type in enumerate(mask_types):
+            ax = axes[row, col]
+
+            if len(baseline) > 0 and metric in baseline.columns:
+                bl = baseline.groupby("k")[metric].mean().sort_index()
+                ax.semilogx(bl.index, bl.values, "k--", linewidth=1.5,
+                            label="unmasked RRR", zorder=5)
+
+            mask_df = ablated[ablated["mask_type"] == mask_type]
+            if mask_df.empty or metric not in mask_df.columns:
+                if row == 0:
+                    ax.set_title(mask_type, fontsize=11)
+                if col == 0:
+                    ax.set_ylabel(metric_label)
+                ax.set_xlabel("k (rank)")
+                ax.grid(True, alpha=0.3)
+                continue
+
+            cmap = matplotlib.colormaps.get_cmap(cmap_map.get(mask_type, "viridis"))
+            unique_pcts = sorted(mask_df["center_pct"].unique())
+            n_pcts = len(unique_pcts)
+            color_start, color_end = 0.3, 0.85
+
+            for i, cpct in enumerate(unique_pcts):
+                color = cmap(color_start + (color_end - color_start) * i / max(n_pcts - 1, 1))
+                pct_df = mask_df[mask_df["center_pct"] == cpct].sort_values("k")
+                ax.semilogx(pct_df["k"], pct_df[metric], "o-", color=color,
+                            markersize=4, linewidth=1.2,
+                            label=f"center_pct={cpct}")
+
+            if row == 0:
+                ax.set_title(mask_type, fontsize=11)
+            if col == 0:
+                ax.set_ylabel(metric_label)
+            ax.set_xlabel("k (rank)")
+            ax.legend(fontsize=7, loc="best")
+            ax.grid(True, alpha=0.3)
+            
+            
 def plot_alpha_vs_rank(
     rank_alpha_dict: dict[int, np.ndarray],
     alpha_grid: np.ndarray,

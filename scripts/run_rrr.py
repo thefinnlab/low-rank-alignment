@@ -57,84 +57,13 @@ from utils.encoding import (
 )
 from utils.sae import solve_regression
 from utils.srrr import (
-    compute_cca_similarity,
-    compute_procrustes_similarity,
     compute_r2,
     fit_dense_rrr,
     predict_from_factors,
-    run_sufficiency_test,
     save_rrr_factors,
     save_rrr_result,
 )
-
-
-# ---------------------------------------------------------------------------
-# Private helpers
-# ---------------------------------------------------------------------------
-
-
-def _run_prediction_metrics(
-    Y_hat_min: np.ndarray,
-    Y_hat_min_train: np.ndarray,
-    Y_train: np.ndarray,
-    X_train: np.ndarray,
-    X_test: np.ndarray,
-    Y_test: np.ndarray,
-    Y_hat_full: np.ndarray,
-    config: RRRConfig,
-    alphas: np.ndarray | None = None,
-) -> tuple[dict, float | None, float | None]:
-    """Run sufficiency test and optional alignment metrics for a minimal model.
-
-    Returns:
-        (suf, cca_sim, proc_sim) where suf is the run_sufficiency_test result dict.
-    """
-    suf = run_sufficiency_test(
-        X_train,
-        Y_train - Y_hat_min_train,
-        X_test,
-        Y_test,
-        Y_hat_full=Y_hat_full,
-        Y_hat_min=Y_hat_min,
-        null_r2=None,
-        regression_type="ridge",
-        alphas=alphas,
-    )
-    cca_sim = (
-        compute_cca_similarity(Y_hat_full, Y_hat_min) if config.compute_cca else None
-    )
-    proc_sim = (
-        compute_procrustes_similarity(Y_hat_full, Y_hat_min)
-        if config.compute_procrustes
-        else None
-    )
-    return suf, cca_sim, proc_sim
-
-
-def _add_sig_nonsig_corrs(
-    metrics: dict,
-    suf: dict,
-    sig_mask_flat: np.ndarray,
-    pairs: list[tuple[str, str]],
-) -> None:
-    """Add sig/nonsig split correlations to metrics dict in-place.
-
-    Args:
-        metrics: Dict to update.
-        suf: Sufficiency test result dict containing per-target arrays.
-        sig_mask_flat: Boolean mask over targets (True = significant).
-        pairs: List of (metric_col_name, suf_per_target_key) tuples.
-    """
-    for col_name, suf_key in pairs:
-        arr = suf[suf_key]
-        metrics[f"{col_name}_sig"] = (
-            float(arr[sig_mask_flat].mean()) if sig_mask_flat.any() else float("nan")
-        )
-        metrics[f"{col_name}_nonsig"] = (
-            float(arr[~sig_mask_flat].mean())
-            if (~sig_mask_flat).any()
-            else float("nan")
-        )
+from utils.rrr_utils import add_sig_nonsig_corrs, run_prediction_metrics
 
 
 # ---------------------------------------------------------------------------
@@ -227,9 +156,11 @@ def _run_rrr_for_unit(
             Y_hat_rrr = Y_hat_full @ B @ B.T
             Y_hat_rrr_train = Y_hat_ols_train @ B @ B.T
 
-            suf, cca_sim, proc_sim = _run_prediction_metrics(
+            suf, cca_sim, proc_sim = run_prediction_metrics(
                 Y_hat_rrr, Y_hat_rrr_train, Y_train, X_train, X_test, Y_test,
-                Y_hat_full, config, alphas=alphas,
+                Y_hat_full, alphas=alphas,
+                compute_cca=config.compute_cca,
+                compute_procrustes=config.compute_procrustes,
             )
 
             # Non-reduced-rank ridge from k-dim subspace
@@ -258,9 +189,11 @@ def _run_rrr_for_unit(
             Y_hat_nr = (X_proj_test_t @ nr_W + nr_b).cpu().numpy()
             Y_hat_nr_train = (X_proj_train_t @ nr_W + nr_b).cpu().numpy()
 
-            nr_suf, nr_cca_sim, nr_proc_sim = _run_prediction_metrics(
+            nr_suf, nr_cca_sim, nr_proc_sim = run_prediction_metrics(
                 Y_hat_nr, Y_hat_nr_train, Y_train, X_train, X_test, Y_test,
-                Y_hat_full, config, alphas=alphas,
+                Y_hat_full, alphas=alphas,
+                compute_cca=config.compute_cca,
+                compute_procrustes=config.compute_procrustes,
             )
 
             metrics = {
@@ -276,7 +209,7 @@ def _run_rrr_for_unit(
                 "k": k,
             }
             if sig_mask_flat is not None:
-                _add_sig_nonsig_corrs(metrics, suf, sig_mask_flat, [
+                add_sig_nonsig_corrs(metrics, suf, sig_mask_flat, [
                     ("full_corr", "full_corr_per_target"),
                     ("minimal_corr", "minimal_corr_per_target"),
                     ("recovery_corr", "recovery_corr_per_target"),
@@ -295,7 +228,7 @@ def _run_rrr_for_unit(
                 "nr_corr_per_target": nr_suf["minimal_corr_per_target"],
             })
             if sig_mask_flat is not None:
-                _add_sig_nonsig_corrs(metrics, nr_suf, sig_mask_flat, [
+                add_sig_nonsig_corrs(metrics, nr_suf, sig_mask_flat, [
                     ("nr_corr", "minimal_corr_per_target"),
                     ("nr_recovery_corr", "recovery_corr_per_target"),
                 ])

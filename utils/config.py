@@ -271,3 +271,47 @@ class SAEConfig:
     # Per-region mode
     atlas_path: str | None = None
     atlas_region_groups: dict | None = None
+
+
+@dataclass
+class AblationConfig:
+    """Parameters for RRR latent space ablation study (run_ablation.py).
+
+    Loads pre-computed RRR A and B matrices, projects embeddings into the
+    latent space, applies quantile-based masks (tail-only, center-only,
+    random), and evaluates neural reconstruction under each mask by training
+    a fresh ridge regression from the masked projections to neural targets.
+
+    Mode -> output directory mapping (default, overridable via ablation_output_dir):
+        cross_subject : {output_dir}/ablation/
+        per_subject   : {output_dir}/per_subject_ablation/
+        per_region    : {output_dir}/per_region_ablation/
+    """
+
+    encoding: EncodingConfig = field(default_factory=EncodingConfig)
+    output_dir: str | None = None              # Root results dir; auto from model/layer/offset if None
+    ablation_output_dir: str | None = None     # Override for ablation root subdir
+    rrr_source_dir: str | None = None          # Where to find RRR A/B matrices; auto-resolved per mode
+    mode: SVDMode = SVDMode.CROSS_SUBJECT
+
+    # Rank sweep — which top-k dimensions to evaluate
+    rank_grid: list[int] = field(
+        default_factory=lambda: [1, 2, 5, 10, 20, 50]
+    )
+
+    # Percentile sweep — center zone sizes (percentage of distribution)
+    center_pcts: list[int] = field(
+        default_factory=lambda: [10, 30, 50, 70, 90]
+    )
+
+    # Mask types to evaluate
+    mask_types: list[str] = field(
+        default_factory=lambda: ["tail", "center", "random"]
+    )
+
+    # Number of random seeds for random mask (averaged for stability)
+    n_random_seeds: int = 5
+
+    # Per-region mode
+    atlas_path: str | None = None
+    atlas_region_groups: dict | None = None
