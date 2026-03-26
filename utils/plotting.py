@@ -1791,6 +1791,82 @@ def plot_ablation_pct_zeroed(
         ax.grid(True, alpha=0.3)
 
     fig.suptitle(title, fontsize=12)
+    
+    
+def plot_alpha_diagnostics(
+    per_fold_alphas: list[np.ndarray],
+    alpha_grid: np.ndarray,
+    title: str = "Ridge alpha diagnostics",
+    save_path: str | None = None,
+):
+    """3-panel figure summarising which alphas RidgeCV selected.
+
+    Panel 1: Histogram of log10(best_alphas) across all targets/folds.
+    Panel 2: Per-fold boxplot of log10(best_alphas).
+    Panel 3: Text summary (median, IQR, boundary warnings, suggested refined grid).
+
+    Args:
+        per_fold_alphas: List of 1-D arrays, one per fold, each shape (n_targets,).
+        alpha_grid: The alpha grid that was swept.
+        title: Figure title.
+        save_path: If given, save figure here; otherwise return fig.
+    """
+    import matplotlib.pyplot as plt
+    from utils.constants import check_alpha_grid_boundaries, refine_alpha_grid
+
+    all_alphas = np.concatenate(per_fold_alphas)
+    log_all = np.log10(all_alphas[all_alphas > 0])
+
+    fig, axes = plt.subplots(1, 3, figsize=(16, 5))
+
+    # Panel 1: histogram
+    ax = axes[0]
+    ax.hist(log_all, bins=40, color="steelblue", edgecolor="white", alpha=0.8)
+    lo_line = np.log10(alpha_grid.min())
+    hi_line = np.log10(alpha_grid.max())
+    ax.axvline(lo_line, color="red", linestyle="--", label=f"grid min ({alpha_grid.min():.1e})")
+    ax.axvline(hi_line, color="red", linestyle="--", label=f"grid max ({alpha_grid.max():.1e})")
+    ax.set_xlabel("log10(alpha)")
+    ax.set_ylabel("Count")
+    ax.set_title("Selected alpha distribution")
+    ax.legend(fontsize=7)
+
+    # Panel 2: per-fold violin plot (scales to 100K+ targets without outlier clutter)
+    ax = axes[1]
+    log_per_fold = [np.log10(a[a > 0]) for a in per_fold_alphas]
+    parts = ax.violinplot(log_per_fold, showmedians=True, showextrema=True)
+    for pc in parts["bodies"]:
+        pc.set_facecolor("steelblue")
+        pc.set_alpha(0.6)
+    ax.set_xticks(range(1, len(per_fold_alphas) + 1))
+    ax.set_xticklabels([f"Fold {i}" for i in range(len(per_fold_alphas))])
+    ax.set_ylabel("log10(alpha)")
+    ax.set_title("Per-fold alpha distribution")
+
+    # Panel 3: text summary
+    ax = axes[2]
+    ax.axis("off")
+    boundary = check_alpha_grid_boundaries(all_alphas, alpha_grid)
+    median_a = float(np.median(all_alphas))
+    q25, q75 = float(np.percentile(all_alphas, 25)), float(np.percentile(all_alphas, 75))
+    refined = refine_alpha_grid(all_alphas)
+
+    lines = [
+        f"Targets: {len(all_alphas)}",
+        f"Median alpha: {median_a:.2e}",
+        f"IQR: [{q25:.2e}, {q75:.2e}]",
+        "",
+        f"Hit lower boundary: {'YES' if boundary['hit_lower'] else 'no'} ({boundary['frac_lower']:.1%})",
+        f"Hit upper boundary: {'YES' if boundary['hit_upper'] else 'no'} ({boundary['frac_upper']:.1%})",
+        "",
+        f"Suggested refined grid ({len(refined)} pts):",
+        f"  [{refined[0]:.2e} .. {refined[-1]:.2e}]",
+    ]
+    ax.text(0.05, 0.95, "\n".join(lines), transform=ax.transAxes,
+            verticalalignment="top", fontsize=10, fontfamily="monospace")
+    ax.set_title("Summary")
+
+    fig.suptitle(title, fontsize=13)
     fig.tight_layout()
 
     if save_path is not None:
@@ -1872,6 +1948,57 @@ def plot_ablation_vs_rank(
             ax.set_xlabel("k (rank)")
             ax.legend(fontsize=7, loc="best")
             ax.grid(True, alpha=0.3)
+            
+            
+def plot_alpha_vs_rank(
+    rank_alpha_dict: dict[int, np.ndarray],
+    alpha_grid: np.ndarray,
+    title: str = "Ridge alpha distribution vs RRR rank",
+    save_path: str | None = None,
+):
+    """2-panel figure showing how selected alphas shift with RRR rank.
+
+    Panel 1: Boxplot of log10(best_alphas) per rank k.
+    Panel 2: Median alpha vs rank (line) with IQR band.
+
+    Args:
+        rank_alpha_dict: Dict mapping rank k → 1-D array of best_alphas_.
+        alpha_grid: The alpha grid that was swept.
+        title: Figure title.
+        save_path: If given, save figure here; otherwise return fig.
+    """
+    import matplotlib.pyplot as plt
+
+    ranks = sorted(rank_alpha_dict.keys())
+    log_data = [np.log10(rank_alpha_dict[k][rank_alpha_dict[k] > 0]) for k in ranks]
+    medians = [float(np.median(d)) for d in log_data]
+    q25s = [float(np.percentile(d, 25)) for d in log_data]
+    q75s = [float(np.percentile(d, 75)) for d in log_data]
+
+    fig, axes = plt.subplots(1, 2, figsize=(13, 5))
+
+    # Panel 1: violin plot per rank (scales to 100K+ targets without outlier clutter)
+    ax = axes[0]
+    parts = ax.violinplot(log_data, showmedians=True, showextrema=True)
+    for pc in parts["bodies"]:
+        pc.set_facecolor("steelblue")
+        pc.set_alpha(0.6)
+    ax.set_xticks(range(1, len(ranks) + 1))
+    ax.set_xticklabels([str(k) for k in ranks])
+    ax.axhline(np.log10(alpha_grid.min()), color="red", linestyle="--", alpha=0.4)
+    ax.axhline(np.log10(alpha_grid.max()), color="red", linestyle="--", alpha=0.4)
+    ax.set_xlabel("Rank k")
+    ax.set_ylabel("log10(alpha)")
+    ax.set_title("Alpha distribution per rank")
+
+    # Panel 2: median + IQR band
+    ax = axes[1]
+    ax.plot(ranks, medians, "o-", color="steelblue", label="Median")
+    ax.fill_between(ranks, q25s, q75s, alpha=0.2, color="steelblue", label="IQR")
+    ax.set_xlabel("Rank k")
+    ax.set_ylabel("log10(alpha)")
+    ax.set_title("Median alpha vs rank")
+    ax.legend()
 
     fig.suptitle(title, fontsize=13)
     fig.tight_layout()

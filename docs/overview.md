@@ -54,7 +54,7 @@ Main entry points for the pipeline:
 | File | Purpose |
 |------|---------|
 | `run_significance.py` | Permutation-test significance per electrode-lag pair; outputs `significance_detailed.csv` and `all_subject_sig.csv` |
-| `train_encoding_models.py` | Trains ridge regression models on significant electrodes; outputs coefficients, correlations, and plots |
+| `train_encoding_models.py` | Trains ridge regression models on significant electrodes; outputs coefficients, correlations, and plots. When `log_alphas=True`, saves alpha diagnostic plots and `.npz` files. When `refine_alphas=True`, uses a two-pass coarse→refined alpha sweep |
 | `generate_plots.py` | Generates or regenerates correlation plots from existing run results; supports backfilling SVD plots for cross_subject, per_subject, and per_region modes (auto-detected or via `--svd-modes`) |
 | `run_svd_analysis.py` | SVD decomposition of encoding weights; evaluates truncation at various k values and selects optimal k |
 | `run_srrr.py` | SRRR analysis; reads SVD decompositions and finds minimal direction subset via stability selection and sufficiency testing; supports cross_subject, per_subject, and per_region modes |
@@ -70,17 +70,18 @@ Core library modules:
 
 | File | Purpose |
 |------|---------|
-| `constants.py` | Project-wide constants; `RIDGE_ALPHAS` — default alpha grid for RidgeCV used across all ridge regression training |
+
+| `constants.py` | Project-wide constants; `RIDGE_ALPHAS` — default alpha grid for RidgeCV; `refine_alpha_grid()` — builds a refined grid from observed best alphas; `check_alpha_grid_boundaries()` — detects when selected alphas cluster at grid edges |
 | `config.py` | Dataclass definitions for `EncodingConfig`, `SignificanceConfig`, `SVDConfig`, `PartialSVDConfig`, `PartialRRRConfig`, `SRRRConfig`, `RRRConfig`, `SAEConfig`, `AblationConfig`; `get_results_dir()` for canonical output paths |
 | `config_utils.py` | Argument parsing and YAML loading with CLI override support (dot-notation, e.g. `--encoding.layer=48`) |
 | `data_loaders.py` | Loads iEEG BIDS data via MNE, GPT-2 embeddings from HDF5, builds word-aligned epochs, handles time offsets; `build_XY_from_subjects()` for stacking multi-subject neural data; `load_sig_electrodes()` and `load_fold_indices()` for shared data-loading across scripts |
 | `embeddings.py` | Loads contextual GPT-2-XL token embeddings from HDF5 and averages tokens per word |
-| `encoding.py` | K-fold cross-validation ridge regression (Himalaya backend), coefficient serialization, cross-subject aggregation |
+| `encoding.py` | K-fold cross-validation ridge regression (Himalaya backend), coefficient serialization, cross-subject aggregation; `extract_best_alphas()` — extracts per-target selected alphas from fitted RidgeCV; `train_encoding_two_pass()` — coarse-then-refined alpha sweep |
 | `significance.py` | GPU-accelerated permutation testing, vectorized Pearson correlation, Benjamini-Hochberg FDR correction |
 | `analysis.py` | SVD decomposition of weights, truncated correlation evaluation, best-k selection, residualization utilities |
 | `srrr.py` | Core SRRR/RRR functions: ProxGD optimizer, stability selection, `fit_dense_rrr`, sufficiency test, alignment metrics (CCA, Procrustes), I/O helpers for both SRRR and RRR outputs |
 | `sae.py` | SAE model (`SAEEncoder`, `SAERegressorEndToEnd`), training functions (`train_sae_end_to_end`, `train_sae_alternating`), dead feature resampling (`_resample_dead_neurons`), and SAE-specific metrics (L0 sparsity, dead neurons, activation frequency). Encoder bias is initialized to zero to prevent dead-on-init features. |
-| `plotting.py` | Matplotlib helpers for correlation vs lag plots, significance overlays, SVD truncation analysis figures, ablation pct-zeroed and vs-rank plots |
+| `plotting.py` | Matplotlib helpers for correlation vs lag plots, significance overlays, SVD truncation analysis figures, ablation pct-zeroed and vs-rank plots; `plot_alpha_diagnostics()` — 3-panel alpha selection summary; `plot_alpha_vs_rank()` — how optimal alpha shifts with RRR rank |
 | `rrr_utils.py` | Shared helpers for RRR-based scripts: `run_prediction_metrics`, `add_sig_nonsig_corrs`, `resolve_rrr_source_dir` |
 | `examples.py` | Generates context windows and markdown tables of example words for qualitative analysis |
 | `__init__.py` | Public API — re-exports all key functions for convenient imports |
@@ -103,6 +104,7 @@ Unit tests with full pipeline coverage:
 | `test_partial_rrr.py` | Partial RRR: `partial_out_subspace` orthogonality/idempotency/non-orthonormal handling, sweep integration, save results, config round-trip |
 | `test_sae.py` | SAE: encoder shape/ReLU, zero-bias init, dead feature resampling, end-to-end and alternating training (loss decrease, OLS/ridge, resampling integration), metrics computation, config round-trip, sweep detection helpers, sweep summary plot |
 | `test_ablation.py` | Ablation: quantile mask construction (center/tail/random fractions, complementarity, median centering), `_run_ablation_for_unit` integration (grid_results.csv, summary.csv, baseline inclusion, per-k plots, performance monotonicity) |
+| `test_alpha_diagnostics.py` | Alpha grid utilities: `refine_alpha_grid`, `check_alpha_grid_boundaries`, `extract_best_alphas`, `solve_regression` `return_alphas` parameter |
 | `test_significance.py` | Permutation testing, FDR correction |
 | `test_examples.py` | Context building and table generation |
 

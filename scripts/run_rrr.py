@@ -102,6 +102,8 @@ def _run_rrr_for_unit(
     selected_idx = np.arange(n_embed)
 
     all_rows = []
+    # Per-fold alpha tracking (populated when config.log_alphas is True)
+    per_fold_rank_alphas: list[dict[int, np.ndarray]] = []
 
     for fold_f in range(n_folds):
         fold_start = time.time()
@@ -136,6 +138,8 @@ def _run_rrr_for_unit(
 
         device = "cuda" if torch.cuda.is_available() else "cpu"
 
+        rank_alpha_dict: dict[int, np.ndarray] = {}
+
         print(f"  Running {len(config.rank_grid)} rank(s): {config.rank_grid}")
         for k in tqdm(
             config.rank_grid, desc=f"  fold {fold_f}", leave=True, unit="rank"
@@ -162,14 +166,20 @@ def _run_rrr_for_unit(
             # Non-reduced-rank ridge from k-dim subspace
             X_proj_train = X_train @ A  # (n_train, k)
             X_proj_test = X_test @ A  # (n_test, k)
-            nr_W, nr_b = solve_regression(
+            _nr_result = solve_regression(
                 torch.as_tensor(X_proj_train, dtype=torch.float32, device=device),
                 torch.as_tensor(Y_train, dtype=torch.float32, device=device),
                 "ridge",
                 device,
                 standardize=False,
                 alphas=alphas,
+                return_alphas=config.log_alphas,
             )
+            if config.log_alphas:
+                nr_W, nr_b, nr_best_alphas = _nr_result
+                rank_alpha_dict[k] = nr_best_alphas
+            else:
+                nr_W, nr_b = _nr_result
             X_proj_train_t = torch.as_tensor(
                 X_proj_train, dtype=torch.float32, device=device
             )
@@ -229,7 +239,32 @@ def _run_rrr_for_unit(
             save_rrr_result(rrr_unit_dir, k=k, fold=fold_f, metrics=metrics)
             all_rows.append(metrics)
 
+        if config.log_alphas and rank_alpha_dict:
+            per_fold_rank_alphas.append(rank_alpha_dict)
+            np.savez(
+                os.path.join(rrr_unit_dir, f"alpha_diagnostics_fold{fold_f}.npz"),
+                **{f"k{k}": arr for k, arr in rank_alpha_dict.items()},
+            )
+
         print(f"  Fold {fold_f} done in {time.time() - fold_start:.1f}s")
+
+    # Alpha-vs-rank diagnostic plot (aggregate across folds)
+    if config.log_alphas and per_fold_rank_alphas:
+        from utils.plotting import plot_alpha_vs_rank
+        from utils.constants import RIDGE_ALPHAS as _default_alphas
+
+        _alpha_grid = alphas if alphas is not None else _default_alphas
+        # Merge across folds: concatenate per-rank arrays
+        merged: dict[int, np.ndarray] = {}
+        for frd in per_fold_rank_alphas:
+            for k_val, arr in frd.items():
+                merged[k_val] = np.concatenate([merged.get(k_val, np.array([])), arr])
+        plot_alpha_vs_rank(
+            merged,
+            _alpha_grid,
+            title=f"RRR alpha vs rank ({os.path.basename(rrr_unit_dir)})",
+            save_path=os.path.join(rrr_unit_dir, "alpha_vs_rank.png"),
+        )
 
     df = pd.DataFrame(all_rows)
     df.to_csv(os.path.join(rrr_unit_dir, "grid_results.csv"), index=False)

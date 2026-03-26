@@ -32,6 +32,8 @@ class EncodingConfig:
     run_name: str | None = None  # Output dir; auto-generated from model/layer/offset if None
     batch: bool = False      # Process subjects one at a time (lower peak RAM)
     ridge_alphas: list[float] | None = None  # None → use RIDGE_ALPHAS from constants.py
+    log_alphas: bool = False     # Save alpha diagnostics (.npz + .png) per subject
+    refine_alphas: bool = False  # Two-pass training: coarse sweep → refined grid
 
 
 @dataclass
@@ -87,6 +89,9 @@ class RRRConfig:
     # Optional metrics (expensive; disabled by default to speed up rank sweeps)
     compute_cca: bool = False
     compute_procrustes: bool = False
+
+    # Alpha diagnostics
+    log_alphas: bool = False  # Save per-rank alpha diagnostics in RRR output
 
     # Per-region mode
     atlas_path: str | None = None        # Path to Destrieux 2009 .nii.gz; None = download via nilearn
