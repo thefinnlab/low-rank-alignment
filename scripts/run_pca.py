@@ -296,23 +296,15 @@ def _run_pca_for_unit(
         overlay_label="RRR (NR)",
     )
 
-    # Second plot: same PCA results with RRR reduced-rank overlay
+    # Second plot: PCA with RRR reduced-rank overlay (only when RRR data exists)
     if rrr_summary is not None:
         plot_rrr_rank_results(
             summary,
             grid_df=df,
             title=f"PCA: perf vs rank ({os.path.basename(pca_unit_dir)})",
-            save_path=os.path.join(pca_unit_dir, "rank_analysis_nr.png"),
+            save_path=os.path.join(pca_unit_dir, "rank_analysis_rrr_raw.png"),
             overlay_summary_df=rrr_summary,
             overlay_label="RRR",
-        )
-    else:
-        # No RRR data — just duplicate the main plot
-        plot_rrr_rank_results(
-            summary,
-            grid_df=df,
-            title=f"PCA: perf vs rank ({os.path.basename(pca_unit_dir)})",
-            save_path=os.path.join(pca_unit_dir, "rank_analysis_nr.png"),
         )
 
     return df

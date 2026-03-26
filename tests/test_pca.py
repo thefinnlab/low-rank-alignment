@@ -253,7 +253,8 @@ class TestRunPCAForUnit:
         _run_pca_for_unit(str(tmp_path), X, test_idxs, per_fold_baselines, config)
 
         assert os.path.exists(os.path.join(str(tmp_path), "rank_analysis.png"))
-        assert os.path.exists(os.path.join(str(tmp_path), "rank_analysis_nr.png"))
+        # rank_analysis_rrr_raw.png is only generated when RRR overlay exists
+        assert not os.path.exists(os.path.join(str(tmp_path), "rank_analysis_rrr_raw.png"))
 
     def test_rank_clamped_to_available_components(self, tmp_path, rng):
         """Ranks exceeding min(n_train, n_embed) should be silently skipped."""
