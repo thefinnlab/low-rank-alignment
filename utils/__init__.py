@@ -3,7 +3,7 @@
 
 from utils.constants import RIDGE_ALPHAS, refine_alpha_grid, check_alpha_grid_boundaries
 from utils.tensor_utils import to_numpy, to_torch
-from utils.config import EncodingConfig, SignificanceConfig, SVDConfig, SRRRConfig, RRRConfig, PartialSVDConfig, PartialRRRConfig, SAEConfig, SVDMode, get_results_dir
+from utils.config import EncodingConfig, SignificanceConfig, SVDConfig, SRRRConfig, RRRConfig, PCAConfig, PartialSVDConfig, PartialRRRConfig, SAEConfig, SVDMode, get_results_dir
 from utils.config_utils import (
     parse_override_args,
     get_nested_value,
@@ -109,6 +109,7 @@ from utils.sae import (
     train_sae_end_to_end,
     train_sae_alternating,
 )
+from utils.subspace_utils import evaluate_subspace_ridge, build_nr_metrics_dict
 from utils.examples import (
     _make_context,
     _sample,
@@ -131,6 +132,7 @@ __all__ = [
     "SVDConfig",
     "SRRRConfig",
     "RRRConfig",
+    "PCAConfig",
     "PartialSVDConfig",
     "PartialRRRConfig",
     "SAEConfig",
@@ -231,6 +233,9 @@ __all__ = [
     "compute_sae_metrics",
     "train_sae_end_to_end",
     "train_sae_alternating",
+    # subspace_utils
+    "evaluate_subspace_ridge",
+    "build_nr_metrics_dict",
     # examples
     "_make_context",
     "_sample",

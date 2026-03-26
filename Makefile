@@ -18,6 +18,7 @@ SIG_CONFIG      ?= configs/significance/significance_default.yml
 SVD_CONFIG      ?= configs/svd/svd_default.yml
 SRRR_CONFIG     ?= configs/srrr/srrr_default.yml
 RRR_CONFIG      ?= configs/rrr/rrr_default.yml
+PCA_CONFIG      ?= configs/pca/pca_default.yml
 RUN_DIR         ?=   # required for plots: RUN_DIR=results/my_run
 DATA_ROOT       ?= data
 ATLAS_PATH      ?= atlases/destrieux_2009/destrieux2009_rois_lateralized.nii.gz
@@ -85,6 +86,16 @@ rrr:
 	mkdir -p logs
 	$(CMD) scripts/run_rrr.py --config $(RRR_CONFIG) $(OVERRIDES)
 
+## Run PCA analysis (embedding PCA subspace baseline)
+## Usage:
+##   make pca                                                          # default config
+##   make pca PCA_CONFIG=configs/pca/pca_default.yml                  # explicit config
+##   make pca OVERRIDES="--mode=per_region"                           # per-region mode
+##   make pca CMD=python                                               # run locally
+pca:
+	mkdir -p logs
+	$(CMD) scripts/run_pca.py --config $(PCA_CONFIG) $(OVERRIDES)
+
 ## Run partial SVD analysis (direction importance via partialling)
 ## Usage:
 ##   make partial-svd                                                     # default config
@@ -136,4 +147,4 @@ sig-test:
 test:
 	python -m pytest tests/ -v
 
-.PHONY: sig train plots svd srrr rrr partial-svd partial-rrr sae sig-test test
+.PHONY: sig train plots svd srrr rrr pca partial-svd partial-rrr sae sig-test test

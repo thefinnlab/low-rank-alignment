@@ -309,7 +309,8 @@ def plot_svd_corrs(corrs_trunc, full_corrs, lags, title, save_path, best_k):
 
 
 def plot_rrr_rank_results(
-    summary_df, grid_df=None, title="RRR: perf vs rank", save_path=None
+    summary_df, grid_df=None, title="RRR: perf vs rank", save_path=None,
+    overlay_summary_df=None, overlay_label="RRR",
 ):
     """Multi-panel figure summarising RRR rank analysis.
 
@@ -333,6 +334,9 @@ def plot_rrr_rank_results(
             (i.e. grid_results.csv).
         title: Figure title.
         save_path: If given, save figure here and close it; otherwise return the Figure.
+        overlay_summary_df: Optional second summary DataFrame to overlay as dashed
+            lines (e.g. RRR results on a PCA plot). Must have the same column schema.
+        overlay_label: Legend label prefix for the overlay traces.
 
     Returns:
         matplotlib Figure when save_path is None, else None.
@@ -445,6 +449,13 @@ def plot_rrr_rank_results(
         label="minimal_r2 (RRR)",
         linewidth=1.5,
     )
+    if overlay_summary_df is not None and "minimal_r2" in overlay_summary_df.columns:
+        ov_ks = overlay_summary_df["k"].values
+        ax2.semilogx(
+            ov_ks, overlay_summary_df["minimal_r2"],
+            color="#dc2626", linestyle="--", marker="s", markersize=3,
+            label=f"minimal_r2 ({overlay_label})", linewidth=1.2, alpha=0.7,
+        )
     ax2.axhline(0, color="black", linewidth=0.5, linestyle=":")
     ax2.set_xlabel("Rank k")
     ax2.set_ylabel("R²")
@@ -472,6 +483,17 @@ def plot_rrr_rank_results(
         label="minimal_r2 / full_r2",
         linewidth=1.5,
     )
+    if overlay_summary_df is not None and "minimal_r2" in overlay_summary_df.columns:
+        ov_ks = overlay_summary_df["k"].values
+        ov_ratio = overlay_summary_df["minimal_r2"].values / np.where(
+            overlay_summary_df["full_r2"].values > 0,
+            overlay_summary_df["full_r2"].values, np.nan,
+        )
+        ax3.semilogx(
+            ov_ks, ov_ratio,
+            color="#dc2626", linestyle="--", marker="s", markersize=3,
+            label=f"ratio ({overlay_label})", linewidth=1.2, alpha=0.7,
+        )
     ax3.axhline(1, color="black", linewidth=0.5, linestyle=":")
     ax3.set_xlabel("Rank k")
     ax3.set_ylabel("Fraction of ceiling")
@@ -559,6 +581,19 @@ def plot_rrr_rank_results(
                 label="recovery_corr (residual)",
                 linewidth=1.5,
             )
+        if overlay_summary_df is not None and "minimal_corr" in overlay_summary_df.columns:
+            ov_ks = overlay_summary_df["k"].values
+            ax5.semilogx(
+                ov_ks, overlay_summary_df["minimal_corr"],
+                color="#dc2626", linestyle="--", marker="s", markersize=3,
+                label=f"minimal_corr ({overlay_label})", linewidth=1.2, alpha=0.7,
+            )
+            if "recovery_corr" in overlay_summary_df.columns:
+                ax5.semilogx(
+                    ov_ks, overlay_summary_df["recovery_corr"],
+                    color="#991b1b", linestyle="--", marker="s", markersize=3,
+                    label=f"recovery_corr ({overlay_label})", linewidth=1.2, alpha=0.7,
+                )
         ax5.axhline(0, color="black", linewidth=0.5, linestyle=":")
         ax5.set_xlabel("Rank k")
         ax5.set_ylabel("Correlation")
@@ -593,6 +628,17 @@ def plot_rrr_rank_results(
             label="minimal_corr / full_corr",
             linewidth=1.5,
         )
+        if overlay_summary_df is not None and "minimal_corr" in overlay_summary_df.columns:
+            ov_ks = overlay_summary_df["k"].values
+            ov_corr_ratio = overlay_summary_df["minimal_corr"].values / np.where(
+                overlay_summary_df["full_corr"].values > 0,
+                overlay_summary_df["full_corr"].values, np.nan,
+            )
+            ax6.semilogx(
+                ov_ks, ov_corr_ratio,
+                color="#dc2626", linestyle="--", marker="s", markersize=3,
+                label=f"ratio ({overlay_label})", linewidth=1.2, alpha=0.7,
+            )
         ax6.axhline(1, color="black", linewidth=0.5, linestyle=":")
         ax6.set_xlabel("Rank k")
         ax6.set_ylabel("Fraction of ceiling")
@@ -622,6 +668,13 @@ def plot_rrr_rank_results(
                 label="pred_r2",
                 linewidth=1.5,
             )
+            if overlay_summary_df is not None and "pred_r2" in overlay_summary_df.columns:
+                ov_ks = overlay_summary_df["k"].values
+                ax7.semilogx(
+                    ov_ks, overlay_summary_df["pred_r2"],
+                    color="#dc2626", linestyle="--", marker="s", markersize=3,
+                    label=f"pred_r2 ({overlay_label})", linewidth=1.2, alpha=0.7,
+                )
             ax7.axhline(1, color="black", linewidth=0.5, linestyle=":")
             ax7.set_xlabel("Rank k")
             ax7.set_ylabel("R² (Y_hat_full as target)")

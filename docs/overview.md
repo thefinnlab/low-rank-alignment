@@ -10,6 +10,7 @@ This is a neuroscience encoding analysis pipeline that studies how GPT-2-XL lang
 4. **Partial SVD analysis** (`make partial-svd`) — removes contiguous windows of SVD directions from word embeddings and retrains ridge regression to measure how much each group contributes to encoding performance
 5. **SRRR analysis** (`make srrr`) — finds the minimal subset of SVD directions that explains all significant encoding variance, via stability selection and a statistical sufficiency test
 6. **RRR analysis** (`make rrr`) — raw-input RRR baseline: sweeps over ranks to find the minimal rank that captures full-ridge variance, directly in embedding space (no SVD projection)
+6b. **PCA analysis** (`make pca`) — PCA-based subspace baseline: computes PCA on word embeddings to find a low-dimensional input subspace, trains ridge regression from projected embeddings to neural targets, and sweeps over a rank grid; plots optionally overlay corresponding RRR results for comparison
 7. **Partial RRR analysis** (`make partial-rrr`) — partials out RRR-learned subspaces from word embeddings and retrains ridge regression to measure how much each rank-k subspace contributes to encoding performance
 8. **SAE analysis** (`make sae`) — projects embeddings into an RRR-learned k-dimensional subspace and trains a sparse autoencoder (overcomplete hidden layer with ReLU + L1 penalty) followed by regression to predict neural targets; tests whether superposition in the RRR subspace can be decoded with more linear dimensions
 9. **Ablation analysis** (`run_ablation.py`) — loads pre-computed RRR A/B matrices, projects embeddings into the latent space, applies quantile-based masks (tail-only, center-only, random) to the projected activations, trains fresh ridge regressions from masked projections to neural targets, and evaluates reconstruction performance; determines whether encoding information is concentrated in distributional tails or centers; supports cross_subject, per_subject, and per_region modes
@@ -42,6 +43,9 @@ YAML config files passed to scripts via `--config`:
 | `partial_svd_per_region.yml` | Partial SVD variant with Destrieux atlas region plots |
 | `partial_rrr_default.yml` | Partial RRR analysis: cross-subject subspace importance (rank_grid [1,2,5,10,20,50]) |
 | `rrr_default.yml` | RRR cross-subject baseline (rank_grid [1,2,5,10,20,50]) |
+| `pca_default.yml` | PCA cross-subject baseline (rank_grid [1,2,5,...,1600]) |
+| `pca_per_subject.yml` | Per-subject PCA variant |
+| `pca_per_region.yml` | Per-region PCA variant with Destrieux atlas regions |
 | `rrr_per_subject.yml` | Per-subject RRR variant |
 | `rrr_per_region.yml` | Per-region RRR variant with Destrieux atlas regions |
 | `sae_default.yml` | SAE cross-subject default (k=10, hidden_dim=50, end-to-end, OLS, L1=0.001) |
@@ -60,6 +64,7 @@ Main entry points for the pipeline:
 | `run_srrr.py` | SRRR analysis; reads SVD decompositions and finds minimal direction subset via stability selection and sufficiency testing; supports cross_subject, per_subject, and per_region modes |
 | `run_partial_svd.py` | Partial SVD analysis; removes windows of SVD directions from embeddings, retrains ridge regression, and measures correlation drop; generates cross-subject, per-subject, and per-region sweep plots |
 | `run_rrr.py` | RRR baseline; fits RRR directly from raw embeddings to neural targets (no SVD projection); sweeps over ranks with residual R², CCA, and Procrustes metrics; supports cross_subject, per_subject, and per_region modes |
+| `run_pca.py` | PCA baseline; computes PCA on word embeddings to find low-dimensional input subspace, trains ridge regression from projected embeddings to neural targets; sweeps over ranks with same metrics as RRR; plots overlay corresponding RRR results when available; supports cross_subject, per_subject, and per_region modes |
 | `run_partial_rrr.py` | Partial RRR analysis; loads RRR-learned A matrices, partials out their subspaces from embeddings, retrains ridge, and measures correlation drop; supports cross_subject, per_subject, and per_region modes |
 | `run_sae.py` | SAE analysis; projects embeddings into RRR k-dim subspace, trains sparse autoencoder + regression (end-to-end or alternating), evaluates with correlation/R²/recovery metrics; supports cross_subject, per_subject, and per_region modes. **Hyperparameter sweeps**: set any scalar config param as a list (e.g. `hidden_dim: [5, 10, 30]`, `l1_penalty: [0.005, 0.01]`) to run all combinations. Results are organized hierarchically under k directories (e.g. `sae/k5/hidden_dim=5/l1_penalty=0.005/`). Summary plots at each k directory show how metrics vary per swept parameter. |
 | `run_ablation.py` | RRR latent space ablation; loads pre-computed RRR A/B matrices, applies quantile-based masks (tail/center/random) to projected activations, trains fresh ridge regressions from masked projections to neural targets, sweeps over rank and center-zone percentile grids; outputs per-k pct_zeroed plots and a vs-rank summary figure; supports cross_subject, per_subject, and per_region modes |
@@ -72,7 +77,7 @@ Core library modules:
 |------|---------|
 
 | `constants.py` | Project-wide constants; `RIDGE_ALPHAS` — default alpha grid for RidgeCV; `refine_alpha_grid()` — builds a refined grid from observed best alphas; `check_alpha_grid_boundaries()` — detects when selected alphas cluster at grid edges |
-| `config.py` | Dataclass definitions for `EncodingConfig`, `SignificanceConfig`, `SVDConfig`, `PartialSVDConfig`, `PartialRRRConfig`, `SRRRConfig`, `RRRConfig`, `SAEConfig`, `AblationConfig`; `get_results_dir()` for canonical output paths |
+| `config.py` | Dataclass definitions for `EncodingConfig`, `SignificanceConfig`, `SVDConfig`, `PartialSVDConfig`, `PartialRRRConfig`, `SRRRConfig`, `RRRConfig`, `PCAConfig`, `SAEConfig`, `AblationConfig`; `get_results_dir()` for canonical output paths |
 | `config_utils.py` | Argument parsing and YAML loading with CLI override support (dot-notation, e.g. `--encoding.layer=48`) |
 | `data_loaders.py` | Loads iEEG BIDS data via MNE, GPT-2 embeddings from HDF5, builds word-aligned epochs, handles time offsets; `build_XY_from_subjects()` for stacking multi-subject neural data; `load_sig_electrodes()` and `load_fold_indices()` for shared data-loading across scripts |
 | `embeddings.py` | Loads contextual GPT-2-XL token embeddings from HDF5 and averages tokens per word |
@@ -83,6 +88,7 @@ Core library modules:
 | `sae.py` | SAE model (`SAEEncoder`, `SAERegressorEndToEnd`), training functions (`train_sae_end_to_end`, `train_sae_alternating`), dead feature resampling (`_resample_dead_neurons`), and SAE-specific metrics (L0 sparsity, dead neurons, activation frequency). Encoder bias is initialized to zero to prevent dead-on-init features. |
 | `plotting.py` | Matplotlib helpers for correlation vs lag plots, significance overlays, SVD truncation analysis figures, ablation pct-zeroed and vs-rank plots; `plot_alpha_diagnostics()` — 3-panel alpha selection summary; `plot_alpha_vs_rank()` — how optimal alpha shifts with RRR rank |
 | `rrr_utils.py` | Shared helpers for RRR-based scripts: `run_prediction_metrics`, `add_sig_nonsig_corrs`, `resolve_rrr_source_dir` |
+| `subspace_utils.py` | Shared utilities for subspace-based ridge evaluation: `evaluate_subspace_ridge` (project X into subspace, train ridge, compute metrics), `build_nr_metrics_dict` (assemble NR metrics dict); used by both `run_rrr.py` and `run_pca.py` |
 | `examples.py` | Generates context windows and markdown tables of example words for qualitative analysis |
 | `__init__.py` | Public API — re-exports all key functions for convenient imports |
 
@@ -101,6 +107,7 @@ Unit tests with full pipeline coverage:
 | `test_srrr.py` | SRRR core functions: ProxGD, stability selection, sufficiency test, alignment metrics, I/O |
 | `test_partial_svd.py` | Partial SVD: `partial_out_svd_directions` orthogonality/idempotency, config round-trip, sweep window generation |
 | `test_rrr.py` | RRR utilities: `save_rrr_result`/`load_rrr_result` roundtrip, `_run_rrr_for_unit` integration, `build_XY_from_subjects` |
+| `test_pca.py` | PCA utilities: `evaluate_subspace_ridge` and `build_nr_metrics_dict` unit tests, `_run_pca_for_unit` integration (CSV output, monotonicity, rank clamping, plot generation) |
 | `test_partial_rrr.py` | Partial RRR: `partial_out_subspace` orthogonality/idempotency/non-orthonormal handling, sweep integration, save results, config round-trip |
 | `test_sae.py` | SAE: encoder shape/ReLU, zero-bias init, dead feature resampling, end-to-end and alternating training (loss decrease, OLS/ridge, resampling integration), metrics computation, config round-trip, sweep detection helpers, sweep summary plot |
 | `test_ablation.py` | Ablation: quantile mask construction (center/tail/random fractions, complementarity, median centering), `_run_ablation_for_unit` integration (grid_results.csv, summary.csv, baseline inclusion, per-k plots, performance monotonicity) |
