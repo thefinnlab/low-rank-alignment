@@ -61,7 +61,6 @@ from utils.encoding import (
     build_enc_subjects_info,
     build_per_fold_baselines,
 )
-from utils.analysis import build_sig_mask_flat_for_elecs
 from utils.srrr import (
     compute_r2,
     compute_correlation,
@@ -147,7 +146,6 @@ def _run_sae_for_unit(
     per_fold_baselines: list,
     config: SAEConfig,
     n_electrodes: int | None = None,
-    sig_mask_flat: np.ndarray | None = None,
     experiment_subdir: str | None = None,
 ) -> pd.DataFrame:
     """Core SAE loop for one analysis unit (cross-subject, per-subject, or per-region).
@@ -161,8 +159,6 @@ def _run_sae_for_unit(
         config: SAEConfig.
         n_electrodes: Number of electrodes (for reshaping per-target correlations
             into (n_electrodes, n_lags) for the timecourse plot). None to skip plot.
-        sig_mask_flat: Optional (n_targets,) boolean mask indicating significant
-            electrode-lag pairs.  Used to split recovery metrics into sig/nonsig.
         experiment_subdir: Optional subdirectory under k_dir for sweep experiments
             (e.g. "hidden_dim=5/l1_penalty=0.005"). None = write directly to k_dir.
 
@@ -203,54 +199,25 @@ def _run_sae_for_unit(
 
         print(f"  X_proj_train: {X_proj_train.shape}, Y_train: {Y_train.shape}")
 
-        # Build optional log callback for per-step metrics during training.
-        # Always active when sig_mask_flat is available (for corr sig/nonsig).
-        # Optionally includes the expensive sufficiency test.
+        # Build optional log callback for recovery tracking during training.
         log_callback = None
-        if sig_mask_flat is not None or config.track_recovery_during_training:
+        if config.track_recovery_during_training:
 
             def _log_callback(Y_hat_train, Y_hat_test):
                 extra = {}
-                # Correlation sig/nonsig split
-                if sig_mask_flat is not None:
-                    per_target = compute_correlation(Y_test, Y_hat_test)
-                    extra["test_corr_sig"] = (
-                        float(per_target[sig_mask_flat].mean())
-                        if sig_mask_flat.any()
-                        else float("nan")
-                    )
-                    extra["test_corr_nonsig"] = (
-                        float(per_target[~sig_mask_flat].mean())
-                        if (~sig_mask_flat).any()
-                        else float("nan")
-                    )
-                # Sufficiency test (expensive)
-                if config.track_recovery_during_training:
-                    suf = run_sufficiency_test(
-                        X_raw[train_idx],
-                        Y_train - Y_hat_train,
-                        X_raw[test_idx],
-                        Y_test,
-                        Y_hat_full=Y_hat_full,
-                        Y_hat_min=Y_hat_test,
-                        null_r2=None,
-                        regression_type="ridge",
-                        alphas=alphas,
-                    )
-                    extra["recovery_corr"] = suf["recovery_corr"]
-                    extra["recovery_r2"] = suf["recovery_r2"]
-                    if sig_mask_flat is not None:
-                        arr = suf["recovery_corr_per_target"]
-                        extra["recovery_corr_sig"] = (
-                            float(arr[sig_mask_flat].mean())
-                            if sig_mask_flat.any()
-                            else float("nan")
-                        )
-                        extra["recovery_corr_nonsig"] = (
-                            float(arr[~sig_mask_flat].mean())
-                            if (~sig_mask_flat).any()
-                            else float("nan")
-                        )
+                suf = run_sufficiency_test(
+                    X_raw[train_idx],
+                    Y_train - Y_hat_train,
+                    X_raw[test_idx],
+                    Y_test,
+                    Y_hat_full=Y_hat_full,
+                    Y_hat_min=Y_hat_test,
+                    null_r2=None,
+                    regression_type="ridge",
+                    alphas=alphas,
+                )
+                extra["recovery_corr"] = suf["recovery_corr"]
+                extra["recovery_r2"] = suf["recovery_r2"]
                 return extra
 
             log_callback = _log_callback
@@ -356,40 +323,6 @@ def _run_sae_for_unit(
             "rrr_baseline_corr": rrr_baseline_corr,
             "rrr_recovery_corr": rrr_recovery_corr,
         }
-        if sig_mask_flat is not None:
-            # Prediction correlation sig/nonsig split
-            per_target_corr = compute_correlation(Y_test, Y_hat_sae)
-            metrics["correlation_sig"] = (
-                float(per_target_corr[sig_mask_flat].mean())
-                if sig_mask_flat.any()
-                else float("nan")
-            )
-            metrics["correlation_nonsig"] = (
-                float(per_target_corr[~sig_mask_flat].mean())
-                if (~sig_mask_flat).any()
-                else float("nan")
-            )
-            # Recovery correlation sig/nonsig split
-            for prefix in ("recovery_corr",):
-                arr = suf[f"{prefix}_per_target"]
-                metrics[f"{prefix}_sig"] = (
-                    float(arr[sig_mask_flat].mean())
-                    if sig_mask_flat.any()
-                    else float("nan")
-                )
-                metrics[f"{prefix}_nonsig"] = (
-                    float(arr[~sig_mask_flat].mean())
-                    if (~sig_mask_flat).any()
-                    else float("nan")
-                )
-            # RRR sig/nonsig baselines from the RRR metrics npz
-            metrics["rrr_recovery_corr_sig"] = float(
-                rrr_baseline_metrics.get("recovery_corr_sig", np.nan)
-            )
-            metrics["rrr_recovery_corr_nonsig"] = float(
-                rrr_baseline_metrics.get("recovery_corr_nonsig", np.nan)
-            )
-
         # Save per-fold outputs
         k_dir = os.path.join(sae_unit_dir, f"k{k}")
         if experiment_subdir:
@@ -422,23 +355,11 @@ def _run_sae_for_unit(
 
         from utils.plotting import plot_sae_training_curves
 
-        rrr_recovery_corr_sig = (
-            float(rrr_baseline_metrics.get("recovery_corr_sig", np.nan))
-            if sig_mask_flat is not None
-            else None
-        )
-        rrr_recovery_corr_nonsig = (
-            float(rrr_baseline_metrics.get("recovery_corr_nonsig", np.nan))
-            if sig_mask_flat is not None
-            else None
-        )
         plot_sae_training_curves(
             result["training_log"],
             title=f"SAE training — k={k}, fold {fold_f}",
             save_path=os.path.join(fold_dir, "training_curves.png"),
             rrr_recovery_corr=rrr_recovery_corr,
-            rrr_recovery_corr_sig=rrr_recovery_corr_sig,
-            rrr_recovery_corr_nonsig=rrr_recovery_corr_nonsig,
         )
 
         all_rows.append(metrics)
@@ -473,11 +394,6 @@ def _run_sae_for_unit(
         corrs_rrr = np.stack(fold_corrs_rrr, axis=0)  # (n_folds, n_electrodes, n_lags)
         n_lags = corrs_sae.shape[2]
         lags = np.linspace(-2.0, 2.0, n_lags, endpoint=False)
-        sig_mask_2d = (
-            sig_mask_flat.reshape(n_electrodes, n_lags)
-            if sig_mask_flat is not None
-            else None
-        )
         plot_sae_corrs_vs_full(
             corrs_sae,
             corrs_full,
@@ -485,7 +401,6 @@ def _run_sae_for_unit(
             corrs_rrr=corrs_rrr,
             title=f"SAE vs RRR vs full model — k={k}",
             save_path=os.path.join(k_dir, "corrs_sae_vs_full.png"),
-            sig_mask=sig_mask_2d,
         )
         # Save correlation arrays for downstream use
         np.save(os.path.join(k_dir, "corrs_sae.npy"), corrs_sae)
@@ -545,13 +460,6 @@ def _run_cross_subject_sae(
         X_ref, Y_full, ref_test_idxs, enc_subjects_info
     )
 
-    sig_mask_flat = build_sig_mask_flat_for_elecs(
-        output_dir,
-        {s: sig_electrodes[s] for s in subs_with_sig},
-        enc_results,
-        sig_dir=sig_dir,
-    )
-
     return _run_sae_for_unit(
         sae_unit_dir=sae_dir,
         rrr_unit_dir=rrr_source_dir,
@@ -560,7 +468,6 @@ def _run_cross_subject_sae(
         per_fold_baselines=per_fold_baselines,
         config=config,
         n_electrodes=total_electrodes,
-        sig_mask_flat=sig_mask_flat,
         experiment_subdir=experiment_subdir,
     )
 
@@ -625,10 +532,6 @@ def _run_per_subject_sae(
             X_arr, Y_sub, test_idxs, enc_subjects_info
         )
 
-        sig_mask_flat = build_sig_mask_flat_for_elecs(
-            output_dir, {sub_id: sub_sig_elecs}, enc_results, sig_dir=sig_dir,
-        )
-
         unit_dfs.append(
             _run_sae_for_unit(
                 sae_unit_dir=sae_sub_dir,
@@ -638,7 +541,6 @@ def _run_per_subject_sae(
                 per_fold_baselines=per_fold_baselines,
                 config=config,
                 n_electrodes=n_elecs_sub,
-                sig_mask_flat=sig_mask_flat,
                 experiment_subdir=experiment_subdir,
             )
         )
@@ -723,10 +625,6 @@ def _run_per_region_sae(
             X_ref, Y_full, ref_test_idxs, enc_subjects_info
         )
 
-        sig_mask_flat = build_sig_mask_flat_for_elecs(
-            output_dir, per_subject_region_elecs, enc_results, sig_dir=sig_dir,
-        )
-
         unit_dfs.append(
             _run_sae_for_unit(
                 sae_unit_dir=sae_region_dir,
@@ -736,7 +634,6 @@ def _run_per_region_sae(
                 per_fold_baselines=per_fold_baselines,
                 config=config,
                 n_electrodes=region_n_electrodes,
-                sig_mask_flat=sig_mask_flat,
                 experiment_subdir=experiment_subdir,
             )
         )
@@ -747,8 +644,7 @@ def _run_per_region_sae(
 # Metrics to extract start/end values from training logs
 _TRAINING_LOG_METRICS = [
     "test_corr", "test_r2", "l0_sparsity", "dead_frac",
-    "test_corr_sig", "test_corr_nonsig",
-    "recovery_corr", "recovery_corr_sig", "recovery_corr_nonsig",
+    "recovery_corr",
 ]
 
 

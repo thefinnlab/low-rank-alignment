@@ -50,31 +50,6 @@ def run_prediction_metrics(
     return suf, cca_sim, proc_sim
 
 
-def add_sig_nonsig_corrs(
-    metrics: dict,
-    suf: dict,
-    sig_mask_flat: np.ndarray,
-    pairs: list[tuple[str, str]],
-) -> None:
-    """Add sig/nonsig split correlations to metrics dict in-place.
-
-    Args:
-        metrics: Dict to update.
-        suf: Sufficiency test result dict containing per-target arrays.
-        sig_mask_flat: Boolean mask over targets (True = significant).
-        pairs: List of (metric_col_name, suf_per_target_key) tuples.
-    """
-    for col_name, suf_key in pairs:
-        arr = suf[suf_key]
-        metrics[f"{col_name}_sig"] = (
-            float(arr[sig_mask_flat].mean()) if sig_mask_flat.any() else float("nan")
-        )
-        metrics[f"{col_name}_nonsig"] = (
-            float(arr[~sig_mask_flat].mean())
-            if (~sig_mask_flat).any()
-            else float("nan")
-        )
-
 
 def resolve_rrr_source_dir(
     mode: SVDMode, output_dir: str, override: str | None = None
