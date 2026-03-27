@@ -320,7 +320,8 @@ def main():
 
     print(f"Results directory: {run_name}")
 
-    sig_elec_path = os.path.join(run_name, "all_subject_sig.csv")
+    sig_dir = config.sig_dir or run_name
+    sig_elec_path = os.path.join(sig_dir, "all_subject_sig.csv")
     sig_elecs = read_electrode_file(sig_elec_path)
     sig_elecs = {s: sig_elecs[s] for s in subject_ids if s in sig_elecs}
     if not sig_elecs:

@@ -125,6 +125,75 @@ def load_significance_results(filepath):
     return data['sig'], data['p_values'], data['q_values'], data['obs_corrs']
 
 
+def phase_randomize_raw(raw, rng=None):
+    """Phase-randomize each channel of an MNE Raw object.
+
+    For each channel, the Fourier transform is computed, the phase spectrum
+    is replaced with random uniform values in [0, 2*pi), and the signal is
+    reconstructed via the inverse FFT.  This preserves the power spectrum
+    (and therefore the autocorrelation) of each channel while destroying
+    any systematic relationship between the neural signal and external events
+    (e.g. word onsets).
+
+    Args:
+        raw: MNE Raw object (must be preloaded).
+        rng (numpy.random.Generator, optional): Random number generator for
+            reproducibility.  If None, a new default generator is used.
+
+    Returns:
+        mne.io.RawArray: A new Raw object with phase-randomized data and
+        the same info structure as the input.
+    """
+    import mne
+
+    if rng is None:
+        rng = np.random.default_rng()
+
+    data = raw.get_data()  # (n_channels, n_samples)
+    n_channels, n_samples = data.shape
+
+    # Vectorised FFT across all channels at once
+    fft_vals = np.fft.rfft(data, axis=1)  # (n_channels, n_freqs)
+    n_freqs = fft_vals.shape[1]
+
+    # Random phases for all channels × frequency bins
+    random_phases = rng.uniform(0, 2 * np.pi, (n_channels, n_freqs))
+    # DC component must stay real
+    random_phases[:, 0] = 0
+    # Nyquist component must stay real for even-length signals
+    if n_samples % 2 == 0:
+        random_phases[:, -1] = 0
+
+    fft_randomized = np.abs(fft_vals) * np.exp(1j * random_phases)
+    randomized_data = np.fft.irfft(fft_randomized, n=n_samples, axis=1)
+
+    return mne.io.RawArray(randomized_data, raw.info, verbose=False)
+
+
+def compute_observed_max_per_electrode(predictions, targets):
+    """Compute max-across-lags Pearson correlation per electrode.
+
+    Args:
+        predictions (np.ndarray): Shape (n_words, n_electrodes, n_lags).
+        targets (np.ndarray): Shape (n_words, n_electrodes, n_lags).
+
+    Returns:
+        max_per_electrode (np.ndarray): Shape (n_electrodes,) — max correlation
+            across lags for each electrode.
+        corrs (np.ndarray): Shape (n_electrodes, n_lags) — full correlation
+            matrix.
+    """
+    pred = torch.tensor(
+        predictions.transpose(1, 2, 0), dtype=torch.float32
+    )  # (n_elec, n_lags, n_words)
+    tgt = torch.tensor(
+        targets.transpose(1, 2, 0), dtype=torch.float32
+    )  # (n_elec, n_lags, n_words)
+    corrs = batch_corrcoef(pred, tgt).numpy()  # (n_elec, n_lags)
+    max_per_electrode = corrs.max(axis=1)  # (n_elec,)
+    return max_per_electrode, corrs
+
+
 def get_sig_results(all_predictions, all_targets):
     """
     Convenience wrapper: transpose arrays and run significance testing.

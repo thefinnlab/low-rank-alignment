@@ -504,6 +504,7 @@ def _run_cross_subject_sae(
     config,
     enc,
     output_dir,
+    sig_dir,
     sae_dir,
     rrr_source_dir,
     subject_ids,
@@ -548,6 +549,7 @@ def _run_cross_subject_sae(
         output_dir,
         {s: sig_electrodes[s] for s in subs_with_sig},
         enc_results,
+        sig_dir=sig_dir,
     )
 
     return _run_sae_for_unit(
@@ -572,6 +574,7 @@ def _run_per_subject_sae(
     config,
     enc,
     output_dir,
+    sig_dir,
     sae_dir,
     rrr_source_dir,
     subject_ids,
@@ -629,7 +632,7 @@ def _run_per_subject_sae(
         )
 
         sig_mask_flat = build_sig_mask_flat_for_elecs(
-            output_dir, {sub_id: sub_sig_elecs}, enc_results
+            output_dir, {sub_id: sub_sig_elecs}, enc_results, sig_dir=sig_dir,
         )
 
         unit_dfs.append(
@@ -658,6 +661,7 @@ def _run_per_region_sae(
     config,
     enc,
     output_dir,
+    sig_dir,
     sae_dir,
     rrr_source_dir,
     subject_ids,
@@ -726,7 +730,7 @@ def _run_per_region_sae(
         )
 
         sig_mask_flat = build_sig_mask_flat_for_elecs(
-            output_dir, per_subject_region_elecs, enc_results
+            output_dir, per_subject_region_elecs, enc_results, sig_dir=sig_dir,
         )
 
         unit_dfs.append(
@@ -811,7 +815,8 @@ def main():
     print(f"Training mode:   {config.training_mode}")
 
     # Load significance CSV and build subject → electrode mapping
-    sig_electrodes, _ = load_sig_electrodes(output_dir, subject_ids)
+    sig_dir = config.sig_dir or output_dir
+    sig_electrodes, _ = load_sig_electrodes(output_dir, subject_ids, sig_dir=sig_dir)
 
     # Load embeddings
     print("Loading embeddings...")
@@ -835,6 +840,7 @@ def main():
             config=config,
             enc=enc,
             output_dir=output_dir,
+            sig_dir=sig_dir,
             sae_dir=sae_dir,
             rrr_source_dir=rrr_source_dir,
             subject_ids=subject_ids,
@@ -885,6 +891,7 @@ def main():
                     config=scalar_config,
                     enc=enc,
                     output_dir=output_dir,
+                    sig_dir=sig_dir,
                     sae_dir=sae_dir,
                     rrr_source_dir=rrr_source_dir,
                     subject_ids=subject_ids,

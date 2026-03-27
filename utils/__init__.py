@@ -3,7 +3,7 @@
 
 from utils.constants import RIDGE_ALPHAS, refine_alpha_grid, check_alpha_grid_boundaries
 from utils.tensor_utils import to_numpy, to_torch
-from utils.config import EncodingConfig, SignificanceConfig, SVDConfig, SRRRConfig, RRRConfig, PCAConfig, PartialSVDConfig, PartialRRRConfig, SAEConfig, SVDMode, get_results_dir
+from utils.config import EncodingConfig, SignificanceConfig, NullDistConfig, NewSignificanceConfig, SVDConfig, SRRRConfig, RRRConfig, PCAConfig, PartialSVDConfig, PartialRRRConfig, SAEConfig, SVDMode, get_results_dir
 from utils.config_utils import (
     parse_override_args,
     get_nested_value,
@@ -61,6 +61,8 @@ from utils.significance import (
     save_significance_results,
     load_significance_results,
     get_sig_results,
+    phase_randomize_raw,
+    compute_observed_max_per_electrode,
 )
 from utils.analysis import (
     build_global_sig_mask,
@@ -129,6 +131,8 @@ __all__ = [
     # config
     "EncodingConfig",
     "SignificanceConfig",
+    "NullDistConfig",
+    "NewSignificanceConfig",
     "SVDConfig",
     "SRRRConfig",
     "RRRConfig",
@@ -190,6 +194,8 @@ __all__ = [
     "save_significance_results",
     "load_significance_results",
     "get_sig_results",
+    "phase_randomize_raw",
+    "compute_observed_max_per_electrode",
     # analysis
     "build_global_sig_mask",
     "get_correlation_gpu",

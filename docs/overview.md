@@ -4,7 +4,8 @@ This is a neuroscience encoding analysis pipeline that studies how GPT-2-XL lang
 
 ## Pipeline Stages
 
-1. **Significance testing** (`make sig`) — identifies electrode-lag pairs with statistically significant encoding
+1. **Significance testing** (`make sig`) — identifies electrode-lag pairs with statistically significant encoding (legacy approach: word-order shuffling permutation test)
+1b. **Phase-randomization significance** — more robust electrode-level significance via phase randomization of continuous neural signal: `generate_null_distribution.py` (batchable, run in parallel) followed by `compute_significance.py` (reads null distribution shards, FDR correction). See details below.
 2. **Encoding model training** (`make train`) — trains ridge regression models on significant electrodes
 3. **SVD analysis** (`make svd`) — decomposes model weights to find dominant directions in embedding space
 4. **Partial SVD analysis** (`make partial-svd`) — removes contiguous windows of SVD directions from word embeddings and retrains ridge regression to measure how much each group contributes to encoding performance
@@ -57,7 +58,9 @@ Main entry points for the pipeline:
 
 | File | Purpose |
 |------|---------|
-| `run_significance.py` | Permutation-test significance per electrode-lag pair; outputs `significance_detailed.csv` and `all_subject_sig.csv` |
+| `run_significance.py` | Legacy permutation-test significance per electrode-lag pair; outputs `significance_detailed.csv` and `all_subject_sig.csv` |
+| `generate_null_distribution.py` | Batchable phase-randomization null distribution generator; each invocation runs N iterations per subject and writes a uniquely-named `.npy` shard to `{null_dir}/sub_{id}/`; multiple jobs can run in parallel |
+| `compute_significance.py` | Reads null distribution shards, re-runs encoding on real data, computes per-electrode p-values via max-statistic procedure, applies FDR correction, outputs `all_subject_sig.csv` and `significance_detailed.csv` |
 | `train_encoding_models.py` | Trains ridge regression models on significant electrodes; outputs coefficients, correlations, and plots. When `log_alphas=True`, saves alpha diagnostic plots and `.npz` files. When `refine_alphas=True`, uses a two-pass coarse→refined alpha sweep |
 | `generate_plots.py` | Generates or regenerates correlation plots from existing run results; supports backfilling SVD plots for cross_subject, per_subject, and per_region modes (auto-detected or via `--svd-modes`) |
 | `run_svd_analysis.py` | SVD decomposition of encoding weights; evaluates truncation at various k values and selects optimal k |
@@ -77,12 +80,12 @@ Core library modules:
 |------|---------|
 
 | `constants.py` | Project-wide constants; `RIDGE_ALPHAS` — default alpha grid for RidgeCV; `refine_alpha_grid()` — builds a refined grid from observed best alphas; `check_alpha_grid_boundaries()` — detects when selected alphas cluster at grid edges |
-| `config.py` | Dataclass definitions for `EncodingConfig`, `SignificanceConfig`, `SVDConfig`, `PartialSVDConfig`, `PartialRRRConfig`, `SRRRConfig`, `RRRConfig`, `PCAConfig`, `SAEConfig`, `AblationConfig`; `get_results_dir()` for canonical output paths |
+| `config.py` | Dataclass definitions for `EncodingConfig`, `SignificanceConfig`, `NullDistConfig`, `NewSignificanceConfig`, `SVDConfig`, `PartialSVDConfig`, `PartialRRRConfig`, `SRRRConfig`, `RRRConfig`, `PCAConfig`, `SAEConfig`, `AblationConfig`; `get_results_dir()` for canonical output paths. Most downstream configs support `sig_dir` to override where significance CSVs are read from (defaults to `output_dir`). |
 | `config_utils.py` | Argument parsing and YAML loading with CLI override support (dot-notation, e.g. `--encoding.layer=48`) |
 | `data_loaders.py` | Loads iEEG BIDS data via MNE, GPT-2 embeddings from HDF5, builds word-aligned epochs, handles time offsets; `build_XY_from_subjects()` for stacking multi-subject neural data; `load_sig_electrodes()` and `load_fold_indices()` for shared data-loading across scripts |
 | `embeddings.py` | Loads contextual GPT-2-XL token embeddings from HDF5 and averages tokens per word |
 | `encoding.py` | K-fold cross-validation ridge regression (Himalaya backend), coefficient serialization, cross-subject aggregation; `extract_best_alphas()` — extracts per-target selected alphas from fitted RidgeCV; `train_encoding_two_pass()` — coarse-then-refined alpha sweep |
-| `significance.py` | GPU-accelerated permutation testing, vectorized Pearson correlation, Benjamini-Hochberg FDR correction |
+| `significance.py` | GPU-accelerated permutation testing, vectorized Pearson correlation, Benjamini-Hochberg FDR correction; `phase_randomize_raw()` for signal phase randomization preserving autocorrelation; `compute_observed_max_per_electrode()` for max-across-lags statistics |
 | `analysis.py` | SVD decomposition of weights, truncated correlation evaluation, best-k selection, residualization utilities |
 | `srrr.py` | Core SRRR/RRR functions: ProxGD optimizer, stability selection, `fit_dense_rrr`, sufficiency test, alignment metrics (CCA, Procrustes), I/O helpers for both SRRR and RRR outputs |
 | `sae.py` | SAE model (`SAEEncoder`, `SAERegressorEndToEnd`), training functions (`train_sae_end_to_end`, `train_sae_alternating`), dead feature resampling (`_resample_dead_neurons`), and SAE-specific metrics (L0 sparsity, dead neurons, activation frequency). Encoder bias is initialized to zero to prevent dead-on-init features. |

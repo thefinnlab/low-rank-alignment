@@ -347,6 +347,7 @@ def _run_cross_subject(
     config,
     enc,
     output_dir,
+    sig_dir,
     partial_rrr_dir,
     subject_ids,
     sig_electrodes,
@@ -386,7 +387,7 @@ def _run_cross_subject(
     print(f"  Baseline corrs: {baseline_corrs.shape}")
 
     # Build significance mask
-    sig_detailed_csv = os.path.join(output_dir, "significance_detailed.csv")
+    sig_detailed_csv = os.path.join(sig_dir, "significance_detailed.csv")
     sig_detailed_df = pd.read_csv(sig_detailed_csv)
     sig_mask = build_global_sig_mask(sig_detailed_df, metadata_df, n_lags)
     print(f"  Significant pairs: {sig_mask.sum()} / {sig_mask.size}")
@@ -440,6 +441,7 @@ def _run_per_subject(
     config,
     enc,
     output_dir,
+    sig_dir,
     partial_rrr_dir,
     subject_ids,
     sig_electrodes,
@@ -508,7 +510,7 @@ def _run_per_subject(
         print(f"  Baseline corrs: {baseline_corrs.shape}")
 
         # Build significance mask
-        sig_detailed_csv = os.path.join(output_dir, "significance_detailed.csv")
+        sig_detailed_csv = os.path.join(sig_dir, "significance_detailed.csv")
         sig_detailed_df = pd.read_csv(sig_detailed_csv)
         sig_mask = build_global_sig_mask(sig_detailed_df, metadata_df, n_lags)
         print(f"  Significant pairs: {sig_mask.sum()} / {sig_mask.size}")
@@ -565,6 +567,7 @@ def _run_per_region(
     config,
     enc,
     output_dir,
+    sig_dir,
     partial_rrr_dir,
     subject_ids,
     sig_electrodes,
@@ -644,7 +647,7 @@ def _run_per_region(
         n_lags = baseline_corrs.shape[2]
 
         # Build sig mask for region electrodes
-        sig_detailed_csv = os.path.join(output_dir, "significance_detailed.csv")
+        sig_detailed_csv = os.path.join(sig_dir, "significance_detailed.csv")
         sig_detailed_df = pd.read_csv(sig_detailed_csv)
 
         n_elecs_region = Y.shape[1] // n_lags
@@ -730,7 +733,8 @@ def main():
 
     # Load significance
     print("\nLoading significance data...")
-    sig_electrodes, _ = load_sig_electrodes(output_dir, subject_ids)
+    sig_dir = config.sig_dir or output_dir
+    sig_electrodes, _ = load_sig_electrodes(output_dir, subject_ids, sig_dir=sig_dir)
     total_sig = sum(len(e) for e in sig_electrodes.values())
     print(f"  {total_sig} significant electrodes across {len(sig_electrodes)} subjects")
 
@@ -743,6 +747,7 @@ def main():
         config=config,
         enc=enc,
         output_dir=output_dir,
+        sig_dir=sig_dir,
         partial_rrr_dir=partial_rrr_dir,
         subject_ids=subject_ids,
         sig_electrodes=sig_electrodes,
