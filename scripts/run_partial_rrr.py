@@ -364,7 +364,7 @@ def _run_cross_subject(
 
     print(f"\nSubjects with significant electrodes: {subs_with_sig}")
     print("Building combined X, Y from all subjects...")
-    X, Y = build_XY_from_subjects(
+    X, Y, _ = build_XY_from_subjects(
         subject_ids,
         enc,
         sig_electrodes,
@@ -613,7 +613,7 @@ def _run_per_region(
 
         print("  Building X, Y...")
         subs_in_region = list(per_subject_region_elecs.keys())
-        X, Y = build_XY_from_subjects(
+        X, Y, _ = build_XY_from_subjects(
             subs_in_region,
             enc,
             per_subject_region_elecs,

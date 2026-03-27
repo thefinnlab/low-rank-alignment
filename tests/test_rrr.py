@@ -316,7 +316,7 @@ class TestBuildXYFromSubjects:
         enc = self._make_enc()
         sig_electrodes = {1: ["ch1", "ch2", "ch3"], 2: ["ch4", "ch5", "ch6"]}
 
-        X, Y = build_XY_from_subjects([1, 2], enc, sig_electrodes, X_emb, df_word)
+        X, Y, _ = build_XY_from_subjects([1, 2], enc, sig_electrodes, X_emb, df_word)
 
         assert X.shape == (n_words, n_embed)
         # Two subjects × (n_elecs_per_sub × n_lags) columns

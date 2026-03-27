@@ -348,7 +348,7 @@ def _run_cross_subject_srrr(
         print("  No significant electrodes found; skipping cross-subject SRRR.")
         return
 
-    X_ref, Y_full = build_XY_from_subjects(
+    X_ref, Y_full, _ = build_XY_from_subjects(
         subject_ids,
         enc,
         sig_electrodes,
@@ -503,7 +503,7 @@ def _run_per_region_srrr(
             continue
 
         subs_in_region = list(per_subject_region_elecs.keys())
-        X_ref, Y_full = build_XY_from_subjects(
+        X_ref, Y_full, _ = build_XY_from_subjects(
             subs_in_region,
             enc,
             per_subject_region_elecs,

@@ -21,6 +21,7 @@ def run_prediction_metrics(
     Y_test: np.ndarray,
     Y_hat_full: np.ndarray,
     alphas: np.ndarray | None = None,
+    regression_type: str = "ridge",
     compute_cca: bool = False,
     compute_procrustes: bool = False,
 ) -> tuple[dict, float | None, float | None]:
@@ -37,7 +38,7 @@ def run_prediction_metrics(
         Y_hat_full=Y_hat_full,
         Y_hat_min=Y_hat_min,
         null_r2=None,
-        regression_type="ridge",
+        regression_type=regression_type,
         alphas=alphas,
     )
     cca_sim = compute_cca_similarity(Y_hat_full, Y_hat_min) if compute_cca else None

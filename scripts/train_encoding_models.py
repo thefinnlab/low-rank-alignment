@@ -21,7 +21,7 @@ from himalaya.backend import set_backend
 
 from utils import (
     train_encoding,
-    get_arbitrary_embeddings,
+    get_and_offset_arbitrary_embeddings,
     get_models_coefficients,
     load_embeddings,
     apply_offset,
@@ -35,6 +35,7 @@ from utils.config import EncodingConfig, get_results_dir
 from utils.config_utils import parse_args, load_config
 from utils.constants import check_alpha_grid_boundaries
 from utils.encoding import (
+    get_and_offset_arbitrary_embeddings,
     get_ridge_model_constructor,
     extract_best_alphas,
     train_encoding_two_pass,
@@ -82,14 +83,9 @@ def _train_with_arbitrary(
 
     original_folds = list(zip(tr_idxs, test_idxs))
 
-    arb = get_arbitrary_embeddings(averaged_embeddings, selection, df_word).astype(
-        np.float32
+    arb = get_and_offset_arbitrary_embeddings(
+        aligned_embeddings, selection, df_word, enc.offset, config.arbitrary_seed
     )
-    # Apply same length trim as _apply_offset does for X_arr
-    if offset < 0:
-        arb = arb[:offset]
-    elif offset > 0:
-        arb = arb[offset:]
 
     corrs_arb, _, _, _, _ = train_encoding(
         [arb, arb],
@@ -175,6 +171,9 @@ def _run_joint(
         config=config,
         alphas=alphas,
     )
+    coefficients, intercepts = get_models_coefficients(
+        models, total_elecs, n_lags, scaled_model=False
+    )
 
     if config is not None and config.log_alphas and alpha_grid is not None:
         joint_dir = os.path.join(run_name, "joint")
@@ -252,6 +251,9 @@ def _run_batch(
             offset,
             config=config,
             alphas=alphas,
+        )
+        coefficients, intercepts = get_models_coefficients(
+            models, n_elecs, n_lags, scaled_model=False
         )
 
         if config is not None and config.log_alphas and alpha_grid is not None:

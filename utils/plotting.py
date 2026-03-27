@@ -581,6 +581,32 @@ def plot_rrr_rank_results(
                 label="recovery_corr (residual)",
                 linewidth=1.5,
             )
+        # Complement curves (if present)
+        if "complement_corr" in summary_df.columns:
+            ax5.semilogx(
+                ks, summary_df["complement_corr"],
+                color="#8b5cf6", linestyle="--", marker="^", markersize=4,
+                label="complement_corr", linewidth=1.5,
+            )
+        if "complement_recovery_corr" in summary_df.columns:
+            ax5.semilogx(
+                ks, summary_df["complement_recovery_corr"],
+                color="#8b5cf6", linestyle=":", marker="^", markersize=4,
+                label="complement_recovery_corr", linewidth=1.5,
+            )
+        # Arbitrary curves (if present)
+        if "arbitrary_corr" in summary_df.columns:
+            ax5.semilogx(
+                ks, summary_df["arbitrary_corr"],
+                color="#78716c", linestyle="--", marker="D", markersize=3,
+                label="arbitrary_corr", linewidth=1.5,
+            )
+        if "arbitrary_recovery_corr" in summary_df.columns:
+            ax5.semilogx(
+                ks, summary_df["arbitrary_recovery_corr"],
+                color="#78716c", linestyle=":", marker="D", markersize=3,
+                label="arbitrary_recovery_corr", linewidth=1.5,
+            )
         if overlay_summary_df is not None and "minimal_corr" in overlay_summary_df.columns:
             ov_ks = overlay_summary_df["k"].values
             ax5.semilogx(
@@ -744,6 +770,18 @@ def plot_rrr_rank_results(
                 label="recovery_corr_sig",
                 linewidth=1.5,
             )
+        if "complement_corr_sig" in summary_df.columns:
+            ax_sig.semilogx(
+                ks, summary_df["complement_corr_sig"],
+                color="#8b5cf6", linestyle="--", marker="^", markersize=4,
+                label="complement_corr_sig", linewidth=1.5,
+            )
+        if "arbitrary_corr_sig" in summary_df.columns:
+            ax_sig.semilogx(
+                ks, summary_df["arbitrary_corr_sig"],
+                color="#78716c", linestyle="--", marker="D", markersize=3,
+                label="arbitrary_corr_sig", linewidth=1.5,
+            )
         ax_sig.axhline(0, color="black", linewidth=0.5, linestyle=":")
         ax_sig.set_xlabel("Rank k")
         ax_sig.set_ylabel("Correlation")
@@ -791,6 +829,18 @@ def plot_rrr_rank_results(
                 markersize=4,
                 label="recovery_corr_nonsig",
                 linewidth=1.5,
+            )
+        if "complement_corr_nonsig" in summary_df.columns:
+            ax_nonsig.semilogx(
+                ks, summary_df["complement_corr_nonsig"],
+                color="#8b5cf6", linestyle="--", marker="^", markersize=4,
+                label="complement_corr_nonsig", linewidth=1.5,
+            )
+        if "arbitrary_corr_nonsig" in summary_df.columns:
+            ax_nonsig.semilogx(
+                ks, summary_df["arbitrary_corr_nonsig"],
+                color="#78716c", linestyle="--", marker="D", markersize=3,
+                label="arbitrary_corr_nonsig", linewidth=1.5,
             )
         ax_nonsig.axhline(0, color="black", linewidth=0.5, linestyle=":")
         ax_nonsig.set_xlabel("Rank k")

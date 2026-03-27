@@ -170,6 +170,30 @@ class TestGetArbitraryEmbeddings:
             for idx in idxs[1:]:
                 np.testing.assert_array_equal(X_arb[idxs[0]], X_arb[idx])
 
+    def test_seed_reproducibility(self):
+        rng = np.random.default_rng(42)
+        n_words, n_features = 20, 8
+        words = [f"word{i % 5}" for i in range(n_words)]
+        X = rng.standard_normal((n_words, n_features)).astype(np.float32)
+        epochs = self._make_epochs(list(range(n_words)))
+        df_word = self._make_df_word(words)
+
+        X_arb1 = get_arbitrary_embeddings(X, epochs, df_word, seed=123)
+        X_arb2 = get_arbitrary_embeddings(X, epochs, df_word, seed=123)
+        np.testing.assert_array_equal(X_arb1, X_arb2)
+
+    def test_different_seeds_different_results(self):
+        rng = np.random.default_rng(42)
+        n_words, n_features = 20, 8
+        words = [f"word{i % 5}" for i in range(n_words)]
+        X = rng.standard_normal((n_words, n_features)).astype(np.float32)
+        epochs = self._make_epochs(list(range(n_words)))
+        df_word = self._make_df_word(words)
+
+        X_arb1 = get_arbitrary_embeddings(X, epochs, df_word, seed=123)
+        X_arb2 = get_arbitrary_embeddings(X, epochs, df_word, seed=456)
+        assert not np.array_equal(X_arb1, X_arb2)
+
 
 # ---------------------------------------------------------------------------
 # build_word_epochs

@@ -52,9 +52,16 @@ from utils.encoding import (
     load_encoding_results,
     build_enc_subjects_info,
     build_per_fold_baselines,
+    get_and_offset_arbitrary_embeddings,
 )
 from utils.rrr_utils import add_sig_nonsig_corrs
-from utils.subspace_utils import evaluate_subspace_ridge
+from utils.subspace_utils import (
+    evaluate_subspace_ols,
+    evaluate_complement,
+    evaluate_arbitrary,
+    _add_complement_sig_nonsig,
+    _add_arbitrary_sig_nonsig,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -124,6 +131,7 @@ def _run_pca_for_unit(
     config: PCAConfig,
     sig_mask_flat: np.ndarray | None = None,
     rrr_overlay_dir: str | None = None,
+    X_arbitrary: np.ndarray | None = None,
 ) -> pd.DataFrame:
     """Core PCA loop for one analysis unit (cross-subject, per-subject, or per-region).
 
@@ -135,6 +143,7 @@ def _run_pca_for_unit(
         config: PCAConfig.
         sig_mask_flat: Optional boolean mask for significant vs non-significant targets.
         rrr_overlay_dir: Path to RRR unit directory for overlay (or None).
+        X_arbitrary: (n_words, n_embed) arbitrary embeddings for null baseline.
 
     Returns:
         DataFrame of per-(fold, k) metrics for grid_results.csv.
@@ -147,10 +156,8 @@ def _run_pca_for_unit(
     n_folds = len(test_idxs)
     all_rows = []
 
-    # Per-fold alpha tracking (populated when config.log_alphas is True)
-    per_fold_rank_alphas: list[dict[int, np.ndarray]] = []
-
     import torch
+
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
     for fold_f in range(n_folds):
@@ -173,8 +180,6 @@ def _run_pca_for_unit(
         V_full = Vt.T  # (n_embed, min(n_train, n_embed))
         max_components = V_full.shape[1]
 
-        rank_alpha_dict: dict[int, np.ndarray] = {}
-
         # Clamp rank grid to available components
         valid_ranks = [k for k in config.rank_grid if k <= max_components]
         if len(valid_ranks) < len(config.rank_grid):
@@ -182,21 +187,47 @@ def _run_pca_for_unit(
             print(f"  Skipping ranks {skipped} (> {max_components} PCA components)")
 
         print(f"  Running {len(valid_ranks)} rank(s): {valid_ranks}")
-        for k in tqdm(
-            valid_ranks, desc=f"  fold {fold_f}", leave=True, unit="rank"
-        ):
+        for k in tqdm(valid_ranks, desc=f"  fold {fold_f}", leave=True, unit="rank"):
             A = V_full[:, :k]  # (n_embed, k) — top-k PCA components
 
-            nr_result = evaluate_subspace_ridge(
-                A, X_train, X_test, Y_train, Y_test, Y_hat_full,
-                alphas=alphas,
+            nr_result = evaluate_subspace_ols(
+                A,
+                X_train,
+                X_test,
+                Y_train,
+                Y_test,
+                Y_hat_full,
                 compute_cca=config.compute_cca,
                 compute_procrustes=config.compute_procrustes,
-                log_alphas=config.log_alphas,
                 device=device,
             )
-            if config.log_alphas and nr_result["best_alphas"] is not None:
-                rank_alpha_dict[k] = nr_result["best_alphas"]
+
+            # Complement and arbitrary evaluations
+            complement_result = evaluate_complement(
+                A,
+                X_train,
+                X_test,
+                Y_train,
+                Y_test,
+                nr_result["Y_hat_train"],
+                nr_result["Y_hat"],
+                alphas=alphas,
+                device=device,
+            )
+            arbitrary_result = None
+            if X_arbitrary is not None:
+                X_arb_train = X_arbitrary[train_idx]
+                X_arb_test = X_arbitrary[test_idx]
+                arbitrary_result = evaluate_arbitrary(
+                    X_arb_train,
+                    X_arb_test,
+                    Y_train,
+                    Y_test,
+                    nr_result["Y_hat_train"],
+                    nr_result["Y_hat"],
+                    alphas=alphas,
+                    device=device,
+                )
 
             suf = nr_result["suf"]
             metrics = {
@@ -207,15 +238,32 @@ def _run_pca_for_unit(
                 "full_corr": suf["full_corr"],
                 "minimal_corr": suf["minimal_corr"],
                 "recovery_corr": suf["recovery_corr"],
+                "complement_corr": complement_result["complement_corr"],
+                "complement_recovery_corr": complement_result[
+                    "complement_recovery_corr"
+                ],
                 "fold": fold_f,
                 "k": k,
             }
+            if arbitrary_result is not None:
+                metrics["arbitrary_corr"] = arbitrary_result["arbitrary_corr"]
+                metrics["arbitrary_recovery_corr"] = arbitrary_result[
+                    "arbitrary_recovery_corr"
+                ]
             if sig_mask_flat is not None:
-                add_sig_nonsig_corrs(metrics, suf, sig_mask_flat, [
-                    ("full_corr", "full_corr_per_target"),
-                    ("minimal_corr", "minimal_corr_per_target"),
-                    ("recovery_corr", "recovery_corr_per_target"),
-                ])
+                add_sig_nonsig_corrs(
+                    metrics,
+                    suf,
+                    sig_mask_flat,
+                    [
+                        ("full_corr", "full_corr_per_target"),
+                        ("minimal_corr", "minimal_corr_per_target"),
+                        ("recovery_corr", "recovery_corr_per_target"),
+                    ],
+                )
+                _add_complement_sig_nonsig(metrics, complement_result, sig_mask_flat)
+                if arbitrary_result is not None:
+                    _add_arbitrary_sig_nonsig(metrics, arbitrary_result, sig_mask_flat)
             if nr_result["cca_sim"] is not None:
                 metrics["cca_similarity"] = nr_result["cca_sim"]
             if nr_result["proc_sim"] is not None:
@@ -223,31 +271,7 @@ def _run_pca_for_unit(
 
             all_rows.append(metrics)
 
-        if config.log_alphas and rank_alpha_dict:
-            per_fold_rank_alphas.append(rank_alpha_dict)
-            np.savez(
-                os.path.join(pca_unit_dir, f"alpha_diagnostics_fold{fold_f}.npz"),
-                **{f"k{k}": arr for k, arr in rank_alpha_dict.items()},
-            )
-
         print(f"  Fold {fold_f} done in {time.time() - fold_start:.1f}s")
-
-    # Alpha-vs-rank diagnostic plot (aggregate across folds)
-    if config.log_alphas and per_fold_rank_alphas:
-        from utils.plotting import plot_alpha_vs_rank
-        from utils.constants import RIDGE_ALPHAS as _default_alphas
-
-        _alpha_grid = alphas if alphas is not None else _default_alphas
-        merged: dict[int, np.ndarray] = {}
-        for frd in per_fold_rank_alphas:
-            for k_val, arr in frd.items():
-                merged[k_val] = np.concatenate([merged.get(k_val, np.array([])), arr])
-        plot_alpha_vs_rank(
-            merged,
-            _alpha_grid,
-            title=f"PCA alpha vs rank ({os.path.basename(pca_unit_dir)})",
-            save_path=os.path.join(pca_unit_dir, "alpha_vs_rank.png"),
-        )
 
     df = pd.DataFrame(all_rows)
     df.to_csv(os.path.join(pca_unit_dir, "grid_results.csv"), index=False)
@@ -261,16 +285,40 @@ def _run_pca_for_unit(
         "full_corr",
         "minimal_corr",
         "recovery_corr",
+        "complement_corr",
+        "complement_recovery_corr",
     ]
+    if X_arbitrary is not None:
+        agg_cols.extend(
+            [
+                "arbitrary_corr",
+                "arbitrary_recovery_corr",
+            ]
+        )
     if sig_mask_flat is not None:
-        agg_cols.extend([
-            "full_corr_sig",
-            "full_corr_nonsig",
-            "minimal_corr_sig",
-            "minimal_corr_nonsig",
-            "recovery_corr_sig",
-            "recovery_corr_nonsig",
-        ])
+        agg_cols.extend(
+            [
+                "full_corr_sig",
+                "full_corr_nonsig",
+                "minimal_corr_sig",
+                "minimal_corr_nonsig",
+                "recovery_corr_sig",
+                "recovery_corr_nonsig",
+                "complement_corr_sig",
+                "complement_corr_nonsig",
+                "complement_recovery_corr_sig",
+                "complement_recovery_corr_nonsig",
+            ]
+        )
+        if X_arbitrary is not None:
+            agg_cols.extend(
+                [
+                    "arbitrary_corr_sig",
+                    "arbitrary_corr_nonsig",
+                    "arbitrary_recovery_corr_sig",
+                    "arbitrary_recovery_corr_nonsig",
+                ]
+            )
     if config.compute_cca:
         agg_cols.append("cca_similarity")
     if config.compute_procrustes:
@@ -341,7 +389,7 @@ def _run_cross_subject_pca(
         print("  No significant electrodes found; skipping cross-subject PCA.")
         return
 
-    X_ref, Y_full = build_XY_from_subjects(
+    X_ref, Y_full, selection = build_XY_from_subjects(
         subject_ids,
         enc,
         sig_electrodes,
@@ -364,6 +412,11 @@ def _run_cross_subject_pca(
         sig_dir=sig_dir,
     )
 
+    # Generate arbitrary embeddings for null baseline
+    X_arbitrary = get_and_offset_arbitrary_embeddings(
+        aligned_embeddings, selection, df_word, enc.offset, config.arbitrary_seed
+    )
+
     rrr_overlay_dir = _resolve_rrr_overlay_dir(config.mode, output_dir)
 
     _run_pca_for_unit(
@@ -374,6 +427,7 @@ def _run_cross_subject_pca(
         config=config,
         sig_mask_flat=sig_mask_flat,
         rrr_overlay_dir=rrr_overlay_dir,
+        X_arbitrary=X_arbitrary,
     )
 
 
@@ -413,15 +467,22 @@ def _run_per_subject_pca(
         test_idxs = enc_results["test_idxs"]
 
         cache = load_precomputed_epochs(sub_id, enc.data_root)
+        selection = cache["selection"]
         data = epochs_from_cache(cache, elec_names=sub_sig_elecs)
-        X_arr, Y_sub = apply_offset(
-            aligned_embeddings[cache["selection"]], data, enc.offset
-        )
-        del cache, data
+        X_arr, Y_sub = apply_offset(aligned_embeddings[selection], data, enc.offset)
+        del data
         gc.collect()
 
         Y_sub = Y_sub.astype(np.float32)
         print(f"  X: {X_arr.shape}, Y: {Y_sub.shape}")
+
+        # Generate arbitrary embeddings for null baseline
+        X_arbitrary = get_and_offset_arbitrary_embeddings(
+            aligned_embeddings, selection, df_word, enc.offset, config.arbitrary_seed
+        )
+
+        del cache
+        gc.collect()
 
         enc_subjects_info = build_enc_subjects_info(
             output_dir, [sub_id], {sub_id: sub_sig_elecs}
@@ -431,7 +492,10 @@ def _run_per_subject_pca(
         )
 
         sig_mask_flat = build_sig_mask_flat_for_elecs(
-            output_dir, {sub_id: sub_sig_elecs}, enc_results, sig_dir=sig_dir,
+            output_dir,
+            {sub_id: sub_sig_elecs},
+            enc_results,
+            sig_dir=sig_dir,
         )
 
         rrr_sub_overlay = None
@@ -448,6 +512,7 @@ def _run_per_subject_pca(
             config=config,
             sig_mask_flat=sig_mask_flat,
             rrr_overlay_dir=rrr_sub_overlay,
+            X_arbitrary=X_arbitrary,
         )
 
 
@@ -505,7 +570,7 @@ def _run_per_region_pca(
             continue
 
         subs_in_region = list(per_subject_region_elecs.keys())
-        X_ref, Y_full = build_XY_from_subjects(
+        X_ref, Y_full, selection = build_XY_from_subjects(
             subs_in_region,
             enc,
             per_subject_region_elecs,
@@ -522,7 +587,15 @@ def _run_per_region_pca(
         )
 
         sig_mask_flat = build_sig_mask_flat_for_elecs(
-            output_dir, per_subject_region_elecs, enc_results, sig_dir=sig_dir,
+            output_dir,
+            per_subject_region_elecs,
+            enc_results,
+            sig_dir=sig_dir,
+        )
+
+        # Generate arbitrary embeddings for null baseline
+        X_arbitrary = get_and_offset_arbitrary_embeddings(
+            aligned_embeddings, selection, df_word, enc.offset, config.arbitrary_seed
         )
 
         rrr_region_overlay = None
@@ -539,6 +612,7 @@ def _run_per_region_pca(
             config=config,
             sig_mask_flat=sig_mask_flat,
             rrr_overlay_dir=rrr_region_overlay,
+            X_arbitrary=X_arbitrary,
         )
 
 

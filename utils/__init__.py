@@ -3,7 +3,21 @@
 
 from utils.constants import RIDGE_ALPHAS, refine_alpha_grid, check_alpha_grid_boundaries
 from utils.tensor_utils import to_numpy, to_torch
-from utils.config import EncodingConfig, SignificanceConfig, NullDistConfig, NewSignificanceConfig, SVDConfig, SRRRConfig, RRRConfig, PCAConfig, PartialSVDConfig, PartialRRRConfig, SAEConfig, SVDMode, get_results_dir
+from utils.config import (
+    EncodingConfig,
+    SignificanceConfig,
+    NullDistConfig,
+    NewSignificanceConfig,
+    SVDConfig,
+    SRRRConfig,
+    RRRConfig,
+    PCAConfig,
+    PartialSVDConfig,
+    PartialRRRConfig,
+    SAEConfig,
+    SVDMode,
+    get_results_dir,
+)
 from utils.config_utils import (
     parse_override_args,
     get_nested_value,
@@ -44,6 +58,7 @@ from utils.encoding import (
     load_all_subject_coefficients,
     extract_best_alphas,
     train_encoding_two_pass,
+    get_and_offset_arbitrary_embeddings,
 )
 from utils.plotting import (
     add_corrs,
@@ -116,7 +131,12 @@ from utils.sae import (
     train_sae_end_to_end,
     train_sae_alternating,
 )
-from utils.subspace_utils import evaluate_subspace_ridge, build_nr_metrics_dict
+from utils.subspace_utils import (
+    evaluate_subspace_ols,
+    evaluate_complement,
+    evaluate_arbitrary,
+    build_nr_metrics_dict,
+)
 from utils.examples import (
     _make_context,
     _sample,
@@ -184,6 +204,7 @@ __all__ = [
     "load_all_subject_coefficients",
     "extract_best_alphas",
     "train_encoding_two_pass",
+    "get_and_offset_arbitrary_embeddings",
     # plotting
     "add_corrs",
     "plot_corrs_vs_arbitrary",
@@ -250,7 +271,9 @@ __all__ = [
     "train_sae_end_to_end",
     "train_sae_alternating",
     # subspace_utils
-    "evaluate_subspace_ridge",
+    "evaluate_subspace_ols",
+    "evaluate_complement",
+    "evaluate_arbitrary",
     "build_nr_metrics_dict",
     # examples
     "_make_context",
