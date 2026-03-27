@@ -331,12 +331,7 @@ def _(BIDSPath, Optional, mne, np, os, pd):
 
         return X_arb
 
-    return (
-        get_arbitrary_embeddings,
-        load_raws,
-        read_electrode_file,
-        read_subject_mapping,
-    )
+    return get_arbitrary_embeddings, load_raws, read_electrode_file
 
 
 @app.cell
@@ -1072,7 +1067,7 @@ def _(
         plt.tight_layout()
         return fig, sim_matrix
 
-    return (plot_embedding_correlations,)
+    return add_corrs, plot_embedding_correlations
 
 
 @app.cell
@@ -1637,13 +1632,13 @@ def _(
 
 
 @app.cell
-def _(read_electrode_file, read_subject_mapping):
-    new_subject_sig = read_electrode_file("mid_gpt2-0/all_subject_sig.csv")
-    old_subject_mapping = read_subject_mapping("data/participants.tsv")
-    old_sig_elecs = read_electrode_file("all_subject_sig.csv", old_subject_mapping)
-    num_new, num_old = sum([len(x) for x in new_subject_sig.values()]), sum([len(x) for x in old_sig_elecs.values()])
-    num_new, num_old
-    return new_subject_sig, num_old, old_sig_elecs
+def _(read_electrode_file):
+    new_subject_sig = read_electrode_file("results/gpt2xl_layer24_offset0/all_subject_sig.csv")
+    # old_subject_mapping = read_subject_mapping("data/participants.tsv")
+    # old_sig_elecs = read_electrode_file("all_subject_sig.csv", old_subject_mapping)
+    # num_new, num_old = sum([len(x) for x in new_subject_sig.values()]), sum([len(x) for x in old_sig_elecs.values()])
+    # num_new, num_old
+    return (new_subject_sig,)
 
 
 @app.cell
@@ -1691,11 +1686,7 @@ def _(mo):
     offsets_to_train_dropdown = mo.ui.dropdown(options=[0], value=0)
     subjects_to_include_multiselect = mo.ui.multiselect(options=list(range(1, 10)), label="subjects")
     mo.hstack([layer_dropdown, offsets_to_train_dropdown, subjects_to_include_multiselect])
-    return (
-        layer_dropdown,
-        offsets_to_train_dropdown,
-        subjects_to_include_multiselect,
-    )
+    return layer_dropdown, offsets_to_train_dropdown
 
 
 @app.cell
@@ -1744,15 +1735,13 @@ def _(
     layer,
     load_raws,
     mne,
+    new_subject_sig,
     np,
     os,
     pd,
-    read_electrode_file,
-    run_name,
     save_distributions,
     set_backend,
     start,
-    subjects_to_include_multiselect,
     token_probs,
     torch,
     urllib,
@@ -1900,8 +1889,8 @@ def _(
     gpt2_word_kl_divergence = kl_divergence(aligned_gpt2_probs)
 
     # subject_mapping = read_subject_mapping("data/participants.tsv")
-    sig_elecs = read_electrode_file(f"{run_name}/all_subject_sig.csv")
-    raws = load_raws([i for i in subjects_to_include_multiselect.value], "data/", per_subject_electrodes=sig_elecs, use_high_gamma=True)
+    # sig_elecs = read_electrode_file(f"{run_name}/all_subject_sig.csv")
+    raws = load_raws([1], "data/", per_subject_electrodes=new_subject_sig, use_high_gamma=True)
 
     # raws = load_raws(
     #     list(range(1, 10)),
@@ -1942,7 +1931,7 @@ def _(
     datas = np.concatenate(datas, axis=1)
     print(f"Datas array has a shape of: {datas.shape}")
 
-    electrode_names = [f"S/{list(sig_elecs.keys())[i]}/E/{e_name}" for i, r in enumerate(raws) for e_name in r.ch_names]
+    electrode_names = [f"S/{list(new_subject_sig.keys())[i]}/E/{e_name}" for i, r in enumerate(raws) for e_name in r.ch_names]
 
     epochs_data = datas.reshape(len(epochs), -1)
     print(f"ECoG data matrix shape: {epochs_data.shape}")
@@ -1951,15 +1940,44 @@ def _(
     averaged_embeddings = aligned_embeddings[epochs.selection]
     final_layer_averaged_embeddings = final_layer_aligned_embeddings[epochs.selection]
     print("Averaged embeddings:", averaged_embeddings.shape, "Final layer embeddings:", final_layer_averaged_embeddings.shape)
-    return (
-        averaged_embeddings,
-        datas,
-        df_word,
-        epochs,
-        epochs_data,
-        raws,
-        sig_elecs,
-    )
+    return averaged_embeddings, datas, df_word, epochs, epochs_data, raws
+
+
+@app.cell
+def _(np):
+    full_corrs = np.concatenate([np.load(f"results/gpt2xl_layer24_offset0/subjects/sub_{sub_id}/corrs.npy") for sub_id in range(1, 10)], axis=1)
+    return (full_corrs,)
+
+
+@app.cell
+def _(full_corrs, plt):
+    plt.plot(full_corrs.mean((0, 1)))
+    return
+
+
+@app.cell
+def _(add_corrs, full_corrs, plt):
+    add_corrs(full_corrs, color="green", ax=None, linestyle="-")
+    plt.show()
+    return
+
+
+@app.cell
+def _(new_subject_sig, np):
+    fold_0_rrr = np.load("results/gpt2xl_layer24_offset0/rrr/k5/fold_0/metrics.npz")["nr_corr_per_target"].reshape((sum([len(new_subject_sig[i]) for i in range(1, 10)]), 128))
+    fold_1_rrr = np.load("results/gpt2xl_layer24_offset0/rrr/k5/fold_1/metrics.npz")["nr_corr_per_target"].reshape((sum([len(new_subject_sig[i]) for i in range(1, 10)]), 128))
+    rrr_corrs = np.stack([fold_0_rrr, fold_1_rrr])
+    return
+
+
+@app.cell
+def _(full_corrs, plot_embedding_correlations, plt):
+    plot_embedding_correlations(plot_corrs=  [
+            # {"corrs": rrr_corrs, "color": "yellow", "label": "5 Dimensional RRR Space", "linestyle": "--"},
+            {"corrs": full_corrs, "color": "white", "label": "Full Embeddings", "linestyle": "-"},
+        ])
+    plt.show()
+    return
 
 
 @app.cell
@@ -2042,10 +2060,10 @@ def _(
     else:
         encode_cluster_results = encode_ecog(X, Y, num_electrodes, num_lags, get_ridge_model_constructor(), result_dir=result_dir, folds=None, epochs_shape=(num_electrodes, num_lags), skip_sigs=True)
         save_encoding_results(encode_cluster_results, results_file)
-    
+
     if not skip_sigs:
         sig, p_vals, q_vals = get_detailed_sig_results(sig_elecs, run_name)
-        
+
         encode_cluster_results["sig"] = {
             "sig_bool": sig,
             "p_values": p_vals,

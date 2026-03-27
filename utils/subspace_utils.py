@@ -50,7 +50,7 @@ def evaluate_subspace_ridge(
             best_alphas – np.ndarray | None (populated only when log_alphas=True)
     """
     X_proj_train = X_train @ A  # (n_train, k)
-    X_proj_test = X_test @ A    # (n_test, k)
+    X_proj_test = X_test @ A  # (n_test, k)
 
     _result = solve_regression(
         torch.as_tensor(X_proj_train, dtype=torch.float32, device=device),
@@ -73,8 +73,14 @@ def evaluate_subspace_ridge(
     Y_hat_train = (X_proj_train_t @ W + b).cpu().numpy()
 
     suf, cca_sim, proc_sim = run_prediction_metrics(
-        Y_hat, Y_hat_train, Y_train, X_train, X_test, Y_test,
-        Y_hat_full, alphas=alphas,
+        Y_hat,
+        Y_hat_train,
+        Y_train,
+        X_train,
+        X_test,
+        Y_test,
+        Y_hat_full,
+        alphas=alphas,
         compute_cca=compute_cca,
         compute_procrustes=compute_procrustes,
     )
@@ -115,10 +121,15 @@ def build_nr_metrics_dict(
         "nr_corr_per_target": suf["minimal_corr_per_target"],
     }
     if sig_mask_flat is not None:
-        add_sig_nonsig_corrs(out, suf, sig_mask_flat, [
-            ("nr_corr", "minimal_corr_per_target"),
-            ("nr_recovery_corr", "recovery_corr_per_target"),
-        ])
+        add_sig_nonsig_corrs(
+            out,
+            suf,
+            sig_mask_flat,
+            [
+                ("nr_corr", "minimal_corr_per_target"),
+                ("nr_recovery_corr", "recovery_corr_per_target"),
+            ],
+        )
     if nr_result["cca_sim"] is not None:
         out["nr_cca_similarity"] = nr_result["cca_sim"]
     if nr_result["proc_sim"] is not None:
