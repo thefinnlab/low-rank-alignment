@@ -4,11 +4,6 @@ __generated_with = "0.20.0"
 app = marimo.App(width="medium")
 
 
-# ---------------------------------------------------------------------------
-# Foundation
-# ---------------------------------------------------------------------------
-
-
 @app.cell
 def _():
     import marimo as mo
@@ -16,8 +11,13 @@ def _():
     import numpy as np
     import pandas as pd
     import matplotlib.pyplot as plt
-    from scipy.stats import kurtosis as sp_kurtosis, entropy as sp_entropy, skew as sp_skew
+    from scipy.stats import (
+        kurtosis as sp_kurtosis,
+        entropy as sp_entropy,
+        skew as sp_skew,
+    )
     from pathlib import Path
+
     return Path, alt, mo, np, pd, plt, sp_entropy, sp_kurtosis, sp_skew
 
 
@@ -25,6 +25,7 @@ def _():
 def _():
     import sys
     import os
+
     _cwd = os.path.abspath(".")
     _root = _cwd
     while _root != os.path.dirname(_root):
@@ -37,7 +38,12 @@ def _():
     from utils.examples import get_mo_display_activations, get_example_display_controls
     from utils.encoding import load_encoding_results
     from utils.data_loaders import load_sig_electrodes, load_raws
-    from utils.atlas import get_coord_atlas_labels, build_electrode_region_map
+    from utils.atlas import (
+        get_coord_atlas_labels,
+        build_electrode_region_map,
+        _lookup_atlas_labels,
+    )
+
     return (
         build_electrode_region_map,
         get_coord_atlas_labels,
@@ -52,11 +58,15 @@ def _():
 
 @app.cell
 def _(mo):
-    mo.md("# RRR Interpretability Explorer")
+    mo.md(
+        """
+    # RRR Interpretability Explorer
+    """
+    )
     return
 
 
-@app.cell
+@app.cell(hide_code=True)
 def _(mo):
     results_root_input = mo.ui.text(
         value="results/gpt2xl_layer24_offset0",
@@ -78,7 +88,7 @@ def _(mo):
     return data_root_input, layer_input, results_root_input, sig_dir_input
 
 
-@app.cell
+@app.cell(hide_code=True)
 def _(Path, mo, results_root_input):
     _rr = Path(results_root_input.value)
     mo.stop(
@@ -103,11 +113,10 @@ def _(Path, mo, results_root_input):
     if _pr_rrr.exists():
         for _p in sorted(_pr_rrr.glob("*/grid_results.csv")):
             rrr_options.append(f"per_region/{_p.parent.name}")
-
     return (rrr_options,)
 
 
-@app.cell
+@app.cell(hide_code=True)
 def _(data_root_input, layer_input, load_embeddings, np):
     aligned_embeddings, df_word = load_embeddings(
         data_root_input.value, int(layer_input.value)
@@ -120,12 +129,7 @@ def _(data_root_input, layer_input, load_embeddings, np):
     return aligned_embeddings, all_words_epochs, df_word
 
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-
-@app.cell
+@app.cell(hide_code=True)
 def _(Path, results_root_input):
     def get_rrr_dir(source: str) -> Path:
         rr = Path(results_root_input.value)
@@ -139,7 +143,7 @@ def _(Path, results_root_input):
     return (get_rrr_dir,)
 
 
-@app.cell
+@app.cell(hide_code=True)
 def _(np):
     def load_rrr_AB(rrr_dir, fold_str, k):
         """Load A and B matrices from the correct fold directory, truncated to rank k."""
@@ -152,10 +156,17 @@ def _(np):
     return (load_rrr_AB,)
 
 
-@app.cell
+@app.cell(hide_code=True)
 def _(
-    Path, load_encoding_results, load_raws, load_sig_electrodes, np,
-    results_root_input, data_root_input, sig_dir_input,
+    Path,
+    load_encoding_results,
+    load_raws,
+    load_sig_electrodes,
+    np,
+    results_root_input,
+    data_root_input,
+    build_electrode_region_map,
+    sig_dir_input,
 ):
     def load_electrode_metadata(source: str):
         """Load electrode metadata (names, lags, coords, y-column mapping) for a source.
@@ -167,17 +178,22 @@ def _(
             all_coords: (n_total_elecs, 3) MNI coordinates in mm
         """
         import os
+
         rr = Path(results_root_input.value)
         data_root = data_root_input.value
         _sig_dir = sig_dir_input.value.strip() or None
 
         # Determine subject IDs and per-subject electrode lists
         sig_electrodes, _ = load_sig_electrodes(
-            str(rr), list(range(1, 10)), sig_dir=_sig_dir,
+            str(rr),
+            list(range(1, 10)),
+            sig_dir=_sig_dir,
         )
 
         if source == "cross_subject":
-            subs_with_sig = [s for s in sorted(sig_electrodes.keys()) if sig_electrodes[s]]
+            subs_with_sig = [
+                s for s in sorted(sig_electrodes.keys()) if sig_electrodes[s]
+            ]
             per_sub_elecs = {s: sig_electrodes[s] for s in subs_with_sig}
         elif source.startswith("per_subject/"):
             sub_name = source.split("/", 1)[1]  # e.g. "sub_3"
@@ -186,10 +202,15 @@ def _(
         elif source.startswith("per_region/"):
             region_name = source.split("/", 1)[1]
             # Re-derive which electrodes are in this region
-            all_sub_ids = [s for s in sorted(sig_electrodes.keys()) if sig_electrodes[s]]
+            all_sub_ids = [
+                s for s in sorted(sig_electrodes.keys()) if sig_electrodes[s]
+            ]
             try:
                 elec_region_map = build_electrode_region_map(
-                    all_sub_ids, data_root, None, None,
+                    all_sub_ids,
+                    data_root,
+                    None,
+                    None,
                 )
                 region_sub_elecs = elec_region_map.get(region_name, {})
                 per_sub_elecs = {}
@@ -217,7 +238,7 @@ def _(
             )
             if not os.path.exists(enc_path):
                 continue
-            enc_results = load_encoding_results(enc_path)
+            enc_results = load_encoding_results(enc_path, location="cpu")
             sub_lags = enc_results["lags"]
             if lags is None:
                 lags = sub_lags
@@ -227,27 +248,33 @@ def _(
             # Load MNE raw header (no data) for MNI coordinates
             try:
                 raws = load_raws(
-                    [sub_id], data_root,
+                    [sub_id],
+                    data_root,
                     use_high_gamma=True,
                     per_subject_electrodes={sub_id: elec_names},
                     no_preload=True,
                 )
                 raw = raws[0]
-                coords = np.array([
-                    raw.info["chs"][raw.ch_names.index(ch)]["loc"][:3] * 1000
-                    for ch in elec_names if ch in raw.ch_names
-                ])
+                coords = np.array(
+                    [
+                        raw.info["chs"][raw.ch_names.index(ch)]["loc"][:3] * 1000
+                        for ch in elec_names
+                        if ch in raw.ch_names
+                    ]
+                )
             except Exception:
                 coords = np.zeros((len(elec_names), 3))
 
-            subjects_info.append({
-                "sub_id": sub_id,
-                "elec_names": elec_names,
-                "lags": sub_lags,
-                "y_col_start": y_cursor,
-                "y_col_end": y_cursor + n_target_cols,
-                "coords": coords,
-            })
+            subjects_info.append(
+                {
+                    "sub_id": sub_id,
+                    "elec_names": elec_names,
+                    "lags": sub_lags,
+                    "y_col_start": y_cursor,
+                    "y_col_end": y_cursor + n_target_cols,
+                    "coords": coords,
+                }
+            )
             all_elec_names.extend(elec_names)
             all_coords.append(coords)
             y_cursor += n_target_cols
@@ -262,27 +289,29 @@ def _(
     return (load_electrode_metadata,)
 
 
-# ---------------------------------------------------------------------------
-# Section 1: RRR — Rank vs Explained Variance
-# ---------------------------------------------------------------------------
-
-
 @app.cell
 def _(mo):
-    mo.md("---\n## Section 1: RRR — Rank vs Explained Variance")
-    return
-
-
-@app.cell
-def _(mo, rrr_options):
-    mo.stop(
-        len(rrr_options) == 0,
-        mo.callout(mo.md("No RRR results found. Run `scripts/run_rrr.py` first."), kind="warn"),
+    mo.md(
+        """
+    ---
+    ## Section 1: RRR — Rank vs Explained Variance
+    """
     )
     return
 
 
-@app.cell
+@app.cell(hide_code=True)
+def _(mo, rrr_options):
+    mo.stop(
+        len(rrr_options) == 0,
+        mo.callout(
+            mo.md("No RRR results found. Run `scripts/run_rrr.py` first."), kind="warn"
+        ),
+    )
+    return
+
+
+@app.cell(hide_code=True)
 def _(mo, rrr_options):
     s1_source = mo.ui.dropdown(
         options=rrr_options,
@@ -291,14 +320,17 @@ def _(mo, rrr_options):
     )
     s1_show_folds = mo.ui.checkbox(value=False, label="Show individual folds")
     s1_threshold = mo.ui.slider(
-        start=0.0, stop=0.10, value=0.01, step=0.005,
+        start=0.0,
+        stop=0.10,
+        value=0.01,
+        step=0.005,
         label="Sufficiency threshold (full_r2 − minimal_r2 ≤)",
     )
     mo.hstack([s1_source, s1_show_folds, s1_threshold])
-    return s1_show_folds, s1_source, s1_threshold
+    return s1_source, s1_threshold
 
 
-@app.cell
+@app.cell(hide_code=True)
 def _(get_rrr_dir, mo, pd, s1_source):
     _unit_dir = get_rrr_dir(s1_source.value)
     _summary_path = _unit_dir / "summary.csv"
@@ -312,9 +344,10 @@ def _(get_rrr_dir, mo, pd, s1_source):
     return s1_grid, s1_summary
 
 
-@app.cell
+@app.cell(hide_code=True)
 def _(s1_grid, s1_source, s1_summary):
     from utils.plotting import plot_rrr_rank_results
+
     plot_rrr_rank_results(
         s1_summary,
         grid_df=s1_grid,
@@ -323,11 +356,17 @@ def _(s1_grid, s1_source, s1_summary):
     return
 
 
-@app.cell
+@app.cell(hide_code=True)
 def _(alt, mo, s1_summary):
     # CCA / Procrustes (optional)
-    _opt_cols = [c for c in ["cca_similarity", "procrustes_similarity"] if c in s1_summary.columns]
-    mo.stop(len(_opt_cols) == 0, mo.md("*No CCA or Procrustes similarity columns found.*"))
+    _opt_cols = [
+        c
+        for c in ["cca_similarity", "procrustes_similarity"]
+        if c in s1_summary.columns
+    ]
+    mo.stop(
+        len(_opt_cols) == 0, mo.md("*No CCA or Procrustes similarity columns found.*")
+    )
     _long_opt = s1_summary.melt(
         id_vars="k", value_vars=_opt_cols, var_name="metric", value_name="value"
     )
@@ -340,7 +379,9 @@ def _(alt, mo, s1_summary):
             color=alt.Color("metric:N"),
             tooltip=["k:Q", "metric:N", alt.Tooltip("value:Q", format=".4f")],
         )
-        .properties(width="container", height=200, title="CCA / Procrustes similarity vs rank")
+        .properties(
+            width="container", height=200, title="CCA / Procrustes similarity vs rank"
+        )
         .configure_view(strokeWidth=0)
         .configure_axis(grid=False)
     )
@@ -348,46 +389,54 @@ def _(alt, mo, s1_summary):
     return
 
 
-@app.cell
-def _(mo, np, s1_summary, s1_threshold):
+@app.cell(hide_code=True)
+def _(mo, s1_summary, s1_threshold):
     # Sufficiency summary
     if "full_r2" in s1_summary.columns and "minimal_r2" in s1_summary.columns:
         _gap = s1_summary["full_r2"] - s1_summary["minimal_r2"]
-        _ratio = s1_summary["minimal_r2"] / s1_summary["full_r2"].replace(0, float("nan"))
+        _ratio = s1_summary["minimal_r2"] / s1_summary["full_r2"].replace(
+            0, float("nan")
+        )
         _suf = s1_summary[_gap <= s1_threshold.value]
         if len(_suf) > 0:
             _min_k = int(_suf["k"].min())
             _gap_at_k = float(_gap[s1_summary["k"] == _min_k].values[0])
             _ratio_at_k = float(_ratio[s1_summary["k"] == _min_k].values[0])
             mo.callout(
-                mo.md(f"**Minimum sufficient rank (RRR):** k = **{_min_k}**  \n"
-                      f"First rank where avg. `full_r2 − minimal_r2 ≤ {s1_threshold.value:.3f}` "
-                      f"(gap = {_gap_at_k:.4f}, ratio = {_ratio_at_k:.3f})"),
+                mo.md(
+                    f"**Minimum sufficient rank (RRR):** k = **{_min_k}**  \n"
+                    f"First rank where avg. `full_r2 − minimal_r2 ≤ {s1_threshold.value:.3f}` "
+                    f"(gap = {_gap_at_k:.4f}, ratio = {_ratio_at_k:.3f})"
+                ),
                 kind="success",
             )
         else:
             mo.callout(
-                mo.md(f"No rank achieves `full_r2 − minimal_r2 ≤ {s1_threshold.value:.3f}`. "
-                      "Try a larger threshold or a larger rank grid."),
+                mo.md(
+                    f"No rank achieves `full_r2 − minimal_r2 ≤ {s1_threshold.value:.3f}`. "
+                    "Try a larger threshold or a larger rank grid."
+                ),
                 kind="warn",
             )
     else:
-        mo.callout(mo.md("*`full_r2` or `minimal_r2` not found in summary.csv.*"), kind="warn")
+        mo.callout(
+            mo.md("*`full_r2` or `minimal_r2` not found in summary.csv.*"), kind="warn"
+        )
     return
 
 
-# ---------------------------------------------------------------------------
-# Section 2: Direction Interpretability
-# ---------------------------------------------------------------------------
-
-
-@app.cell
+@app.cell(hide_code=True)
 def _(mo):
-    mo.md("---\n## Section 2: Direction Interpretability")
+    mo.md(
+        """
+    ---
+    ## Section 2: Direction Interpretability
+    """
+    )
     return
 
 
-@app.cell
+@app.cell(hide_code=True)
 def _(mo, rrr_options):
     mo.stop(
         len(rrr_options) == 0,
@@ -409,10 +458,17 @@ def _(mo, rrr_options):
     return s2_dir_idx, s2_fold, s2_k, s2_source
 
 
-@app.cell
+@app.cell(hide_code=True)
 def _(
-    aligned_embeddings, get_rrr_dir, load_rrr_AB,
-    mo, np, s2_dir_idx, s2_fold, s2_k, s2_source,
+    aligned_embeddings,
+    get_rrr_dir,
+    load_rrr_AB,
+    mo,
+    np,
+    s2_dir_idx,
+    s2_fold,
+    s2_k,
+    s2_source,
 ):
     _unit_dir = get_rrr_dir(s2_source.value)
     _fold_dir = _unit_dir / s2_fold.value
@@ -427,7 +483,7 @@ def _(
     return (s2_activations,)
 
 
-@app.cell
+@app.cell(hide_code=True)
 def _(alt, mo, np, pd, s2_activations, s2_dir_idx, s2_fold, s2_k):
     _counts, _edges = np.histogram(s2_activations, bins=100)
     _hist_df = pd.DataFrame({"x1": _edges[:-1], "x2": _edges[1:], "count": _counts})
@@ -435,8 +491,11 @@ def _(alt, mo, np, pd, s2_activations, s2_dir_idx, s2_fold, s2_k):
         alt.Chart(_hist_df)
         .mark_bar(color="#93c5fd", stroke="#bfdbfe", strokeWidth=0.5)
         .encode(
-            x=alt.X("x1:Q", title="Activation",
-                    scale=alt.Scale(domain=[float(_edges[0]), float(_edges[-1])])),
+            x=alt.X(
+                "x1:Q",
+                title="Activation",
+                scale=alt.Scale(domain=[float(_edges[0]), float(_edges[-1])]),
+            ),
             x2="x2:Q",
             y=alt.Y("count:Q", title="Count"),
             tooltip=[
@@ -446,25 +505,36 @@ def _(alt, mo, np, pd, s2_activations, s2_dir_idx, s2_fold, s2_k):
             ],
         )
     )
-    _chart = _bars.properties(
-        width="container", height=220,
-        title=f"RRR direction {s2_dir_idx.value} — k={s2_k.value}, {s2_fold.value}",
-    ).configure_view(strokeWidth=0).configure_axis(grid=False)
+    _chart = (
+        _bars.properties(
+            width="container",
+            height=220,
+            title=f"RRR direction {s2_dir_idx.value} — k={s2_k.value}, {s2_fold.value}",
+        )
+        .configure_view(strokeWidth=0)
+        .configure_axis(grid=False)
+    )
     mo.ui.altair_chart(_chart)
     return
 
 
-@app.cell
+@app.cell(hide_code=True)
 def _(get_example_display_controls, mo):
     s2_num_bins, s2_samp_per_bin, s2_ctx, s2_seed = get_example_display_controls()
     mo.hstack([s2_num_bins, s2_samp_per_bin, s2_ctx, s2_seed])
     return s2_ctx, s2_num_bins, s2_samp_per_bin, s2_seed
 
 
-@app.cell
+@app.cell(hide_code=True)
 def _(
-    all_words_epochs, df_word, get_mo_display_activations,
-    s2_activations, s2_ctx, s2_num_bins, s2_samp_per_bin, s2_seed,
+    all_words_epochs,
+    df_word,
+    get_mo_display_activations,
+    s2_activations,
+    s2_ctx,
+    s2_num_bins,
+    s2_samp_per_bin,
+    s2_seed,
 ):
     get_mo_display_activations(
         s2_activations,
@@ -478,18 +548,18 @@ def _(
     return
 
 
-# ---------------------------------------------------------------------------
-# Section 3: B Matrix — Temporal Profile
-# ---------------------------------------------------------------------------
-
-
-@app.cell
+@app.cell(hide_code=True)
 def _(mo):
-    mo.md("---\n## Section 3: B Matrix — Temporal Profile")
+    mo.md(
+        """
+    ---
+    ## Section 3: B Matrix — Temporal Profile
+    """
+    )
     return
 
 
-@app.cell
+@app.cell(hide_code=True)
 def _(mo, rrr_options):
     mo.stop(
         len(rrr_options) == 0,
@@ -511,10 +581,15 @@ def _(mo, rrr_options):
     return s3_dir_idx, s3_fold, s3_k, s3_source
 
 
-@app.cell
+@app.cell(hide_code=True)
 def _(
-    get_rrr_dir, load_electrode_metadata, load_rrr_AB,
-    mo, np, pd, s3_dir_idx, s3_fold, s3_k, s3_source,
+    get_rrr_dir,
+    load_electrode_metadata,
+    load_rrr_AB,
+    mo,
+    s3_fold,
+    s3_k,
+    s3_source,
 ):
     _unit_dir = get_rrr_dir(s3_source.value)
     _fold_dir = _unit_dir / s3_fold.value
@@ -522,21 +597,28 @@ def _(
         not (_fold_dir / "B.npy").exists(),
         mo.callout(mo.md(f"B.npy not found at `{_fold_dir}`."), kind="warn"),
     )
-    _A, _B = load_rrr_AB(_unit_dir, s3_fold.value, int(s3_k.value))
-    _dir_idx = min(int(s3_dir_idx.value), _B.shape[1] - 1)
-    _b_col = _B[:, _dir_idx]  # (n_targets,)
+    _A, B_3 = load_rrr_AB(_unit_dir, s3_fold.value, int(s3_k.value))
 
-    _meta = load_electrode_metadata(s3_source.value)
+    meta_3 = load_electrode_metadata(s3_source.value)
+    return B_3, meta_3
+
+
+@app.cell(hide_code=True)
+def _(B_3, meta, meta_3, mo, pd, s3_dir_idx):
     mo.stop(
-        len(_meta["subjects"]) == 0,
-        mo.callout(mo.md("Could not load electrode metadata for this source."), kind="warn"),
+        len(meta["subjects"]) == 0,
+        mo.callout(
+            mo.md("Could not load electrode metadata for this source."), kind="warn"
+        ),
     )
-    _lags = _meta["lags"]
+    _dir_idx = min(int(s3_dir_idx.value), B_3.shape[1] - 1)
+    _b_col = B_3[:, _dir_idx]  # (n_targets,)
+    _lags = meta_3["lags"]
     _n_lags = len(_lags)
 
     # Build tidy DataFrame: one row per (electrode, lag)
     _rows = []
-    for _sub in _meta["subjects"]:
+    for _sub in meta_3["subjects"]:
         _start = _sub["y_col_start"]
         _end = _sub["y_col_end"]
         _n_elecs = len(_sub["elec_names"])
@@ -545,20 +627,41 @@ def _(
         _b_sub = _b_col[_start:_end].reshape(_n_elecs, _n_lags)
         for _ei, _ename in enumerate(_sub["elec_names"]):
             for _li in range(_n_lags):
-                _rows.append({
-                    "electrode": _ename,
-                    "subject": f"sub_{_sub['sub_id']}",
-                    "lag_sec": float(_lags[_li]),
-                    "weight": float(_b_sub[_ei, _li]),
-                })
+                _rows.append(
+                    {
+                        "electrode": _ename,
+                        "subject": f"sub_{_sub['sub_id']}",
+                        "lag_sec": float(_lags[_li]),
+                        "weight": float(_b_sub[_ei, _li]),
+                    }
+                )
+
+    def convert_to_electrode_id(subject, electrode):
+        return f"{subject}-{electrode}"
 
     s3_b_df = pd.DataFrame(_rows)
-    s3_meta = _meta
-    return s3_b_df, s3_meta
+    s3_meta = meta_3
+
+    all_elec_list = []
+    for i, row in s3_b_df.iterrows():
+        all_elec_list.append(convert_to_electrode_id(row.subject, row.electrode))
+    s3_b_df["elec_name"] = all_elec_list
+    # Drop duplicates
+    elec_list = list(set(all_elec_list))
+    return convert_to_electrode_id, elec_list, s3_b_df
 
 
-@app.cell
-def _(mo, s3_b_df, s3_meta):
+@app.cell(hide_code=True)
+def _(elec_list, mo):
+    _elecs = sorted(elec_list)
+    get_s3_selected_elecs, set_s3_selected_elecs = mo.state(
+        elec_list[:20] if len(elec_list) > 20 else elec_list
+    )
+    return get_s3_selected_elecs, set_s3_selected_elecs
+
+
+@app.cell(hide_code=True)
+def _(elec_list, get_s3_selected_elecs, mo, s3_b_df):
     _subs = sorted(s3_b_df["subject"].unique().tolist()) if len(s3_b_df) > 0 else []
     _elecs = sorted(s3_b_df["electrode"].unique().tolist()) if len(s3_b_df) > 0 else []
     s3_subject_filter = mo.ui.multiselect(
@@ -566,23 +669,21 @@ def _(mo, s3_b_df, s3_meta):
         value=_subs,
         label="Subjects",
     )
+
     s3_electrode_filter = mo.ui.multiselect(
-        options=_elecs,
-        value=_elecs[:20] if len(_elecs) > 20 else _elecs,
+        options=elec_list,
+        value=get_s3_selected_elecs(),
         label="Electrodes (select subset for clarity)",
     )
     mo.hstack([s3_subject_filter, s3_electrode_filter])
-    return s3_electrode_filter, s3_subject_filter
+    return (s3_electrode_filter,)
 
 
-@app.cell
-def _(alt, mo, np, pd, s3_b_df, s3_dir_idx, s3_electrode_filter, s3_subject_filter):
+@app.cell(hide_code=True)
+def _(alt, mo, s3_b_df, s3_dir_idx, s3_electrode_filter):
     mo.stop(len(s3_b_df) == 0, mo.md("*No B-matrix data available.*"))
 
-    _filtered = s3_b_df[
-        s3_b_df["subject"].isin(s3_subject_filter.value) &
-        s3_b_df["electrode"].isin(s3_electrode_filter.value)
-    ]
+    _filtered = s3_b_df[s3_b_df["elec_name"].isin(s3_electrode_filter.value)]
 
     # Mean +/- std across filtered electrodes
     _agg = _filtered.groupby("lag_sec")["weight"].agg(["mean", "std"]).reset_index()
@@ -615,19 +716,24 @@ def _(alt, mo, np, pd, s3_b_df, s3_dir_idx, s3_electrode_filter, s3_subject_filt
     # Individual electrode lines (thin, transparent)
     _n_elecs_shown = _filtered["electrode"].nunique()
     _indiv = (
-        alt.Chart(_filtered)
-        .mark_line(opacity=0.15, strokeWidth=0.8)
-        .encode(
-            x="lag_sec:Q",
-            y="weight:Q",
-            color=alt.Color("electrode:N", legend=None),
+        (
+            alt.Chart(_filtered)
+            .mark_line(opacity=0.15, strokeWidth=0.8)
+            .encode(
+                x="lag_sec:Q",
+                y="weight:Q",
+                color=alt.Color("electrode:N", legend=None),
+            )
         )
-    ) if _n_elecs_shown <= 50 else alt.Chart().mark_point()
+        if _n_elecs_shown <= 50
+        else alt.Chart().mark_point()
+    )
 
     _chart = (
         alt.layer(_indiv, _band, _mean_line)
         .properties(
-            width="container", height=300,
+            width="container",
+            height=300,
             title=f"B weights over time — direction {s3_dir_idx.value} ({_n_elecs_shown} electrodes)",
         )
         .configure_view(strokeWidth=0)
@@ -637,15 +743,12 @@ def _(alt, mo, np, pd, s3_b_df, s3_dir_idx, s3_electrode_filter, s3_subject_filt
     return
 
 
-@app.cell
-def _(alt, mo, s3_b_df, s3_dir_idx, s3_electrode_filter, s3_subject_filter):
+@app.cell(hide_code=True)
+def _(alt, mo, s3_b_df, s3_dir_idx, s3_electrode_filter):
     # Heatmap: electrodes x lags
     mo.stop(len(s3_b_df) == 0, mo.md("*No B-matrix data available.*"))
 
-    _filtered = s3_b_df[
-        s3_b_df["subject"].isin(s3_subject_filter.value) &
-        s3_b_df["electrode"].isin(s3_electrode_filter.value)
-    ]
+    _filtered = s3_b_df[s3_b_df["elec_name"].isin(s3_electrode_filter.value)]
 
     _hm = (
         alt.Chart(_filtered)
@@ -654,8 +757,9 @@ def _(alt, mo, s3_b_df, s3_dir_idx, s3_electrode_filter, s3_subject_filter):
             x=alt.X("lag_sec:Q", title="Lag (seconds)", bin=alt.Bin(maxbins=64)),
             y=alt.Y("electrode:N", title="Electrode", sort=alt.SortField("subject")),
             color=alt.Color(
-                "weight:Q", title="B weight",
-                scale=alt.Scale(scheme="redblue", domainMid=0),
+                "weight:Q",
+                title="B weight",
+                scale=alt.Scale(scheme="redblue", domainMid=0, reverse=True),
             ),
             tooltip=[
                 alt.Tooltip("electrode:N"),
@@ -665,7 +769,8 @@ def _(alt, mo, s3_b_df, s3_dir_idx, s3_electrode_filter, s3_subject_filter):
             ],
         )
         .properties(
-            width="container", height=max(200, len(_filtered["electrode"].unique()) * 12),
+            width="container",
+            height=max(200, len(_filtered["electrode"].unique()) * 12),
             title=f"B weight heatmap — direction {s3_dir_idx.value}",
         )
         .configure_view(strokeWidth=0)
@@ -674,48 +779,51 @@ def _(alt, mo, s3_b_df, s3_dir_idx, s3_electrode_filter, s3_subject_filter):
     return
 
 
-@app.cell
-def _(mo, np, pd, s3_b_df, s3_electrode_filter, s3_subject_filter):
+@app.cell(hide_code=True)
+def _(mo, pd, s3_b_df, s3_electrode_filter):
     # Summary table: per-electrode peak lag, peak weight, mean |weight|
     mo.stop(len(s3_b_df) == 0, mo.md("*No B-matrix data available.*"))
 
-    _filtered = s3_b_df[
-        s3_b_df["subject"].isin(s3_subject_filter.value) &
-        s3_b_df["electrode"].isin(s3_electrode_filter.value)
-    ]
+    _filtered = s3_b_df[s3_b_df["elec_name"].isin(s3_electrode_filter.value)]
 
     _summary_rows = []
     for (_elec, _sub), _grp in _filtered.groupby(["electrode", "subject"]):
         _abs_max_idx = _grp["weight"].abs().idxmax()
         _peak_row = _grp.loc[_abs_max_idx]
-        _summary_rows.append({
-            "electrode": _elec,
-            "subject": _sub,
-            "peak_lag_sec": round(float(_peak_row["lag_sec"]), 3),
-            "peak_weight": round(float(_peak_row["weight"]), 5),
-            "mean_abs_weight": round(float(_grp["weight"].abs().mean()), 5),
-        })
+        _summary_rows.append(
+            {
+                "electrode": _elec,
+                "subject": _sub,
+                "peak_lag_sec": round(float(_peak_row["lag_sec"]), 3),
+                "peak_weight": round(float(_peak_row["weight"]), 5),
+                "mean_abs_weight": round(float(_grp["weight"].abs().mean()), 5),
+            }
+        )
 
-    _summary_df = pd.DataFrame(_summary_rows).sort_values("mean_abs_weight", ascending=False)
-    mo.vstack([
-        mo.md("### Electrode Summary"),
-        mo.ui.table(_summary_df),
-    ])
+    _summary_df = pd.DataFrame(_summary_rows).sort_values(
+        "mean_abs_weight", ascending=False
+    )
+    mo.vstack(
+        [
+            mo.md("### Electrode Summary"),
+            mo.ui.table(_summary_df),
+        ]
+    )
     return
 
 
-# ---------------------------------------------------------------------------
-# Section 4: B Matrix — Brain Map
-# ---------------------------------------------------------------------------
-
-
-@app.cell
+@app.cell(hide_code=True)
 def _(mo):
-    mo.md("---\n## Section 4: B Matrix — Brain Map")
+    mo.md(
+        """
+    ---
+    ## Section 4: B Matrix — Brain Map
+    """
+    )
     return
 
 
-@app.cell
+@app.cell(hide_code=True)
 def _(mo, rrr_options):
     mo.stop(
         len(rrr_options) == 0,
@@ -739,27 +847,45 @@ def _(mo, rrr_options):
         label="Time mode",
     )
     s4_timepoint = mo.ui.slider(
-        start=-2.0, stop=2.0, value=0.0, step=0.05,
+        start=-2.0,
+        stop=2.0,
+        value=0.0,
+        step=0.05,
         label="Timepoint (seconds)",
     )
-    s4_time_start = mo.ui.number(value=-0.5, start=-2.0, stop=2.0, step=0.05, label="Window start (s)")
-    s4_time_end = mo.ui.number(value=0.5, start=-2.0, stop=2.0, step=0.05, label="Window end (s)")
-    mo.vstack([
-        mo.hstack([s4_source, s4_fold, s4_k, s4_dir_idx]),
-        mo.hstack([s4_time_mode, s4_timepoint, s4_time_start, s4_time_end]),
-    ])
+    s4_time_start = mo.ui.number(
+        value=-0.5, start=-2.0, stop=2.0, step=0.05, label="Window start (s)"
+    )
+    s4_time_end = mo.ui.number(
+        value=0.5, start=-2.0, stop=2.0, step=0.05, label="Window end (s)"
+    )
+    mo.vstack(
+        [
+            mo.hstack([s4_source, s4_fold, s4_k, s4_dir_idx]),
+            mo.hstack([s4_time_mode, s4_timepoint, s4_time_start, s4_time_end]),
+        ]
+    )
     return (
-        s4_dir_idx, s4_fold, s4_k, s4_source,
-        s4_time_end, s4_time_mode, s4_time_start, s4_timepoint,
+        s4_dir_idx,
+        s4_fold,
+        s4_k,
+        s4_source,
+        s4_time_end,
+        s4_time_mode,
+        s4_time_start,
+        s4_timepoint,
     )
 
 
-@app.cell
+@app.cell(hide_code=True)
 def _(
-    get_rrr_dir, load_electrode_metadata, load_rrr_AB,
-    mo, np, pd, plt,
-    s4_dir_idx, s4_fold, s4_k, s4_source,
-    s4_time_end, s4_time_mode, s4_time_start, s4_timepoint,
+    get_rrr_dir,
+    load_electrode_metadata,
+    load_rrr_AB,
+    mo,
+    s4_fold,
+    s4_k,
+    s4_source,
 ):
     _unit_dir = get_rrr_dir(s4_source.value)
     _fold_dir = _unit_dir / s4_fold.value
@@ -767,23 +893,39 @@ def _(
         not (_fold_dir / "B.npy").exists(),
         mo.callout(mo.md(f"B.npy not found at `{_fold_dir}`."), kind="warn"),
     )
-    _A, _B = load_rrr_AB(_unit_dir, s4_fold.value, int(s4_k.value))
-    _dir_idx = min(int(s4_dir_idx.value), _B.shape[1] - 1)
-    _b_col = _B[:, _dir_idx]
+    _A, B = load_rrr_AB(_unit_dir, s4_fold.value, int(s4_k.value))
 
-    _meta = load_electrode_metadata(s4_source.value)
+    meta = load_electrode_metadata(s4_source.value)
+    return B, meta
+
+
+@app.cell(hide_code=True)
+def _(
+    B,
+    meta,
+    mo,
+    np,
+    plt,
+    s4_dir_idx,
+    s4_time_end,
+    s4_time_mode,
+    s4_time_start,
+    s4_timepoint,
+):
     mo.stop(
-        len(_meta["subjects"]) == 0 or len(_meta["lags"]) == 0,
+        len(meta["subjects"]) == 0 or len(meta["lags"]) == 0,
         mo.callout(mo.md("Could not load electrode metadata."), kind="warn"),
     )
-    _lags = _meta["lags"]
+    dir_idx = int(s4_dir_idx.value)
+    _b_col = B[:, dir_idx]
+    _lags = meta["lags"]
     _n_lags = len(_lags)
 
     # Compute one scalar per electrode
     if s4_time_mode.value == "single timepoint":
         _t = float(s4_timepoint.value)
         _lag_idx = int(np.argmin(np.abs(_lags - _t)))
-        _time_label = f"t = {_lags[_lag_idx]:.3f}s"
+        time_label = f"t = {_lags[_lag_idx]:.3f}s"
     else:
         _t_start = float(s4_time_start.value)
         _t_end = float(s4_time_end.value)
@@ -792,14 +934,14 @@ def _(
             not _lag_mask.any(),
             mo.callout(mo.md("No lags in the selected time window."), kind="warn"),
         )
-        _time_label = f"t = [{_t_start:.2f}, {_t_end:.2f}]s"
+        time_label = f"t = [{_t_start:.2f}, {_t_end:.2f}]s"
 
-    _values = []
-    _coords = []
-    _elec_names = []
-    _sub_labels = []
+    values = []
+    coords = []
+    elec_names = []
+    sub_labels = []
 
-    for _sub in _meta["subjects"]:
+    for _sub in meta["subjects"]:
         _start = _sub["y_col_start"]
         _end = _sub["y_col_end"]
         _n_elecs = len(_sub["elec_names"])
@@ -810,82 +952,125 @@ def _(
             _v = _b_sub[:, _lag_idx]
         else:
             _v = _b_sub[:, _lag_mask].mean(axis=1)
-        _values.append(_v)
-        _coords.append(_sub["coords"][:_n_elecs])
-        _elec_names.extend(_sub["elec_names"])
-        _sub_labels.extend([f"sub_{_sub['sub_id']}"] * _n_elecs)
+        values.append(_v)
+        coords.append(_sub["coords"][:_n_elecs])
+        elec_names.extend(_sub["elec_names"])
+        sub_labels.extend([f"sub_{_sub['sub_id']}"] * _n_elecs)
 
     mo.stop(
-        len(_values) == 0,
+        len(values) == 0,
         mo.callout(mo.md("No electrode data available for brain map."), kind="warn"),
     )
 
-    _values = np.concatenate(_values)
-    _coords = np.vstack(_coords)
+    values = np.concatenate(values)
+    coords = np.vstack(coords)
 
     # Check coordinates are valid (non-zero)
-    _valid = np.any(_coords != 0, axis=1)
+    _valid = np.any(coords != 0, axis=1)
     mo.stop(
         not _valid.any(),
-        mo.callout(mo.md("No valid MNI coordinates found for electrodes."), kind="warn"),
+        mo.callout(
+            mo.md("No valid MNI coordinates found for electrodes."), kind="warn"
+        ),
     )
 
-    _values_valid = _values[_valid]
-    _coords_valid = _coords[_valid]
-    _names_valid = [n for n, v in zip(_elec_names, _valid) if v]
-    _subs_valid = [s for s, v in zip(_sub_labels, _valid) if v]
+    _values_valid = values[_valid]
+    _coords_valid = coords[_valid]
+    _names_valid = [n for n, v in zip(elec_names, _valid) if v]
+    _subs_valid = [s for s, v in zip(sub_labels, _valid) if v]
 
     # Sort by absolute value so largest are plotted on top
     _order = np.argsort(np.abs(_values_valid))
 
-    try:
-        from nilearn.plotting import plot_markers
-        _fig = plt.figure(figsize=(14, 5))
-        _vmax = max(abs(_values_valid.min()), abs(_values_valid.max()))
-        plot_markers(
-            _values_valid[_order],
-            _coords_valid[_order],
-            node_size=40,
-            display_mode="lzr",
-            node_cmap="RdBu_r",
-            node_vmin=-_vmax,
-            node_vmax=_vmax,
-            colorbar=True,
-        )
-        plt.suptitle(f"RRR direction {_dir_idx}, {_time_label}", fontsize=12, y=1.02)
-        mo.mpl(_fig)
-    except ImportError:
-        mo.callout(mo.md("nilearn not installed — cannot render brain map."), kind="warn")
+    from nilearn.plotting import plot_markers
 
+    _fig = plt.figure(figsize=(14, 5))
+    _vmax = max(abs(_values_valid.min()), abs(_values_valid.max()))
+    plot_markers(
+        _values_valid[_order],
+        _coords_valid[_order],
+        node_size=40,
+        display_mode="lzr",
+        node_cmap="RdBu_r",
+        node_vmin=-_vmax,
+        node_vmax=_vmax,
+        colorbar=True,
+    )
+    plt.suptitle(f"RRR direction {dir_idx}, {time_label}", fontsize=12, y=1.02)
+    plt.show()
+    return coords, dir_idx, elec_names, sub_labels, time_label, values
+
+
+@app.cell
+def _(elec_names):
+    elec_names
+    return
+
+
+@app.cell(hide_code=True)
+def _(coords, dir_idx, elec_names, mo, np, pd, sub_labels, time_label, values):
     # Electrode table
-    _tbl_df = pd.DataFrame({
-        "electrode": _elec_names,
-        "subject": _sub_labels,
-        "weight": np.round(_values, 5),
-        "mni_x": np.round(_coords[:, 0], 1),
-        "mni_y": np.round(_coords[:, 1], 1),
-        "mni_z": np.round(_coords[:, 2], 1),
-    }).sort_values("weight", key=abs, ascending=False)
+    _tbl_df = pd.DataFrame(
+        {
+            "electrode": elec_names,
+            "subject": sub_labels,
+            "weight": np.round(values, 5),
+            "mni_x": np.round(coords[:, 0], 1),
+            "mni_y": np.round(coords[:, 1], 1),
+            "mni_z": np.round(coords[:, 2], 1),
+        }
+    ).sort_values("weight", key=abs, ascending=False)
 
-    mo.vstack([
-        mo.md(f"### Electrode Weights — direction {_dir_idx}, {_time_label}"),
-        mo.ui.table(_tbl_df),
-    ])
-    return
+    mo_electrode_table = mo.ui.table(_tbl_df)
+
+    mo.vstack(
+        [
+            mo.md(f"### Electrode Weights — direction {dir_idx}, {time_label}"),
+            mo_electrode_table,
+        ]
+    )
+    return (mo_electrode_table,)
 
 
-# ---------------------------------------------------------------------------
-# Section 5: Cross-Fold Consistency
-# ---------------------------------------------------------------------------
-
-
-@app.cell
+@app.cell(hide_code=True)
 def _(mo):
-    mo.md("---\n## Section 5: Cross-Fold Consistency")
+    update_elecs_run = mo.ui.run_button(
+        label="Click to Update Section 3 Electrodes with Table Selections"
+    )
+    update_elecs_run
+    return (update_elecs_run,)
+
+
+@app.cell(hide_code=True)
+def _(
+    convert_to_electrode_id,
+    mo,
+    mo_electrode_table,
+    set_s3_selected_elecs,
+    update_elecs_run,
+):
+    mo.stop(not update_elecs_run.value, "Click button to update section 3 selections")
+
+    _subs = mo_electrode_table.value["subject"].tolist()
+    _elecs = mo_electrode_table.value["electrode"].tolist()
+    set_s3_selected_elecs(
+        [convert_to_electrode_id(sub, elec) for sub, elec in zip(_subs, _elecs)]
+    )
     return
 
 
-@app.cell
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(
+        """
+    ---
+    ## Section 5: Cross-Fold Consistency
+    """
+    )
+    return
+
+
+@app.cell(hide_code=True)
 def _(mo, rrr_options):
     mo.stop(
         len(rrr_options) == 0,
@@ -897,19 +1082,24 @@ def _(mo, rrr_options):
         label="Source",
     )
     s5_k = mo.ui.number(value=10, start=1, stop=50, label="Rank k")
-    s5_ndirs = mo.ui.slider(start=2, stop=50, value=10, step=1, label="Directions to compare")
+    s5_ndirs = mo.ui.slider(
+        start=2, stop=50, value=10, step=1, label="Directions to compare"
+    )
     mo.hstack([s5_source, s5_k, s5_ndirs])
     return s5_k, s5_ndirs, s5_source
 
 
-@app.cell
+@app.cell(hide_code=True)
 def _(alt, get_rrr_dir, mo, np, pd, s5_k, s5_ndirs, s5_source):
     _unit_dir = get_rrr_dir(s5_source.value)
     _f0 = _unit_dir / "fold_0" / "A.npy"
     _f1 = _unit_dir / "fold_1" / "A.npy"
     mo.stop(
         not _f0.exists() or not _f1.exists(),
-        mo.callout(mo.md("Need both fold_0 and fold_1 A.npy for consistency analysis."), kind="warn"),
+        mo.callout(
+            mo.md("Need both fold_0 and fold_1 A.npy for consistency analysis."),
+            kind="warn",
+        ),
     )
 
     _k = int(s5_k.value)
@@ -927,7 +1117,9 @@ def _(alt, get_rrr_dir, mo, np, pd, s5_k, s5_ndirs, s5_source):
     _hm_rows = []
     for _i in range(_n):
         for _j in range(_n):
-            _hm_rows.append({"fold_0_dir": _i, "fold_1_dir": _j, "cos_sim": float(_cos_sim[_i, _j])})
+            _hm_rows.append(
+                {"fold_0_dir": _i, "fold_1_dir": _j, "cos_sim": float(_cos_sim[_i, _j])}
+            )
     _hm_df = pd.DataFrame(_hm_rows)
     _hm_chart = (
         alt.Chart(_hm_df)
@@ -936,8 +1128,9 @@ def _(alt, get_rrr_dir, mo, np, pd, s5_k, s5_ndirs, s5_source):
             x=alt.X("fold_0_dir:O", title="Fold 0 direction"),
             y=alt.Y("fold_1_dir:O", title="Fold 1 direction"),
             color=alt.Color(
-                "cos_sim:Q", title="Cosine sim",
-                scale=alt.Scale(scheme="rdbu", domain=[-1, 1]),
+                "cos_sim:Q",
+                title="Cosine sim",
+                scale=alt.Scale(scheme="redblue", domain=[1, -1]),
             ),
             tooltip=[
                 alt.Tooltip("fold_0_dir:O", title="Fold 0"),
@@ -945,7 +1138,9 @@ def _(alt, get_rrr_dir, mo, np, pd, s5_k, s5_ndirs, s5_source):
                 alt.Tooltip("cos_sim:Q", format=".3f"),
             ],
         )
-        .properties(width="container", height=400, title="Cosine similarity: fold 0 vs fold 1")
+        .properties(
+            width="container", height=400, title="Cosine similarity: fold 0 vs fold 1"
+        )
         .configure_view(strokeWidth=0)
     )
 
@@ -956,76 +1151,106 @@ def _(alt, get_rrr_dir, mo, np, pd, s5_k, s5_ndirs, s5_source):
         .mark_bar(color="#3b82f6")
         .encode(
             x=alt.X("direction:O", title="Direction"),
-            y=alt.Y("abs_cos_sim:Q", title="|Cosine similarity|", scale=alt.Scale(domain=[0, 1])),
+            y=alt.Y(
+                "abs_cos_sim:Q",
+                title="|Cosine similarity|",
+                scale=alt.Scale(domain=[0, 1]),
+            ),
             tooltip=[
                 alt.Tooltip("direction:O"),
                 alt.Tooltip("abs_cos_sim:Q", format=".4f"),
             ],
         )
-        .properties(width="container", height=250, title="Per-direction fold consistency")
+        .properties(
+            width="container", height=250, title="Per-direction fold consistency"
+        )
         .configure_view(strokeWidth=0)
         .configure_axis(grid=False)
     )
 
     # --- Tab C: Consistency table ---
-    _tbl_df = pd.DataFrame({
-        "direction": np.arange(_n),
-        "abs_cos_sim": np.round(_diag_cos, 4),
-    })
+    _tbl_df = pd.DataFrame(
+        {
+            "direction": np.arange(_n),
+            "abs_cos_sim": np.round(_diag_cos, 4),
+        }
+    )
 
-    mo.tabs({
-        "Cosine heatmap": mo.ui.altair_chart(_hm_chart),
-        "Diagonal consistency": mo.ui.altair_chart(_diag_chart),
-        "Table": mo.ui.table(_tbl_df),
-    })
+    mo.tabs(
+        {
+            "Cosine heatmap": mo.ui.altair_chart(_hm_chart),
+            "Diagonal consistency": mo.ui.altair_chart(_diag_chart),
+            "Table": mo.ui.table(_tbl_df),
+        }
+    )
     return
 
 
-# ---------------------------------------------------------------------------
-# Section 6: Cross-Source Comparison
-# ---------------------------------------------------------------------------
-
-
-@app.cell
+@app.cell(hide_code=True)
 def _(mo):
-    mo.md("---\n## Section 6: Cross-Source Comparison")
+    mo.md(
+        """
+    ---
+    ## Section 6: Cross-Source Comparison
+    """
+    )
     return
 
 
-@app.cell
+@app.cell(hide_code=True)
 def _(mo, rrr_options):
     mo.stop(
         len(rrr_options) < 2,
-        mo.callout(mo.md("Need ≥ 2 RRR sources for cross-source comparison."), kind="warn"),
+        mo.callout(
+            mo.md("Need ≥ 2 RRR sources for cross-source comparison."), kind="warn"
+        ),
     )
-    s6_source_a = mo.ui.dropdown(options=rrr_options, value=rrr_options[0], label="Source A")
-    s6_fold_a = mo.ui.dropdown(options=["fold_0", "fold_1"], value="fold_0", label="Fold A")
+    s6_source_a = mo.ui.dropdown(
+        options=rrr_options, value=rrr_options[0], label="Source A"
+    )
+    s6_fold_a = mo.ui.dropdown(
+        options=["fold_0", "fold_1"], value="fold_0", label="Fold A"
+    )
     s6_source_b = mo.ui.dropdown(
         options=rrr_options,
         value=rrr_options[1] if len(rrr_options) > 1 else rrr_options[0],
         label="Source B",
     )
-    s6_fold_b = mo.ui.dropdown(options=["fold_0", "fold_1"], value="fold_0", label="Fold B")
+    s6_fold_b = mo.ui.dropdown(
+        options=["fold_0", "fold_1"], value="fold_0", label="Fold B"
+    )
     s6_k = mo.ui.number(value=10, start=1, stop=50, label="Rank k")
     s6_topk = mo.ui.slider(start=2, stop=50, value=10, step=1, label="Top-k directions")
-    mo.vstack([
-        mo.hstack([s6_source_a, s6_fold_a, s6_source_b, s6_fold_b]),
-        mo.hstack([s6_k, s6_topk]),
-    ])
+    mo.vstack(
+        [
+            mo.hstack([s6_source_a, s6_fold_a, s6_source_b, s6_fold_b]),
+            mo.hstack([s6_k, s6_topk]),
+        ]
+    )
     return s6_fold_a, s6_fold_b, s6_k, s6_source_a, s6_source_b, s6_topk
 
 
-@app.cell
+@app.cell(hide_code=True)
 def _(
-    aligned_embeddings, alt, get_rrr_dir, load_rrr_AB,
-    mo, np, pd,
-    s6_fold_a, s6_fold_b, s6_k, s6_source_a, s6_source_b, s6_topk,
+    aligned_embeddings,
+    alt,
+    get_rrr_dir,
+    load_rrr_AB,
+    mo,
+    np,
+    pd,
+    s6_fold_a,
+    s6_fold_b,
+    s6_k,
+    s6_source_a,
+    s6_source_b,
+    s6_topk,
 ):
     _dir_a = get_rrr_dir(s6_source_a.value)
     _dir_b = get_rrr_dir(s6_source_b.value)
     mo.stop(
-        not (_dir_a / s6_fold_a.value / "A.npy").exists() or
-        not (_dir_b / s6_fold_b.value / "A.npy").exists(),
+        not (_dir_a / s6_fold_a.value / "A.npy").exists()
+        or not (_dir_b / s6_fold_b.value / "A.npy").exists(),
         mo.callout(mo.md("A.npy not found for one or both sources."), kind="warn"),
     )
 
@@ -1052,15 +1277,21 @@ def _(
     # Activation correlation
     _acts_a = (aligned_embeddings @ _A_a_k).astype(np.float64)
     _acts_b = (aligned_embeddings @ _A_b_k).astype(np.float64)
-    _a_z = (_acts_a - _acts_a.mean(0)) / np.where(_acts_a.std(0) > 0, _acts_a.std(0), 1.0)
-    _b_z = (_acts_b - _acts_b.mean(0)) / np.where(_acts_b.std(0) > 0, _acts_b.std(0), 1.0)
+    _a_z = (_acts_a - _acts_a.mean(0)) / np.where(
+        _acts_a.std(0) > 0, _acts_a.std(0), 1.0
+    )
+    _b_z = (_acts_b - _acts_b.mean(0)) / np.where(
+        _acts_b.std(0) > 0, _acts_b.std(0), 1.0
+    )
     _act_corr = (_a_z.T @ _b_z) / len(_a_z)
 
     # --- Tab A: Cosine heatmap ---
     _cs_rows = []
     for _i in range(_n):
         for _j in range(_n):
-            _cs_rows.append({"dir_A": _i, "dir_B": _j, "cos_sim": float(_cos_sim[_i, _j])})
+            _cs_rows.append(
+                {"dir_A": _i, "dir_B": _j, "cos_sim": float(_cos_sim[_i, _j])}
+            )
     _cs_df = pd.DataFrame(_cs_rows)
     _cs_chart = (
         alt.Chart(_cs_df)
@@ -1068,25 +1299,32 @@ def _(
         .encode(
             x=alt.X("dir_A:O", title="Source A direction"),
             y=alt.Y("dir_B:O", title="Source B direction"),
-            color=alt.Color("cos_sim:Q", title="Cosine sim",
-                           scale=alt.Scale(scheme="rdbu", domain=[-1, 1])),
+            color=alt.Color(
+                "cos_sim:Q",
+                title="Cosine sim",
+                scale=alt.Scale(scheme="redblue", domain=[-1, 1], reverse=True),
+            ),
             tooltip=[
-                alt.Tooltip("dir_A:O"), alt.Tooltip("dir_B:O"),
+                alt.Tooltip("dir_A:O"),
+                alt.Tooltip("dir_B:O"),
                 alt.Tooltip("cos_sim:Q", format=".3f"),
             ],
         )
         .properties(
-            width="container", height=400,
+            width="container",
+            height=400,
             title=f"Cosine similarity: {s6_source_a.value} vs {s6_source_b.value}",
         )
         .configure_view(strokeWidth=0)
     )
 
     # --- Tab B: Activation scatter (best pair) ---
-    _scatter_df = pd.DataFrame({
-        "activation_A": _acts_a[:, _best_i],
-        "activation_B": _acts_b[:, _best_j],
-    })
+    _scatter_df = pd.DataFrame(
+        {
+            "activation_A": _acts_a[:, _best_i],
+            "activation_B": _acts_b[:, _best_j],
+        }
+    )
     _scatter_base = alt.Chart(_scatter_df).encode(
         x=alt.X("activation_A:Q", title=f"Source A dir {_best_i}"),
         y=alt.Y("activation_B:Q", title=f"Source B dir {_best_j}"),
@@ -1098,7 +1336,8 @@ def _(
     _scatter_chart = (
         (_scatter_pts + _scatter_reg)
         .properties(
-            width="container", height=350,
+            width="container",
+            height=350,
             title=f"Best pair: A[{_best_i}] vs B[{_best_j}] (cos={_best_cos:.3f})",
         )
         .configure_view(strokeWidth=0)
@@ -1109,18 +1348,23 @@ def _(
     _tp_rows = []
     for _i in range(_n):
         _bj = int(np.argmax(np.abs(_cos_sim[_i])))
-        _tp_rows.append({
-            "dir_A": _i, "best_dir_B": _bj,
-            "cos_sim": round(float(_cos_sim[_i, _bj]), 4),
-            "abs_cos_sim": round(float(np.abs(_cos_sim[_i, _bj])), 4),
-        })
+        _tp_rows.append(
+            {
+                "dir_A": _i,
+                "best_dir_B": _bj,
+                "cos_sim": round(float(_cos_sim[_i, _bj]), 4),
+                "abs_cos_sim": round(float(np.abs(_cos_sim[_i, _bj])), 4),
+            }
+        )
     _tp_df = pd.DataFrame(_tp_rows).sort_values("abs_cos_sim", ascending=False)
 
     # --- Tab D: Activation correlation heatmap ---
     _ac_rows = []
     for _i in range(_n):
         for _j in range(_n):
-            _ac_rows.append({"dir_A": _i, "dir_B": _j, "pearson_r": float(_act_corr[_i, _j])})
+            _ac_rows.append(
+                {"dir_A": _i, "dir_B": _j, "pearson_r": float(_act_corr[_i, _j])}
+            )
     _ac_df = pd.DataFrame(_ac_rows)
     _ac_chart = (
         alt.Chart(_ac_df)
@@ -1128,38 +1372,46 @@ def _(
         .encode(
             x=alt.X("dir_A:O", title="Source A direction"),
             y=alt.Y("dir_B:O", title="Source B direction"),
-            color=alt.Color("pearson_r:Q", title="Pearson r",
-                           scale=alt.Scale(scheme="rdbu", domain=[-1, 1])),
+            color=alt.Color(
+                "pearson_r:Q",
+                title="Pearson r",
+                scale=alt.Scale(scheme="redblue", domain=[-1, 1], reverse=True),
+            ),
             tooltip=[
-                alt.Tooltip("dir_A:O"), alt.Tooltip("dir_B:O"),
+                alt.Tooltip("dir_A:O"),
+                alt.Tooltip("dir_B:O"),
                 alt.Tooltip("pearson_r:Q", format=".3f"),
             ],
         )
-        .properties(width="container", height=400, title="Activation Pearson correlations")
+        .properties(
+            width="container", height=400, title="Activation Pearson correlations"
+        )
         .configure_view(strokeWidth=0)
     )
 
-    mo.tabs({
-        "A. Cosine heatmap": mo.ui.altair_chart(_cs_chart),
-        "B. Activation scatter": mo.ui.altair_chart(_scatter_chart),
-        "C. Top pairs": mo.ui.table(_tp_df),
-        "D. Activation correlations": mo.ui.altair_chart(_ac_chart),
-    })
+    mo.tabs(
+        {
+            "A. Cosine heatmap": mo.ui.altair_chart(_cs_chart),
+            "B. Activation scatter": mo.ui.altair_chart(_scatter_chart),
+            "C. Top pairs": mo.ui.table(_tp_df),
+            "D. Activation correlations": mo.ui.altair_chart(_ac_chart),
+        }
+    )
     return
 
 
-# ---------------------------------------------------------------------------
-# Section 7: Cross-Region Electrode Similarity from B
-# ---------------------------------------------------------------------------
-
-
-@app.cell
+@app.cell(hide_code=True)
 def _(mo):
-    mo.md("---\n## Section 7: Cross-Region Electrode Similarity from B")
+    mo.md(
+        """
+    ---
+    ## Section 7: Cross-Region Electrode Similarity from B
+    """
+    )
     return
 
 
-@app.cell
+@app.cell(hide_code=True)
 def _(mo, rrr_options):
     mo.stop(
         len(rrr_options) == 0,
@@ -1185,10 +1437,57 @@ def _(mo, rrr_options):
     return s7_fold, s7_k, s7_profile_mode, s7_source
 
 
-@app.cell
+@app.cell(hide_code=True)
+def _():
+    REGION_GROUPS = {
+        "EAC": [
+            "L G_temp_sup-G_T_transv",
+            "R G_temp_sup-G_T_transv",
+            "L S_temporal_transverse",
+            "L G_temp_sup-Plan_tempo",
+        ],
+        "STG": [
+            "L G_temp_sup-Lateral",
+            "R G_temp_sup-Lateral",
+            "L S_temporal_sup",
+            "R S_temporal_sup",
+        ],
+        "IFG": [
+            "L G_front_inf-Opercular",
+            "R G_front_inf-Opercular",
+            "L G_front_inf-Triangul",
+            "R G_front_inf-Triangul",
+            "L G_front_inf-Orbital",
+            "R G_front_inf-Orbital",
+        ],
+        "PRC": [
+            "L G_precentral",
+            "R G_precentral",
+            "L S_precentral-inf-part",
+            "L S_precentral-sup-part",
+            "L G_and_S_subcentral",
+        ],
+        "MFG": ["L G_front_middle", "R G_front_middle", "L S_front_inf"],
+        "TMP": ["L Pole_temporal", "R Pole_temporal", "L G_temp_sup-Plan_polar"],
+    }
+    return (REGION_GROUPS,)
+
+
+@app.cell(hide_code=True)
 def _(
-    alt, get_coord_atlas_labels, get_rrr_dir, load_electrode_metadata, load_rrr_AB,
-    mo, np, pd, s7_fold, s7_k, s7_profile_mode, s7_source,
+    REGION_GROUPS,
+    alt,
+    get_coord_atlas_labels,
+    get_rrr_dir,
+    load_electrode_metadata,
+    load_rrr_AB,
+    mo,
+    np,
+    pd,
+    s7_fold,
+    s7_k,
+    s7_profile_mode,
+    s7_source,
 ):
     _unit_dir = get_rrr_dir(s7_source.value)
     _fold_dir = _unit_dir / s7_fold.value
@@ -1196,6 +1495,11 @@ def _(
         not (_fold_dir / "B.npy").exists(),
         mo.callout(mo.md(f"B.npy not found at `{_fold_dir}`."), kind="warn"),
     )
+    _destrieux_to_region = {}
+    for _area, _regions in REGION_GROUPS.items():
+        for _region in _regions:
+            _destrieux_to_region[_region] = _area
+
     _k = int(s7_k.value)
     _A, _B = load_rrr_AB(_unit_dir, s7_fold.value, _k)
 
@@ -1250,15 +1554,24 @@ def _(
     _valid_coords = np.any(_coords_arr != 0, axis=1)
     _regions = ["unknown"] * len(_elec_names)
     if _valid_coords.any():
-        try:
-            _atlas_labels = get_coord_atlas_labels(_coords_arr[_valid_coords])
-            _vi = 0
-            for _idx in range(len(_elec_names)):
-                if _valid_coords[_idx]:
-                    _regions[_idx] = _atlas_labels[_vi]
-                    _vi += 1
-        except Exception:
-            pass
+        from utils.atlas import DESTRIEUX_2009_LABELS, group_electrodes_by_region
+
+        _atlas_labels = get_coord_atlas_labels(
+            _coords_arr[_valid_coords],
+            "atlases/destrieux_2009/destrieux2009_rois_lateralized.nii.gz",
+            DESTRIEUX_2009_LABELS,
+        )
+        _region_labels = [
+            _destrieux_to_region[x] if x in _destrieux_to_region else None
+            for x in _atlas_labels
+        ]
+        _vi = 0
+        for _idx in range(len(_elec_names)):
+            if _valid_coords[_idx] and _region_labels[_vi]:
+                _regions[_idx] = _region_labels[_vi]
+                _vi += 1
+            elif not _region_labels[_vi]:
+                _vi += 1
 
     # Cosine similarity matrix between all electrodes
     _norms = np.linalg.norm(_profile_mat, axis=1, keepdims=True)
@@ -1268,7 +1581,9 @@ def _(
 
     # Group by region
     _unique_regions = sorted(set(_regions))
-    _region_indices = {r: [i for i, reg in enumerate(_regions) if reg == r] for r in _unique_regions}
+    _region_indices = {
+        r: [i for i, reg in enumerate(_regions) if reg == r] for r in _unique_regions
+    }
 
     # Region-by-region mean similarity
     _rr_rows = []
@@ -1285,11 +1600,17 @@ def _(
                 _vals = _block[_mask] if _mask.any() else _block.ravel()
             else:
                 _vals = _block.ravel()
-            _rr_rows.append({
-                "region_A": _ra, "region_B": _rb,
-                "mean_sim": round(float(_vals.mean()), 4) if len(_vals) > 0 else 0.0,
-                "n_elecs_A": len(_idxs_a), "n_elecs_B": len(_idxs_b),
-            })
+            _rr_rows.append(
+                {
+                    "region_A": _ra,
+                    "region_B": _rb,
+                    "mean_sim": (
+                        round(float(_vals.mean()), 4) if len(_vals) > 0 else 0.0
+                    ),
+                    "n_elecs_A": len(_idxs_a),
+                    "n_elecs_B": len(_idxs_b),
+                }
+            )
 
     _rr_df = pd.DataFrame(_rr_rows)
 
@@ -1313,34 +1634,47 @@ def _(
             x=alt.X("region_A:N", title="Region A"),
             y=alt.Y("region_B:N", title="Region B"),
             color=alt.Color(
-                "mean_sim:Q", title="Mean cosine sim",
+                "mean_sim:Q",
+                title="Mean cosine sim",
                 scale=alt.Scale(scheme="viridis"),
             ),
             tooltip=[
-                alt.Tooltip("region_A:N"), alt.Tooltip("region_B:N"),
+                alt.Tooltip("region_A:N"),
+                alt.Tooltip("region_B:N"),
                 alt.Tooltip("mean_sim:Q", format=".4f"),
-                alt.Tooltip("n_elecs_A:Q"), alt.Tooltip("n_elecs_B:Q"),
+                alt.Tooltip("n_elecs_A:Q"),
+                alt.Tooltip("n_elecs_B:Q"),
             ],
         )
-        .properties(width="container", height=400, title="Region-by-region electrode similarity (B profiles)")
+        .properties(
+            width="container",
+            height=400,
+            title="Region-by-region electrode similarity (B profiles)",
+        )
         .configure_view(strokeWidth=0)
     )
 
     # Within vs across bar
-    _wa_df = pd.DataFrame([
-        {"category": "within-region", "mean_sim": _within_mean},
-        {"category": "across-region", "mean_sim": _across_mean},
-    ])
+    _wa_df = pd.DataFrame(
+        [
+            {"category": "within-region", "mean_sim": _within_mean},
+            {"category": "across-region", "mean_sim": _across_mean},
+        ]
+    )
     _wa_chart = (
         alt.Chart(_wa_df)
         .mark_bar()
         .encode(
             x=alt.X("category:N", title=""),
             y=alt.Y("mean_sim:Q", title="Mean cosine similarity"),
-            color=alt.Color("category:N", scale=alt.Scale(
-                domain=["within-region", "across-region"],
-                range=["#3b82f6", "#f59e0b"],
-            ), legend=None),
+            color=alt.Color(
+                "category:N",
+                scale=alt.Scale(
+                    domain=["within-region", "across-region"],
+                    range=["#3b82f6", "#f59e0b"],
+                ),
+                legend=None,
+            ),
             tooltip=[alt.Tooltip("mean_sim:Q", format=".4f")],
         )
         .properties(width=200, height=250, title="Within vs across region similarity")
@@ -1348,33 +1682,39 @@ def _(
         .configure_axis(grid=False)
     )
 
-    mo.tabs({
-        "Region similarity heatmap": mo.ui.altair_chart(_hm),
-        "Within vs across": mo.vstack([
-            mo.ui.altair_chart(_wa_chart),
-            mo.callout(
-                mo.md(f"**Within-region mean:** {_within_mean:.4f}  \n"
-                      f"**Across-region mean:** {_across_mean:.4f}"),
-                kind="info",
+    mo.tabs(
+        {
+            "Region similarity heatmap": mo.ui.altair_chart(_hm),
+            "Within vs across": mo.vstack(
+                [
+                    mo.ui.altair_chart(_wa_chart),
+                    mo.callout(
+                        mo.md(
+                            f"**Within-region mean:** {_within_mean:.4f}  \n"
+                            f"**Across-region mean:** {_across_mean:.4f}"
+                        ),
+                        kind="info",
+                    ),
+                ]
             ),
-        ]),
-        "Region table": mo.ui.table(_rr_df),
-    })
+            "Region table": mo.ui.table(_rr_df),
+        }
+    )
     return
-
-
-# ---------------------------------------------------------------------------
-# Section 8: Activation Distribution Statistics
-# ---------------------------------------------------------------------------
 
 
 @app.cell
 def _(mo):
-    mo.md("---\n## Section 8: Activation Distribution Statistics")
+    mo.md(
+        """
+    ---
+    ## Section 8: Activation Distribution Statistics
+    """
+    )
     return
 
 
-@app.cell
+@app.cell(hide_code=True)
 def _(mo, rrr_options):
     mo.stop(
         len(rrr_options) == 0,
@@ -1395,11 +1735,21 @@ def _(mo, rrr_options):
     return s8_fold, s8_k, s8_source
 
 
-@app.cell
+@app.cell(hide_code=True)
 def _(
-    aligned_embeddings, alt, get_rrr_dir, load_rrr_AB,
-    mo, np, pd, s8_fold, s8_k, s8_source,
-    sp_entropy, sp_kurtosis, sp_skew,
+    aligned_embeddings,
+    alt,
+    get_rrr_dir,
+    load_rrr_AB,
+    mo,
+    np,
+    pd,
+    s8_fold,
+    s8_k,
+    s8_source,
+    sp_entropy,
+    sp_kurtosis,
+    sp_skew,
 ):
     _unit_dir = get_rrr_dir(s8_source.value)
     _fold_dir = _unit_dir / s8_fold.value
@@ -1419,14 +1769,16 @@ def _(
         _counts, _ = np.histogram(_a, bins=50)
         _probs = _counts / _counts.sum()
         _ent = float(sp_entropy(_probs + 1e-12))
-        _stats_rows.append({
-            "direction": _i,
-            "mean": round(float(_a.mean()), 4),
-            "std": round(float(_a.std()), 4),
-            "kurtosis": round(float(sp_kurtosis(_a)), 4),
-            "skewness": round(float(sp_skew(_a)), 4),
-            "entropy": round(_ent, 4),
-        })
+        _stats_rows.append(
+            {
+                "direction": _i,
+                "mean": round(float(_a.mean()), 4),
+                "std": round(float(_a.std()), 4),
+                "kurtosis": round(float(sp_kurtosis(_a)), 4),
+                "skewness": round(float(sp_skew(_a)), 4),
+                "entropy": round(_ent, 4),
+            }
+        )
 
     _stats_df = pd.DataFrame(_stats_rows)
 
@@ -1444,17 +1796,20 @@ def _(
             ],
         )
         .properties(
-            width="container", height=250,
+            width="container",
+            height=250,
             title="Kurtosis per direction (higher = more semantically selective)",
         )
         .configure_view(strokeWidth=0)
         .configure_axis(grid=False)
     )
 
-    mo.vstack([
-        mo.ui.altair_chart(_kurt_chart),
-        mo.ui.table(_stats_df),
-    ])
+    mo.vstack(
+        [
+            mo.ui.altair_chart(_kurt_chart),
+            mo.ui.table(_stats_df),
+        ]
+    )
     return
 
 

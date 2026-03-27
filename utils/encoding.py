@@ -335,11 +335,22 @@ def save_encoding_results(results: dict, filepath: str) -> None:
     joblib.dump(results, filepath)
 
 
-def load_encoding_results(filepath: str) -> dict:
+def load_encoding_results(filepath: str, location=None) -> dict:
     """Load results dict previously saved by save_encoding_results."""
     import joblib
+    from unittest.mock import patch
 
-    return joblib.load(filepath)
+    # TODO: This is super hacky and I should just change where these are written to make sure they're always on CPU. But for now, this allows loading GPU-saved results on CPU-only machines without error.
+    if location == "cpu":
+        # We need to return a function that accepts (storage, location)
+        # and just returns the storage (which defaults to CPU).
+        def force_cpu(storage, loc):
+            return storage
+
+        with patch("torch.serialization._get_restore_location", return_value=force_cpu):
+            return joblib.load(filepath)
+    else:
+        return joblib.load(filepath)
 
 
 def _make_col_idxs(enc_results: dict, target_elec_names: list) -> np.ndarray:

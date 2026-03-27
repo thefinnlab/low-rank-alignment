@@ -317,7 +317,11 @@ def main():
     print(f"Loading embeddings (layer {layer_int})...")
     aligned_embeddings, df_word = load_embeddings(config.data_root, layer_int)
 
-    alphas = np.array(config.ridge_alphas) if config.ridge_alphas is not None else None
+    alphas = (
+        np.array(config.ridge_alphas, dtype=float)
+        if config.ridge_alphas is not None
+        else None
+    )
     alpha_grid = alphas if alphas is not None else RIDGE_ALPHAS
     model_constructor = get_ridge_model_constructor(alphas=alphas)
 

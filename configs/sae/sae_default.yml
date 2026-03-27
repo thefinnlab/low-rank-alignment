@@ -10,15 +10,15 @@ encoding:
 output_dir: null
 sae_output_dir: null
 rrr_source_dir: null
-mode: per_subject
+mode: cross_subject
 track_recovery_during_training: true
 
 # RRR rank to load
-k: 5
+k: [10, 20, 50, 100]
 
 # SAE architecture
-hidden_dim: 50
-l1_penalty: 0.005
+hidden_dim: [50, 100, 500, 1000]
+l1_penalty: 0.0
 l1_warmup_start: 20            # epoch/cycle to begin L1 ramp (0 = immediate)
 l1_warmup_epochs: 90           # epochs/cycles to linearly ramp L1 to target (0 = no ramp)
 
@@ -35,7 +35,7 @@ log_every: 100             # compute & display test metrics every N epochs/cycle
 # Alternating params
 sae_learning_rate: 0.0001
 sae_steps_per_cycle: 1
-num_cycles: 2000
+num_cycles: 1000
 regression_momentum: 0.2      # proximal damping: W = (1-η)W_old + η*W_optimal (1.0 = no damping)
 
 # Input jitter (Gaussian noise on X_proj during SAE training, 0 = disabled)
@@ -49,5 +49,5 @@ resample_interval: 0
 weight_l1_by_decoder_norm: true
 
 # Subject/region limiting (null = run all)
-max_subjects: 1
+max_subjects: null
 max_regions: null
