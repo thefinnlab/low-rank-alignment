@@ -25,7 +25,7 @@ def batch_corrcoef(x, y):
     x = x - x.mean(dim=-1, keepdim=True)
     y = y - y.mean(dim=-1, keepdim=True)
     num = (x * y).sum(dim=-1)
-    denom = (x ** 2).sum(dim=-1).sqrt() * (y ** 2).sum(dim=-1).sqrt()
+    denom = (x**2).sum(dim=-1).sqrt() * (y**2).sum(dim=-1).sqrt()
     return num / denom
 
 
@@ -74,12 +74,12 @@ def significant_lags_all_electrodes_gpu(
     for _ in tqdm(range(n_permutations), desc="Permutations"):
         idx = torch.randperm(n_words, device=device, generator=rng)
         null_corr = batch_corrcoef(pred, act[:, :, idx])
-        null_ge_count += (null_corr >= obs_corrs)
+        null_ge_count += null_corr >= obs_corrs
 
     p_values = (null_ge_count / n_permutations).cpu().numpy()
     obs_corrs_np = obs_corrs.cpu().numpy()
     flat_p = p_values.ravel()
-    reject_flat, q_flat, _, _ = multipletests(flat_p, alpha=fdr_q, method='fdr_bh')
+    reject_flat, q_flat, _, _ = multipletests(flat_p, alpha=fdr_q, method="fdr_bh")
     sig = reject_flat.reshape(n_electrodes, n_lags)
     q_values = q_flat.reshape(n_electrodes, n_lags)
 
@@ -122,7 +122,7 @@ def load_significance_results(filepath):
     sig, p_values, q_values, obs_corrs
     """
     data = np.load(filepath)
-    return data['sig'], data['p_values'], data['q_values'], data['obs_corrs']
+    return data["sig"], data["p_values"], data["q_values"], data["obs_corrs"]
 
 
 def phase_randomize_data(data, rng=None):

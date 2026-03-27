@@ -7,8 +7,8 @@ PREFIX   = significance
 JOB_NAME ?= "$(PREFIX)-$(USR)-$(DT)"
 
 # Flip to `python` to run locally instead of submitting to Slurm
-# CMD = sbatch --job-name=$(JOB_NAME) submit.sh
-CMD = python
+CMD = sbatch --job-name=$(JOB_NAME) submit.sh
+# CMD = python
 
 export PYTHONPATH := $(CURDIR)
 
@@ -19,6 +19,10 @@ SVD_CONFIG      ?= configs/svd/svd_default.yml
 SRRR_CONFIG     ?= configs/srrr/srrr_default.yml
 RRR_CONFIG      ?= configs/rrr/rrr_default.yml
 PCA_CONFIG      ?= configs/pca/pca_default.yml
+ABLATION_CONFIG ?= configs/ablation/ablation_default.yml
+NULL_CONFIG	    ?= configs/new_sig/null_dist.yml
+NEW_SIG_CONFIG  ?= configs/new_sig/new_sig.yml
+PRECOMPUTE_EPOCHS_CONFIG ?= configs/precompute_epochs/precompute_epochs_default.yml
 RUN_DIR         ?=   # required for plots: RUN_DIR=results/my_run
 DATA_ROOT       ?= data
 ATLAS_PATH      ?= atlases/destrieux_2009/destrieux2009_rois_lateralized.nii.gz
@@ -45,6 +49,43 @@ sig:
 train:
 	mkdir -p logs
 	$(CMD) scripts/train_encoding_models.py --config $(ENCODING_CONFIG) $(OVERRIDES)
+
+## Test effects of ablating different portions of either the center or tail of RRR axes.
+## Usage:
+##   make ablation                                                 # default config
+##   make ablation ABLATION_CONFIG=configs/ablation/ablation_default.yml  # explicit config
+##   make ablation OVERRIDES="--mode=per_subject"                  # per-subject mode
+##   make ablation CMD=python                                      # run locally
+ablation:
+	mkdir -p logs
+	$(CMD) scripts/run_ablation.py --config $(ABLATION_CONFIG) $(OVERRIDES)
+
+## Test effects of ablating different portions of either the center or tail of RRR axes.
+## Usage:
+##   make precompute-epochs                                                 # default config
+##   make precompute-epochs PRECOMPUTE_EPOCHS_CONFIG=configs/precompute_epochs/precompute_epochs_default.yml  # explicit config
+##   make precompute-epochs CMD=python                                      # run locally
+precompute-epochs:
+	mkdir -p logs
+	$(CMD) scripts/precompute_epochs.py --config $(PRECOMPUTE_EPOCHS_CONFIG) $(OVERRIDES)
+
+## Generate null distribution for new significance test.
+## Usage:
+##   make null-dist                                                 # default config
+##   make null-dist NULL_CONFIG=configs/new_sig/null_dist.yml  # explicit config
+##   make null-dist CMD=python                                      # run locally
+null-dist:
+	mkdir -p logs
+	$(CMD) scripts/generate_null_distribution.py --config $(NULL_CONFIG) $(OVERRIDES)
+
+## Apply the new significance test to an existing run directory.
+## Usage:
+##   make new-sig                                                 # default config
+##   make new-sig NEW_SIG_CONFIG=configs/new_sig/new_sig.yml  # explicit config
+##   make new-sig CMD=python                                      # run locally
+new-sig:
+	mkdir -p logs
+	$(CMD) scripts/compute_significance.py --config $(NEW_SIG_CONFIG) $(OVERRIDES)
 
 ## Generate correlation plots for an existing run directory
 ## Usage:
