@@ -47,7 +47,7 @@ def evaluate_subspace_ols(
             Y_hat_train – (n_train, n_targets) subspace OLS predictions on train
     """
     X_proj_train = X_train @ A  # (n_train, k)
-    X_proj_test = X_test @ A    # (n_test, k)
+    X_proj_test = X_test @ A  # (n_test, k)
 
     W, b = solve_regression(
         torch.as_tensor(X_proj_train, dtype=torch.float32, device=device),
@@ -63,8 +63,14 @@ def evaluate_subspace_ols(
     Y_hat_train = (X_proj_train_t @ W + b).cpu().numpy()
 
     suf, cca_sim, proc_sim = run_prediction_metrics(
-        Y_hat, Y_hat_train, Y_train, X_train, X_test, Y_test,
-        Y_hat_full, regression_type="ols",
+        Y_hat,
+        Y_hat_train,
+        Y_train,
+        X_train,
+        X_test,
+        Y_test,
+        Y_hat_full,
+        regression_type="ols",
         compute_cca=compute_cca,
         compute_procrustes=compute_procrustes,
     )
@@ -75,6 +81,54 @@ def evaluate_subspace_ols(
         "proc_sim": proc_sim,
         "Y_hat": Y_hat,
         "Y_hat_train": Y_hat_train,
+    }
+
+
+def evaluate_input_space(
+    X_train: np.ndarray,
+    X_test: np.ndarray,
+    Y_train: np.ndarray,
+    Y_test: np.ndarray,
+    Y_hat_subspace_train: np.ndarray,
+    Y_hat_subspace_test: np.ndarray,
+    device: str = "cpu",
+    alphas: np.ndarray | None = None,
+    subspace_name: str = "",
+) -> dict:
+    # Predict raw neural data from complement
+    W_raw, b_raw = solve_regression(
+        torch.as_tensor(X_train, dtype=torch.float32, device=device),
+        torch.as_tensor(Y_train, dtype=torch.float32, device=device),
+        "ridge",
+        device,
+        standardize=False,
+        alphas=alphas,
+    )
+    X_test_t = torch.as_tensor(X_test, dtype=torch.float32, device=device)
+    Y_hat = (X_test_t @ W_raw + b_raw).cpu().numpy()
+    comp_corr_arr = compute_correlation(Y_test, Y_hat)
+
+    # Predict residuals from complement
+    Y_resid_train = Y_train - Y_hat_subspace_train
+    Y_resid_test = Y_test - Y_hat_subspace_test
+
+    W_resid, b_resid = solve_regression(
+        torch.as_tensor(X_train, dtype=torch.float32, device=device),
+        torch.as_tensor(Y_resid_train, dtype=torch.float32, device=device),
+        "ridge",
+        device,
+        standardize=False,
+        alphas=alphas,
+    )
+    Y_hat_resid = (X_test_t @ W_resid + b_resid).cpu().numpy()
+    comp_recovery_corr_arr = compute_correlation(Y_resid_test, Y_hat_resid)
+
+    prefix = f"{subspace_name}_" if subspace_name else ""
+    return {
+        f"{prefix}corr": float(comp_corr_arr.mean()),
+        f"{prefix}recovery_corr": float(comp_recovery_corr_arr.mean()),
+        f"{prefix}corr_per_target": comp_corr_arr,
+        f"{prefix}recovery_corr_per_target": comp_recovery_corr_arr,
     }
 
 
@@ -116,34 +170,17 @@ def evaluate_complement(
     X_comp_train = partial_out_subspace(X_train, A.T)
     X_comp_test = partial_out_subspace(X_test, A.T)
 
-    # Predict raw neural data from complement
-    W_raw, b_raw = solve_regression(
-        torch.as_tensor(X_comp_train, dtype=torch.float32, device=device),
-        torch.as_tensor(Y_train, dtype=torch.float32, device=device),
-        "ridge", device, standardize=False, alphas=alphas,
+    return evaluate_input_space(
+        X_comp_train,
+        X_comp_test,
+        Y_train,
+        Y_test,
+        Y_hat_subspace_train,
+        Y_hat_subspace_test,
+        alphas=alphas,
+        device=device,
+        subspace_name="complement",
     )
-    X_comp_test_t = torch.as_tensor(X_comp_test, dtype=torch.float32, device=device)
-    Y_hat_comp = (X_comp_test_t @ W_raw + b_raw).cpu().numpy()
-    comp_corr_arr = compute_correlation(Y_test, Y_hat_comp)
-
-    # Predict residuals from complement
-    Y_resid_train = Y_train - Y_hat_subspace_train
-    Y_resid_test = Y_test - Y_hat_subspace_test
-
-    W_resid, b_resid = solve_regression(
-        torch.as_tensor(X_comp_train, dtype=torch.float32, device=device),
-        torch.as_tensor(Y_resid_train, dtype=torch.float32, device=device),
-        "ridge", device, standardize=False, alphas=alphas,
-    )
-    Y_hat_resid = (X_comp_test_t @ W_resid + b_resid).cpu().numpy()
-    comp_recovery_corr_arr = compute_correlation(Y_resid_test, Y_hat_resid)
-
-    return {
-        "complement_corr": float(comp_corr_arr.mean()),
-        "complement_recovery_corr": float(comp_recovery_corr_arr.mean()),
-        "complement_corr_per_target": comp_corr_arr,
-        "complement_recovery_corr_per_target": comp_recovery_corr_arr,
-    }
 
 
 def evaluate_arbitrary(
@@ -178,34 +215,17 @@ def evaluate_arbitrary(
             arbitrary_corr_per_target  – (n_targets,) per-target correlations
             arbitrary_recovery_corr_per_target – (n_targets,) per-target correlations
     """
-    # Predict raw neural data from arbitrary embeddings
-    W_raw, b_raw = solve_regression(
-        torch.as_tensor(X_arbitrary_train, dtype=torch.float32, device=device),
-        torch.as_tensor(Y_train, dtype=torch.float32, device=device),
-        "ridge", device, standardize=False, alphas=alphas,
+    return evaluate_input_space(
+        X_arbitrary_train,
+        X_arbitrary_test,
+        Y_train,
+        Y_test,
+        Y_hat_subspace_train,
+        Y_hat_subspace_test,
+        alphas=alphas,
+        device=device,
+        subspace_name="arbitrary",
     )
-    X_arb_test_t = torch.as_tensor(X_arbitrary_test, dtype=torch.float32, device=device)
-    Y_hat_arb = (X_arb_test_t @ W_raw + b_raw).cpu().numpy()
-    arb_corr_arr = compute_correlation(Y_test, Y_hat_arb)
-
-    # Predict residuals from arbitrary embeddings
-    Y_resid_train = Y_train - Y_hat_subspace_train
-    Y_resid_test = Y_test - Y_hat_subspace_test
-
-    W_resid, b_resid = solve_regression(
-        torch.as_tensor(X_arbitrary_train, dtype=torch.float32, device=device),
-        torch.as_tensor(Y_resid_train, dtype=torch.float32, device=device),
-        "ridge", device, standardize=False, alphas=alphas,
-    )
-    Y_hat_resid = (X_arb_test_t @ W_resid + b_resid).cpu().numpy()
-    arb_recovery_corr_arr = compute_correlation(Y_resid_test, Y_hat_resid)
-
-    return {
-        "arbitrary_corr": float(arb_corr_arr.mean()),
-        "arbitrary_recovery_corr": float(arb_recovery_corr_arr.mean()),
-        "arbitrary_corr_per_target": arb_corr_arr,
-        "arbitrary_recovery_corr_per_target": arb_recovery_corr_arr,
-    }
 
 
 def build_nr_metrics_dict(
@@ -238,10 +258,15 @@ def build_nr_metrics_dict(
         "nr_corr_per_target": suf["minimal_corr_per_target"],
     }
     if sig_mask_flat is not None:
-        add_sig_nonsig_corrs(out, suf, sig_mask_flat, [
-            ("nr_corr", "minimal_corr_per_target"),
-            ("nr_recovery_corr", "recovery_corr_per_target"),
-        ])
+        add_sig_nonsig_corrs(
+            out,
+            suf,
+            sig_mask_flat,
+            [
+                ("nr_corr", "minimal_corr_per_target"),
+                ("nr_recovery_corr", "recovery_corr_per_target"),
+            ],
+        )
     if nr_result["cca_sim"] is not None:
         out["nr_cca_similarity"] = nr_result["cca_sim"]
     if nr_result["proc_sim"] is not None:
@@ -249,7 +274,9 @@ def build_nr_metrics_dict(
 
     if complement_result is not None:
         out["nr_complement_corr"] = complement_result["complement_corr"]
-        out["nr_complement_recovery_corr"] = complement_result["complement_recovery_corr"]
+        out["nr_complement_recovery_corr"] = complement_result[
+            "complement_recovery_corr"
+        ]
         if sig_mask_flat is not None:
             _add_complement_sig_nonsig(out, complement_result, sig_mask_flat, "nr_")
 
@@ -263,7 +290,10 @@ def build_nr_metrics_dict(
 
 
 def _add_complement_sig_nonsig(
-    out: dict, complement_result: dict, sig_mask_flat: np.ndarray, prefix: str = "",
+    out: dict,
+    complement_result: dict,
+    sig_mask_flat: np.ndarray,
+    prefix: str = "",
 ) -> None:
     """Add sig/nonsig splits for complement metrics."""
     for key, per_target_key in [
@@ -275,12 +305,17 @@ def _add_complement_sig_nonsig(
             float(arr[sig_mask_flat].mean()) if sig_mask_flat.any() else float("nan")
         )
         out[f"{prefix}{key}_nonsig"] = (
-            float(arr[~sig_mask_flat].mean()) if (~sig_mask_flat).any() else float("nan")
+            float(arr[~sig_mask_flat].mean())
+            if (~sig_mask_flat).any()
+            else float("nan")
         )
 
 
 def _add_arbitrary_sig_nonsig(
-    out: dict, arbitrary_result: dict, sig_mask_flat: np.ndarray, prefix: str = "",
+    out: dict,
+    arbitrary_result: dict,
+    sig_mask_flat: np.ndarray,
+    prefix: str = "",
 ) -> None:
     """Add sig/nonsig splits for arbitrary metrics."""
     for key, per_target_key in [
@@ -292,5 +327,7 @@ def _add_arbitrary_sig_nonsig(
             float(arr[sig_mask_flat].mean()) if sig_mask_flat.any() else float("nan")
         )
         out[f"{prefix}{key}_nonsig"] = (
-            float(arr[~sig_mask_flat].mean()) if (~sig_mask_flat).any() else float("nan")
+            float(arr[~sig_mask_flat].mean())
+            if (~sig_mask_flat).any()
+            else float("nan")
         )
