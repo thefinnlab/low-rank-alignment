@@ -37,22 +37,25 @@ def build_global_sig_mask(sig_df: pd.DataFrame, metadata_df: pd.DataFrame, n_lag
     return mask
 
 
-def build_sig_mask_flat_for_elecs(output_dir, elecs_per_sub, enc_results):
+def build_sig_mask_flat_for_elecs(output_dir, elecs_per_sub, enc_results, sig_dir=None):
     """Build a flat sig mask for a specific subset of electrodes per subject.
 
-    Loads significance_detailed.csv from output_dir and constructs a 1-D
-    boolean mask aligned to the Y column layout implied by elecs_per_sub.
+    Loads significance_detailed.csv and constructs a 1-D boolean mask aligned
+    to the Y column layout implied by elecs_per_sub.
 
     Args:
-        output_dir: Root results directory containing significance_detailed.csv.
+        output_dir: Root results directory (used as default location for the CSV).
         elecs_per_sub: Dict mapping subject_id → list of electrode names.
         enc_results: Encoding results dict (must contain 'lags').
+        sig_dir: Optional override directory to read significance_detailed.csv from.
+            When provided, the CSV is loaded from ``sig_dir`` instead of ``output_dir``.
 
     Returns:
         1-D boolean array of shape (n_electrodes * n_lags,), or None if
         significance_detailed.csv is not found.
     """
-    sig_csv = os.path.join(output_dir, "significance_detailed.csv")
+    csv_dir = sig_dir if sig_dir is not None else output_dir
+    sig_csv = os.path.join(csv_dir, "significance_detailed.csv")
     if not os.path.exists(sig_csv):
         print("  significance_detailed.csv not found; skipping sig/non-sig split.")
         return None

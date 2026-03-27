@@ -324,12 +324,14 @@ def build_XY_from_subjects(
     return X_ref, np.concatenate(Y_cols, axis=1).astype(np.float32)
 
 
-def load_sig_electrodes(output_dir, subject_ids):
+def load_sig_electrodes(output_dir, subject_ids, sig_dir=None):
     """Load significance CSV and build a subject → electrode list mapping.
 
     Args:
-        output_dir: Root results directory containing ``all_subject_sig.csv``.
+        output_dir: Root results directory (used as default location for the CSV).
         subject_ids: Subject IDs to include.
+        sig_dir: Optional override directory to read ``all_subject_sig.csv`` from.
+            When provided, the CSV is loaded from ``sig_dir`` instead of ``output_dir``.
 
     Returns:
         sig_electrodes: dict mapping sub_id → list of significant electrode names.
@@ -342,7 +344,8 @@ def load_sig_electrodes(output_dir, subject_ids):
     """
     import os
 
-    sig_csv = os.path.join(output_dir, "all_subject_sig.csv")
+    csv_dir = sig_dir if sig_dir is not None else output_dir
+    sig_csv = os.path.join(csv_dir, "all_subject_sig.csv")
     if not os.path.exists(sig_csv):
         raise FileNotFoundError(
             f"all_subject_sig.csv not found at {sig_csv}. "

@@ -68,9 +68,14 @@ def _(mo):
         label="Data root",
         full_width=True,
     )
+    sig_dir_input = mo.ui.text(
+        value="",
+        label="Significance dir (blank = results root)",
+        full_width=True,
+    )
     layer_input = mo.ui.number(value=24, label="Layer")
-    mo.hstack([results_root_input, data_root_input, layer_input])
-    return data_root_input, layer_input, results_root_input
+    mo.hstack([results_root_input, data_root_input, sig_dir_input, layer_input])
+    return data_root_input, layer_input, results_root_input, sig_dir_input
 
 
 @app.cell
@@ -150,7 +155,7 @@ def _(np):
 @app.cell
 def _(
     Path, load_encoding_results, load_raws, load_sig_electrodes, np,
-    results_root_input, data_root_input,
+    results_root_input, data_root_input, sig_dir_input,
 ):
     def load_electrode_metadata(source: str):
         """Load electrode metadata (names, lags, coords, y-column mapping) for a source.
@@ -164,10 +169,11 @@ def _(
         import os
         rr = Path(results_root_input.value)
         data_root = data_root_input.value
+        _sig_dir = sig_dir_input.value.strip() or None
 
         # Determine subject IDs and per-subject electrode lists
         sig_electrodes, _ = load_sig_electrodes(
-            str(rr), list(range(1, 10))
+            str(rr), list(range(1, 10)), sig_dir=_sig_dir,
         )
 
         if source == "cross_subject":

@@ -30,6 +30,7 @@ class EncodingConfig:
     offset: int = 0          # Word offset for aligning embeddings to neural data
     subjects: list[int] | None = None   # None → defaults to 1–9 at runtime
     run_name: str | None = None  # Output dir; auto-generated from model/layer/offset if None
+    sig_dir: str | None = None   # Override dir for significance CSVs; defaults to run_name/output_dir
     batch: bool = False      # Process subjects one at a time (lower peak RAM)
     ridge_alphas: list[float] | None = None  # None → use RIDGE_ALPHAS from constants.py
     log_alphas: bool = False     # Save alpha diagnostics (.npz + .png) per subject
@@ -45,6 +46,39 @@ class SignificanceConfig:
     n_permutations: int = 5000
     fdr_q: float = 0.01
     save_weights: bool = False
+
+
+@dataclass
+class NullDistConfig:
+    """Parameters for generating phase-randomization null distributions.
+
+    Each invocation of generate_null_distribution.py runs ``n_iterations``
+    permutations and writes results to a uniquely-named file inside
+    ``{null_dir}/sub_{id}/``.  Multiple invocations can run in parallel
+    to accumulate the full null distribution.
+    """
+
+    encoding: EncodingConfig = field(default_factory=EncodingConfig)
+    output_dir: str | None = None      # Root results dir (for lag computation, etc.)
+    null_dir: str | None = None        # Where to write null distribution shards; defaults to {output_dir}/null_dist
+    n_iterations: int = 50             # Number of permutations per invocation
+    seed: int | None = None            # None = random seed per invocation (for parallel batching)
+
+
+@dataclass
+class NewSignificanceConfig:
+    """Parameters for computing significance from pre-built null distributions.
+
+    Reads null distribution shards produced by generate_null_distribution.py,
+    re-runs encoding on real data to get observed correlations, and applies
+    the max-statistic significance procedure with FDR correction.
+    """
+
+    encoding: EncodingConfig = field(default_factory=EncodingConfig)
+    output_dir: str | None = None      # Where to write significance CSVs
+    null_dir: str | None = None        # Where null distribution shards live
+    fdr_q: float = 0.01               # FDR threshold for Benjamini-Hochberg correction
+    min_permutations: int = 5000       # Warn if fewer total permutations found
 
 
 @dataclass
@@ -80,6 +114,7 @@ class RRRConfig:
 
     encoding: EncodingConfig = field(default_factory=EncodingConfig)
     output_dir: str | None = None         # Root results dir; auto from model/layer/offset if None
+    sig_dir: str | None = None            # Override dir for significance CSVs; defaults to output_dir
     rrr_output_dir: str | None = None     # Override for RRR root subdir; default depends on mode
     mode: SVDMode = SVDMode.CROSS_SUBJECT
 
@@ -114,6 +149,7 @@ class PCAConfig:
 
     encoding: EncodingConfig = field(default_factory=EncodingConfig)
     output_dir: str | None = None         # Root results dir; auto from model/layer/offset if None
+    sig_dir: str | None = None            # Override dir for significance CSVs; defaults to output_dir
     pca_output_dir: str | None = None     # Override for PCA root subdir; default depends on mode
     mode: SVDMode = SVDMode.CROSS_SUBJECT
 
@@ -177,6 +213,7 @@ class PartialRRRConfig:
 
     encoding: EncodingConfig = field(default_factory=EncodingConfig)
     output_dir: str | None = None              # Root results dir; auto from model/layer/offset if None
+    sig_dir: str | None = None                 # Override dir for significance CSVs; defaults to output_dir
     partial_rrr_output_dir: str | None = None  # Override for output subdir; default depends on mode
     rrr_source_dir: str | None = None          # Where to find RRR A matrices; auto-resolved per mode
     mode: SVDMode = SVDMode.CROSS_SUBJECT
@@ -257,6 +294,7 @@ class SAEConfig:
 
     encoding: EncodingConfig = field(default_factory=EncodingConfig)
     output_dir: str | None = None         # Root results dir; auto from model/layer/offset if None
+    sig_dir: str | None = None            # Override dir for significance CSVs; defaults to output_dir
     sae_output_dir: str | None = None     # Override for SAE root subdir; default depends on mode
     rrr_source_dir: str | None = None     # Where to find RRR A matrices; auto-resolved per mode
     mode: SVDMode = SVDMode.CROSS_SUBJECT
@@ -324,6 +362,7 @@ class AblationConfig:
 
     encoding: EncodingConfig = field(default_factory=EncodingConfig)
     output_dir: str | None = None              # Root results dir; auto from model/layer/offset if None
+    sig_dir: str | None = None                 # Override dir for significance CSVs; defaults to output_dir
     ablation_output_dir: str | None = None     # Override for ablation root subdir
     rrr_source_dir: str | None = None          # Where to find RRR A/B matrices; auto-resolved per mode
     mode: SVDMode = SVDMode.CROSS_SUBJECT
