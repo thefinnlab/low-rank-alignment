@@ -14,14 +14,18 @@ For each iteration the procedure is:
     4. Retain the max correlation across all lags for each electrode.
     5. Take the max across electrodes → single scalar.
 
-The per-subject output file contains the array of max-across-electrode scalars
-(one per iteration).
+To amortise the cost of ridge regression, multiple permutations are batched
+together: their Y matrices are concatenated column-wise so a single model
+predicts all permutations at once (ridge is independent per target).  The
+``batch_size`` config parameter controls how many permutations share a model
+(limited by RAM).
 
 Writes:
   {null_dir}/sub_{id}/{batch_uuid}.npy   — shape (n_iterations,)
 """
 
 import gc
+import math
 import os
 import uuid
 
@@ -43,6 +47,70 @@ from utils.encoding import get_ridge_model_constructor
 from utils.significance import phase_randomize_raw, compute_observed_max_per_electrode
 
 
+def _run_batched_permutations(
+    raw, df_word, aligned_embeddings, enc, model_constructor, rng, batch_size,
+):
+    """Generate ``batch_size`` phase-randomised permutations and train one model.
+
+    The Y matrices for each permutation are concatenated column-wise so that a
+    single ridge model predicts all permutations simultaneously (ridge is
+    independent per target, so this is equivalent to training separate models
+    but much faster due to batched linear algebra).
+
+    Returns:
+        np.ndarray of shape (batch_size,) — max-across-electrodes scalar per
+        permutation.
+    """
+    Y_parts = []
+    n_elec = None
+    n_lags = None
+    X_arr = None
+
+    for _ in range(batch_size):
+        raw_perm = phase_randomize_raw(raw, rng=rng)
+        epochs_perm, data_perm = build_word_epochs(raw_perm, df_word)
+        X_i, Y_i = apply_offset(
+            aligned_embeddings[epochs_perm.selection], data_perm, enc.offset
+        )
+        if n_elec is None:
+            n_elec = data_perm.shape[1]
+            n_lags = data_perm.shape[2]
+            X_arr = X_i
+        Y_parts.append(Y_i)
+        del raw_perm, epochs_perm, data_perm, X_i
+
+    # Concatenate targets: (n_words, batch_size * n_elec * n_lags)
+    Y_concat = np.concatenate(Y_parts, axis=1).astype(np.float32)
+    del Y_parts
+
+    total_elec = batch_size * n_elec
+    X = [X_arr, X_arr]  # 2-fold CV
+
+    # Train one model for all permutations at once
+    corrs, models, tr_idxs, test_idxs, scalers = train_encoding(
+        X, Y_concat, model_constructor,
+        epochs_shape=(total_elec, n_lags),
+    )
+
+    # Get combined predictions: (n_words, total_elec, n_lags)
+    all_predictions, all_targets = get_all_predictions_and_targets_test_set(
+        models, test_idxs, X, Y_concat, total_elec, n_lags
+    )
+
+    # Split per permutation and compute max-across-electrodes scalar each
+    null_maxes = np.zeros(batch_size)
+    for b in range(batch_size):
+        start = b * n_elec
+        end = (b + 1) * n_elec
+        max_per_elec, _ = compute_observed_max_per_electrode(
+            all_predictions[:, start:end, :],
+            all_targets[:, start:end, :],
+        )
+        null_maxes[b] = max_per_elec.max()
+
+    return null_maxes
+
+
 def main():
     args, overrides = parse_args("Phase-randomization null distribution generation")
     config: NullDistConfig = load_config(args.config, overrides, NullDistConfig)
@@ -51,6 +119,7 @@ def main():
     subject_ids = enc.subjects or list(range(1, 10))
     output_dir = config.output_dir or get_results_dir(enc.model, enc.layer, enc.offset)
     null_dir = config.null_dir or os.path.join(output_dir, "null_dist")
+    batch_size = max(1, config.batch_size)
 
     # Use GPU backend if available
     if torch.cuda.is_available():
@@ -70,6 +139,7 @@ def main():
     print(f"Batch ID: {batch_id}")
     print(f"Null dir: {null_dir}")
     print(f"Iterations per subject: {config.n_iterations}")
+    print(f"Batch size (permutations per model): {batch_size}")
 
     # Load embeddings once — shared across all subjects
     aligned_embeddings, df_word = load_embeddings(enc.data_root, enc.layer)
@@ -85,67 +155,38 @@ def main():
         # Load raw data once per subject
         raws = load_raws([bids_sub_id], enc.data_root, use_high_gamma=True)
         raw = raws[0]
-        electrode_names = raw.ch_names
-        n_elec = len(electrode_names)
+        n_elec = len(raw.ch_names)
         print(f"  Electrodes: {n_elec}")
 
-        # Pre-compute epoch metadata from the real raw to know dimensions
-        epochs_real, data_real = build_word_epochs(raw, df_word)
-        n_words, _, n_lags = data_real.shape
-        print(f"  Epoch data shape: {data_real.shape}")
-        del data_real
+        n_batches = math.ceil(config.n_iterations / batch_size)
+        null_max_values = []
 
-        null_max_values = np.zeros(config.n_iterations)
+        for b_idx in tqdm(range(n_batches), desc=f"  Sub {bids_sub_id} batches"):
+            remaining = config.n_iterations - len(null_max_values)
+            cur_batch = min(batch_size, remaining)
 
-        for i in tqdm(range(config.n_iterations), desc=f"  Sub {bids_sub_id} permutations"):
-            # 1. Phase-randomize the raw signal
-            raw_perm = phase_randomize_raw(raw, rng=rng)
-
-            # 2. Build word epochs from the phase-randomized signal
-            epochs_perm, data_perm = build_word_epochs(raw_perm, df_word)
-
-            # 3. Align embeddings and neural data
-            X_arr, Y = apply_offset(
-                aligned_embeddings[epochs_perm.selection], data_perm, enc.offset
+            batch_maxes = _run_batched_permutations(
+                raw, df_word, aligned_embeddings, enc, model_constructor, rng,
+                batch_size=cur_batch,
             )
-            n_elec_perm = data_perm.shape[1]
-            n_lags_perm = data_perm.shape[2]
-            X = [X_arr, X_arr]  # one per fold (2-fold CV)
+            null_max_values.extend(batch_maxes.tolist())
 
-            # 4. Train encoding model
-            corrs, models, tr_idxs, test_idxs, scalers = train_encoding(
-                X, Y, model_constructor,
-                epochs_shape=(n_elec_perm, n_lags_perm),
-            )
-
-            # 5. Get test-set predictions
-            all_predictions, all_targets = get_all_predictions_and_targets_test_set(
-                models, test_idxs, X, Y, n_elec_perm, n_lags_perm
-            )
-
-            # 6. Compute max correlation across lags per electrode, then max across electrodes
-            max_per_elec, _ = compute_observed_max_per_electrode(
-                all_predictions, all_targets
-            )
-            null_max_values[i] = max_per_elec.max()
-
-            # Free memory
-            del raw_perm, epochs_perm, data_perm, X_arr, Y, X
-            del corrs, models, tr_idxs, test_idxs, scalers
-            del all_predictions, all_targets, max_per_elec
+            # Free memory between batches
             gc.collect()
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
+
+        null_max_values = np.array(null_max_values)
 
         # Save null distribution shard for this subject
         sub_null_dir = os.path.join(null_dir, f"sub_{bids_sub_id}")
         os.makedirs(sub_null_dir, exist_ok=True)
         out_path = os.path.join(sub_null_dir, f"{batch_id}.npy")
         np.save(out_path, null_max_values)
-        print(f"  Saved {config.n_iterations} null values to {out_path}")
+        print(f"  Saved {len(null_max_values)} null values to {out_path}")
 
         # Free subject-level memory
-        del raws, raw, epochs_real
+        del raws, raw
         gc.collect()
         if torch.cuda.is_available():
             torch.cuda.empty_cache()

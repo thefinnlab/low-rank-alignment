@@ -62,6 +62,7 @@ class NullDistConfig:
     output_dir: str | None = None      # Root results dir (for lag computation, etc.)
     null_dir: str | None = None        # Where to write null distribution shards; defaults to {output_dir}/null_dist
     n_iterations: int = 50             # Number of permutations per invocation
+    batch_size: int = 5                # Permutations to batch into a single model (limited by RAM)
     seed: int | None = None            # None = random seed per invocation (for parallel batching)
 
 

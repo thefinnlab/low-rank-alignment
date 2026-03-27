@@ -149,25 +149,25 @@ def phase_randomize_raw(raw, rng=None):
     if rng is None:
         rng = np.random.default_rng()
 
-    data = raw.get_data().copy()  # (n_channels, n_samples)
-    n_samples = data.shape[1]
+    data = raw.get_data()  # (n_channels, n_samples)
+    n_channels, n_samples = data.shape
 
-    for ch_idx in range(data.shape[0]):
-        fft_vals = np.fft.rfft(data[ch_idx])
-        n_freqs = len(fft_vals)
+    # Vectorised FFT across all channels at once
+    fft_vals = np.fft.rfft(data, axis=1)  # (n_channels, n_freqs)
+    n_freqs = fft_vals.shape[1]
 
-        # Random phases for all frequency bins
-        random_phases = rng.uniform(0, 2 * np.pi, n_freqs)
-        # DC component must stay real
-        random_phases[0] = 0
-        # Nyquist component must stay real for even-length signals
-        if n_samples % 2 == 0:
-            random_phases[-1] = 0
+    # Random phases for all channels × frequency bins
+    random_phases = rng.uniform(0, 2 * np.pi, (n_channels, n_freqs))
+    # DC component must stay real
+    random_phases[:, 0] = 0
+    # Nyquist component must stay real for even-length signals
+    if n_samples % 2 == 0:
+        random_phases[:, -1] = 0
 
-        fft_randomized = np.abs(fft_vals) * np.exp(1j * random_phases)
-        data[ch_idx] = np.fft.irfft(fft_randomized, n=n_samples)
+    fft_randomized = np.abs(fft_vals) * np.exp(1j * random_phases)
+    randomized_data = np.fft.irfft(fft_randomized, n=n_samples, axis=1)
 
-    return mne.io.RawArray(data, raw.info, verbose=False)
+    return mne.io.RawArray(randomized_data, raw.info, verbose=False)
 
 
 def compute_observed_max_per_electrode(predictions, targets):
