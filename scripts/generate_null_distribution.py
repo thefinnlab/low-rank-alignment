@@ -50,7 +50,22 @@ from himalaya.ridge import RidgeCV
 from himalaya.scoring import correlation_score
 
 
-TOTAL_TARGET_CAPACITY = 5702400 * 30
+def estimate_batch_size_from_gpu(n_elec: int, n_samples: int, safety_factor: float = 0.5) -> int:
+    """Estimate max batch size from available GPU memory.
+
+    Uses free VRAM and the dominant memory consumer — the phase-randomised raw
+    data tensor of shape (batch, n_elec, n_samples) in float32 — to derive a
+    safe upper bound.  A ``safety_factor`` < 1 reserves headroom for FFT
+    intermediates, the epoched tensor, and the ridge model.
+
+    Falls back to 1 if CUDA is unavailable (CPU path).
+    """
+    if not torch.cuda.is_available():
+        return 1
+    free_bytes, _ = torch.cuda.mem_get_info()
+    bytes_per_perm = n_elec * n_samples * 4  # float32
+    estimated = int(free_bytes * safety_factor / bytes_per_perm)
+    return max(1, estimated)
 
 
 def print_gpu_utilization():
@@ -229,12 +244,10 @@ def main():
         print(f"  Electrodes: {n_elec}")
         print(f"  Raw Data Shape: {raw_data.shape}")
 
-        recommended_batch = TOTAL_TARGET_CAPACITY // (n_elec * raw_data.shape[1])
-        print("Recommended batch size based on memory capacity:", recommended_batch)
+        recommended_batch = estimate_batch_size_from_gpu(n_elec, raw_data.shape[1])
+        print("Recommended batch size based on available GPU memory:", recommended_batch)
         current_batch_size = max(1, min(recommended_batch, config.n_iterations))
-        print(
-            f"Adjusting batch size to {current_batch_size} (Max capacity: {TOTAL_TARGET_CAPACITY})"
-        )
+        print(f"Adjusting batch size to {current_batch_size}")
         n_batches = math.ceil(config.n_iterations / current_batch_size)
         null_max_values = []
 
@@ -242,17 +255,30 @@ def main():
             remaining = config.n_iterations - len(null_max_values)
             cur_batch = min(current_batch_size, remaining)
 
-            batch_maxes = _run_batched_permutations(
-                raw_data,
-                selection,
-                epoch_starts,
-                n_lags_sub,
-                aligned_embeddings,
-                enc,
-                model_constructor,
-                rng,
-                batch_size=cur_batch,
-            )
+            # Retry with smaller batches on OOM so the script survives nodes
+            # with less VRAM than the initial estimate assumed.
+            while True:
+                try:
+                    batch_maxes = _run_batched_permutations(
+                        raw_data,
+                        selection,
+                        epoch_starts,
+                        n_lags_sub,
+                        aligned_embeddings,
+                        enc,
+                        model_constructor,
+                        rng,
+                        batch_size=cur_batch,
+                    )
+                    break
+                except torch.cuda.OutOfMemoryError:
+                    torch.cuda.empty_cache()
+                    cur_batch = cur_batch // 2
+                    if cur_batch < 1:
+                        raise
+                    print(f"\nOOM — retrying with batch_size={cur_batch}")
+                    current_batch_size = cur_batch  # keep smaller size for future batches
+
             null_max_values.extend(batch_maxes.tolist())
 
             # Free memory between batches
