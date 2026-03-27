@@ -28,12 +28,12 @@ import torch
 from statsmodels.stats.multitest import multipletests
 
 from utils import (
-    load_raws,
     load_embeddings,
-    build_word_epochs,
     apply_offset,
     train_encoding,
     get_all_predictions_and_targets_test_set,
+    load_precomputed_epochs,
+    epochs_from_cache,
 )
 from utils.config import NewSignificanceConfig, get_results_dir
 from utils.config_utils import parse_args, load_config
@@ -98,16 +98,15 @@ def main():
         # -------------------------------------------------------------------
         # 2. Re-run encoding on real (non-permuted) data
         # -------------------------------------------------------------------
-        raws = load_raws([bids_sub_id], enc.data_root, use_high_gamma=True)
-        raw = raws[0]
-        electrode_names = raw.ch_names
+        cache = load_precomputed_epochs(bids_sub_id, enc.data_root)
+        electrode_names = cache["ch_names"]
         n_elec = len(electrode_names)
 
-        epochs, data = build_word_epochs(raw, df_word)
+        data = epochs_from_cache(cache)
         n_words, _, n_lags = data.shape
 
         X_arr, Y = apply_offset(
-            aligned_embeddings[epochs.selection], data, enc.offset
+            aligned_embeddings[cache["selection"]], data, enc.offset
         )
         X = [X_arr, X_arr]  # 2-fold CV
 
@@ -150,7 +149,7 @@ def main():
             })
 
         # Free memory
-        del raws, raw, epochs, data, X_arr, Y, X
+        del cache, data, X_arr, Y, X
         del corrs, models, tr_idxs, test_idxs, scalers
         del all_predictions, all_targets, max_per_electrode, obs_corrs
         gc.collect()

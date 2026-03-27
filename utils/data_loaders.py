@@ -1,3 +1,4 @@
+import os
 from typing import Optional
 
 import numpy as np
@@ -407,7 +408,102 @@ def load_fold_indices(output_dir, subject_ids, sig_electrodes):
     return provided_idxs, lags
 
 
-def get_arbitrary_embeddings(X, epochs, df_word):
+def get_precomputed_epochs_path(sub_id, data_root):
+    """Return the canonical path for a subject's precomputed 32 Hz epoch cache."""
+    return os.path.join(
+        data_root, "derivatives", "ecogprep",
+        f"sub-{sub_id:02d}", "ieeg",
+        f"sub-{sub_id:02d}_task-podcast_desc-epochs32hz_ieeg.npz",
+    )
+
+
+def save_precomputed_epochs(sub_id, data_root, raw_data, selection, epoch_starts, ch_names, n_lags):
+    """Save precomputed epoch cache to disk.
+
+    Args:
+        sub_id: Integer subject ID.
+        data_root: BIDS dataset root directory.
+        raw_data: np.ndarray of shape (n_elecs, n_samples) at 32 Hz (float32).
+        selection: np.ndarray of word indices kept by MNE epoching.
+        epoch_starts: np.ndarray of start sample indices in raw_data for each epoch.
+        ch_names: List of electrode name strings.
+        n_lags: Number of samples per epoch window.
+    """
+    path = get_precomputed_epochs_path(sub_id, data_root)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    np.savez(
+        path,
+        raw_data=raw_data,
+        selection=selection,
+        epoch_starts=epoch_starts,
+        n_lags=np.array(n_lags),
+        ch_names=np.array(ch_names),
+    )
+    print(f"  Saved precomputed epochs: {path}")
+
+
+def load_precomputed_epochs(sub_id, data_root):
+    """Load precomputed epoch cache from disk.
+
+    Args:
+        sub_id: Integer subject ID.
+        data_root: BIDS dataset root directory.
+
+    Returns:
+        dict with keys:
+            raw_data  — (n_elecs, n_samples) float32 array at 32 Hz
+            selection — (n_words_kept,) int array of kept word indices
+            epoch_starts — (n_words_kept,) int array of start sample indices
+            n_lags    — int, samples per epoch window
+            ch_names  — list of electrode name strings
+
+    Raises:
+        FileNotFoundError if cache file does not exist.
+    """
+    path = get_precomputed_epochs_path(sub_id, data_root)
+    if not os.path.exists(path):
+        raise FileNotFoundError(
+            f"Precomputed epochs not found: {path}. "
+            "Run scripts/precompute_epochs.py first."
+        )
+    cache = np.load(path, allow_pickle=False)
+    return {
+        "raw_data": cache["raw_data"],
+        "selection": cache["selection"],
+        "epoch_starts": cache["epoch_starts"],
+        "n_lags": int(cache["n_lags"]),
+        "ch_names": cache["ch_names"].tolist(),
+    }
+
+
+def epochs_from_cache(cache, elec_names=None):
+    """Extract epoch data array from a precomputed cache.
+
+    Slices epoch windows directly out of the stored 32 Hz raw array.
+
+    Args:
+        cache: dict returned by load_precomputed_epochs.
+        elec_names: Optional list of electrode names to select.  If None all
+            electrodes are returned.
+
+    Returns:
+        np.ndarray of shape (n_words_kept, n_elecs, n_lags), float32.
+    """
+    raw_data = cache["raw_data"]
+    epoch_starts = cache["epoch_starts"]
+    n_lags = cache["n_lags"]
+
+    if elec_names is not None:
+        ch_names = cache["ch_names"]
+        idx = [ch_names.index(e) for e in elec_names]
+        raw_data = raw_data[idx]
+
+    return np.stack(
+        [raw_data[:, s : s + n_lags] for s in epoch_starts], axis=0
+    ).astype(np.float32)
+
+
+def get_arbitrary_embeddings(X, epochs_or_selection, df_word):
     """
     Assign unique random embeddings per word type, preserving per-word consistency.
 
@@ -417,15 +513,19 @@ def get_arbitrary_embeddings(X, epochs, df_word):
 
     Args:
         X (np.ndarray): Embedding array of shape (n_words, n_features).
-        epochs: MNE Epochs-like object with a `.selection` attribute (integer indices
-                into df_word).
+        epochs_or_selection: Either an MNE Epochs-like object with a `.selection`
+            attribute, or a numpy integer array of word indices into df_word.
         df_word (pd.DataFrame): DataFrame with a 'word' column; rows indexed by position.
 
     Returns:
         np.ndarray: Array of shape (n_words, n_features) with arbitrary embeddings
                     assigned consistently per word type.
     """
-    words = df_word.iloc[epochs.selection].reset_index()["word"].apply(lambda x: x.lower())
+    if isinstance(epochs_or_selection, np.ndarray):
+        selection = epochs_or_selection
+    else:
+        selection = epochs_or_selection.selection
+    words = df_word.iloc[selection].reset_index()["word"].apply(lambda x: x.lower())
     unique_words = words.unique()
     emb_idxs = np.random.choice(np.arange(X.shape[0]), size=len(unique_words), replace=False)
     arb_word_embs = X[emb_idxs]

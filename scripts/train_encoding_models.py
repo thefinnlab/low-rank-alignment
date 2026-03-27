@@ -20,16 +20,16 @@ import torch
 from himalaya.backend import set_backend
 
 from utils import (
-    load_raws,
     train_encoding,
     get_arbitrary_embeddings,
     get_models_coefficients,
     load_embeddings,
-    build_word_epochs,
     apply_offset,
     save_subject_results,
     read_electrode_file,
     RIDGE_ALPHAS,
+    load_precomputed_epochs,
+    epochs_from_cache,
 )
 from utils.config import EncodingConfig, get_results_dir
 from utils.config_utils import parse_args, load_config
@@ -54,7 +54,7 @@ def _train_with_arbitrary(
     n_lags,
     model_constructor,
     averaged_embeddings,
-    epochs,
+    selection,
     df_word,
     offset,
     config=None,
@@ -82,7 +82,7 @@ def _train_with_arbitrary(
 
     original_folds = list(zip(tr_idxs, test_idxs))
 
-    arb = get_arbitrary_embeddings(averaged_embeddings, epochs, df_word).astype(
+    arb = get_arbitrary_embeddings(averaged_embeddings, selection, df_word).astype(
         np.float32
     )
     # Apply same length trim as _apply_offset does for X_arr
@@ -142,25 +142,23 @@ def _run_joint(
     alphas=None,
     alpha_grid=None,
 ):
-    raws = load_raws(
-        list(sig_elecs.keys()),
-        data_root,
-        use_high_gamma=True,
-        per_subject_electrodes=sig_elecs,
-    )
-    elec_counts = [len(r.ch_names) for r in raws]
-
-    all_datas, epochs = [], None
-    for raw in raws:
-        ep, ep_data = build_word_epochs(raw, df_word)
-        all_datas.append(ep_data)
-        epochs = ep
+    all_subject_ids = list(sig_elecs.keys())
+    all_datas = []
+    elec_counts = []
+    selection = None
+    for sub_id in all_subject_ids:
+        cache = load_precomputed_epochs(sub_id, data_root)
+        data_sub = epochs_from_cache(cache, elec_names=sig_elecs[sub_id])
+        all_datas.append(data_sub)
+        elec_counts.append(data_sub.shape[1])
+        if selection is None:
+            selection = cache["selection"]
 
     datas = np.concatenate(all_datas, axis=1)  # (n_words, total_elecs, n_lags)
     n_words, total_elecs, n_lags = datas.shape
     lags = np.linspace(-2.0, 2.0, n_lags, endpoint=False)
 
-    avg_embs = aligned_embeddings[epochs.selection]
+    avg_embs = aligned_embeddings[selection]
     X_arr, Y = apply_offset(avg_embs, datas, offset)
 
     print(f"Training joint model: {total_elecs} electrodes, {X_arr.shape[0]} words...")
@@ -171,14 +169,11 @@ def _run_joint(
         n_lags,
         model_constructor,
         avg_embs,
-        epochs,
+        selection,
         df_word,
         offset,
         config=config,
         alphas=alphas,
-    )
-    coefficients, intercepts = get_models_coefficients(
-        models, total_elecs, n_lags, scaled_model=False
     )
 
     if config is not None and config.log_alphas and alpha_grid is not None:
@@ -186,7 +181,7 @@ def _run_joint(
         _log_alpha_diagnostics(models, alpha_grid, joint_dir, "Joint")
 
     cursor = 0
-    for sub_id, raw, n_elecs in zip(sig_elecs.keys(), raws, elec_counts):
+    for sub_id, n_elecs in zip(all_subject_ids, elec_counts):
         sl = slice(cursor, cursor + n_elecs)
         cursor += n_elecs
         coef_slices = [c[sl] for c in coefficients]
@@ -201,7 +196,7 @@ def _run_joint(
             tr_idxs,
             test_idxs,
             scalers,
-            raw.ch_names,
+            sig_elecs[sub_id],
             offset,
             layer_int,
             lags,
@@ -237,19 +232,12 @@ def _run_batch(
         print(f"Processing subject {sub_id}")
         print(f"{'='*60}")
 
-        raws = load_raws(
-            [sub_id],
-            data_root,
-            use_high_gamma=True,
-            per_subject_electrodes={sub_id: sig_elecs[sub_id]},
-        )
-        raw = raws[0]
-
-        epochs, data = build_word_epochs(raw, df_word)
+        cache = load_precomputed_epochs(sub_id, data_root)
+        data = epochs_from_cache(cache, elec_names=sig_elecs[sub_id])
         n_words, n_elecs, n_lags = data.shape
         lags = np.linspace(-2.0, 2.0, n_lags, endpoint=False)
 
-        avg_embs = aligned_embeddings[epochs.selection]
+        avg_embs = aligned_embeddings[cache["selection"]]
         X_arr, Y = apply_offset(avg_embs, data, offset)
 
         corrs, corrs_arb, models, tr_idxs, test_idxs, scalers = _train_with_arbitrary(
@@ -259,14 +247,11 @@ def _run_batch(
             n_lags,
             model_constructor,
             avg_embs,
-            epochs,
+            cache["selection"],
             df_word,
             offset,
             config=config,
             alphas=alphas,
-        )
-        coefficients, intercepts = get_models_coefficients(
-            models, n_elecs, n_lags, scaled_model=False
         )
 
         if config is not None and config.log_alphas and alpha_grid is not None:
@@ -283,14 +268,14 @@ def _run_batch(
             tr_idxs,
             test_idxs,
             scalers,
-            raw.ch_names,
+            sig_elecs[sub_id],
             offset,
             layer_int,
             lags,
             corrs_arb=corrs_arb,
         )
 
-        del raws, raw, epochs, data, X_arr, Y, models, scalers, corrs, corrs_arb
+        del cache, data, X_arr, Y, models, scalers, corrs, corrs_arb
         gc.collect()
         if torch.cuda.is_available():
             torch.cuda.empty_cache()

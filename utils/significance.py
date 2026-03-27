@@ -125,6 +125,37 @@ def load_significance_results(filepath):
     return data['sig'], data['p_values'], data['q_values'], data['obs_corrs']
 
 
+def phase_randomize_data(data, rng=None):
+    """Phase-randomize a (n_channels, n_samples) numpy array.
+
+    Identical logic to phase_randomize_raw but operates directly on a numpy
+    array to avoid MNE object-creation overhead.  Use this in tight loops
+    (e.g. null-distribution generation) where the signal is already a
+    precomputed numpy array.
+
+    Args:
+        data: np.ndarray of shape (n_channels, n_samples).
+        rng (numpy.random.Generator, optional): RNG for reproducibility.
+
+    Returns:
+        np.ndarray of shape (n_channels, n_samples) with phase-randomized data.
+    """
+    if rng is None:
+        rng = np.random.default_rng()
+
+    n_channels, n_samples = data.shape
+    fft_vals = np.fft.rfft(data, axis=1)
+    n_freqs = fft_vals.shape[1]
+
+    random_phases = rng.uniform(0, 2 * np.pi, (n_channels, n_freqs))
+    random_phases[:, 0] = 0
+    if n_samples % 2 == 0:
+        random_phases[:, -1] = 0
+
+    fft_randomized = np.abs(fft_vals) * np.exp(1j * random_phases)
+    return np.fft.irfft(fft_randomized, n=n_samples, axis=1)
+
+
 def phase_randomize_raw(raw, rng=None):
     """Phase-randomize each channel of an MNE Raw object.
 
