@@ -43,7 +43,6 @@ from utils import (
     load_precomputed_epochs,
     epochs_from_cache,
 )
-from utils.analysis import build_sig_mask_flat_for_elecs
 from utils.data_loaders import load_sig_electrodes
 from utils.atlas import build_electrode_region_map
 from utils.config import PCAConfig, SVDMode, get_results_dir
@@ -54,13 +53,11 @@ from utils.encoding import (
     build_per_fold_baselines,
     get_and_offset_arbitrary_embeddings,
 )
-from utils.rrr_utils import add_sig_nonsig_corrs
 from utils.subspace_utils import (
     evaluate_subspace_ols,
     evaluate_complement,
     evaluate_arbitrary,
-    _add_complement_sig_nonsig,
-    _add_arbitrary_sig_nonsig,
+    compute_cross_model_metrics,
 )
 
 
@@ -105,10 +102,6 @@ def _load_rrr_overlay(rrr_dir: str, unit_suffix: str = "") -> tuple:
         "nr_recovery_r2": "recovery_r2",
         "nr_recovery_corr": "recovery_corr",
         "nr_pred_r2": "pred_r2",
-        "nr_corr_sig": "minimal_corr_sig",
-        "nr_corr_nonsig": "minimal_corr_nonsig",
-        "nr_recovery_corr_sig": "recovery_corr_sig",
-        "nr_recovery_corr_nonsig": "recovery_corr_nonsig",
         "nr_cca_similarity": "cca_similarity",
         "nr_procrustes_similarity": "procrustes_similarity",
     }
@@ -129,7 +122,6 @@ def _run_pca_for_unit(
     test_idxs: list,
     per_fold_baselines: list,
     config: PCAConfig,
-    sig_mask_flat: np.ndarray | None = None,
     rrr_overlay_dir: str | None = None,
     X_arbitrary: np.ndarray | None = None,
 ) -> pd.DataFrame:
@@ -141,7 +133,6 @@ def _run_pca_for_unit(
         test_idxs: List of test index arrays, one per fold.
         per_fold_baselines: Output of build_per_fold_baselines.
         config: PCAConfig.
-        sig_mask_flat: Optional boolean mask for significant vs non-significant targets.
         rrr_overlay_dir: Path to RRR unit directory for overlay (or None).
         X_arbitrary: (n_words, n_embed) arbitrary embeddings for null baseline.
 
@@ -250,24 +241,25 @@ def _run_pca_for_unit(
                 metrics["arbitrary_recovery_corr"] = arbitrary_result[
                     "arbitrary_recovery_corr"
                 ]
-            if sig_mask_flat is not None:
-                add_sig_nonsig_corrs(
-                    metrics,
-                    suf,
-                    sig_mask_flat,
-                    [
-                        ("full_corr", "full_corr_per_target"),
-                        ("minimal_corr", "minimal_corr_per_target"),
-                        ("recovery_corr", "recovery_corr_per_target"),
-                    ],
-                )
-                _add_complement_sig_nonsig(metrics, complement_result, sig_mask_flat)
-                if arbitrary_result is not None:
-                    _add_arbitrary_sig_nonsig(metrics, arbitrary_result, sig_mask_flat)
             if nr_result["cca_sim"] is not None:
                 metrics["cca_similarity"] = nr_result["cca_sim"]
             if nr_result["proc_sim"] is not None:
                 metrics["procrustes_similarity"] = nr_result["proc_sim"]
+
+            # Cross-model metrics
+            Y_hat_pca = nr_result["Y_hat"]
+            Y_hat_complement = complement_result["complement_Y_hat"]
+            Y_hat_arbitrary = (
+                arbitrary_result["arbitrary_Y_hat"]
+                if arbitrary_result is not None
+                else None
+            )
+            metrics.update(compute_cross_model_metrics(Y_hat_pca, Y_hat_full, Y_test, "pca", "full"))
+            metrics.update(compute_cross_model_metrics(Y_hat_pca, Y_hat_complement, Y_test, "pca", "complement"))
+            metrics.update(compute_cross_model_metrics(Y_hat_complement, Y_hat_full, Y_test, "complement", "full"))
+            if Y_hat_arbitrary is not None:
+                metrics.update(compute_cross_model_metrics(Y_hat_pca, Y_hat_arbitrary, Y_test, "pca", "arbitrary"))
+                metrics.update(compute_cross_model_metrics(Y_hat_complement, Y_hat_arbitrary, Y_test, "complement", "arbitrary"))
 
             all_rows.append(metrics)
 
@@ -287,38 +279,26 @@ def _run_pca_for_unit(
         "recovery_corr",
         "complement_corr",
         "complement_recovery_corr",
+        # Cross-model metrics for PCA model
+        "pca_full_pred_corr",
+        "pca_full_joint_corr",
+        "pca_complement_pred_corr",
+        "pca_complement_joint_corr",
+        # Complement vs other models
+        "complement_full_pred_corr",
+        "complement_full_joint_corr",
     ]
     if X_arbitrary is not None:
         agg_cols.extend(
             [
                 "arbitrary_corr",
                 "arbitrary_recovery_corr",
+                "pca_arbitrary_pred_corr",
+                "pca_arbitrary_joint_corr",
+                "complement_arbitrary_pred_corr",
+                "complement_arbitrary_joint_corr",
             ]
         )
-    if sig_mask_flat is not None:
-        agg_cols.extend(
-            [
-                "full_corr_sig",
-                "full_corr_nonsig",
-                "minimal_corr_sig",
-                "minimal_corr_nonsig",
-                "recovery_corr_sig",
-                "recovery_corr_nonsig",
-                "complement_corr_sig",
-                "complement_corr_nonsig",
-                "complement_recovery_corr_sig",
-                "complement_recovery_corr_nonsig",
-            ]
-        )
-        if X_arbitrary is not None:
-            agg_cols.extend(
-                [
-                    "arbitrary_corr_sig",
-                    "arbitrary_corr_nonsig",
-                    "arbitrary_recovery_corr_sig",
-                    "arbitrary_recovery_corr_nonsig",
-                ]
-            )
     if config.compute_cca:
         agg_cols.append("cca_similarity")
     if config.compute_procrustes:
@@ -342,6 +322,7 @@ def _run_pca_for_unit(
         save_path=os.path.join(pca_unit_dir, "rank_analysis.png"),
         overlay_summary_df=rrr_nr_summary,
         overlay_label="RRR (NR)",
+        primary_label="pca",
     )
 
     # Second plot: PCA with RRR reduced-rank overlay (only when RRR data exists)
@@ -353,6 +334,7 @@ def _run_pca_for_unit(
             save_path=os.path.join(pca_unit_dir, "rank_analysis_rrr_raw.png"),
             overlay_summary_df=rrr_summary,
             overlay_label="RRR",
+            primary_label="pca",
         )
 
     return df
@@ -405,13 +387,6 @@ def _run_cross_subject_pca(
         X_ref, Y_full, ref_test_idxs, enc_subjects_info
     )
 
-    sig_mask_flat = build_sig_mask_flat_for_elecs(
-        output_dir,
-        {s: sig_electrodes[s] for s in subs_with_sig},
-        enc_results,
-        sig_dir=sig_dir,
-    )
-
     # Generate arbitrary embeddings for null baseline
     X_arbitrary = get_and_offset_arbitrary_embeddings(
         aligned_embeddings, selection, df_word, enc.offset, config.arbitrary_seed
@@ -425,7 +400,6 @@ def _run_cross_subject_pca(
         test_idxs=ref_test_idxs,
         per_fold_baselines=per_fold_baselines,
         config=config,
-        sig_mask_flat=sig_mask_flat,
         rrr_overlay_dir=rrr_overlay_dir,
         X_arbitrary=X_arbitrary,
     )
@@ -491,13 +465,6 @@ def _run_per_subject_pca(
             X_arr, Y_sub, test_idxs, enc_subjects_info
         )
 
-        sig_mask_flat = build_sig_mask_flat_for_elecs(
-            output_dir,
-            {sub_id: sub_sig_elecs},
-            enc_results,
-            sig_dir=sig_dir,
-        )
-
         rrr_sub_overlay = None
         if rrr_overlay_dir:
             candidate = os.path.join(rrr_overlay_dir, "subjects", f"sub_{sub_id}")
@@ -510,7 +477,6 @@ def _run_per_subject_pca(
             test_idxs=test_idxs,
             per_fold_baselines=per_fold_baselines,
             config=config,
-            sig_mask_flat=sig_mask_flat,
             rrr_overlay_dir=rrr_sub_overlay,
             X_arbitrary=X_arbitrary,
         )
@@ -586,13 +552,6 @@ def _run_per_region_pca(
             X_ref, Y_full, ref_test_idxs, enc_subjects_info
         )
 
-        sig_mask_flat = build_sig_mask_flat_for_elecs(
-            output_dir,
-            per_subject_region_elecs,
-            enc_results,
-            sig_dir=sig_dir,
-        )
-
         # Generate arbitrary embeddings for null baseline
         X_arbitrary = get_and_offset_arbitrary_embeddings(
             aligned_embeddings, selection, df_word, enc.offset, config.arbitrary_seed
@@ -610,7 +569,6 @@ def _run_per_region_pca(
             test_idxs=ref_test_idxs,
             per_fold_baselines=per_fold_baselines,
             config=config,
-            sig_mask_flat=sig_mask_flat,
             rrr_overlay_dir=rrr_region_overlay,
             X_arbitrary=X_arbitrary,
         )

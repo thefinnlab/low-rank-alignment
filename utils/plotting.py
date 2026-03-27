@@ -310,7 +310,7 @@ def plot_svd_corrs(corrs_trunc, full_corrs, lags, title, save_path, best_k):
 
 def plot_rrr_rank_results(
     summary_df, grid_df=None, title="RRR: perf vs rank", save_path=None,
-    overlay_summary_df=None, overlay_label="RRR",
+    overlay_summary_df=None, overlay_label="RRR", primary_label="rrr",
 ):
     """Multi-panel figure summarising RRR rank analysis.
 
@@ -326,6 +326,17 @@ def plot_rrr_rank_results(
         Panel 7: pred_r2 vs rank (R² of rank-k vs full predictions).
         Panel 8: Fold × rank heatmap of recovery_corr.
 
+    Row 3 (effective rank — shown when effective_rank column exists):
+        Panel 9: Effective rank of A vs configured rank k.
+
+    Row A (primary cross-model metrics — shown when {primary_label}_*_pred_corr exists):
+        Panel A1: Prediction correlation between primary model and comparison models.
+        Panel A2: Joint model correlation alongside individual model correlations.
+
+    Row B (complement cross-model metrics — shown when complement_*_pred_corr exists):
+        Panel B1: Prediction correlation between complement and comparison models.
+        Panel B2: Joint model correlation alongside individual model correlations.
+
     Args:
         summary_df: DataFrame with columns [k, full_r2, minimal_r2, recovery_r2]
             averaged over folds (i.e. summary.csv). May also contain
@@ -337,6 +348,8 @@ def plot_rrr_rank_results(
         overlay_summary_df: Optional second summary DataFrame to overlay as dashed
             lines (e.g. RRR results on a PCA plot). Must have the same column schema.
         overlay_label: Legend label prefix for the overlay traces.
+        primary_label: Label prefix identifying the primary model's cross-model columns
+            (e.g. "rrr", "nr", "pca"). Used to find {primary_label}_{x}_pred_corr cols.
 
     Returns:
         matplotlib Figure when save_path is None, else None.
@@ -347,158 +360,132 @@ def plot_rrr_rank_results(
     has_corr = (
         "full_corr" in summary_df.columns and "minimal_corr" in summary_df.columns
     )
-    has_sig_split = "minimal_corr_sig" in summary_df.columns
     has_effective_rank = "effective_rank" in summary_df.columns
-    has_row3 = has_sig_split or has_effective_rank
+
+    # Detect cross-model columns
+    _comparisons = ["full", "complement", "arbitrary"]
+    primary_pred_cols = {
+        x: f"{primary_label}_{x}_pred_corr"
+        for x in _comparisons
+        if f"{primary_label}_{x}_pred_corr" in summary_df.columns
+    }
+    primary_joint_cols = {
+        x: f"{primary_label}_{x}_joint_corr"
+        for x in _comparisons
+        if f"{primary_label}_{x}_joint_corr" in summary_df.columns
+    }
+    complement_pred_cols = {
+        x: f"complement_{x}_pred_corr"
+        for x in ["full", "arbitrary"]
+        if f"complement_{x}_pred_corr" in summary_df.columns
+    }
+    complement_joint_cols = {
+        x: f"complement_{x}_joint_corr"
+        for x in ["full", "arbitrary"]
+        if f"complement_{x}_joint_corr" in summary_df.columns
+    }
+    has_primary_cross = bool(primary_pred_cols)
+    has_complement_cross = bool(complement_pred_cols)
+
+    # Color/style scheme for cross-model pairs; individual model corr cols
+    _pair_colors = {"full": "#3b82f6", "complement": "#8b5cf6", "arbitrary": "#78716c"}
+    _indiv_corr_cols = {
+        "full": "full_corr",
+        "complement": "complement_corr",
+        "arbitrary": "arbitrary_corr",
+    }
 
     n_cols = 4 if has_folds else 3
-    n_rows = 1 + int(has_corr) + int(has_row3)
+    n_rows = (1 + int(has_corr) + int(has_effective_rank)
+              + int(has_primary_cross) + int(has_complement_cross))
     fig, axes = plt.subplots(n_rows, n_cols, figsize=(7 * n_cols, 4.5 * n_rows))
     if n_rows == 1:
         axes = axes[np.newaxis, :]  # uniform 2D indexing
 
     ks = summary_df["k"].values
+
+    # ---- Local helpers to eliminate repeated semilogx boilerplate ----
+
+    def _fold_traces(ax, col, color):
+        """Draw per-fold background traces for col from grid_df."""
+        if has_folds and col in grid_df.columns:
+            for _, fd in grid_df.groupby("fold"):
+                ax.semilogx(fd["k"], fd[col], color=color, alpha=0.2, linewidth=0.8)
+
+    def _mean_line(ax, col, df, color, label, ls="-", mk="o", ms=4):
+        """Draw the mean line for col from df (no-op if col absent)."""
+        if col in df.columns:
+            ax.semilogx(
+                df["k"], df[col], color=color, linestyle=ls,
+                marker=mk, markersize=ms, label=label, linewidth=1.5,
+            )
+
+    def _overlay_line(ax, col, color, label):
+        """Draw an overlay line if overlay_summary_df has the column."""
+        if overlay_summary_df is not None and col in overlay_summary_df.columns:
+            ax.semilogx(
+                overlay_summary_df["k"], overlay_summary_df[col],
+                color=color, linestyle="--", marker="s", markersize=3,
+                label=label, linewidth=1.2, alpha=0.7,
+            )
+
+    def _panel_finish(ax, xlabel, ylabel, ptitle, hline=None):
+        """Apply standard panel labels, title, legend, and optional hline."""
+        if hline is not None:
+            ax.axhline(hline, color="black", linewidth=0.5, linestyle=":")
+        ax.set_xlabel(xlabel)
+        ax.set_ylabel(ylabel)
+        ax.set_title(ptitle)
+        ax.legend(fontsize=8)
+
+    # ===== Row 1: R² panels =====
+
     gap = summary_df["full_r2"].values - summary_df["minimal_r2"].values
     ratio = summary_df["minimal_r2"].values / np.where(
         summary_df["full_r2"].values > 0, summary_df["full_r2"].values, np.nan
     )
 
-    # ===== Row 1: R² panels =====
-
     # --- Panel 1: gap + recovery_r2 ---
     ax1 = axes[0, 0]
     if has_folds:
-        for _, fold_df in grid_df.groupby("fold"):
-            fold_gap = fold_df["full_r2"].values - fold_df["minimal_r2"].values
-            ax1.semilogx(
-                fold_df["k"], fold_gap, color="#f59e0b", alpha=0.2, linewidth=0.8
-            )
-        if "recovery_r2" in grid_df.columns:
-            for _, fold_df in grid_df.groupby("fold"):
-                ax1.semilogx(
-                    fold_df["k"],
-                    fold_df["recovery_r2"],
-                    color="#ef4444",
-                    alpha=0.2,
-                    linewidth=0.8,
-                )
-
-    ax1.semilogx(
-        ks,
-        gap,
-        color="#f59e0b",
-        linestyle="-",
-        marker="o",
-        markersize=4,
-        label="full_r2 − minimal_r2 (gap)",
-        linewidth=1.5,
-    )
-    if "recovery_r2" in summary_df.columns:
-        ax1.semilogx(
-            ks,
-            summary_df["recovery_r2"],
-            color="#ef4444",
-            linestyle="-",
-            marker="o",
-            markersize=4,
-            label="recovery_r2 (residual)",
-            linewidth=1.5,
-        )
-    ax1.axhline(0, color="black", linewidth=0.5, linestyle=":")
-    ax1.set_xlabel("Rank k")
-    ax1.set_ylabel("R²")
-    ax1.set_title(f"{title}\n(gap + residual)")
-    ax1.legend(fontsize=8)
+        for _, fd in grid_df.groupby("fold"):
+            fold_gap = fd["full_r2"].values - fd["minimal_r2"].values
+            ax1.semilogx(fd["k"], fold_gap, color="#f59e0b", alpha=0.2, linewidth=0.8)
+        _fold_traces(ax1, "recovery_r2", "#ef4444")
+    ax1.semilogx(ks, gap, color="#f59e0b", linestyle="-", marker="o", markersize=4,
+                 label="full_r2 − minimal_r2 (gap)", linewidth=1.5)
+    _mean_line(ax1, "recovery_r2", summary_df, "#ef4444", "recovery_r2 (residual)")
+    _panel_finish(ax1, "Rank k", "R²", f"{title}\n(gap + residual)", hline=0)
 
     # --- Panel 2: absolute R² ---
     ax2 = axes[0, 1]
-    if has_folds:
-        for _, fold_df in grid_df.groupby("fold"):
-            ax2.semilogx(
-                fold_df["k"],
-                fold_df["full_r2"],
-                color="#9ca3af",
-                alpha=0.2,
-                linewidth=0.8,
-            )
-            ax2.semilogx(
-                fold_df["k"],
-                fold_df["minimal_r2"],
-                color="#3b82f6",
-                alpha=0.2,
-                linewidth=0.8,
-            )
-
-    ax2.semilogx(
-        ks,
-        summary_df["full_r2"],
-        color="#9ca3af",
-        linestyle="--",
-        marker="o",
-        markersize=4,
-        label="full_r2 (ceiling)",
-        linewidth=1.5,
-    )
-    ax2.semilogx(
-        ks,
-        summary_df["minimal_r2"],
-        color="#3b82f6",
-        linestyle="-",
-        marker="o",
-        markersize=4,
-        label="minimal_r2 (RRR)",
-        linewidth=1.5,
-    )
-    if overlay_summary_df is not None and "minimal_r2" in overlay_summary_df.columns:
-        ov_ks = overlay_summary_df["k"].values
-        ax2.semilogx(
-            ov_ks, overlay_summary_df["minimal_r2"],
-            color="#dc2626", linestyle="--", marker="s", markersize=3,
-            label=f"minimal_r2 ({overlay_label})", linewidth=1.2, alpha=0.7,
-        )
-    ax2.axhline(0, color="black", linewidth=0.5, linestyle=":")
-    ax2.set_xlabel("Rank k")
-    ax2.set_ylabel("R²")
-    ax2.set_title(f"{title}\n(absolute R²)")
-    ax2.legend(fontsize=8)
+    _fold_traces(ax2, "full_r2", "#9ca3af")
+    _fold_traces(ax2, "minimal_r2", "#3b82f6")
+    _mean_line(ax2, "full_r2", summary_df, "#9ca3af", "full_r2 (ceiling)", ls="--")
+    _mean_line(ax2, "minimal_r2", summary_df, "#3b82f6", "minimal_r2 (RRR)")
+    _overlay_line(ax2, "minimal_r2", "#dc2626", f"minimal_r2 ({overlay_label})")
+    _panel_finish(ax2, "Rank k", "R²", f"{title}\n(absolute R²)", hline=0)
 
     # --- Panel 3: ratio minimal_r2 / full_r2 ---
     ax3 = axes[0, 2]
     if has_folds:
-        for _, fold_df in grid_df.groupby("fold"):
-            fold_ratio = fold_df["minimal_r2"].values / np.where(
-                fold_df["full_r2"].values > 0, fold_df["full_r2"].values, np.nan
+        for _, fd in grid_df.groupby("fold"):
+            fold_ratio = fd["minimal_r2"].values / np.where(
+                fd["full_r2"].values > 0, fd["full_r2"].values, np.nan
             )
-            ax3.semilogx(
-                fold_df["k"], fold_ratio, color="#8b5cf6", alpha=0.2, linewidth=0.8
-            )
-
-    ax3.semilogx(
-        ks,
-        ratio,
-        color="#8b5cf6",
-        linestyle="-",
-        marker="o",
-        markersize=4,
-        label="minimal_r2 / full_r2",
-        linewidth=1.5,
-    )
+            ax3.semilogx(fd["k"], fold_ratio, color="#8b5cf6", alpha=0.2, linewidth=0.8)
+    ax3.semilogx(ks, ratio, color="#8b5cf6", linestyle="-", marker="o", markersize=4,
+                 label="minimal_r2 / full_r2", linewidth=1.5)
     if overlay_summary_df is not None and "minimal_r2" in overlay_summary_df.columns:
-        ov_ks = overlay_summary_df["k"].values
         ov_ratio = overlay_summary_df["minimal_r2"].values / np.where(
             overlay_summary_df["full_r2"].values > 0,
             overlay_summary_df["full_r2"].values, np.nan,
         )
-        ax3.semilogx(
-            ov_ks, ov_ratio,
-            color="#dc2626", linestyle="--", marker="s", markersize=3,
-            label=f"ratio ({overlay_label})", linewidth=1.2, alpha=0.7,
-        )
-    ax3.axhline(1, color="black", linewidth=0.5, linestyle=":")
-    ax3.set_xlabel("Rank k")
-    ax3.set_ylabel("Fraction of ceiling")
-    ax3.set_title(f"{title}\n(normalised ratio)")
-    ax3.legend(fontsize=8)
+        ax3.semilogx(overlay_summary_df["k"], ov_ratio,
+                     color="#dc2626", linestyle="--", marker="s", markersize=3,
+                     label=f"ratio ({overlay_label})", linewidth=1.2, alpha=0.7)
+    _panel_finish(ax3, "Rank k", "Fraction of ceiling",
+                  f"{title}\n(normalised ratio)", hline=1)
 
     # --- Panel 4: heatmap recovery_r2 per fold ---
     if has_folds:
@@ -509,7 +496,6 @@ def plot_rrr_rank_results(
         hm = np.full((len(folds), len(ks_ord)), np.nan)
         for _, row in grid_df.iterrows():
             hm[f_idx[row["fold"]], k_idx[row["k"]]] = row["recovery_r2"]
-
         ax4 = axes[0, 3]
         im = ax4.imshow(hm, aspect="auto", cmap="Reds_r")
         ax4.set_xticks(range(len(ks_ord)))
@@ -523,108 +509,26 @@ def plot_rrr_rank_results(
     # ===== Row 2: Correlation panels (only when correlation data available) =====
 
     if has_corr:
-        # --- Panel 5: absolute correlations + recovery_corr ---
+        # --- Panel 5: absolute correlations ---
         ax5 = axes[1, 0]
-        if has_folds:
-            for _, fold_df in grid_df.groupby("fold"):
-                ax5.semilogx(
-                    fold_df["k"],
-                    fold_df["full_corr"],
-                    color="#9ca3af",
-                    alpha=0.2,
-                    linewidth=0.8,
-                )
-                ax5.semilogx(
-                    fold_df["k"],
-                    fold_df["minimal_corr"],
-                    color="#10b981",
-                    alpha=0.2,
-                    linewidth=0.8,
-                )
-                if "recovery_corr" in fold_df.columns:
-                    ax5.semilogx(
-                        fold_df["k"],
-                        fold_df["recovery_corr"],
-                        color="#ef4444",
-                        alpha=0.2,
-                        linewidth=0.8,
-                    )
-
-        ax5.semilogx(
-            ks,
-            summary_df["full_corr"],
-            color="#9ca3af",
-            linestyle="--",
-            marker="o",
-            markersize=4,
-            label="full_corr (ceiling)",
-            linewidth=1.5,
-        )
-        ax5.semilogx(
-            ks,
-            summary_df["minimal_corr"],
-            color="#10b981",
-            linestyle="-",
-            marker="o",
-            markersize=4,
-            label="minimal_corr (RRR)",
-            linewidth=1.5,
-        )
-        if "recovery_corr" in summary_df.columns:
-            ax5.semilogx(
-                ks,
-                summary_df["recovery_corr"],
-                color="#ef4444",
-                linestyle="-",
-                marker="o",
-                markersize=4,
-                label="recovery_corr (residual)",
-                linewidth=1.5,
-            )
-        # Complement curves (if present)
-        if "complement_corr" in summary_df.columns:
-            ax5.semilogx(
-                ks, summary_df["complement_corr"],
-                color="#8b5cf6", linestyle="--", marker="^", markersize=4,
-                label="complement_corr", linewidth=1.5,
-            )
-        if "complement_recovery_corr" in summary_df.columns:
-            ax5.semilogx(
-                ks, summary_df["complement_recovery_corr"],
-                color="#8b5cf6", linestyle=":", marker="^", markersize=4,
-                label="complement_recovery_corr", linewidth=1.5,
-            )
-        # Arbitrary curves (if present)
-        if "arbitrary_corr" in summary_df.columns:
-            ax5.semilogx(
-                ks, summary_df["arbitrary_corr"],
-                color="#78716c", linestyle="--", marker="D", markersize=3,
-                label="arbitrary_corr", linewidth=1.5,
-            )
-        if "arbitrary_recovery_corr" in summary_df.columns:
-            ax5.semilogx(
-                ks, summary_df["arbitrary_recovery_corr"],
-                color="#78716c", linestyle=":", marker="D", markersize=3,
-                label="arbitrary_recovery_corr", linewidth=1.5,
-            )
-        if overlay_summary_df is not None and "minimal_corr" in overlay_summary_df.columns:
-            ov_ks = overlay_summary_df["k"].values
-            ax5.semilogx(
-                ov_ks, overlay_summary_df["minimal_corr"],
-                color="#dc2626", linestyle="--", marker="s", markersize=3,
-                label=f"minimal_corr ({overlay_label})", linewidth=1.2, alpha=0.7,
-            )
-            if "recovery_corr" in overlay_summary_df.columns:
-                ax5.semilogx(
-                    ov_ks, overlay_summary_df["recovery_corr"],
-                    color="#991b1b", linestyle="--", marker="s", markersize=3,
-                    label=f"recovery_corr ({overlay_label})", linewidth=1.2, alpha=0.7,
-                )
-        ax5.axhline(0, color="black", linewidth=0.5, linestyle=":")
-        ax5.set_xlabel("Rank k")
-        ax5.set_ylabel("Correlation")
-        ax5.set_title(f"{title}\n(absolute correlation)")
-        ax5.legend(fontsize=8)
+        _fold_traces(ax5, "full_corr", "#9ca3af")
+        _fold_traces(ax5, "minimal_corr", "#10b981")
+        _fold_traces(ax5, "recovery_corr", "#ef4444")
+        _mean_line(ax5, "full_corr", summary_df, "#9ca3af", "full_corr (ceiling)", ls="--")
+        _mean_line(ax5, "minimal_corr", summary_df, "#10b981", "minimal_corr (RRR)")
+        _mean_line(ax5, "recovery_corr", summary_df, "#ef4444", "recovery_corr (residual)")
+        _mean_line(ax5, "complement_corr", summary_df, "#8b5cf6", "complement_corr",
+                   ls="--", mk="^")
+        _mean_line(ax5, "complement_recovery_corr", summary_df, "#8b5cf6",
+                   "complement_recovery_corr", ls=":", mk="^")
+        _mean_line(ax5, "arbitrary_corr", summary_df, "#78716c", "arbitrary_corr",
+                   ls="--", mk="D", ms=3)
+        _mean_line(ax5, "arbitrary_recovery_corr", summary_df, "#78716c",
+                   "arbitrary_recovery_corr", ls=":", mk="D", ms=3)
+        _overlay_line(ax5, "minimal_corr", "#dc2626", f"minimal_corr ({overlay_label})")
+        _overlay_line(ax5, "recovery_corr", "#991b1b", f"recovery_corr ({overlay_label})")
+        _panel_finish(ax5, "Rank k", "Correlation",
+                      f"{title}\n(absolute correlation)", hline=0)
 
         # --- Panel 6: ratio minimal_corr / full_corr ---
         ax6 = axes[1, 1]
@@ -632,80 +536,33 @@ def plot_rrr_rank_results(
             summary_df["full_corr"].values > 0, summary_df["full_corr"].values, np.nan
         )
         if has_folds:
-            for _, fold_df in grid_df.groupby("fold"):
-                fold_corr_ratio = fold_df["minimal_corr"].values / np.where(
-                    fold_df["full_corr"].values > 0, fold_df["full_corr"].values, np.nan
+            for _, fd in grid_df.groupby("fold"):
+                fold_corr_ratio = fd["minimal_corr"].values / np.where(
+                    fd["full_corr"].values > 0, fd["full_corr"].values, np.nan
                 )
-                ax6.semilogx(
-                    fold_df["k"],
-                    fold_corr_ratio,
-                    color="#8b5cf6",
-                    alpha=0.2,
-                    linewidth=0.8,
-                )
-
-        ax6.semilogx(
-            ks,
-            corr_ratio,
-            color="#8b5cf6",
-            linestyle="-",
-            marker="o",
-            markersize=4,
-            label="minimal_corr / full_corr",
-            linewidth=1.5,
-        )
+                ax6.semilogx(fd["k"], fold_corr_ratio,
+                             color="#8b5cf6", alpha=0.2, linewidth=0.8)
+        ax6.semilogx(ks, corr_ratio, color="#8b5cf6", linestyle="-", marker="o",
+                     markersize=4, label="minimal_corr / full_corr", linewidth=1.5)
         if overlay_summary_df is not None and "minimal_corr" in overlay_summary_df.columns:
-            ov_ks = overlay_summary_df["k"].values
             ov_corr_ratio = overlay_summary_df["minimal_corr"].values / np.where(
                 overlay_summary_df["full_corr"].values > 0,
                 overlay_summary_df["full_corr"].values, np.nan,
             )
-            ax6.semilogx(
-                ov_ks, ov_corr_ratio,
-                color="#dc2626", linestyle="--", marker="s", markersize=3,
-                label=f"ratio ({overlay_label})", linewidth=1.2, alpha=0.7,
-            )
-        ax6.axhline(1, color="black", linewidth=0.5, linestyle=":")
-        ax6.set_xlabel("Rank k")
-        ax6.set_ylabel("Fraction of ceiling")
-        ax6.set_title(f"{title}\n(correlation ratio)")
-        ax6.legend(fontsize=8)
+            ax6.semilogx(overlay_summary_df["k"], ov_corr_ratio,
+                         color="#dc2626", linestyle="--", marker="s", markersize=3,
+                         label=f"ratio ({overlay_label})", linewidth=1.2, alpha=0.7)
+        _panel_finish(ax6, "Rank k", "Fraction of ceiling",
+                      f"{title}\n(correlation ratio)", hline=1)
 
         # --- Panel 7: pred_r2 vs rank ---
         ax7 = axes[1, 2]
+        _fold_traces(ax7, "pred_r2", "#f97316")
+        _mean_line(ax7, "pred_r2", summary_df, "#f97316", "pred_r2")
+        _overlay_line(ax7, "pred_r2", "#dc2626", f"pred_r2 ({overlay_label})")
         if "pred_r2" in summary_df.columns:
-            if has_folds and "pred_r2" in grid_df.columns:
-                for _, fold_df in grid_df.groupby("fold"):
-                    ax7.semilogx(
-                        fold_df["k"],
-                        fold_df["pred_r2"],
-                        color="#f97316",
-                        alpha=0.2,
-                        linewidth=0.8,
-                    )
-
-            ax7.semilogx(
-                ks,
-                summary_df["pred_r2"],
-                color="#f97316",
-                linestyle="-",
-                marker="o",
-                markersize=4,
-                label="pred_r2",
-                linewidth=1.5,
-            )
-            if overlay_summary_df is not None and "pred_r2" in overlay_summary_df.columns:
-                ov_ks = overlay_summary_df["k"].values
-                ax7.semilogx(
-                    ov_ks, overlay_summary_df["pred_r2"],
-                    color="#dc2626", linestyle="--", marker="s", markersize=3,
-                    label=f"pred_r2 ({overlay_label})", linewidth=1.2, alpha=0.7,
-                )
-            ax7.axhline(1, color="black", linewidth=0.5, linestyle=":")
-            ax7.set_xlabel("Rank k")
-            ax7.set_ylabel("R² (Y_hat_full as target)")
-            ax7.set_title(f"{title}\n(pred R²: rank-k vs full)")
-            ax7.legend(fontsize=8)
+            _panel_finish(ax7, "Rank k", "R² (Y_hat_full as target)",
+                          f"{title}\n(pred R²: rank-k vs full)", hline=1)
 
         # --- Panel 8: heatmap recovery_corr per fold ---
         if has_folds and "recovery_corr" in grid_df.columns:
@@ -713,7 +570,6 @@ def plot_rrr_rank_results(
             hm_corr = np.full((len(folds), len(ks_ord)), np.nan)
             for _, row in grid_df.iterrows():
                 hm_corr[f_idx[row["fold"]], k_idx[row["k"]]] = row["recovery_corr"]
-
             im2 = ax8.imshow(hm_corr, aspect="auto", cmap="Reds_r")
             ax8.set_xticks(range(len(ks_ord)))
             ax8.set_xticklabels([str(k) for k in ks_ord], rotation=45, ha="right")
@@ -723,209 +579,81 @@ def plot_rrr_rank_results(
             ax8.set_title("Recovery corr per fold\n(lower = more sufficient)")
             plt.colorbar(im2, ax=ax8, label="recovery_corr")
 
-    # ===== Row 3: Sig/non-sig split + effective rank (when available) =====
+    # ===== Row 3: Effective rank (when available) =====
 
-    row3_idx = 1 + int(has_corr)  # row index for row 3
+    next_row = 1 + int(has_corr)
 
-    if has_row3 and has_sig_split:
-        # --- Panel: Sig correlations vs k ---
-        ax_sig = axes[row3_idx, 0]
-        if has_folds:
-            for _, fold_df in grid_df.groupby("fold"):
-                ax_sig.semilogx(
-                    fold_df["k"],
-                    fold_df["minimal_corr_sig"],
-                    color="#10b981",
-                    alpha=0.2,
-                    linewidth=0.8,
-                )
-        ax_sig.semilogx(
-            ks,
-            summary_df["full_corr_sig"],
-            color="#9ca3af",
-            linestyle="--",
-            marker="o",
-            markersize=4,
-            label="full_corr_sig (ceiling)",
-            linewidth=1.5,
-        )
-        ax_sig.semilogx(
-            ks,
-            summary_df["minimal_corr_sig"],
-            color="#10b981",
-            linestyle="-",
-            marker="o",
-            markersize=4,
-            label="minimal_corr_sig (RRR)",
-            linewidth=1.5,
-        )
-        if "recovery_corr_sig" in summary_df.columns:
-            ax_sig.semilogx(
-                ks,
-                summary_df["recovery_corr_sig"],
-                color="#ef4444",
-                linestyle="-",
-                marker="o",
-                markersize=4,
-                label="recovery_corr_sig",
-                linewidth=1.5,
-            )
-        if "complement_corr_sig" in summary_df.columns:
-            ax_sig.semilogx(
-                ks, summary_df["complement_corr_sig"],
-                color="#8b5cf6", linestyle="--", marker="^", markersize=4,
-                label="complement_corr_sig", linewidth=1.5,
-            )
-        if "arbitrary_corr_sig" in summary_df.columns:
-            ax_sig.semilogx(
-                ks, summary_df["arbitrary_corr_sig"],
-                color="#78716c", linestyle="--", marker="D", markersize=3,
-                label="arbitrary_corr_sig", linewidth=1.5,
-            )
-        ax_sig.axhline(0, color="black", linewidth=0.5, linestyle=":")
-        ax_sig.set_xlabel("Rank k")
-        ax_sig.set_ylabel("Correlation")
-        ax_sig.set_title(f"{title}\n(significant lags)")
-        ax_sig.legend(fontsize=8)
-
-        # --- Panel: Non-sig correlations vs k ---
-        ax_nonsig = axes[row3_idx, 1]
-        if has_folds:
-            for _, fold_df in grid_df.groupby("fold"):
-                ax_nonsig.semilogx(
-                    fold_df["k"],
-                    fold_df["minimal_corr_nonsig"],
-                    color="#f97316",
-                    alpha=0.2,
-                    linewidth=0.8,
-                )
-        ax_nonsig.semilogx(
-            ks,
-            summary_df["full_corr_nonsig"],
-            color="#9ca3af",
-            linestyle="--",
-            marker="o",
-            markersize=4,
-            label="full_corr_nonsig (ceiling)",
-            linewidth=1.5,
-        )
-        ax_nonsig.semilogx(
-            ks,
-            summary_df["minimal_corr_nonsig"],
-            color="#f97316",
-            linestyle="-",
-            marker="o",
-            markersize=4,
-            label="minimal_corr_nonsig (RRR)",
-            linewidth=1.5,
-        )
-        if "recovery_corr_nonsig" in summary_df.columns:
-            ax_nonsig.semilogx(
-                ks,
-                summary_df["recovery_corr_nonsig"],
-                color="#ef4444",
-                linestyle="-",
-                marker="o",
-                markersize=4,
-                label="recovery_corr_nonsig",
-                linewidth=1.5,
-            )
-        if "complement_corr_nonsig" in summary_df.columns:
-            ax_nonsig.semilogx(
-                ks, summary_df["complement_corr_nonsig"],
-                color="#8b5cf6", linestyle="--", marker="^", markersize=4,
-                label="complement_corr_nonsig", linewidth=1.5,
-            )
-        if "arbitrary_corr_nonsig" in summary_df.columns:
-            ax_nonsig.semilogx(
-                ks, summary_df["arbitrary_corr_nonsig"],
-                color="#78716c", linestyle="--", marker="D", markersize=3,
-                label="arbitrary_corr_nonsig", linewidth=1.5,
-            )
-        ax_nonsig.axhline(0, color="black", linewidth=0.5, linestyle=":")
-        ax_nonsig.set_xlabel("Rank k")
-        ax_nonsig.set_ylabel("Correlation")
-        ax_nonsig.set_title(f"{title}\n(non-significant lags)")
-        ax_nonsig.legend(fontsize=8)
-
-        # --- Panel: Sig vs non-sig overlay ---
-        ax_overlay = axes[row3_idx, 2]
-        if has_folds:
-            for _, fold_df in grid_df.groupby("fold"):
-                ax_overlay.semilogx(
-                    fold_df["k"],
-                    fold_df["minimal_corr_sig"],
-                    color="#10b981",
-                    alpha=0.2,
-                    linewidth=0.8,
-                )
-                ax_overlay.semilogx(
-                    fold_df["k"],
-                    fold_df["minimal_corr_nonsig"],
-                    color="#f97316",
-                    alpha=0.2,
-                    linewidth=0.8,
-                )
-        ax_overlay.semilogx(
-            ks,
-            summary_df["minimal_corr_sig"],
-            color="#10b981",
-            linestyle="-",
-            marker="o",
-            markersize=4,
-            label="sig",
-            linewidth=1.5,
-        )
-        ax_overlay.semilogx(
-            ks,
-            summary_df["minimal_corr_nonsig"],
-            color="#f97316",
-            linestyle="-",
-            marker="o",
-            markersize=4,
-            label="non-sig",
-            linewidth=1.5,
-        )
-        ax_overlay.axhline(0, color="black", linewidth=0.5, linestyle=":")
-        ax_overlay.set_xlabel("Rank k")
-        ax_overlay.set_ylabel("Correlation")
-        ax_overlay.set_title(f"{title}\n(sig vs non-sig)")
-        ax_overlay.legend(fontsize=8)
-
-    if has_row3 and has_effective_rank:
-        # --- Panel: Effective rank vs k ---
-        col_idx = 3 if has_sig_split else 0
-        ax_rank = axes[row3_idx, col_idx]
-        if has_folds:
-            for _, fold_df in grid_df.groupby("fold"):
-                ax_rank.plot(
-                    fold_df["k"],
-                    fold_df["effective_rank"],
-                    color="#6366f1",
-                    alpha=0.2,
-                    linewidth=0.8,
-                    marker=".",
-                    markersize=3,
-                )
-        ax_rank.plot(
-            ks,
-            summary_df["effective_rank"],
-            color="#6366f1",
-            linestyle="-",
-            marker="o",
-            markersize=4,
-            label="effective rank",
-            linewidth=1.5,
-        )
-        # y = x reference line
+    if has_effective_rank:
+        ax_rank = axes[next_row, 0]
+        if has_folds and "effective_rank" in grid_df.columns:
+            for _, fd in grid_df.groupby("fold"):
+                ax_rank.plot(fd["k"], fd["effective_rank"], color="#6366f1",
+                             alpha=0.2, linewidth=0.8, marker=".", markersize=3)
+        ax_rank.plot(ks, summary_df["effective_rank"], color="#6366f1", linestyle="-",
+                     marker="o", markersize=4, label="effective rank", linewidth=1.5)
         k_range = np.array([ks.min(), ks.max()])
-        ax_rank.plot(
-            k_range, k_range, color="black", linewidth=0.8, linestyle=":", label="y = k"
-        )
+        ax_rank.plot(k_range, k_range, color="black", linewidth=0.8, linestyle=":",
+                     label="y = k")
         ax_rank.set_xlabel("Configured rank k")
         ax_rank.set_ylabel("Effective rank")
         ax_rank.set_title(f"{title}\n(effective rank of A)")
         ax_rank.legend(fontsize=8)
+        for ci in range(1, n_cols):
+            axes[next_row, ci].set_visible(False)
+        next_row += 1
+
+    # ===== Helper: draw a cross-model row (pred + joint panels) =====
+
+    def _cross_model_row(row_idx, pred_cols, joint_cols, source_label):
+        """Render prediction-corr and joint-corr panels for one cross-model row.
+
+        For the joint panel, each comparison model's individual correlation is
+        also drawn alongside the joint line so the improvement is immediately
+        visible.
+        """
+        ax_pred = axes[row_idx, 0]
+        ax_joint = axes[row_idx, 1]
+
+        # Prediction correlation panel
+        for x, col in pred_cols.items():
+            color = _pair_colors.get(x, "#6b7280")
+            _mean_line(ax_pred, col, summary_df, color,
+                       f"{source_label} vs {x}", ls="-", mk="o")
+        _panel_finish(ax_pred, "Rank k", "Prediction correlation",
+                      f"{title}\n({source_label}: prediction correlation with other models)",
+                      hline=0)
+
+        # Joint correlation panel — also show individual model corrs for comparison
+        # Source model individual corr (shown once)
+        source_indiv_col = "minimal_corr" if source_label == primary_label else "complement_corr"
+        _mean_line(ax_joint, source_indiv_col, summary_df, "#10b981",
+                   f"{source_label} (indiv)", ls="-", mk="o")
+        # Comparison model individual corrs and joint lines
+        for x, col in joint_cols.items():
+            color = _pair_colors.get(x, "#6b7280")
+            indiv_col = _indiv_corr_cols.get(x)
+            if indiv_col:
+                _mean_line(ax_joint, indiv_col, summary_df, color,
+                           f"{x} (indiv)", ls="-", mk="o")
+            _mean_line(ax_joint, col, summary_df, color,
+                       f"{source_label}+{x} joint", ls="--", mk="s")
+        _panel_finish(ax_joint, "Rank k", "Correlation",
+                      f"{title}\n({source_label}: joint vs individual [unique variance])",
+                      hline=0)
+
+        for ci in range(2, n_cols):
+            axes[row_idx, ci].set_visible(False)
+
+    # ===== Row A: Primary model cross-model metrics =====
+
+    if has_primary_cross:
+        _cross_model_row(next_row, primary_pred_cols, primary_joint_cols, primary_label)
+        next_row += 1
+
+    # ===== Row B: Complement cross-model metrics =====
+
+    if has_complement_cross:
+        _cross_model_row(next_row, complement_pred_cols, complement_joint_cols, "complement")
 
     fig.tight_layout()
 
@@ -1278,7 +1006,7 @@ def plot_corrs_vs_arbitrary(corrs, corrs_arb, lags, save_path=None):
 
 
 def plot_sae_corrs_vs_full(corrs_sae, corrs_full, lags, corrs_rrr=None,
-                           title=None, save_path=None, sig_mask=None):
+                           title=None, save_path=None):
     """Plot SAE correlation timecourse vs full encoding model baseline.
 
     Args:
@@ -1289,46 +1017,21 @@ def plot_sae_corrs_vs_full(corrs_sae, corrs_full, lags, corrs_rrr=None,
             per-target correlations (linear regression from RRR subspace, no SAE).
         title: Optional plot title.
         save_path: If given, save figure here; otherwise call plt.show().
-        sig_mask: Optional (n_electrodes, n_lags) boolean mask of significant pairs.
-            When provided, two additional panels are added for sig-only and nonsig-only.
     """
     import matplotlib.pyplot as plt
 
-    ncols = 3 if sig_mask is not None else 1
-    fig, axes = plt.subplots(1, ncols, figsize=(8 * ncols, 4), squeeze=False)
+    fig, axes = plt.subplots(1, 1, figsize=(8, 4), squeeze=False)
 
-    def _plot_panel(ax, corrs_sae_p, corrs_full_p, corrs_rrr_p, panel_title):
-        add_corrs(corrs_full_p, lags, label="Full model", color="blue", ax=ax)
-        if corrs_rrr_p is not None:
-            add_corrs(corrs_rrr_p, lags, label="RRR direct", color="green", ax=ax)
-        add_corrs(corrs_sae_p, lags, label="SAE", color="orange", ax=ax)
-        ax.axhline(0, color="black", linewidth=0.5)
-        ax.set_xlabel("Lag (s)")
-        ax.set_ylabel("Correlation")
-        ax.set_title(panel_title)
-        ax.legend()
-
-    # Panel 1: all electrode-lag pairs
-    panel_title = title or "All"
-    _plot_panel(axes[0, 0], corrs_sae, corrs_full, corrs_rrr, panel_title)
-
-    if sig_mask is not None:
-        mask = sig_mask[None, :, :]  # broadcast to (1, n_electrodes, n_lags)
-
-        # Panel 2: significant pairs only
-        corrs_sae_sig = np.where(mask, corrs_sae, np.nan)
-        corrs_full_sig = np.where(mask, corrs_full, np.nan)
-        corrs_rrr_sig = np.where(mask, corrs_rrr, np.nan) if corrs_rrr is not None else None
-        _plot_panel(axes[0, 1], corrs_sae_sig, corrs_full_sig, corrs_rrr_sig,
-                    "Significant only")
-
-        # Panel 3: non-significant pairs only
-        nonsig = ~mask
-        corrs_sae_nonsig = np.where(nonsig, corrs_sae, np.nan)
-        corrs_full_nonsig = np.where(nonsig, corrs_full, np.nan)
-        corrs_rrr_nonsig = np.where(nonsig, corrs_rrr, np.nan) if corrs_rrr is not None else None
-        _plot_panel(axes[0, 2], corrs_sae_nonsig, corrs_full_nonsig, corrs_rrr_nonsig,
-                    "Non-significant only")
+    ax = axes[0, 0]
+    add_corrs(corrs_full, lags, label="Full model", color="blue", ax=ax)
+    if corrs_rrr is not None:
+        add_corrs(corrs_rrr, lags, label="RRR direct", color="green", ax=ax)
+    add_corrs(corrs_sae, lags, label="SAE", color="orange", ax=ax)
+    ax.axhline(0, color="black", linewidth=0.5)
+    ax.set_xlabel("Lag (s)")
+    ax.set_ylabel("Correlation")
+    ax.set_title(title or "All")
+    ax.legend()
 
     fig.tight_layout()
 
@@ -1340,8 +1043,7 @@ def plot_sae_corrs_vs_full(corrs_sae, corrs_full, lags, corrs_rrr=None,
 
 
 def plot_sae_training_curves(training_log, title="SAE training", save_path=None,
-                             rrr_recovery_corr=None, rrr_recovery_corr_sig=None,
-                             rrr_recovery_corr_nonsig=None):
+                             rrr_recovery_corr=None):
     """Multi-panel figure of SAE training metrics vs epoch/cycle.
 
     Panels (up to 3 rows x 3 columns):
@@ -1358,14 +1060,11 @@ def plot_sae_training_curves(training_log, title="SAE training", save_path=None,
             train_sae_alternating.  Each dict has keys like epoch/cycle,
             mse_loss, l1_loss, total_loss, test_r2, test_corr, l0_sparsity,
             dead_neurons, mean_activation.  Optionally recovery_corr,
-            recovery_r2, recovery_corr_sig, recovery_corr_nonsig when a
-            log_callback was provided during training.
+            recovery_r2 when a log_callback was provided during training.
         title: Figure title.
         save_path: If given, save figure here and close; otherwise return Figure.
         rrr_recovery_corr: If given, draw a horizontal dashed line at this value
             in the recovery correlation panel (RRR baseline for comparison).
-        rrr_recovery_corr_sig: RRR recovery_corr for significant targets only.
-        rrr_recovery_corr_nonsig: RRR recovery_corr for non-significant targets only.
 
     Returns:
         matplotlib Figure when save_path is None, else None.
@@ -1412,18 +1111,7 @@ def plot_sae_training_curves(training_log, title="SAE training", save_path=None,
 
         # Row 1, Panel 3: Test correlation
         ax = axes[0, 2]
-        ax.plot(log_steps, df_logged["test_corr"], marker=".", markersize=3, linewidth=1, label="all")
-        # Sig/nonsig correlation split (from log callback)
-        has_corr_sig = "test_corr_sig" in df_logged.columns
-        df_corr_sig = df_logged.dropna(subset=["test_corr_sig"]) if has_corr_sig else pd.DataFrame()
-        if len(df_corr_sig) > 0:
-            ax.plot(df_corr_sig[step_col], df_corr_sig["test_corr_sig"],
-                    marker=".", markersize=2, linewidth=0.8, alpha=0.7,
-                    color="tab:blue", label="sig")
-            ax.plot(df_corr_sig[step_col], df_corr_sig["test_corr_nonsig"],
-                    marker=".", markersize=2, linewidth=0.8, alpha=0.7,
-                    color="tab:red", label="nonsig")
-            ax.legend(fontsize=7)
+        ax.plot(log_steps, df_logged["test_corr"], marker=".", markersize=3, linewidth=1)
         ax.set_xlabel(step_col)
         ax.set_ylabel("correlation")
         ax.set_title("Test correlation")
@@ -1488,45 +1176,8 @@ def plot_sae_training_curves(training_log, title="SAE training", save_path=None,
         ax.legend(fontsize=8)
         ax.grid(True, alpha=0.3)
 
-        # Panel 2: Sig recovery correlation
-        has_sig = "recovery_corr_sig" in df_recovery.columns
-        df_sig = df_recovery.dropna(subset=["recovery_corr_sig"]) if has_sig else pd.DataFrame()
-        if len(df_sig) > 0:
-            ax = axes[2, 1]
-            sig_steps = df_sig[step_col]
-            ax.plot(sig_steps, df_sig["recovery_corr_sig"],
-                    marker=".", markersize=3, linewidth=1, color="tab:blue",
-                    label="SAE (sig)")
-            if _is_valid(rrr_recovery_corr_sig):
-                ax.axhline(rrr_recovery_corr_sig, color="tab:blue", linestyle="--",
-                            linewidth=1.5, alpha=0.5, label="RRR (sig)")
-            ax.set_xlabel(step_col)
-            ax.set_ylabel("recovery corr")
-            ax.set_title("Sufficiency: recovery corr (sig)")
-            ax.legend(fontsize=8)
-            ax.grid(True, alpha=0.3)
-        else:
-            axes[2, 1].set_visible(False)
-
-        # Panel 3: Non-sig recovery correlation
-        has_nonsig = "recovery_corr_nonsig" in df_recovery.columns
-        df_nonsig = df_recovery.dropna(subset=["recovery_corr_nonsig"]) if has_nonsig else pd.DataFrame()
-        if len(df_nonsig) > 0:
-            ax = axes[2, 2]
-            nonsig_steps = df_nonsig[step_col]
-            ax.plot(nonsig_steps, df_nonsig["recovery_corr_nonsig"],
-                    marker=".", markersize=3, linewidth=1, color="tab:red",
-                    label="SAE (nonsig)")
-            if _is_valid(rrr_recovery_corr_nonsig):
-                ax.axhline(rrr_recovery_corr_nonsig, color="tab:red", linestyle="--",
-                            linewidth=1.5, alpha=0.5, label="RRR (nonsig)")
-            ax.set_xlabel(step_col)
-            ax.set_ylabel("recovery corr")
-            ax.set_title("Sufficiency: recovery corr (nonsig)")
-            ax.legend(fontsize=8)
-            ax.grid(True, alpha=0.3)
-        else:
-            axes[2, 2].set_visible(False)
+        axes[2, 1].set_visible(False)
+        axes[2, 2].set_visible(False)
 
     fig.tight_layout()
 
@@ -1541,17 +1192,13 @@ def plot_sae_recovery_summary(grid_results_df, title="SAE vs RRR recovery",
                               save_path=None):
     """Summary figure comparing SAE vs RRR recovery and prediction quality.
 
-    Layout (up to 2x2):
+    Layout (1x2):
         (0,0): Overall recovery correlation (lower = better).
         (0,1): Prediction correlation (higher = better).
-        (1,0): Sig-only recovery correlation (if available).
-        (1,1): Nonsig-only recovery correlation (if available).
 
     Args:
         grid_results_df: DataFrame with columns fold, recovery_corr,
-            rrr_recovery_corr, correlation, rrr_baseline_corr.  Optionally
-            recovery_corr_sig, recovery_corr_nonsig, rrr_recovery_corr_sig,
-            rrr_recovery_corr_nonsig for significance-stratified panels.
+            rrr_recovery_corr, correlation, rrr_baseline_corr.
         title: Figure title.
         save_path: If given, save figure here and close; otherwise return Figure.
 
@@ -1565,16 +1212,8 @@ def plot_sae_recovery_summary(grid_results_df, title="SAE vs RRR recovery",
     x = np.arange(len(folds))
     width = 0.35
 
-    has_sig_split = (
-        "recovery_corr_sig" in df.columns
-        and "rrr_recovery_corr_sig" in df.columns
-        and df["recovery_corr_sig"].notna().any()
-    )
-
-    n_rows = 2 if has_sig_split else 1
-    fig, axes = plt.subplots(n_rows, 2, figsize=(12, 5 * n_rows))
-    if n_rows == 1:
-        axes = axes[np.newaxis, :]
+    fig, axes = plt.subplots(1, 2, figsize=(12, 5))
+    axes = axes[np.newaxis, :]
     fig.suptitle(title, fontsize=12)
 
     def _recovery_bar_panel(ax, rrr_col, sae_col, panel_title, color="tab:purple"):
@@ -1621,15 +1260,6 @@ def plot_sae_recovery_summary(grid_results_df, title="SAE vs RRR recovery",
     else:
         axes[0, 1].set_visible(False)
 
-    # Row 2: Sig/nonsig split
-    if has_sig_split:
-        _recovery_bar_panel(axes[1, 0], "rrr_recovery_corr_sig", "recovery_corr_sig",
-                            "Sufficiency — sig targets (lower = better)",
-                            color="tab:blue")
-        _recovery_bar_panel(axes[1, 1], "rrr_recovery_corr_nonsig", "recovery_corr_nonsig",
-                            "Sufficiency — nonsig targets (lower = better)",
-                            color="tab:red")
-
     fig.tight_layout()
 
     if save_path is not None:
@@ -1646,12 +1276,8 @@ def plot_sae_recovery_summary(grid_results_df, title="SAE vs RRR recovery",
 # Metrics to include in sweep summary, with direction (True = higher is better)
 _SWEEP_METRICS = [
     ("correlation", True),
-    ("correlation_sig", True),
-    ("correlation_nonsig", True),
     ("r2", True),
     ("recovery_corr", False),
-    ("recovery_corr_sig", False),
-    ("recovery_corr_nonsig", False),
     ("l0_sparsity", False),
     ("dead_neurons", False),
     ("mean_activation", None),  # None = no direction, informational
@@ -1660,14 +1286,10 @@ _SWEEP_METRICS = [
 # Map final metric names → training log column names for start/end bars
 _METRIC_TO_TRAINING_COL = {
     "correlation": "test_corr",
-    "correlation_sig": "test_corr_sig",
-    "correlation_nonsig": "test_corr_nonsig",
     "r2": "test_r2",
     "l0_sparsity": "l0_sparsity",
     "dead_neurons": "dead_frac",
     "recovery_corr": "recovery_corr",
-    "recovery_corr_sig": "recovery_corr_sig",
-    "recovery_corr_nonsig": "recovery_corr_nonsig",
 }
 
 

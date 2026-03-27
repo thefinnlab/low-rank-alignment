@@ -204,25 +204,6 @@ class TestBuildNrMetricsDict:
         assert "nr_recovery_corr" in out
         assert "nr_pred_r2" in out
 
-    def test_sig_nonsig_split(self, rng):
-        nr_result = {
-            "suf": {
-                "minimal_r2": 0.5,
-                "minimal_corr": 0.3,
-                "recovery_r2": 0.1,
-                "recovery_corr": 0.05,
-                "pred_r2": 0.8,
-                "minimal_corr_per_target": np.array([0.3, 0.4, 0.2]),
-                "recovery_corr_per_target": np.array([0.05, 0.06, 0.04]),
-            },
-            "cca_sim": None,
-            "proc_sim": None,
-        }
-        sig_mask = np.array([True, True, False])
-        out = build_nr_metrics_dict(nr_result, sig_mask)
-        assert "nr_corr_sig" in out
-        assert "nr_corr_nonsig" in out
-
     def test_complement_and_arbitrary_included(self, rng):
         nr_result = {
             "suf": {
