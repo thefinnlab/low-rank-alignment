@@ -322,6 +322,7 @@ def _run_cross_subject_rrr(
     config,
     enc,
     output_dir,
+    sig_dir,
     rrr_dir,
     subject_ids,
     sig_electrodes,
@@ -364,6 +365,7 @@ def _run_cross_subject_rrr(
         output_dir,
         {s: sig_electrodes[s] for s in subs_with_sig},
         enc_results,
+        sig_dir=sig_dir,
     )
 
     _run_rrr_for_unit(
@@ -385,6 +387,7 @@ def _run_per_subject_rrr(
     config,
     enc,
     output_dir,
+    sig_dir,
     rrr_dir,
     subject_ids,
     sig_electrodes,
@@ -433,7 +436,7 @@ def _run_per_subject_rrr(
         )
 
         sig_mask_flat = build_sig_mask_flat_for_elecs(
-            output_dir, {sub_id: sub_sig_elecs}, enc_results
+            output_dir, {sub_id: sub_sig_elecs}, enc_results, sig_dir=sig_dir,
         )
 
         _run_rrr_for_unit(
@@ -455,6 +458,7 @@ def _run_per_region_rrr(
     config,
     enc,
     output_dir,
+    sig_dir,
     rrr_dir,
     subject_ids,
     sig_electrodes,
@@ -515,7 +519,7 @@ def _run_per_region_rrr(
 
         # Build sig mask for this region's electrodes
         sig_mask_flat = build_sig_mask_flat_for_elecs(
-            output_dir, per_subject_region_elecs, enc_results
+            output_dir, per_subject_region_elecs, enc_results, sig_dir=sig_dir,
         )
 
         _run_rrr_for_unit(
@@ -563,7 +567,8 @@ def main():
     print(f"Mode:        {config.mode.value}")
 
     # Load significance CSV and build subject → electrode mapping
-    sig_electrodes, _ = load_sig_electrodes(output_dir, subject_ids)
+    sig_dir = config.sig_dir or output_dir
+    sig_electrodes, _ = load_sig_electrodes(output_dir, subject_ids, sig_dir=sig_dir)
 
     # Load embeddings
     print("Loading embeddings...")
@@ -573,6 +578,7 @@ def main():
         config=config,
         enc=enc,
         output_dir=output_dir,
+        sig_dir=sig_dir,
         rrr_dir=rrr_dir,
         subject_ids=subject_ids,
         sig_electrodes=sig_electrodes,
