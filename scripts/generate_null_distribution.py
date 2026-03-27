@@ -34,21 +34,21 @@ import torch
 from tqdm import tqdm
 
 from utils import (
-    load_raws,
     load_embeddings,
-    build_word_epochs,
     apply_offset,
     train_encoding,
     get_all_predictions_and_targets_test_set,
+    load_precomputed_epochs,
 )
 from utils.config import NullDistConfig, get_results_dir
 from utils.config_utils import parse_args, load_config
 from utils.encoding import get_ridge_model_constructor
-from utils.significance import phase_randomize_raw, compute_observed_max_per_electrode
+from utils.significance import phase_randomize_data, compute_observed_max_per_electrode
 
 
 def _run_batched_permutations(
-    raw, df_word, aligned_embeddings, enc, model_constructor, rng, batch_size,
+    raw_data, selection, epoch_starts, n_lags,
+    aligned_embeddings, enc, model_constructor, rng, batch_size,
 ):
     """Generate ``batch_size`` phase-randomised permutations and train one model.
 
@@ -57,27 +57,32 @@ def _run_batched_permutations(
     independent per target, so this is equivalent to training separate models
     but much faster due to batched linear algebra).
 
+    Args:
+        raw_data: (n_elecs, n_samples) float32 array at 32 Hz (precomputed).
+        selection: word indices kept by epoching (precomputed).
+        epoch_starts: start sample in raw_data for each kept epoch (precomputed).
+        n_lags: samples per epoch window.
+
     Returns:
         np.ndarray of shape (batch_size,) — max-across-electrodes scalar per
         permutation.
     """
+    n_elec = raw_data.shape[0]
     Y_parts = []
-    n_elec = None
-    n_lags = None
     X_arr = None
 
     for _ in range(batch_size):
-        raw_perm = phase_randomize_raw(raw, rng=rng)
-        epochs_perm, data_perm = build_word_epochs(raw_perm, df_word)
-        X_i, Y_i = apply_offset(
-            aligned_embeddings[epochs_perm.selection], data_perm, enc.offset
+        raw_perm = phase_randomize_data(raw_data, rng=rng)
+        data_perm = np.stack(
+            [raw_perm[:, s : s + n_lags] for s in epoch_starts], axis=0
         )
-        if n_elec is None:
-            n_elec = data_perm.shape[1]
-            n_lags = data_perm.shape[2]
+        X_i, Y_i = apply_offset(
+            aligned_embeddings[selection], data_perm, enc.offset
+        )
+        if X_arr is None:
             X_arr = X_i
         Y_parts.append(Y_i)
-        del raw_perm, epochs_perm, data_perm, X_i
+        del raw_perm, data_perm, X_i
 
     # Concatenate targets: (n_words, batch_size * n_elec * n_lags)
     Y_concat = np.concatenate(Y_parts, axis=1).astype(np.float32)
@@ -142,7 +147,7 @@ def main():
     print(f"Batch size (permutations per model): {batch_size}")
 
     # Load embeddings once — shared across all subjects
-    aligned_embeddings, df_word = load_embeddings(enc.data_root, enc.layer)
+    aligned_embeddings, _ = load_embeddings(enc.data_root, enc.layer)
 
     alphas = np.array(enc.ridge_alphas) if enc.ridge_alphas is not None else None
     model_constructor = get_ridge_model_constructor(alphas=alphas)
@@ -152,10 +157,13 @@ def main():
         print(f"Subject {bids_sub_id}")
         print(f"{'='*60}")
 
-        # Load raw data once per subject
-        raws = load_raws([bids_sub_id], enc.data_root, use_high_gamma=True)
-        raw = raws[0]
-        n_elec = len(raw.ch_names)
+        # Load precomputed 32 Hz cache once per subject
+        cache = load_precomputed_epochs(bids_sub_id, enc.data_root)
+        raw_data = cache["raw_data"]
+        selection = cache["selection"]
+        epoch_starts = cache["epoch_starts"]
+        n_lags_sub = cache["n_lags"]
+        n_elec = raw_data.shape[0]
         print(f"  Electrodes: {n_elec}")
 
         n_batches = math.ceil(config.n_iterations / batch_size)
@@ -166,7 +174,8 @@ def main():
             cur_batch = min(batch_size, remaining)
 
             batch_maxes = _run_batched_permutations(
-                raw, df_word, aligned_embeddings, enc, model_constructor, rng,
+                raw_data, selection, epoch_starts, n_lags_sub,
+                aligned_embeddings, enc, model_constructor, rng,
                 batch_size=cur_batch,
             )
             null_max_values.extend(batch_maxes.tolist())
@@ -186,7 +195,7 @@ def main():
         print(f"  Saved {len(null_max_values)} null values to {out_path}")
 
         # Free subject-level memory
-        del raws, raw
+        del cache, raw_data
         gc.collect()
         if torch.cuda.is_available():
             torch.cuda.empty_cache()

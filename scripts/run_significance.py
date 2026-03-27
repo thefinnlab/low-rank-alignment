@@ -16,15 +16,15 @@ from himalaya.backend import set_backend
 import torch
 
 from utils import (
-    load_raws,
     train_encoding,
     get_all_predictions_and_targets_test_set,
     significant_lags_all_electrodes_gpu,
     load_embeddings,
-    build_word_epochs,
     apply_offset,
     get_models_coefficients,
     save_subject_results,
+    load_precomputed_epochs,
+    epochs_from_cache,
 )
 from utils.config import SignificanceConfig, get_results_dir
 from utils.config_utils import parse_args, load_config
@@ -72,24 +72,23 @@ def main():
         print(f"{'='*60}")
 
         # ------------------------------------------------------------------
-        # a. Load raw data
+        # a. Load precomputed 32 Hz cache
         # ------------------------------------------------------------------
-        raws = load_raws([bids_sub_id], enc.data_root, use_high_gamma=True)
-        raw = raws[0]
-        electrode_names = raw.ch_names
+        cache = load_precomputed_epochs(bids_sub_id, enc.data_root)
+        electrode_names = cache["ch_names"]
         print(f"  Electrodes: {len(electrode_names)}")
 
         # ------------------------------------------------------------------
-        # b. Build epochs
+        # b. Build epochs from cache
         # ------------------------------------------------------------------
-        epochs, data = build_word_epochs(raw, df_word)
+        data = epochs_from_cache(cache)
         print(f"  Epoch data shape: {data.shape}")
 
         # ------------------------------------------------------------------
         # c. Align X and Y by epoch selection and word offset
         # ------------------------------------------------------------------
         n_words, n_elec, n_lags = data.shape
-        X_arr, Y = apply_offset(aligned_embeddings[epochs.selection], data, enc.offset)
+        X_arr, Y = apply_offset(aligned_embeddings[cache["selection"]], data, enc.offset)
         X = [X_arr, X_arr]  # one per fold
 
         # Update lag_sec based on actual n_lags (in case resampling gives different count)
@@ -168,7 +167,7 @@ def main():
         # ------------------------------------------------------------------
         # j. Free memory
         # ------------------------------------------------------------------
-        del raws, raw, epochs, data, X, Y, models, scalers
+        del cache, data, X, Y, models, scalers
         del all_predictions, all_targets, sig, p_values, q_values, obs_corrs, corrs
         gc.collect()
         if torch.cuda.is_available():
