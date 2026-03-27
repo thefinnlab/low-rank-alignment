@@ -32,14 +32,14 @@ import pandas as pd
 
 from utils import (
     build_global_sig_mask,
-    load_raws,
     load_embeddings,
-    build_word_epochs,
     apply_offset,
     load_all_subject_coefficients,
     load_all_subject_correlations,
     find_dominant_directions,
     compute_truncated_correlations,
+    load_precomputed_epochs,
+    epochs_from_cache,
     find_best_k,
     plot_corrs_by_significance,
     plot_svd_truncation_results,
@@ -177,19 +177,17 @@ def _evaluate_subject_truncation(
     ]
     sig_mask_sub = sig_mask_global[sub_rows]
 
-    raws = load_raws([sub_id], enc.data_root, use_high_gamma=True,
-                     per_subject_electrodes={sub_id: sub_elec_names})
-    raw = raws[0]
-    n_elecs = len(raw.ch_names)
-    epochs, data = build_word_epochs(raw, df_word)
-    X_arr, Y = apply_offset(aligned_embeddings[epochs.selection], data, enc.offset)
+    cache = load_precomputed_epochs(sub_id, enc.data_root)
+    data = epochs_from_cache(cache, elec_names=sub_elec_names)
+    n_elecs = data.shape[1]
+    X_arr, Y = apply_offset(aligned_embeddings[cache["selection"]], data, enc.offset)
 
     results = compute_truncated_correlations(
         coefficients=coefs_sub, intercepts=ints_sub, test_idxs=test_idxs,
         X=X_arr, Y=Y, n_elecs=n_elecs, n_lags=n_lags,
         Vt=Vt, k_values=k_values, sig_mask=sig_mask_sub,
     )
-    del raws, raw, epochs, data, X_arr, Y
+    del cache, data, X_arr, Y
     gc.collect()
 
     return results, n_elecs, sig_mask_sub

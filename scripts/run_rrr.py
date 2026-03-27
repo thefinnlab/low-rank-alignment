@@ -40,10 +40,10 @@ from tqdm import tqdm
 from utils import (
     build_global_sig_mask,
     load_embeddings,
-    build_word_epochs,
     apply_offset,
     build_XY_from_subjects,
-    load_raws,
+    load_precomputed_epochs,
+    epochs_from_cache,
 )
 from utils.analysis import build_sig_mask_flat_for_elecs
 from utils.data_loaders import load_sig_electrodes
@@ -411,18 +411,12 @@ def _run_per_subject_rrr(
         )
         test_idxs = enc_results["test_idxs"]
 
-        raws = load_raws(
-            [sub_id],
-            enc.data_root,
-            use_high_gamma=True,
-            per_subject_electrodes={sub_id: sub_sig_elecs},
-        )
-        raw = raws[0]
-        epochs, data = build_word_epochs(raw, df_word)
+        cache = load_precomputed_epochs(sub_id, enc.data_root)
+        data = epochs_from_cache(cache, elec_names=sub_sig_elecs)
         X_arr, Y_sub = apply_offset(
-            aligned_embeddings[epochs.selection], data, enc.offset
+            aligned_embeddings[cache["selection"]], data, enc.offset
         )
-        del raws, raw, epochs, data
+        del cache, data
         gc.collect()
 
         Y_sub = Y_sub.astype(np.float32)

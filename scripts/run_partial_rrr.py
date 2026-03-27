@@ -46,9 +46,9 @@ from utils import (
     build_XY_from_subjects,
     load_all_subject_correlations,
     train_encoding,
-    load_raws,
-    build_word_epochs,
     apply_offset,
+    load_precomputed_epochs,
+    epochs_from_cache,
 )
 from utils.analysis import partial_out_subspace
 from utils.atlas import build_electrode_region_map
@@ -473,18 +473,12 @@ def _run_per_subject(
         )
         test_idxs = enc_results["test_idxs"]
 
-        raws = load_raws(
-            [sub_id],
-            enc.data_root,
-            use_high_gamma=True,
-            per_subject_electrodes={sub_id: sub_sig_elecs},
-        )
-        raw = raws[0]
-        epochs, data = build_word_epochs(raw, df_word)
+        cache = load_precomputed_epochs(sub_id, enc.data_root)
+        data = epochs_from_cache(cache, elec_names=sub_sig_elecs)
         X_arr, Y_sub = apply_offset(
-            aligned_embeddings[epochs.selection], data, enc.offset
+            aligned_embeddings[cache["selection"]], data, enc.offset
         )
-        del raws, raw, epochs, data
+        del cache, data
         gc.collect()
 
         Y_sub = Y_sub.astype(np.float32)

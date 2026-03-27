@@ -23,6 +23,10 @@ from utils.data_loaders import (
     build_XY_from_subjects,
     load_sig_electrodes,
     load_fold_indices,
+    get_precomputed_epochs_path,
+    save_precomputed_epochs,
+    load_precomputed_epochs,
+    epochs_from_cache,
 )
 from utils.embeddings import load_embeddings
 from utils.encoding import (
@@ -62,6 +66,7 @@ from utils.significance import (
     load_significance_results,
     get_sig_results,
     phase_randomize_raw,
+    phase_randomize_data,
     compute_observed_max_per_electrode,
 )
 from utils.analysis import (
@@ -158,6 +163,10 @@ __all__ = [
     "build_XY_from_subjects",
     "load_sig_electrodes",
     "load_fold_indices",
+    "get_precomputed_epochs_path",
+    "save_precomputed_epochs",
+    "load_precomputed_epochs",
+    "epochs_from_cache",
     # embeddings
     "load_embeddings",
     # encoding
@@ -195,6 +204,7 @@ __all__ = [
     "load_significance_results",
     "get_sig_results",
     "phase_randomize_raw",
+    "phase_randomize_data",
     "compute_observed_max_per_electrode",
     # analysis
     "build_global_sig_mask",
