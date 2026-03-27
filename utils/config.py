@@ -129,6 +129,9 @@ class RRRConfig:
     # Alpha diagnostics
     log_alphas: bool = False  # Save per-rank alpha diagnostics in RRR output
 
+    # Arbitrary embedding seed for null baseline
+    arbitrary_seed: int = 42
+
     # Per-region mode
     atlas_path: str | None = None        # Path to Destrieux 2009 .nii.gz; None = download via nilearn
     atlas_region_groups: dict | None = None  # Required when mode=per_region
@@ -163,6 +166,9 @@ class PCAConfig:
 
     # Alpha diagnostics
     log_alphas: bool = False
+
+    # Arbitrary embedding seed for null baseline
+    arbitrary_seed: int = 42
 
     # Per-region mode
     atlas_path: str | None = None

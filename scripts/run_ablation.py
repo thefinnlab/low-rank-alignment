@@ -436,7 +436,7 @@ def _run_cross_subject_ablation(
         print("  No significant electrodes found; skipping cross-subject ablation.")
         return
 
-    X_ref, Y_full = build_XY_from_subjects(
+    X_ref, Y_full, _ = build_XY_from_subjects(
         subject_ids, enc, sig_electrodes, aligned_embeddings, df_word,
     )
     print(f"  X: {X_ref.shape}, Y: {Y_full.shape}")
@@ -570,7 +570,7 @@ def _run_per_region_ablation(
             continue
 
         subs_in_region = list(per_subject_region_elecs.keys())
-        X_ref, Y_full = build_XY_from_subjects(
+        X_ref, Y_full, _ = build_XY_from_subjects(
             subs_in_region, enc, per_subject_region_elecs,
             aligned_embeddings, df_word,
         )

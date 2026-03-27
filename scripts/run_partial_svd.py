@@ -329,7 +329,7 @@ def main():
 
     # -- Build combined X, Y --
     print("Building combined X, Y from all subjects...")
-    X, Y = build_XY_from_subjects(
+    X, Y, _ = build_XY_from_subjects(
         subject_ids, enc, sig_electrodes, aligned_embeddings, df_word,
     )
     print(f"  X: {X.shape}, Y: {Y.shape}")

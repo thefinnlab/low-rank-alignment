@@ -528,7 +528,7 @@ def _run_cross_subject_sae(
         print("  No significant electrodes found; skipping cross-subject SAE.")
         return
 
-    X_ref, Y_full = build_XY_from_subjects(
+    X_ref, Y_full, _ = build_XY_from_subjects(
         subject_ids,
         enc,
         sig_electrodes,
@@ -707,7 +707,7 @@ def _run_per_region_sae(
 
         subs_in_region = list(per_subject_region_elecs.keys())
         region_n_electrodes = sum(len(e) for e in per_subject_region_elecs.values())
-        X_ref, Y_full = build_XY_from_subjects(
+        X_ref, Y_full, _ = build_XY_from_subjects(
             subs_in_region,
             enc,
             per_subject_region_elecs,

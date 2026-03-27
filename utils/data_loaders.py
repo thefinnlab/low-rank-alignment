@@ -293,6 +293,8 @@ def build_XY_from_subjects(
     Returns:
         X: (n_words, n_embed) embedding matrix (from first subject with data).
         Y: (n_words, n_targets) concatenated neural response matrix, float32.
+        selection: (n_words_pre_offset,) integer array of word indices into
+            df_word (from the first subject's epochs).
 
     Raises:
         ValueError: If no subjects have significant electrodes.
@@ -313,16 +315,18 @@ def build_XY_from_subjects(
 
     Y_cols = []
     X_ref = None
+    ref_selection = None
     for raw, sub_id in zip(raws, subs_to_load):
         epochs, data = build_word_epochs(raw, df_word)
         X_arr, Y_sub = apply_offset(aligned_embeddings[epochs.selection], data, enc.offset)
         if X_ref is None:
             X_ref = X_arr
+            ref_selection = epochs.selection
         Y_cols.append(Y_sub)
     del raws
     gc.collect()
 
-    return X_ref, np.concatenate(Y_cols, axis=1).astype(np.float32)
+    return X_ref, np.concatenate(Y_cols, axis=1).astype(np.float32), ref_selection
 
 
 def load_sig_electrodes(output_dir, subject_ids, sig_dir=None):
@@ -503,7 +507,7 @@ def epochs_from_cache(cache, elec_names=None):
     ).astype(np.float32)
 
 
-def get_arbitrary_embeddings(X, epochs_or_selection, df_word):
+def get_arbitrary_embeddings(X, epochs_or_selection, df_word, seed=None):
     """
     Assign unique random embeddings per word type, preserving per-word consistency.
 
@@ -516,6 +520,8 @@ def get_arbitrary_embeddings(X, epochs_or_selection, df_word):
         epochs_or_selection: Either an MNE Epochs-like object with a `.selection`
             attribute, or a numpy integer array of word indices into df_word.
         df_word (pd.DataFrame): DataFrame with a 'word' column; rows indexed by position.
+        seed (int | None): Random seed for reproducibility. When None, uses the
+            global numpy random state.
 
     Returns:
         np.ndarray: Array of shape (n_words, n_features) with arbitrary embeddings
@@ -527,7 +533,11 @@ def get_arbitrary_embeddings(X, epochs_or_selection, df_word):
         selection = epochs_or_selection.selection
     words = df_word.iloc[selection].reset_index()["word"].apply(lambda x: x.lower())
     unique_words = words.unique()
-    emb_idxs = np.random.choice(np.arange(X.shape[0]), size=len(unique_words), replace=False)
+    if seed is not None:
+        rng = np.random.default_rng(seed)
+        emb_idxs = rng.choice(np.arange(X.shape[0]), size=len(unique_words), replace=False)
+    else:
+        emb_idxs = np.random.choice(np.arange(X.shape[0]), size=len(unique_words), replace=False)
     arb_word_embs = X[emb_idxs]
 
     X_arb = np.zeros_like(X)

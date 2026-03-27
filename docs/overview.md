@@ -91,7 +91,7 @@ Core library modules:
 | `sae.py` | SAE model (`SAEEncoder`, `SAERegressorEndToEnd`), training functions (`train_sae_end_to_end`, `train_sae_alternating`), dead feature resampling (`_resample_dead_neurons`), and SAE-specific metrics (L0 sparsity, dead neurons, activation frequency). Encoder bias is initialized to zero to prevent dead-on-init features. |
 | `plotting.py` | Matplotlib helpers for correlation vs lag plots, significance overlays, SVD truncation analysis figures, ablation pct-zeroed and vs-rank plots; `plot_alpha_diagnostics()` — 3-panel alpha selection summary; `plot_alpha_vs_rank()` — how optimal alpha shifts with RRR rank |
 | `rrr_utils.py` | Shared helpers for RRR-based scripts: `run_prediction_metrics`, `add_sig_nonsig_corrs`, `resolve_rrr_source_dir` |
-| `subspace_utils.py` | Shared utilities for subspace-based ridge evaluation: `evaluate_subspace_ridge` (project X into subspace, train ridge, compute metrics), `build_nr_metrics_dict` (assemble NR metrics dict); used by both `run_rrr.py` and `run_pca.py` |
+| `subspace_utils.py` | Shared utilities for subspace evaluation: `evaluate_subspace_ols` (project X into subspace, train OLS, compute metrics), `evaluate_complement` (predict from complement of subspace via ridge), `evaluate_arbitrary` (predict from arbitrary embeddings via ridge), `build_nr_metrics_dict` (assemble NR metrics dict); used by both `run_rrr.py` and `run_pca.py` |
 | `examples.py` | Generates context windows and markdown tables of example words for qualitative analysis |
 | `__init__.py` | Public API — re-exports all key functions for convenient imports |
 
@@ -110,7 +110,7 @@ Unit tests with full pipeline coverage:
 | `test_srrr.py` | SRRR core functions: ProxGD, stability selection, sufficiency test, alignment metrics, I/O |
 | `test_partial_svd.py` | Partial SVD: `partial_out_svd_directions` orthogonality/idempotency, config round-trip, sweep window generation |
 | `test_rrr.py` | RRR utilities: `save_rrr_result`/`load_rrr_result` roundtrip, `_run_rrr_for_unit` integration, `build_XY_from_subjects` |
-| `test_pca.py` | PCA utilities: `evaluate_subspace_ridge` and `build_nr_metrics_dict` unit tests, `_run_pca_for_unit` integration (CSV output, monotonicity, rank clamping, plot generation) |
+| `test_pca.py` | PCA utilities: `evaluate_subspace_ols`, `evaluate_complement`, `evaluate_arbitrary`, and `build_nr_metrics_dict` unit tests, `_run_pca_for_unit` integration (CSV output, complement columns, monotonicity, rank clamping, plot generation) |
 | `test_partial_rrr.py` | Partial RRR: `partial_out_subspace` orthogonality/idempotency/non-orthonormal handling, sweep integration, save results, config round-trip |
 | `test_sae.py` | SAE: encoder shape/ReLU, zero-bias init, dead feature resampling, end-to-end and alternating training (loss decrease, OLS/ridge, resampling integration), metrics computation, config round-trip, sweep detection helpers, sweep summary plot |
 | `test_ablation.py` | Ablation: quantile mask construction (center/tail/random fractions, complementarity, median centering), `_run_ablation_for_unit` integration (grid_results.csv, summary.csv, baseline inclusion, per-k plots, performance monotonicity) |
