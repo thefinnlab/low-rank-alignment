@@ -3,7 +3,21 @@
 
 from utils.constants import RIDGE_ALPHAS, refine_alpha_grid, check_alpha_grid_boundaries
 from utils.tensor_utils import to_numpy, to_torch
-from utils.config import EncodingConfig, SignificanceConfig, NullDistConfig, NewSignificanceConfig, SVDConfig, SRRRConfig, RRRConfig, PCAConfig, PartialSVDConfig, PartialRRRConfig, SAEConfig, SVDMode, get_results_dir
+from utils.config import (
+    EncodingConfig,
+    SignificanceConfig,
+    NullDistConfig,
+    NewSignificanceConfig,
+    SVDConfig,
+    SRRRConfig,
+    RRRConfig,
+    PCAConfig,
+    PartialSVDConfig,
+    PartialRRRConfig,
+    SAEConfig,
+    SVDMode,
+    get_results_dir,
+)
 from utils.config_utils import (
     parse_override_args,
     get_nested_value,
@@ -44,6 +58,7 @@ from utils.encoding import (
     load_all_subject_coefficients,
     extract_best_alphas,
     train_encoding_two_pass,
+    get_and_offset_arbitrary_embeddings,
 )
 from utils.plotting import (
     add_corrs,
@@ -189,6 +204,7 @@ __all__ = [
     "load_all_subject_coefficients",
     "extract_best_alphas",
     "train_encoding_two_pass",
+    "get_and_offset_arbitrary_embeddings",
     # plotting
     "add_corrs",
     "plot_corrs_vs_arbitrary",

@@ -52,8 +52,8 @@ from utils.encoding import (
     load_encoding_results,
     build_enc_subjects_info,
     build_per_fold_baselines,
+    get_and_offset_arbitrary_embeddings,
 )
-from utils.data_loaders import get_arbitrary_embeddings
 from utils.rrr_utils import add_sig_nonsig_corrs
 from utils.subspace_utils import (
     evaluate_subspace_ols,
@@ -157,6 +157,7 @@ def _run_pca_for_unit(
     all_rows = []
 
     import torch
+
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
     for fold_f in range(n_folds):
@@ -186,13 +187,16 @@ def _run_pca_for_unit(
             print(f"  Skipping ranks {skipped} (> {max_components} PCA components)")
 
         print(f"  Running {len(valid_ranks)} rank(s): {valid_ranks}")
-        for k in tqdm(
-            valid_ranks, desc=f"  fold {fold_f}", leave=True, unit="rank"
-        ):
+        for k in tqdm(valid_ranks, desc=f"  fold {fold_f}", leave=True, unit="rank"):
             A = V_full[:, :k]  # (n_embed, k) — top-k PCA components
 
             nr_result = evaluate_subspace_ols(
-                A, X_train, X_test, Y_train, Y_test, Y_hat_full,
+                A,
+                X_train,
+                X_test,
+                Y_train,
+                Y_test,
+                Y_hat_full,
                 compute_cca=config.compute_cca,
                 compute_procrustes=config.compute_procrustes,
                 device=device,
@@ -200,18 +204,29 @@ def _run_pca_for_unit(
 
             # Complement and arbitrary evaluations
             complement_result = evaluate_complement(
-                A, X_train, X_test, Y_train, Y_test,
-                nr_result["Y_hat_train"], nr_result["Y_hat"],
-                alphas=alphas, device=device,
+                A,
+                X_train,
+                X_test,
+                Y_train,
+                Y_test,
+                nr_result["Y_hat_train"],
+                nr_result["Y_hat"],
+                alphas=alphas,
+                device=device,
             )
             arbitrary_result = None
             if X_arbitrary is not None:
                 X_arb_train = X_arbitrary[train_idx]
                 X_arb_test = X_arbitrary[test_idx]
                 arbitrary_result = evaluate_arbitrary(
-                    X_arb_train, X_arb_test, Y_train, Y_test,
-                    nr_result["Y_hat_train"], nr_result["Y_hat"],
-                    alphas=alphas, device=device,
+                    X_arb_train,
+                    X_arb_test,
+                    Y_train,
+                    Y_test,
+                    nr_result["Y_hat_train"],
+                    nr_result["Y_hat"],
+                    alphas=alphas,
+                    device=device,
                 )
 
             suf = nr_result["suf"]
@@ -224,19 +239,28 @@ def _run_pca_for_unit(
                 "minimal_corr": suf["minimal_corr"],
                 "recovery_corr": suf["recovery_corr"],
                 "complement_corr": complement_result["complement_corr"],
-                "complement_recovery_corr": complement_result["complement_recovery_corr"],
+                "complement_recovery_corr": complement_result[
+                    "complement_recovery_corr"
+                ],
                 "fold": fold_f,
                 "k": k,
             }
             if arbitrary_result is not None:
                 metrics["arbitrary_corr"] = arbitrary_result["arbitrary_corr"]
-                metrics["arbitrary_recovery_corr"] = arbitrary_result["arbitrary_recovery_corr"]
+                metrics["arbitrary_recovery_corr"] = arbitrary_result[
+                    "arbitrary_recovery_corr"
+                ]
             if sig_mask_flat is not None:
-                add_sig_nonsig_corrs(metrics, suf, sig_mask_flat, [
-                    ("full_corr", "full_corr_per_target"),
-                    ("minimal_corr", "minimal_corr_per_target"),
-                    ("recovery_corr", "recovery_corr_per_target"),
-                ])
+                add_sig_nonsig_corrs(
+                    metrics,
+                    suf,
+                    sig_mask_flat,
+                    [
+                        ("full_corr", "full_corr_per_target"),
+                        ("minimal_corr", "minimal_corr_per_target"),
+                        ("recovery_corr", "recovery_corr_per_target"),
+                    ],
+                )
                 _add_complement_sig_nonsig(metrics, complement_result, sig_mask_flat)
                 if arbitrary_result is not None:
                     _add_arbitrary_sig_nonsig(metrics, arbitrary_result, sig_mask_flat)
@@ -265,30 +289,36 @@ def _run_pca_for_unit(
         "complement_recovery_corr",
     ]
     if X_arbitrary is not None:
-        agg_cols.extend([
-            "arbitrary_corr",
-            "arbitrary_recovery_corr",
-        ])
+        agg_cols.extend(
+            [
+                "arbitrary_corr",
+                "arbitrary_recovery_corr",
+            ]
+        )
     if sig_mask_flat is not None:
-        agg_cols.extend([
-            "full_corr_sig",
-            "full_corr_nonsig",
-            "minimal_corr_sig",
-            "minimal_corr_nonsig",
-            "recovery_corr_sig",
-            "recovery_corr_nonsig",
-            "complement_corr_sig",
-            "complement_corr_nonsig",
-            "complement_recovery_corr_sig",
-            "complement_recovery_corr_nonsig",
-        ])
+        agg_cols.extend(
+            [
+                "full_corr_sig",
+                "full_corr_nonsig",
+                "minimal_corr_sig",
+                "minimal_corr_nonsig",
+                "recovery_corr_sig",
+                "recovery_corr_nonsig",
+                "complement_corr_sig",
+                "complement_corr_nonsig",
+                "complement_recovery_corr_sig",
+                "complement_recovery_corr_nonsig",
+            ]
+        )
         if X_arbitrary is not None:
-            agg_cols.extend([
-                "arbitrary_corr_sig",
-                "arbitrary_corr_nonsig",
-                "arbitrary_recovery_corr_sig",
-                "arbitrary_recovery_corr_nonsig",
-            ])
+            agg_cols.extend(
+                [
+                    "arbitrary_corr_sig",
+                    "arbitrary_corr_nonsig",
+                    "arbitrary_recovery_corr_sig",
+                    "arbitrary_recovery_corr_nonsig",
+                ]
+            )
     if config.compute_cca:
         agg_cols.append("cca_similarity")
     if config.compute_procrustes:
@@ -383,13 +413,9 @@ def _run_cross_subject_pca(
     )
 
     # Generate arbitrary embeddings for null baseline
-    X_arbitrary = get_arbitrary_embeddings(
-        aligned_embeddings[selection], selection, df_word, seed=config.arbitrary_seed,
-    ).astype(np.float32)
-    if enc.offset < 0:
-        X_arbitrary = X_arbitrary[:enc.offset]
-    elif enc.offset > 0:
-        X_arbitrary = X_arbitrary[enc.offset:]
+    X_arbitrary = get_and_offset_arbitrary_embeddings(
+        aligned_embeddings, selection, df_word, enc.offset, config.arbitrary_seed
+    )
 
     rrr_overlay_dir = _resolve_rrr_overlay_dir(config.mode, output_dir)
 
@@ -443,9 +469,7 @@ def _run_per_subject_pca(
         cache = load_precomputed_epochs(sub_id, enc.data_root)
         selection = cache["selection"]
         data = epochs_from_cache(cache, elec_names=sub_sig_elecs)
-        X_arr, Y_sub = apply_offset(
-            aligned_embeddings[selection], data, enc.offset
-        )
+        X_arr, Y_sub = apply_offset(aligned_embeddings[selection], data, enc.offset)
         del data
         gc.collect()
 
@@ -453,13 +477,9 @@ def _run_per_subject_pca(
         print(f"  X: {X_arr.shape}, Y: {Y_sub.shape}")
 
         # Generate arbitrary embeddings for null baseline
-        X_arbitrary = get_arbitrary_embeddings(
-            aligned_embeddings[selection], selection, df_word, seed=config.arbitrary_seed,
-        ).astype(np.float32)
-        if enc.offset < 0:
-            X_arbitrary = X_arbitrary[:enc.offset]
-        elif enc.offset > 0:
-            X_arbitrary = X_arbitrary[enc.offset:]
+        X_arbitrary = get_and_offset_arbitrary_embeddings(
+            aligned_embeddings, selection, df_word, enc.offset, config.arbitrary_seed
+        )
 
         del cache
         gc.collect()
@@ -472,7 +492,10 @@ def _run_per_subject_pca(
         )
 
         sig_mask_flat = build_sig_mask_flat_for_elecs(
-            output_dir, {sub_id: sub_sig_elecs}, enc_results, sig_dir=sig_dir,
+            output_dir,
+            {sub_id: sub_sig_elecs},
+            enc_results,
+            sig_dir=sig_dir,
         )
 
         rrr_sub_overlay = None
@@ -564,17 +587,16 @@ def _run_per_region_pca(
         )
 
         sig_mask_flat = build_sig_mask_flat_for_elecs(
-            output_dir, per_subject_region_elecs, enc_results, sig_dir=sig_dir,
+            output_dir,
+            per_subject_region_elecs,
+            enc_results,
+            sig_dir=sig_dir,
         )
 
         # Generate arbitrary embeddings for null baseline
-        X_arbitrary = get_arbitrary_embeddings(
-            aligned_embeddings[selection], selection, df_word, seed=config.arbitrary_seed,
-        ).astype(np.float32)
-        if enc.offset < 0:
-            X_arbitrary = X_arbitrary[:enc.offset]
-        elif enc.offset > 0:
-            X_arbitrary = X_arbitrary[enc.offset:]
+        X_arbitrary = get_and_offset_arbitrary_embeddings(
+            aligned_embeddings, selection, df_word, enc.offset, config.arbitrary_seed
+        )
 
         rrr_region_overlay = None
         if rrr_overlay_dir:

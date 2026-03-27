@@ -8,6 +8,7 @@ from sklearn.model_selection import KFold
 from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import StandardScaler
 
+from utils.data_loaders import get_arbitrary_embeddings
 from utils.tensor_utils import to_numpy, to_torch
 
 
@@ -537,6 +538,19 @@ def apply_offset(averaged_embeddings, data, offset):
     elif offset > 0:
         return averaged_embeddings[offset:].astype(np.float32), Y[:-offset]
     return averaged_embeddings.astype(np.float32), Y
+
+
+def get_and_offset_arbitrary_embeddings(
+    aligned_embeddings, selection, df_word, offset, seed
+):
+    X_arbitrary = get_arbitrary_embeddings(
+        aligned_embeddings[selection],
+        selection,
+        df_word,
+        seed=seed,
+    ).astype(np.float32)
+    X_arbitrary, _ = apply_offset(X_arbitrary, X_arbitrary, offset)
+    return X_arbitrary
 
 
 def save_subject_results(

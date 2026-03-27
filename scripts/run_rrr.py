@@ -54,6 +54,7 @@ from utils.encoding import (
     load_encoding_results,
     build_enc_subjects_info,
     build_per_fold_baselines,
+    get_and_offset_arbitrary_embeddings,
 )
 from utils.srrr import (
     compute_r2,
@@ -62,7 +63,6 @@ from utils.srrr import (
     save_rrr_factors,
     save_rrr_result,
 )
-from utils.data_loaders import get_arbitrary_embeddings
 from utils.rrr_utils import add_sig_nonsig_corrs, run_prediction_metrics
 from utils.subspace_utils import (
     evaluate_subspace_ols,
@@ -165,15 +165,26 @@ def _run_rrr_for_unit(
             Y_hat_rrr_train = Y_hat_ols_train @ B @ B.T
 
             suf, cca_sim, proc_sim = run_prediction_metrics(
-                Y_hat_rrr, Y_hat_rrr_train, Y_train, X_train, X_test, Y_test,
-                Y_hat_full, alphas=alphas,
+                Y_hat_rrr,
+                Y_hat_rrr_train,
+                Y_train,
+                X_train,
+                X_test,
+                Y_test,
+                Y_hat_full,
+                alphas=alphas,
                 compute_cca=config.compute_cca,
                 compute_procrustes=config.compute_procrustes,
             )
 
             # Non-reduced-rank OLS from k-dim subspace
             nr_result = evaluate_subspace_ols(
-                A, X_train, X_test, Y_train, Y_test, Y_hat_full,
+                A,
+                X_train,
+                X_test,
+                Y_train,
+                Y_test,
+                Y_hat_full,
                 compute_cca=config.compute_cca,
                 compute_procrustes=config.compute_procrustes,
                 device=device,
@@ -181,18 +192,29 @@ def _run_rrr_for_unit(
 
             # Complement and arbitrary evaluations
             complement_result = evaluate_complement(
-                A, X_train, X_test, Y_train, Y_test,
-                nr_result["Y_hat_train"], nr_result["Y_hat"],
-                alphas=alphas, device=device,
+                A,
+                X_train,
+                X_test,
+                Y_train,
+                Y_test,
+                nr_result["Y_hat_train"],
+                nr_result["Y_hat"],
+                alphas=alphas,
+                device=device,
             )
             arbitrary_result = None
             if X_arbitrary is not None:
                 X_arb_train = X_arbitrary[train_idx]
                 X_arb_test = X_arbitrary[test_idx]
                 arbitrary_result = evaluate_arbitrary(
-                    X_arb_train, X_arb_test, Y_train, Y_test,
-                    nr_result["Y_hat_train"], nr_result["Y_hat"],
-                    alphas=alphas, device=device,
+                    X_arb_train,
+                    X_arb_test,
+                    Y_train,
+                    Y_test,
+                    nr_result["Y_hat_train"],
+                    nr_result["Y_hat"],
+                    alphas=alphas,
+                    device=device,
                 )
 
             metrics = {
@@ -208,21 +230,29 @@ def _run_rrr_for_unit(
                 "k": k,
             }
             if sig_mask_flat is not None:
-                add_sig_nonsig_corrs(metrics, suf, sig_mask_flat, [
-                    ("full_corr", "full_corr_per_target"),
-                    ("minimal_corr", "minimal_corr_per_target"),
-                    ("recovery_corr", "recovery_corr_per_target"),
-                ])
+                add_sig_nonsig_corrs(
+                    metrics,
+                    suf,
+                    sig_mask_flat,
+                    [
+                        ("full_corr", "full_corr_per_target"),
+                        ("minimal_corr", "minimal_corr_per_target"),
+                        ("recovery_corr", "recovery_corr_per_target"),
+                    ],
+                )
             if cca_sim is not None:
                 metrics["cca_similarity"] = cca_sim
             if proc_sim is not None:
                 metrics["procrustes_similarity"] = proc_sim
 
-            metrics.update(build_nr_metrics_dict(
-                nr_result, sig_mask_flat,
-                complement_result=complement_result,
-                arbitrary_result=arbitrary_result,
-            ))
+            metrics.update(
+                build_nr_metrics_dict(
+                    nr_result,
+                    sig_mask_flat,
+                    complement_result=complement_result,
+                    arbitrary_result=arbitrary_result,
+                )
+            )
             save_rrr_result(rrr_unit_dir, k=k, fold=fold_f, metrics=metrics)
             all_rows.append(metrics)
 
@@ -268,10 +298,12 @@ def _run_rrr_for_unit(
         "nr_complement_recovery_corr",
     ]
     if X_arbitrary is not None:
-        agg_cols.extend([
-            "nr_arbitrary_corr",
-            "nr_arbitrary_recovery_corr",
-        ])
+        agg_cols.extend(
+            [
+                "nr_arbitrary_corr",
+                "nr_arbitrary_recovery_corr",
+            ]
+        )
     if sig_mask_flat is not None:
         agg_cols.extend(
             [
@@ -292,12 +324,14 @@ def _run_rrr_for_unit(
             ]
         )
         if X_arbitrary is not None:
-            agg_cols.extend([
-                "nr_arbitrary_corr_sig",
-                "nr_arbitrary_corr_nonsig",
-                "nr_arbitrary_recovery_corr_sig",
-                "nr_arbitrary_recovery_corr_nonsig",
-            ])
+            agg_cols.extend(
+                [
+                    "nr_arbitrary_corr_sig",
+                    "nr_arbitrary_corr_nonsig",
+                    "nr_arbitrary_recovery_corr_sig",
+                    "nr_arbitrary_recovery_corr_nonsig",
+                ]
+            )
     if config.compute_cca:
         agg_cols.extend(["cca_similarity", "nr_cca_similarity"])
     if config.compute_procrustes:
@@ -359,7 +393,6 @@ def _run_rrr_for_unit(
 # ---------------------------------------------------------------------------
 
 
-
 # ---------------------------------------------------------------------------
 # Branch: cross-subject RRR
 # ---------------------------------------------------------------------------
@@ -416,13 +449,9 @@ def _run_cross_subject_rrr(
     )
 
     # Generate arbitrary embeddings for null baseline
-    X_arbitrary = get_arbitrary_embeddings(
-        aligned_embeddings[selection], selection, df_word, seed=config.arbitrary_seed,
-    ).astype(np.float32)
-    if enc.offset < 0:
-        X_arbitrary = X_arbitrary[:enc.offset]
-    elif enc.offset > 0:
-        X_arbitrary = X_arbitrary[enc.offset:]
+    X_arbitrary = get_and_offset_arbitrary_embeddings(
+        aligned_embeddings, selection, df_word, enc.offset, config.arbitrary_seed
+    )
 
     _run_rrr_for_unit(
         rrr_unit_dir=rrr_dir,
@@ -471,9 +500,7 @@ def _run_per_subject_rrr(
         cache = load_precomputed_epochs(sub_id, enc.data_root)
         selection = cache["selection"]
         data = epochs_from_cache(cache, elec_names=sub_sig_elecs)
-        X_arr, Y_sub = apply_offset(
-            aligned_embeddings[selection], data, enc.offset
-        )
+        X_arr, Y_sub = apply_offset(aligned_embeddings[selection], data, enc.offset)
         del data
         gc.collect()
 
@@ -481,13 +508,9 @@ def _run_per_subject_rrr(
         print(f"  X: {X_arr.shape}, Y: {Y_sub.shape}")
 
         # Generate arbitrary embeddings for null baseline
-        X_arbitrary = get_arbitrary_embeddings(
-            aligned_embeddings[selection], selection, df_word, seed=config.arbitrary_seed,
-        ).astype(np.float32)
-        if enc.offset < 0:
-            X_arbitrary = X_arbitrary[:enc.offset]
-        elif enc.offset > 0:
-            X_arbitrary = X_arbitrary[enc.offset:]
+        X_arbitrary = get_and_offset_arbitrary_embeddings(
+            aligned_embeddings, selection, df_word, enc.offset, config.arbitrary_seed
+        )
 
         del cache
         gc.collect()
@@ -500,7 +523,10 @@ def _run_per_subject_rrr(
         )
 
         sig_mask_flat = build_sig_mask_flat_for_elecs(
-            output_dir, {sub_id: sub_sig_elecs}, enc_results, sig_dir=sig_dir,
+            output_dir,
+            {sub_id: sub_sig_elecs},
+            enc_results,
+            sig_dir=sig_dir,
         )
 
         _run_rrr_for_unit(
@@ -584,17 +610,16 @@ def _run_per_region_rrr(
 
         # Build sig mask for this region's electrodes
         sig_mask_flat = build_sig_mask_flat_for_elecs(
-            output_dir, per_subject_region_elecs, enc_results, sig_dir=sig_dir,
+            output_dir,
+            per_subject_region_elecs,
+            enc_results,
+            sig_dir=sig_dir,
         )
 
         # Generate arbitrary embeddings for null baseline
-        X_arbitrary = get_arbitrary_embeddings(
-            aligned_embeddings[selection], selection, df_word, seed=config.arbitrary_seed,
-        ).astype(np.float32)
-        if enc.offset < 0:
-            X_arbitrary = X_arbitrary[:enc.offset]
-        elif enc.offset > 0:
-            X_arbitrary = X_arbitrary[enc.offset:]
+        X_arbitrary = get_and_offset_arbitrary_embeddings(
+            aligned_embeddings, selection, df_word, enc.offset, config.arbitrary_seed
+        )
 
         _run_rrr_for_unit(
             rrr_unit_dir=rrr_region_dir,
