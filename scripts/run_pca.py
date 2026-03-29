@@ -53,10 +53,14 @@ from utils.encoding import (
     build_per_fold_baselines,
     get_and_offset_arbitrary_embeddings,
 )
+from utils.analysis import build_sig_mask_flat_for_elecs
+from utils.rrr_utils import add_sig_nonsig_corrs, make_sig_split_df
 from utils.subspace_utils import (
     evaluate_subspace_ols,
     evaluate_complement,
     evaluate_arbitrary,
+    _add_complement_sig_nonsig,
+    _add_arbitrary_sig_nonsig,
     compute_cross_model_metrics,
 )
 
@@ -104,6 +108,10 @@ def _load_rrr_overlay(rrr_dir: str, unit_suffix: str = "") -> tuple:
         "nr_pred_r2": "pred_r2",
         "nr_cca_similarity": "cca_similarity",
         "nr_procrustes_similarity": "procrustes_similarity",
+        "nr_corr_sig": "minimal_corr_sig",
+        "nr_corr_nonsig": "minimal_corr_nonsig",
+        "nr_recovery_corr_sig": "recovery_corr_sig",
+        "nr_recovery_corr_nonsig": "recovery_corr_nonsig",
     }
     drop_cols = [v for v in nr_col_map.values() if v in rrr_df.columns]
     rrr_nr_summary = rrr_df.drop(columns=drop_cols).rename(columns=nr_col_map)
@@ -122,6 +130,7 @@ def _run_pca_for_unit(
     test_idxs: list,
     per_fold_baselines: list,
     config: PCAConfig,
+    sig_mask_flat: np.ndarray | None = None,
     rrr_overlay_dir: str | None = None,
     X_arbitrary: np.ndarray | None = None,
 ) -> pd.DataFrame:
@@ -246,6 +255,21 @@ def _run_pca_for_unit(
             if nr_result["proc_sim"] is not None:
                 metrics["procrustes_similarity"] = nr_result["proc_sim"]
 
+            if sig_mask_flat is not None:
+                add_sig_nonsig_corrs(
+                    metrics,
+                    suf,
+                    sig_mask_flat,
+                    [
+                        ("full_corr", "full_corr_per_target"),
+                        ("minimal_corr", "minimal_corr_per_target"),
+                        ("recovery_corr", "recovery_corr_per_target"),
+                    ],
+                )
+                _add_complement_sig_nonsig(metrics, complement_result, sig_mask_flat)
+                if arbitrary_result is not None:
+                    _add_arbitrary_sig_nonsig(metrics, arbitrary_result, sig_mask_flat)
+
             # Cross-model metrics
             Y_hat_pca = nr_result["Y_hat"]
             Y_hat_complement = complement_result["complement_Y_hat"]
@@ -260,6 +284,25 @@ def _run_pca_for_unit(
             if Y_hat_arbitrary is not None:
                 metrics.update(compute_cross_model_metrics(Y_hat_pca, Y_hat_arbitrary, Y_test, "pca", "arbitrary"))
                 metrics.update(compute_cross_model_metrics(Y_hat_complement, Y_hat_arbitrary, Y_test, "complement", "arbitrary"))
+
+            # Apply sig/nonsig splits to per-target cross-model arrays, then strip them
+            _per_target_keys = [k for k in metrics if k.endswith("_per_target")]
+            if sig_mask_flat is not None:
+                for pt_key in _per_target_keys:
+                    base = pt_key[: -len("_per_target")]
+                    arr = metrics[pt_key]
+                    metrics[f"{base}_sig"] = (
+                        float(arr[sig_mask_flat].mean())
+                        if sig_mask_flat.any()
+                        else float("nan")
+                    )
+                    metrics[f"{base}_nonsig"] = (
+                        float(arr[~sig_mask_flat].mean())
+                        if (~sig_mask_flat).any()
+                        else float("nan")
+                    )
+            for pt_key in _per_target_keys:
+                del metrics[pt_key]
 
             all_rows.append(metrics)
 
@@ -299,6 +342,53 @@ def _run_pca_for_unit(
                 "complement_arbitrary_joint_corr",
             ]
         )
+    has_sig_split = sig_mask_flat is not None
+    if has_sig_split:
+        agg_cols.extend(
+            [
+                "full_corr_sig",
+                "full_corr_nonsig",
+                "minimal_corr_sig",
+                "minimal_corr_nonsig",
+                "recovery_corr_sig",
+                "recovery_corr_nonsig",
+                "complement_corr_sig",
+                "complement_corr_nonsig",
+                "complement_recovery_corr_sig",
+                "complement_recovery_corr_nonsig",
+                # Cross-model sig/nonsig for PCA
+                "pca_full_pred_corr_sig",
+                "pca_full_pred_corr_nonsig",
+                "pca_full_joint_corr_sig",
+                "pca_full_joint_corr_nonsig",
+                "pca_complement_pred_corr_sig",
+                "pca_complement_pred_corr_nonsig",
+                "pca_complement_joint_corr_sig",
+                "pca_complement_joint_corr_nonsig",
+                # Complement vs other
+                "complement_full_pred_corr_sig",
+                "complement_full_pred_corr_nonsig",
+                "complement_full_joint_corr_sig",
+                "complement_full_joint_corr_nonsig",
+            ]
+        )
+        if X_arbitrary is not None:
+            agg_cols.extend(
+                [
+                    "arbitrary_corr_sig",
+                    "arbitrary_corr_nonsig",
+                    "arbitrary_recovery_corr_sig",
+                    "arbitrary_recovery_corr_nonsig",
+                    "pca_arbitrary_pred_corr_sig",
+                    "pca_arbitrary_pred_corr_nonsig",
+                    "pca_arbitrary_joint_corr_sig",
+                    "pca_arbitrary_joint_corr_nonsig",
+                    "complement_arbitrary_pred_corr_sig",
+                    "complement_arbitrary_pred_corr_nonsig",
+                    "complement_arbitrary_joint_corr_sig",
+                    "complement_arbitrary_joint_corr_nonsig",
+                ]
+            )
     if config.compute_cca:
         agg_cols.append("cca_similarity")
     if config.compute_procrustes:
@@ -324,6 +414,25 @@ def _run_pca_for_unit(
         overlay_label="RRR (NR)",
         primary_label="pca",
     )
+    if has_sig_split:
+        plot_rrr_rank_results(
+            make_sig_split_df(summary, "sig"),
+            grid_df=make_sig_split_df(df, "sig"),
+            title=f"PCA (sig targets): perf vs rank ({os.path.basename(pca_unit_dir)})",
+            save_path=os.path.join(pca_unit_dir, "rank_analysis_sig.png"),
+            overlay_summary_df=rrr_nr_summary,
+            overlay_label="RRR (NR)",
+            primary_label="pca",
+        )
+        plot_rrr_rank_results(
+            make_sig_split_df(summary, "nonsig"),
+            grid_df=make_sig_split_df(df, "nonsig"),
+            title=f"PCA (nonsig targets): perf vs rank ({os.path.basename(pca_unit_dir)})",
+            save_path=os.path.join(pca_unit_dir, "rank_analysis_nonsig.png"),
+            overlay_summary_df=rrr_nr_summary,
+            overlay_label="RRR (NR)",
+            primary_label="pca",
+        )
 
     # Second plot: PCA with RRR reduced-rank overlay (only when RRR data exists)
     if rrr_summary is not None:
@@ -332,6 +441,25 @@ def _run_pca_for_unit(
             grid_df=df,
             title=f"PCA: perf vs rank ({os.path.basename(pca_unit_dir)})",
             save_path=os.path.join(pca_unit_dir, "rank_analysis_rrr_raw.png"),
+            overlay_summary_df=rrr_summary,
+            overlay_label="RRR",
+            primary_label="pca",
+        )
+    if rrr_summary is not None and has_sig_split:
+        plot_rrr_rank_results(
+            make_sig_split_df(summary, "sig"),
+            grid_df=make_sig_split_df(df, "sig"),
+            title=f"PCA (sig targets): perf vs rank ({os.path.basename(pca_unit_dir)})",
+            save_path=os.path.join(pca_unit_dir, "rank_analysis_rrr_raw_sig.png"),
+            overlay_summary_df=rrr_summary,
+            overlay_label="RRR",
+            primary_label="pca",
+        )
+        plot_rrr_rank_results(
+            make_sig_split_df(summary, "nonsig"),
+            grid_df=make_sig_split_df(df, "nonsig"),
+            title=f"PCA (nonsig targets): perf vs rank ({os.path.basename(pca_unit_dir)})",
+            save_path=os.path.join(pca_unit_dir, "rank_analysis_rrr_raw_nonsig.png"),
             overlay_summary_df=rrr_summary,
             overlay_label="RRR",
             primary_label="pca",
@@ -394,12 +522,22 @@ def _run_cross_subject_pca(
 
     rrr_overlay_dir = _resolve_rrr_overlay_dir(config.mode, output_dir)
 
+    sig_mask_flat = None
+    if config.compute_sig_nonsig:
+        sig_mask_flat = build_sig_mask_flat_for_elecs(
+            output_dir,
+            {s: sig_electrodes[s] for s in subs_with_sig},
+            enc_results,
+            sig_dir=sig_dir,
+        )
+
     _run_pca_for_unit(
         pca_unit_dir=pca_dir,
         X_raw=X_ref,
         test_idxs=ref_test_idxs,
         per_fold_baselines=per_fold_baselines,
         config=config,
+        sig_mask_flat=sig_mask_flat,
         rrr_overlay_dir=rrr_overlay_dir,
         X_arbitrary=X_arbitrary,
     )
@@ -471,12 +609,22 @@ def _run_per_subject_pca(
             if os.path.isdir(candidate):
                 rrr_sub_overlay = candidate
 
+        sig_mask_flat = None
+        if config.compute_sig_nonsig:
+            sig_mask_flat = build_sig_mask_flat_for_elecs(
+                output_dir,
+                {sub_id: sub_sig_elecs},
+                enc_results,
+                sig_dir=sig_dir,
+            )
+
         _run_pca_for_unit(
             pca_unit_dir=pca_sub_dir,
             X_raw=X_arr,
             test_idxs=test_idxs,
             per_fold_baselines=per_fold_baselines,
             config=config,
+            sig_mask_flat=sig_mask_flat,
             rrr_overlay_dir=rrr_sub_overlay,
             X_arbitrary=X_arbitrary,
         )
@@ -563,12 +711,22 @@ def _run_per_region_pca(
             if os.path.isdir(candidate):
                 rrr_region_overlay = candidate
 
+        sig_mask_flat = None
+        if config.compute_sig_nonsig:
+            sig_mask_flat = build_sig_mask_flat_for_elecs(
+                output_dir,
+                per_subject_region_elecs,
+                enc_results,
+                sig_dir=sig_dir,
+            )
+
         _run_pca_for_unit(
             pca_unit_dir=pca_region_dir,
             X_raw=X_ref,
             test_idxs=ref_test_idxs,
             per_fold_baselines=per_fold_baselines,
             config=config,
+            sig_mask_flat=sig_mask_flat,
             rrr_overlay_dir=rrr_region_overlay,
             X_arbitrary=X_arbitrary,
         )

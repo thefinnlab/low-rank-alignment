@@ -3,6 +3,7 @@
 import os
 
 import numpy as np
+import pandas as pd
 
 from utils.config import SVDMode
 from utils.srrr import (
@@ -49,6 +50,64 @@ def run_prediction_metrics(
     )
     return suf, cca_sim, proc_sim
 
+
+def add_sig_nonsig_corrs(
+    metrics: dict,
+    suf: dict,
+    sig_mask_flat: np.ndarray,
+    pairs: list[tuple[str, str]],
+) -> None:
+    """Add sig/nonsig split correlations to metrics dict in-place.
+
+    Args:
+        metrics: Dict to update.
+        suf: Sufficiency test result dict containing per-target arrays.
+        sig_mask_flat: Boolean mask over targets (True = significant).
+        pairs: List of (metric_col_name, suf_per_target_key) tuples.
+    """
+    for col_name, suf_key in pairs:
+        arr = suf[suf_key]
+        metrics[f"{col_name}_sig"] = (
+            float(arr[sig_mask_flat].mean()) if sig_mask_flat.any() else float("nan")
+        )
+        metrics[f"{col_name}_nonsig"] = (
+            float(arr[~sig_mask_flat].mean())
+            if (~sig_mask_flat).any()
+            else float("nan")
+        )
+
+
+def make_sig_split_df(df: "pd.DataFrame", suffix: str) -> "pd.DataFrame":
+    """Return copy of df where {col}_{suffix} columns replace {col}.
+
+    For every scalar column (not ending in _sig or _nonsig) that has a
+    {col}_{suffix} partner, replace col values with the partner values.
+    Then drop all _sig and _nonsig suffixed columns.
+
+    Used by scripts to produce sig-only / nonsig-only DataFrames for plotting.
+
+    Args:
+        df: Source DataFrame (summary or grid_results).
+        suffix: "sig" or "nonsig".
+
+    Returns:
+        New DataFrame with sig/nonsig suffix columns replaced and removed.
+    """
+    opp = "nonsig" if suffix == "sig" else "sig"
+    result = df.copy()
+    scalar_cols = [
+        c for c in df.columns
+        if not c.endswith("_sig") and not c.endswith("_nonsig")
+    ]
+    for col in scalar_cols:
+        partner = f"{col}_{suffix}"
+        if partner in df.columns:
+            result[col] = df[partner]
+    to_drop = [
+        c for c in result.columns
+        if c.endswith(f"_{suffix}") or c.endswith(f"_{opp}")
+    ]
+    return result.drop(columns=to_drop, errors="ignore")
 
 
 def resolve_rrr_source_dir(
