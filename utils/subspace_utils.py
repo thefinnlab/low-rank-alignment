@@ -9,7 +9,7 @@ import numpy as np
 import torch
 
 from utils.analysis import partial_out_subspace
-from utils.rrr_utils import run_prediction_metrics
+from utils.rrr_utils import add_sig_nonsig_corrs, run_prediction_metrics
 from utils.sae import solve_regression
 from utils.srrr import compute_correlation
 
@@ -231,6 +231,7 @@ def evaluate_arbitrary(
 
 def build_nr_metrics_dict(
     nr_result: dict,
+    sig_mask_flat: np.ndarray | None = None,
     complement_result: dict | None = None,
     arbitrary_result: dict | None = None,
 ) -> dict:
@@ -241,6 +242,7 @@ def build_nr_metrics_dict(
 
     Args:
         nr_result: Return value of :func:`evaluate_subspace_ols`.
+        sig_mask_flat: Boolean mask over targets (True = significant).
         complement_result: Return value of :func:`evaluate_complement`.
         arbitrary_result: Return value of :func:`evaluate_arbitrary`.
 
@@ -255,6 +257,16 @@ def build_nr_metrics_dict(
         "nr_recovery_corr": suf["recovery_corr"],
         "nr_pred_r2": suf["pred_r2"],
     }
+    if sig_mask_flat is not None:
+        add_sig_nonsig_corrs(
+            out,
+            suf,
+            sig_mask_flat,
+            [
+                ("nr_corr", "minimal_corr_per_target"),
+                ("nr_recovery_corr", "recovery_corr_per_target"),
+            ],
+        )
     if nr_result["cca_sim"] is not None:
         out["nr_cca_similarity"] = nr_result["cca_sim"]
     if nr_result["proc_sim"] is not None:
@@ -265,12 +277,60 @@ def build_nr_metrics_dict(
         out["nr_complement_recovery_corr"] = complement_result[
             "complement_recovery_corr"
         ]
+        if sig_mask_flat is not None:
+            _add_complement_sig_nonsig(out, complement_result, sig_mask_flat, "nr_")
 
     if arbitrary_result is not None:
         out["nr_arbitrary_corr"] = arbitrary_result["arbitrary_corr"]
         out["nr_arbitrary_recovery_corr"] = arbitrary_result["arbitrary_recovery_corr"]
+        if sig_mask_flat is not None:
+            _add_arbitrary_sig_nonsig(out, arbitrary_result, sig_mask_flat, "nr_")
 
     return out
+
+
+def _add_complement_sig_nonsig(
+    out: dict,
+    complement_result: dict,
+    sig_mask_flat: np.ndarray,
+    prefix: str = "",
+) -> None:
+    """Add sig/nonsig splits for complement metrics."""
+    for key, per_target_key in [
+        ("complement_corr", "complement_corr_per_target"),
+        ("complement_recovery_corr", "complement_recovery_corr_per_target"),
+    ]:
+        arr = complement_result[per_target_key]
+        out[f"{prefix}{key}_sig"] = (
+            float(arr[sig_mask_flat].mean()) if sig_mask_flat.any() else float("nan")
+        )
+        out[f"{prefix}{key}_nonsig"] = (
+            float(arr[~sig_mask_flat].mean())
+            if (~sig_mask_flat).any()
+            else float("nan")
+        )
+
+
+def _add_arbitrary_sig_nonsig(
+    out: dict,
+    arbitrary_result: dict,
+    sig_mask_flat: np.ndarray,
+    prefix: str = "",
+) -> None:
+    """Add sig/nonsig splits for arbitrary metrics."""
+    for key, per_target_key in [
+        ("arbitrary_corr", "arbitrary_corr_per_target"),
+        ("arbitrary_recovery_corr", "arbitrary_recovery_corr_per_target"),
+    ]:
+        arr = arbitrary_result[per_target_key]
+        out[f"{prefix}{key}_sig"] = (
+            float(arr[sig_mask_flat].mean()) if sig_mask_flat.any() else float("nan")
+        )
+        out[f"{prefix}{key}_nonsig"] = (
+            float(arr[~sig_mask_flat].mean())
+            if (~sig_mask_flat).any()
+            else float("nan")
+        )
 
 
 def compute_cross_model_metrics(
@@ -316,4 +376,6 @@ def compute_cross_model_metrics(
     return {
         f"{key_prefix}_pred_corr": float(pred_corr_per_target.mean()),
         f"{key_prefix}_joint_corr": float(joint_corr_per_target.mean()),
+        f"{key_prefix}_pred_corr_per_target": pred_corr_per_target,
+        f"{key_prefix}_joint_corr_per_target": joint_corr_per_target,
     }

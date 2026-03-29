@@ -62,7 +62,8 @@ from utils.srrr import (
     save_rrr_factors,
     save_rrr_result,
 )
-from utils.rrr_utils import run_prediction_metrics
+from utils.analysis import build_sig_mask_flat_for_elecs
+from utils.rrr_utils import add_sig_nonsig_corrs, make_sig_split_df, run_prediction_metrics
 from utils.subspace_utils import (
     evaluate_subspace_ols,
     evaluate_complement,
@@ -83,6 +84,7 @@ def _run_rrr_for_unit(
     test_idxs: list,
     per_fold_baselines: list,
     config: RRRConfig,
+    sig_mask_flat: np.ndarray | None = None,
     X_arbitrary: np.ndarray | None = None,
 ) -> pd.DataFrame:
     """Core RRR loop for one analysis unit (cross-subject, per-subject, or per-region).
@@ -94,6 +96,8 @@ def _run_rrr_for_unit(
         per_fold_baselines: Output of build_per_fold_baselines — pre-computed scaled Y
             arrays and baseline predictions from the saved encoding model.
         config: RRRConfig.
+        sig_mask_flat: Boolean mask over targets (True = significant). If provided,
+            sig/nonsig split metrics are computed.
         X_arbitrary: (n_words, n_embed) arbitrary embeddings for null baseline.
 
     Returns:
@@ -233,9 +237,22 @@ def _run_rrr_for_unit(
             if proc_sim is not None:
                 metrics["procrustes_similarity"] = proc_sim
 
+            if sig_mask_flat is not None:
+                add_sig_nonsig_corrs(
+                    metrics,
+                    suf,
+                    sig_mask_flat,
+                    [
+                        ("full_corr", "full_corr_per_target"),
+                        ("minimal_corr", "minimal_corr_per_target"),
+                        ("recovery_corr", "recovery_corr_per_target"),
+                    ],
+                )
+
             metrics.update(
                 build_nr_metrics_dict(
                     nr_result,
+                    sig_mask_flat=sig_mask_flat,
                     complement_result=complement_result,
                     arbitrary_result=arbitrary_result,
                 )
@@ -258,6 +275,25 @@ def _run_rrr_for_unit(
                 metrics.update(compute_cross_model_metrics(Y_hat_rrr, Y_hat_arbitrary, Y_test, "rrr", "arbitrary"))
                 metrics.update(compute_cross_model_metrics(Y_hat_nr, Y_hat_arbitrary, Y_test, "nr", "arbitrary"))
                 metrics.update(compute_cross_model_metrics(Y_hat_complement, Y_hat_arbitrary, Y_test, "complement", "arbitrary"))
+
+            # Apply sig/nonsig splits to per-target cross-model arrays, then strip them
+            _per_target_keys = [k for k in metrics if k.endswith("_per_target")]
+            if sig_mask_flat is not None:
+                for pt_key in _per_target_keys:
+                    base = pt_key[: -len("_per_target")]
+                    arr = metrics[pt_key]
+                    metrics[f"{base}_sig"] = (
+                        float(arr[sig_mask_flat].mean())
+                        if sig_mask_flat.any()
+                        else float("nan")
+                    )
+                    metrics[f"{base}_nonsig"] = (
+                        float(arr[~sig_mask_flat].mean())
+                        if (~sig_mask_flat).any()
+                        else float("nan")
+                    )
+            for pt_key in _per_target_keys:
+                del metrics[pt_key]
 
             save_rrr_result(rrr_unit_dir, k=k, fold=fold_f, metrics=metrics)
             all_rows.append(metrics)
@@ -329,6 +365,70 @@ def _run_rrr_for_unit(
                 "complement_arbitrary_joint_corr",
             ]
         )
+    has_sig_split = sig_mask_flat is not None
+    if has_sig_split:
+        agg_cols.extend(
+            [
+                "full_corr_sig",
+                "full_corr_nonsig",
+                "minimal_corr_sig",
+                "minimal_corr_nonsig",
+                "recovery_corr_sig",
+                "recovery_corr_nonsig",
+                "nr_corr_sig",
+                "nr_corr_nonsig",
+                "nr_recovery_corr_sig",
+                "nr_recovery_corr_nonsig",
+                "nr_complement_corr_sig",
+                "nr_complement_corr_nonsig",
+                "nr_complement_recovery_corr_sig",
+                "nr_complement_recovery_corr_nonsig",
+                # Cross-model sig/nonsig for RRR reduced-rank
+                "rrr_full_pred_corr_sig",
+                "rrr_full_pred_corr_nonsig",
+                "rrr_full_joint_corr_sig",
+                "rrr_full_joint_corr_nonsig",
+                "rrr_complement_pred_corr_sig",
+                "rrr_complement_pred_corr_nonsig",
+                "rrr_complement_joint_corr_sig",
+                "rrr_complement_joint_corr_nonsig",
+                # Cross-model sig/nonsig for NR
+                "nr_full_pred_corr_sig",
+                "nr_full_pred_corr_nonsig",
+                "nr_full_joint_corr_sig",
+                "nr_full_joint_corr_nonsig",
+                "nr_complement_pred_corr_sig",
+                "nr_complement_pred_corr_nonsig",
+                "nr_complement_joint_corr_sig",
+                "nr_complement_joint_corr_nonsig",
+                # Cross-model sig/nonsig for complement
+                "complement_full_pred_corr_sig",
+                "complement_full_pred_corr_nonsig",
+                "complement_full_joint_corr_sig",
+                "complement_full_joint_corr_nonsig",
+            ]
+        )
+        if X_arbitrary is not None:
+            agg_cols.extend(
+                [
+                    "nr_arbitrary_corr_sig",
+                    "nr_arbitrary_corr_nonsig",
+                    "nr_arbitrary_recovery_corr_sig",
+                    "nr_arbitrary_recovery_corr_nonsig",
+                    "rrr_arbitrary_pred_corr_sig",
+                    "rrr_arbitrary_pred_corr_nonsig",
+                    "rrr_arbitrary_joint_corr_sig",
+                    "rrr_arbitrary_joint_corr_nonsig",
+                    "nr_arbitrary_pred_corr_sig",
+                    "nr_arbitrary_pred_corr_nonsig",
+                    "nr_arbitrary_joint_corr_sig",
+                    "nr_arbitrary_joint_corr_nonsig",
+                    "complement_arbitrary_pred_corr_sig",
+                    "complement_arbitrary_pred_corr_nonsig",
+                    "complement_arbitrary_joint_corr_sig",
+                    "complement_arbitrary_joint_corr_nonsig",
+                ]
+            )
     if config.compute_cca:
         agg_cols.extend(["cca_similarity", "nr_cca_similarity"])
     if config.compute_procrustes:
@@ -345,6 +445,21 @@ def _run_rrr_for_unit(
         save_path=os.path.join(rrr_unit_dir, "rank_analysis.png"),
         primary_label="rrr",
     )
+    if has_sig_split:
+        plot_rrr_rank_results(
+            make_sig_split_df(summary, "sig"),
+            grid_df=make_sig_split_df(df, "sig"),
+            title=f"RRR (sig targets): perf vs rank ({os.path.basename(rrr_unit_dir)})",
+            save_path=os.path.join(rrr_unit_dir, "rank_analysis_sig.png"),
+            primary_label="rrr",
+        )
+        plot_rrr_rank_results(
+            make_sig_split_df(summary, "nonsig"),
+            grid_df=make_sig_split_df(df, "nonsig"),
+            title=f"RRR (nonsig targets): perf vs rank ({os.path.basename(rrr_unit_dir)})",
+            save_path=os.path.join(rrr_unit_dir, "rank_analysis_nonsig.png"),
+            primary_label="rrr",
+        )
 
     # Non-reduced-rank plot: rename nr_ metric columns to standard names and reuse plotter
     nr_col_map = {
@@ -359,6 +474,18 @@ def _run_rrr_for_unit(
         "nr_complement_recovery_corr": "complement_recovery_corr",
         "nr_arbitrary_corr": "arbitrary_corr",
         "nr_arbitrary_recovery_corr": "arbitrary_recovery_corr",
+        "nr_corr_sig": "minimal_corr_sig",
+        "nr_corr_nonsig": "minimal_corr_nonsig",
+        "nr_recovery_corr_sig": "recovery_corr_sig",
+        "nr_recovery_corr_nonsig": "recovery_corr_nonsig",
+        "nr_complement_corr_sig": "complement_corr_sig",
+        "nr_complement_corr_nonsig": "complement_corr_nonsig",
+        "nr_complement_recovery_corr_sig": "complement_recovery_corr_sig",
+        "nr_complement_recovery_corr_nonsig": "complement_recovery_corr_nonsig",
+        "nr_arbitrary_corr_sig": "arbitrary_corr_sig",
+        "nr_arbitrary_corr_nonsig": "arbitrary_corr_nonsig",
+        "nr_arbitrary_recovery_corr_sig": "arbitrary_recovery_corr_sig",
+        "nr_arbitrary_recovery_corr_nonsig": "arbitrary_recovery_corr_nonsig",
     }
     # Drop original reduced-rank columns, then rename nr_ columns into their place.
     # Also drop RRR-specific cross-model cols — the NR plot uses nr_*_pred_corr directly.
@@ -376,6 +503,21 @@ def _run_rrr_for_unit(
         save_path=os.path.join(rrr_unit_dir, "rank_analysis_nr.png"),
         primary_label="nr",
     )
+    if has_sig_split:
+        plot_rrr_rank_results(
+            make_sig_split_df(nr_summary, "sig"),
+            grid_df=make_sig_split_df(nr_grid, "sig"),
+            title=f"RRR (non-reduced ridge, sig targets): perf vs rank ({os.path.basename(rrr_unit_dir)})",
+            save_path=os.path.join(rrr_unit_dir, "rank_analysis_nr_sig.png"),
+            primary_label="nr",
+        )
+        plot_rrr_rank_results(
+            make_sig_split_df(nr_summary, "nonsig"),
+            grid_df=make_sig_split_df(nr_grid, "nonsig"),
+            title=f"RRR (non-reduced ridge, nonsig targets): perf vs rank ({os.path.basename(rrr_unit_dir)})",
+            save_path=os.path.join(rrr_unit_dir, "rank_analysis_nr_nonsig.png"),
+            primary_label="nr",
+        )
 
     return df
 
@@ -437,12 +579,22 @@ def _run_cross_subject_rrr(
         aligned_embeddings, selection, df_word, enc.offset, config.arbitrary_seed
     )
 
+    sig_mask_flat = None
+    if config.compute_sig_nonsig:
+        sig_mask_flat = build_sig_mask_flat_for_elecs(
+            output_dir,
+            {s: sig_electrodes[s] for s in subs_with_sig},
+            enc_results,
+            sig_dir=sig_dir,
+        )
+
     _run_rrr_for_unit(
         rrr_unit_dir=rrr_dir,
         X_raw=X_ref,
         test_idxs=ref_test_idxs,
         per_fold_baselines=per_fold_baselines,
         config=config,
+        sig_mask_flat=sig_mask_flat,
         X_arbitrary=X_arbitrary,
     )
 
@@ -505,12 +657,22 @@ def _run_per_subject_rrr(
             X_arr, Y_sub, test_idxs, enc_subjects_info
         )
 
+        sig_mask_flat = None
+        if config.compute_sig_nonsig:
+            sig_mask_flat = build_sig_mask_flat_for_elecs(
+                output_dir,
+                {sub_id: sub_sig_elecs},
+                enc_results,
+                sig_dir=sig_dir,
+            )
+
         _run_rrr_for_unit(
             rrr_unit_dir=rrr_sub_dir,
             X_raw=X_arr,
             test_idxs=test_idxs,
             per_fold_baselines=per_fold_baselines,
             config=config,
+            sig_mask_flat=sig_mask_flat,
             X_arbitrary=X_arbitrary,
         )
 
@@ -588,12 +750,22 @@ def _run_per_region_rrr(
             aligned_embeddings, selection, df_word, enc.offset, config.arbitrary_seed
         )
 
+        sig_mask_flat = None
+        if config.compute_sig_nonsig:
+            sig_mask_flat = build_sig_mask_flat_for_elecs(
+                output_dir,
+                per_subject_region_elecs,
+                enc_results,
+                sig_dir=sig_dir,
+            )
+
         _run_rrr_for_unit(
             rrr_unit_dir=rrr_region_dir,
             X_raw=X_ref,
             test_idxs=ref_test_idxs,
             per_fold_baselines=per_fold_baselines,
             config=config,
+            sig_mask_flat=sig_mask_flat,
             X_arbitrary=X_arbitrary,
         )
 

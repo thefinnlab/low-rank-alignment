@@ -125,6 +125,7 @@ class RRRConfig:
     # Optional metrics (expensive; disabled by default to speed up rank sweeps)
     compute_cca: bool = False
     compute_procrustes: bool = False
+    compute_sig_nonsig: bool = True
 
     # Alpha diagnostics
     log_alphas: bool = False  # Save per-rank alpha diagnostics in RRR output
@@ -163,6 +164,7 @@ class PCAConfig:
     # Optional metrics (expensive; disabled by default)
     compute_cca: bool = False
     compute_procrustes: bool = False
+    compute_sig_nonsig: bool = True
 
     # Alpha diagnostics
     log_alphas: bool = False
@@ -391,6 +393,9 @@ class AblationConfig:
 
     # Number of random seeds for random mask (averaged for stability)
     n_random_seeds: int = 5
+
+    # Sig/nonsig split
+    compute_sig_nonsig: bool = True
 
     # Per-region mode
     atlas_path: str | None = None
