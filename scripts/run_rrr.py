@@ -55,27 +55,68 @@ from utils.encoding import (
     build_per_fold_baselines,
     get_and_offset_arbitrary_embeddings,
 )
+from utils.sae import solve_regression
 from utils.srrr import (
-    compute_r2,
     fit_dense_rrr,
-    predict_from_factors,
     save_rrr_factors,
     save_rrr_result,
+    compute_correlation,
 )
 from utils.analysis import build_sig_mask_flat_for_elecs
-from utils.rrr_utils import add_sig_nonsig_corrs, make_sig_split_df, run_prediction_metrics
+from utils.rrr_utils import (
+    add_sig_nonsig_corrs,
+    apply_sig_nonsig_splits_and_strip,
+    make_sig_split_df,
+    run_prediction_metrics,
+)
 from utils.subspace_utils import (
     evaluate_subspace_ols,
-    evaluate_complement,
-    evaluate_arbitrary,
+    evaluate_complement_and_arbitrary,
+    add_primary_cross_model_metrics,
     build_nr_metrics_dict,
-    compute_cross_model_metrics,
 )
 
 
 # ---------------------------------------------------------------------------
 # Core per-unit loop
 # ---------------------------------------------------------------------------
+
+
+def _train_ridge_on_subspace(
+    X_train, Y_train, X_test, Y_test, A_subspace, alphas=None, device="cpu"
+):
+    """Train ridge regression from X to Y constrained to the subspace defined by A.
+
+    Args:
+        X_train: (n_samples, n_features) training input.
+        Y_train: (n_samples, n_targets) training targets.
+        A_subspace: (n_features, k) subspace basis matrix.
+        Y_test: (n_test_samples, n_targets) test targets (for validation).
+        alphas: Optional array of ridge alphas to evaluate on validation set.
+        device: Device for PyTorch computations.
+
+    Returns:
+        Dict with keys:
+            - beta_subspace: (k, n_targets) ridge coefficients in subspace.
+            - Y_hat_train: (n_samples, n_targets) predictions on training set.
+            - Correlations on test set.
+    """
+    W, b = solve_regression(
+        X_train @ A_subspace,
+        Y_train,
+        regression_type="ridge",
+        device=device,
+        standardize=False,  # Don't standardize because RRR filters to top-k subspace and noise dimensions have neglgible variance.
+        alphas=alphas,
+    )
+    Y_hat = X_test @ A_subspace @ W + b
+    correlations = compute_correlation(Y_test, Y_hat)
+
+    return {
+        "beta_subspace": W,
+        "Y_hat_train": Y_hat,
+        "correlations": correlations,
+    }
 
 
 def _run_rrr_for_unit(
@@ -194,31 +235,32 @@ def _run_rrr_for_unit(
             )
 
             # Complement and arbitrary evaluations
-            complement_result = evaluate_complement(
+            complement_result, arbitrary_result = evaluate_complement_and_arbitrary(
                 A,
                 X_train,
                 X_test,
+                X_arbitrary,
+                train_idx,
+                test_idx,
                 Y_train,
                 Y_test,
                 nr_result["Y_hat_train"],
                 nr_result["Y_hat"],
+                alphas=np.logspace(1, 10, 13) if k < 50 else np.logspace(-2, 10, 13),
+                device=device,
+            )
+
+            # Ridge on RRR space.
+            ridge_result = _train_ridge_on_subspace(
+                X_train,
+                Y_train,
+                X_test,
+                Y_test,
+                A_subspace=A,
                 alphas=alphas,
                 device=device,
             )
-            arbitrary_result = None
-            if X_arbitrary is not None:
-                X_arb_train = X_arbitrary[train_idx]
-                X_arb_test = X_arbitrary[test_idx]
-                arbitrary_result = evaluate_arbitrary(
-                    X_arb_train,
-                    X_arb_test,
-                    Y_train,
-                    Y_test,
-                    nr_result["Y_hat_train"],
-                    nr_result["Y_hat"],
-                    alphas=alphas,
-                    device=device,
-                )
+            suf["ridge_corr_per_target"] = ridge_result["correlations"]
 
             metrics = {
                 "full_r2": suf["full_r2"],
@@ -230,6 +272,7 @@ def _run_rrr_for_unit(
                 "recovery_corr": suf["recovery_corr"],
                 "effective_rank": effective_rank,
                 "fold": fold_f,
+                "ridge_corr": ridge_result["correlations"].mean(),
                 "k": k,
             }
             if cca_sim is not None:
@@ -246,6 +289,7 @@ def _run_rrr_for_unit(
                         ("full_corr", "full_corr_per_target"),
                         ("minimal_corr", "minimal_corr_per_target"),
                         ("recovery_corr", "recovery_corr_per_target"),
+                        ("ridge_corr", "ridge_corr_per_target"),
                     ],
                 )
 
@@ -266,34 +310,27 @@ def _run_rrr_for_unit(
                 if arbitrary_result is not None
                 else None
             )
-            metrics.update(compute_cross_model_metrics(Y_hat_rrr, Y_hat_full, Y_test, "rrr", "full"))
-            metrics.update(compute_cross_model_metrics(Y_hat_rrr, Y_hat_complement, Y_test, "rrr", "complement"))
-            metrics.update(compute_cross_model_metrics(Y_hat_nr, Y_hat_full, Y_test, "nr", "full"))
-            metrics.update(compute_cross_model_metrics(Y_hat_nr, Y_hat_complement, Y_test, "nr", "complement"))
-            metrics.update(compute_cross_model_metrics(Y_hat_complement, Y_hat_full, Y_test, "complement", "full"))
-            if Y_hat_arbitrary is not None:
-                metrics.update(compute_cross_model_metrics(Y_hat_rrr, Y_hat_arbitrary, Y_test, "rrr", "arbitrary"))
-                metrics.update(compute_cross_model_metrics(Y_hat_nr, Y_hat_arbitrary, Y_test, "nr", "arbitrary"))
-                metrics.update(compute_cross_model_metrics(Y_hat_complement, Y_hat_arbitrary, Y_test, "complement", "arbitrary"))
+            add_primary_cross_model_metrics(
+                metrics,
+                Y_hat_rrr,
+                Y_hat_full,
+                Y_hat_complement,
+                Y_hat_arbitrary,
+                Y_test,
+                "rrr",
+            )
+            add_primary_cross_model_metrics(
+                metrics,
+                Y_hat_nr,
+                Y_hat_full,
+                Y_hat_complement,
+                Y_hat_arbitrary,
+                Y_test,
+                "nr",
+            )
 
-            # Apply sig/nonsig splits to per-target cross-model arrays, then strip them
-            _per_target_keys = [k for k in metrics if k.endswith("_per_target")]
-            if sig_mask_flat is not None:
-                for pt_key in _per_target_keys:
-                    base = pt_key[: -len("_per_target")]
-                    arr = metrics[pt_key]
-                    metrics[f"{base}_sig"] = (
-                        float(arr[sig_mask_flat].mean())
-                        if sig_mask_flat.any()
-                        else float("nan")
-                    )
-                    metrics[f"{base}_nonsig"] = (
-                        float(arr[~sig_mask_flat].mean())
-                        if (~sig_mask_flat).any()
-                        else float("nan")
-                    )
-            for pt_key in _per_target_keys:
-                del metrics[pt_key]
+            # Split any *_per_target arrays into *_sig/*_nonsig scalars, then strip them
+            apply_sig_nonsig_splits_and_strip(metrics, sig_mask_flat)
 
             save_rrr_result(rrr_unit_dir, k=k, fold=fold_f, metrics=metrics)
             all_rows.append(metrics)
@@ -338,6 +375,7 @@ def _run_rrr_for_unit(
         "nr_pred_r2",
         "nr_complement_corr",
         "nr_complement_recovery_corr",
+        "ridge_corr",
         # Cross-model metrics for RRR reduced-rank model
         "rrr_full_pred_corr",
         "rrr_full_joint_corr",
@@ -465,6 +503,7 @@ def _run_rrr_for_unit(
     nr_col_map = {
         "nr_r2": "minimal_r2",
         "nr_corr": "minimal_corr",
+        "ridge_corr": "ridge_corr",
         "nr_recovery_r2": "recovery_r2",
         "nr_recovery_corr": "recovery_corr",
         "nr_pred_r2": "pred_r2",
@@ -491,11 +530,16 @@ def _run_rrr_for_unit(
     # Also drop RRR-specific cross-model cols — the NR plot uses nr_*_pred_corr directly.
     drop_cols = [v for v in nr_col_map.values() if v in df.columns]
     rrr_cross_cols = [
-        c for c in df.columns
+        c
+        for c in df.columns
         if c.startswith("rrr_") and ("_pred_corr" in c or "_joint_corr" in c)
     ]
-    nr_grid = df.drop(columns=drop_cols + rrr_cross_cols, errors="ignore").rename(columns=nr_col_map)
-    nr_summary = summary.drop(columns=[c for c in drop_cols + rrr_cross_cols if c in summary.columns]).rename(columns=nr_col_map)
+    nr_grid = df.drop(columns=drop_cols + rrr_cross_cols, errors="ignore").rename(
+        columns=nr_col_map
+    )
+    nr_summary = summary.drop(
+        columns=[c for c in drop_cols + rrr_cross_cols if c in summary.columns]
+    ).rename(columns=nr_col_map)
     plot_rrr_rank_results(
         nr_summary,
         grid_df=nr_grid,

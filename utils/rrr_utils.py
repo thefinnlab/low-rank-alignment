@@ -108,6 +108,32 @@ def make_sig_split_df(df: "pd.DataFrame", suffix: str) -> "pd.DataFrame":
     return result.drop(columns=to_drop, errors="ignore")
 
 
+def apply_sig_nonsig_splits_and_strip(
+    metrics: dict,
+    sig_mask_flat: "np.ndarray | None",
+) -> None:
+    """Split any *_per_target arrays into *_sig/*_nonsig scalar means, then delete them.
+
+    Modifies *metrics* in-place.  Safe to call when *sig_mask_flat* is None — arrays
+    are still stripped; no split keys are added.
+    """
+    _per_target_keys = [k for k in metrics if k.endswith("_per_target")]
+    if sig_mask_flat is not None:
+        for pt_key in _per_target_keys:
+            base = pt_key[: -len("_per_target")]
+            arr = metrics[pt_key]
+            metrics[f"{base}_sig"] = (
+                float(arr[sig_mask_flat].mean()) if sig_mask_flat.any() else float("nan")
+            )
+            metrics[f"{base}_nonsig"] = (
+                float(arr[~sig_mask_flat].mean())
+                if (~sig_mask_flat).any()
+                else float("nan")
+            )
+    for pt_key in _per_target_keys:
+        del metrics[pt_key]
+
+
 def resolve_rrr_source_dir(
     mode: SVDMode, output_dir: str, override: str | None = None
 ) -> str:
