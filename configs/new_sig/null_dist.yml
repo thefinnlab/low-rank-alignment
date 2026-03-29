@@ -1,0 +1,14 @@
+encoding: 
+  data_root: data/
+  model: gpt2xl
+  layer: 24
+  offset: 0
+  subjects: null  # null → all subjects (1–9)
+  run_name: null
+  batch: false
+output_dir: null      # Root results dir (for lag computation, etc.)
+null_dir: null        # Where to write null distribution shards; defaults to {output_dir}/null_dist
+n_iterations: 1250     # Number of permutations per invocation
+batch_size: 30         # Permutations to batch into a single model (limited by RAM)
+seed: null            # None = random seed per invocation (for parallel batching)
+    

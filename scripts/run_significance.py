@@ -35,6 +35,7 @@ from utils.encoding import get_ridge_model_constructor
 # Main
 # ---------------------------------------------------------------------------
 
+
 def main():
     args, overrides = parse_args("Per-subject encoding + significance testing")
     config: SignificanceConfig = load_config(args.config, overrides, SignificanceConfig)
@@ -88,7 +89,9 @@ def main():
         # c. Align X and Y by epoch selection and word offset
         # ------------------------------------------------------------------
         n_words, n_elec, n_lags = data.shape
-        X_arr, Y = apply_offset(aligned_embeddings[cache["selection"]], data, enc.offset)
+        X_arr, Y = apply_offset(
+            aligned_embeddings[cache["selection"]], data, enc.offset
+        )
         X = [X_arr] * enc.num_folds
 
         # Update lag_sec based on actual n_lags (in case resampling gives different count)
@@ -103,6 +106,7 @@ def main():
             Y,
             model_constructor,
             epochs_shape=(n_elec, n_lags),
+            num_folds=enc.num_folds,
         )
 
         # ------------------------------------------------------------------
@@ -135,13 +139,25 @@ def main():
                     models, n_elec, n_lags, scaled_model=False
                 )
                 sig_coefs = [c[sig_elec_indices] for c in coefficients]
-                sig_ints = [i.reshape(n_elec, n_lags)[sig_elec_indices].ravel() for i in intercepts]
+                sig_ints = [
+                    i.reshape(n_elec, n_lags)[sig_elec_indices].ravel()
+                    for i in intercepts
+                ]
                 sig_corrs = corrs[:, sig_elec_indices, :]
                 sig_names = [electrode_names[i] for i in sig_elec_indices]
                 save_subject_results(
-                    output_dir, bids_sub_id, sig_corrs,
-                    sig_coefs, sig_ints, models, tr_idxs, test_idxs,
-                    scalers, sig_names, enc.offset, enc.layer,
+                    output_dir,
+                    bids_sub_id,
+                    sig_corrs,
+                    sig_coefs,
+                    sig_ints,
+                    models,
+                    tr_idxs,
+                    test_idxs,
+                    scalers,
+                    sig_names,
+                    enc.offset,
+                    enc.layer,
                     actual_lag_sec,
                 )
                 del coefficients, intercepts

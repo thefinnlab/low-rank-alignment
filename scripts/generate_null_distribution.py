@@ -50,7 +50,9 @@ from himalaya.ridge import RidgeCV
 from himalaya.scoring import correlation_score
 
 
-def estimate_batch_size_from_gpu(n_elec: int, n_samples: int, safety_factor: float = 0.5) -> int:
+def estimate_batch_size_from_gpu(
+    n_elec: int, n_samples: int, safety_factor: float = 0.5
+) -> int:
     """Estimate max batch size from available GPU memory.
 
     Uses free VRAM and the dominant memory consumer — the phase-randomised raw
@@ -63,7 +65,7 @@ def estimate_batch_size_from_gpu(n_elec: int, n_samples: int, safety_factor: flo
     if not torch.cuda.is_available():
         return 1
     free_bytes, _ = torch.cuda.mem_get_info()
-    bytes_per_perm = n_elec * n_samples * 4  # float32
+    bytes_per_perm = n_elec * n_samples * 8  # float32
     estimated = int(free_bytes * safety_factor / bytes_per_perm)
     return max(1, estimated)
 
@@ -75,34 +77,30 @@ def print_gpu_utilization():
         print(f"Current VRAM Usage: {used:.2f} / {info[1]/1e9:.2f} GB")
 
 
-def torch_phase_randomize(raw_data, batch_size, rng_seed=None):
-    """
-    GPU-accelerated phase randomization for a batch of permutations.
-    raw_data: (n_elec, n_samples)
-    Returns: (batch_size, n_elec, n_samples)
-    """
+def torch_phase_randomize(raw_data, batch_size, preserve_spatial=False):
     device = raw_data.device
     n_elec, n_samples = raw_data.shape
-    print(f"Total memory required for batch: {n_elec * n_samples}")
 
     # 1. FFT
     freq_data = torch.fft.rfft(raw_data, dim=-1)
     n_freq = freq_data.shape[-1]
 
-    # 2. Generate random phases for the batch
-    # We want different phases per permutation, but shared across electrodes
-    # to preserve spatial correlation if desired, or unique per elec.
-    # Here we do unique per (batch, elec) for maximum noise.
-    if rng_seed:
-        torch.manual_seed(rng_seed)
-    phases = torch.rand((batch_size, n_elec, n_freq), device=device) * 2 * np.pi
+    # 2. Generate Phases
+    # If preserve_spatial is True, we use (batch_size, 1, n_freq)
+    # so it broadcasts across all n_elec identicaly.
+    elec_dim = 1 if preserve_spatial else n_elec
+    phases = torch.rand((batch_size, elec_dim, n_freq), device=device) * 2 * torch.pi
+
+    # CRITICAL: Force DC (index 0) and Nyquist (last index, if even) to have 0 phase
+    # This prevents the baseline shift and keeps the signal real-valued.
+    phases[..., 0] = 0
+    if n_samples % 2 == 0:
+        phases[..., -1] = 0
+
     exp_phases = torch.complex(torch.cos(phases), torch.sin(phases))
 
-    # 3. Apply phases
-    # freq_data is (n_elec, n_freq), we broadcast to (batch, n_elec, n_freq)
+    # 3. Apply and Inverse FFT
     randomized_freq = freq_data.unsqueeze(0) * exp_phases
-
-    # 4. Inverse FFT
     return torch.fft.irfft(randomized_freq, n=n_samples, dim=-1).float()
 
 
@@ -245,41 +243,50 @@ def main():
         print(f"  Raw Data Shape: {raw_data.shape}")
 
         recommended_batch = estimate_batch_size_from_gpu(n_elec, raw_data.shape[1])
-        print("Recommended batch size based on available GPU memory:", recommended_batch)
+        print(
+            "Recommended batch size based on available GPU memory:", recommended_batch
+        )
         current_batch_size = max(1, min(recommended_batch, config.n_iterations))
         print(f"Adjusting batch size to {current_batch_size}")
         n_batches = math.ceil(config.n_iterations / current_batch_size)
         null_max_values = []
 
-        for b_idx in tqdm(range(n_batches), desc=f"  Sub {bids_sub_id} batches"):
-            remaining = config.n_iterations - len(null_max_values)
-            cur_batch = min(current_batch_size, remaining)
+        with tqdm(
+            total=config.n_iterations, desc=f"  Subject {bids_sub_id} permutations"
+        ) as pbar:
+            while len(null_max_values) < config.n_iterations:
+                remaining = config.n_iterations - len(null_max_values)
+                cur_batch = min(current_batch_size, remaining)
 
-            # Retry with smaller batches on OOM so the script survives nodes
-            # with less VRAM than the initial estimate assumed.
-            while True:
-                try:
-                    batch_maxes = _run_batched_permutations(
-                        raw_data,
-                        selection,
-                        epoch_starts,
-                        n_lags_sub,
-                        aligned_embeddings,
-                        enc,
-                        model_constructor,
-                        rng,
-                        batch_size=cur_batch,
-                    )
-                    break
-                except torch.cuda.OutOfMemoryError:
-                    torch.cuda.empty_cache()
-                    cur_batch = cur_batch // 2
-                    if cur_batch < 1:
-                        raise
-                    print(f"\nOOM — retrying with batch_size={cur_batch}")
-                    current_batch_size = cur_batch  # keep smaller size for future batches
+                # Retry with smaller batches on OOM so the script survives nodes
+                # with less VRAM than the initial estimate assumed.
+                while True:
+                    try:
+                        batch_maxes = _run_batched_permutations(
+                            raw_data,
+                            selection,
+                            epoch_starts,
+                            n_lags_sub,
+                            aligned_embeddings,
+                            enc,
+                            model_constructor,
+                            rng,
+                            batch_size=cur_batch,
+                        )
+                        break
+                    except torch.cuda.OutOfMemoryError:
+                        torch.cuda.empty_cache()
+                        cur_batch = cur_batch // 2
+                        if cur_batch < 1:
+                            raise
+                        print(f"\nOOM — retrying with batch_size={cur_batch}")
+                        current_batch_size = (
+                            cur_batch  # keep smaller size for future batches
+                        )
 
-            null_max_values.extend(batch_maxes.tolist())
+                new_maxes = batch_maxes.tolist()
+                null_max_values.extend(new_maxes)
+                pbar.update(len(new_maxes))
 
             # Free memory between batches
             gc.collect()

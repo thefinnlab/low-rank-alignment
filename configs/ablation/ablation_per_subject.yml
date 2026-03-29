@@ -1,0 +1,16 @@
+encoding:
+  data_root: data/
+  model: gpt2xl
+  layer: 24
+  offset: 0
+  subjects: null
+  run_name: null
+  batch: false
+output_dir: null
+ablation_output_dir: null
+rrr_source_dir: null
+mode: per_subject
+rank_grid: [1, 2, 5, 10, 20, 40, 100, 200, 400, 800, 1600]
+center_pcts: [10, 30, 50, 70, 90]
+mask_types: [tail, center, random]
+n_random_seeds: 3

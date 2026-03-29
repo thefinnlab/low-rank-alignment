@@ -12,6 +12,8 @@ Writes per-subject results to:
     corrs_plot.png
 """
 
+# TODO: FIX THIS FILE FOLD PROCESSING
+
 import gc
 import os
 

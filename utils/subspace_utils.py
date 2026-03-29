@@ -234,6 +234,7 @@ def build_nr_metrics_dict(
     sig_mask_flat: np.ndarray | None = None,
     complement_result: dict | None = None,
     arbitrary_result: dict | None = None,
+    prefix: str = "nr_",
 ) -> dict:
     """Convert :func:`evaluate_subspace_ols` output into a flat metrics dict.
 
@@ -251,11 +252,11 @@ def build_nr_metrics_dict(
     """
     suf = nr_result["suf"]
     out: dict = {
-        "nr_r2": suf["minimal_r2"],
-        "nr_corr": suf["minimal_corr"],
-        "nr_recovery_r2": suf["recovery_r2"],
-        "nr_recovery_corr": suf["recovery_corr"],
-        "nr_pred_r2": suf["pred_r2"],
+        f"{prefix}r2": suf["minimal_r2"],
+        f"{prefix}corr": suf["minimal_corr"],
+        f"{prefix}recovery_r2": suf["recovery_r2"],
+        f"{prefix}recovery_corr": suf["recovery_corr"],
+        f"{prefix}pred_r2": suf["pred_r2"],
     }
     if sig_mask_flat is not None:
         add_sig_nonsig_corrs(
@@ -263,28 +264,30 @@ def build_nr_metrics_dict(
             suf,
             sig_mask_flat,
             [
-                ("nr_corr", "minimal_corr_per_target"),
-                ("nr_recovery_corr", "recovery_corr_per_target"),
+                (f"{prefix}corr", f"{prefix}minimal_corr_per_target"),
+                (f"{prefix}recovery_corr", f"{prefix}recovery_corr_per_target"),
             ],
         )
     if nr_result["cca_sim"] is not None:
-        out["nr_cca_similarity"] = nr_result["cca_sim"]
+        out[f"{prefix}cca_similarity"] = nr_result["cca_sim"]
     if nr_result["proc_sim"] is not None:
-        out["nr_procrustes_similarity"] = nr_result["proc_sim"]
+        out[f"{prefix}procrustes_similarity"] = nr_result["proc_sim"]
 
     if complement_result is not None:
-        out["nr_complement_corr"] = complement_result["complement_corr"]
-        out["nr_complement_recovery_corr"] = complement_result[
+        out[f"{prefix}complement_corr"] = complement_result["complement_corr"]
+        out[f"{prefix}complement_recovery_corr"] = complement_result[
             "complement_recovery_corr"
         ]
         if sig_mask_flat is not None:
-            _add_complement_sig_nonsig(out, complement_result, sig_mask_flat, "nr_")
+            _add_complement_sig_nonsig(out, complement_result, sig_mask_flat, prefix)
 
     if arbitrary_result is not None:
-        out["nr_arbitrary_corr"] = arbitrary_result["arbitrary_corr"]
-        out["nr_arbitrary_recovery_corr"] = arbitrary_result["arbitrary_recovery_corr"]
+        out[f"{prefix}arbitrary_corr"] = arbitrary_result["arbitrary_corr"]
+        out[f"{prefix}arbitrary_recovery_corr"] = arbitrary_result[
+            "arbitrary_recovery_corr"
+        ]
         if sig_mask_flat is not None:
-            _add_arbitrary_sig_nonsig(out, arbitrary_result, sig_mask_flat, "nr_")
+            _add_arbitrary_sig_nonsig(out, arbitrary_result, sig_mask_flat, prefix)
 
     return out
 

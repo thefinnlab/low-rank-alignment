@@ -96,16 +96,14 @@ def make_sig_split_df(df: "pd.DataFrame", suffix: str) -> "pd.DataFrame":
     opp = "nonsig" if suffix == "sig" else "sig"
     result = df.copy()
     scalar_cols = [
-        c for c in df.columns
-        if not c.endswith("_sig") and not c.endswith("_nonsig")
+        c for c in df.columns if not c.endswith("_sig") and not c.endswith("_nonsig")
     ]
     for col in scalar_cols:
         partner = f"{col}_{suffix}"
         if partner in df.columns:
             result[col] = df[partner]
     to_drop = [
-        c for c in result.columns
-        if c.endswith(f"_{suffix}") or c.endswith(f"_{opp}")
+        c for c in result.columns if c.endswith(f"_{suffix}") or c.endswith(f"_{opp}")
     ]
     return result.drop(columns=to_drop, errors="ignore")
 
