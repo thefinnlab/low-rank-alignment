@@ -108,7 +108,7 @@ def main():
         X_arr, Y = apply_offset(
             aligned_embeddings[cache["selection"]], data, enc.offset
         )
-        X = [X_arr, X_arr]  # 2-fold CV
+        X = [X_arr] * enc.num_folds
 
         actual_lag_sec = np.linspace(-2.0, 2.0, n_lags, endpoint=False)
 
