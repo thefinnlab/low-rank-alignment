@@ -89,7 +89,7 @@ def main():
         # ------------------------------------------------------------------
         n_words, n_elec, n_lags = data.shape
         X_arr, Y = apply_offset(aligned_embeddings[cache["selection"]], data, enc.offset)
-        X = [X_arr, X_arr]  # one per fold
+        X = [X_arr] * enc.num_folds
 
         # Update lag_sec based on actual n_lags (in case resampling gives different count)
         actual_lag_sec = np.linspace(-2.0, 2.0, n_lags, endpoint=False)

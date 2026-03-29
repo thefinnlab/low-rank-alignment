@@ -66,7 +66,8 @@ def _train_with_arbitrary(
     When config.refine_alphas is True, uses a two-pass coarse→refined sweep
     for the real model. The arbitrary model always uses a single pass.
     """
-    X = [X_arr, X_arr]
+    num_folds = config.num_folds if config is not None else 2
+    X = [X_arr] * num_folds
 
     if config is not None and config.refine_alphas:
         (corrs, models, tr_idxs, test_idxs, scalers, coarse_best, refined_grid) = (
@@ -88,7 +89,7 @@ def _train_with_arbitrary(
     )
 
     corrs_arb, _, _, _, _ = train_encoding(
-        [arb, arb],
+        [arb] * num_folds,
         Y,
         model_constructor,
         epochs_shape=(n_elecs, n_lags),
