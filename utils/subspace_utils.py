@@ -229,6 +229,66 @@ def evaluate_arbitrary(
     )
 
 
+def evaluate_complement_and_arbitrary(
+    A: np.ndarray,
+    X_train: np.ndarray,
+    X_test: np.ndarray,
+    X_arbitrary: "np.ndarray | None",
+    train_idx: np.ndarray,
+    test_idx: np.ndarray,
+    Y_train: np.ndarray,
+    Y_test: np.ndarray,
+    Y_hat_subspace_train: np.ndarray,
+    Y_hat_subspace_test: np.ndarray,
+    alphas: "np.ndarray | None" = None,
+    device: str = "cpu",
+) -> "tuple[dict, dict | None]":
+    """Run complement and (optionally) arbitrary evaluations in one call.
+
+    Args:
+        A: (n_embed, k) projection matrix defining the subspace.
+        X_train: (n_train, n_embed) training embeddings.
+        X_test: (n_test, n_embed) test embeddings.
+        X_arbitrary: (n_words, n_embed) arbitrary embeddings, or None to skip.
+        train_idx: Integer index array selecting training rows from X_arbitrary.
+        test_idx: Integer index array selecting test rows from X_arbitrary.
+        Y_train: (n_train, n_targets) training neural targets.
+        Y_test: (n_test, n_targets) test neural targets.
+        Y_hat_subspace_train: (n_train, n_targets) subspace model predictions on train.
+        Y_hat_subspace_test: (n_test, n_targets) subspace model predictions on test.
+        alphas: Ridge alpha grid; None → solver default.
+        device: Torch device string.
+
+    Returns:
+        (complement_result, arbitrary_result) where arbitrary_result is None when
+        X_arbitrary is None.
+    """
+    complement_result = evaluate_complement(
+        A,
+        X_train,
+        X_test,
+        Y_train,
+        Y_test,
+        Y_hat_subspace_train,
+        Y_hat_subspace_test,
+        alphas=alphas,
+        device=device,
+    )
+    arbitrary_result = None
+    if X_arbitrary is not None:
+        arbitrary_result = evaluate_arbitrary(
+            X_arbitrary[train_idx],
+            X_arbitrary[test_idx],
+            Y_train,
+            Y_test,
+            Y_hat_subspace_train,
+            Y_hat_subspace_test,
+            alphas=alphas,
+            device=device,
+        )
+    return complement_result, arbitrary_result
+
+
 def build_nr_metrics_dict(
     nr_result: dict,
     sig_mask_flat: np.ndarray | None = None,
@@ -382,3 +442,37 @@ def compute_cross_model_metrics(
         f"{key_prefix}_pred_corr_per_target": pred_corr_per_target,
         f"{key_prefix}_joint_corr_per_target": joint_corr_per_target,
     }
+
+
+def add_primary_cross_model_metrics(
+    metrics: dict,
+    Y_hat_primary: np.ndarray,
+    Y_hat_full: np.ndarray,
+    Y_hat_complement: np.ndarray,
+    Y_hat_arbitrary: "np.ndarray | None",
+    Y_test: np.ndarray,
+    primary_label: str,
+) -> None:
+    """Add cross-model metrics for a primary prediction vs full, complement, and arbitrary.
+
+    Adds the following metric groups to *metrics* in-place:
+      - {primary_label}_full_*
+      - {primary_label}_complement_*
+      - complement_full_*
+      - {primary_label}_arbitrary_* and complement_arbitrary_* (when Y_hat_arbitrary is not None)
+
+    Args:
+        metrics: Dict to update in-place.
+        Y_hat_primary: (n_test, n_targets) predictions from the primary model.
+        Y_hat_full: (n_test, n_targets) predictions from the full ridge baseline.
+        Y_hat_complement: (n_test, n_targets) predictions from the complement model.
+        Y_hat_arbitrary: (n_test, n_targets) predictions from the arbitrary baseline, or None.
+        Y_test: (n_test, n_targets) true neural targets.
+        primary_label: Short label for the primary model (e.g. "rrr", "pca", "nr").
+    """
+    metrics.update(compute_cross_model_metrics(Y_hat_primary, Y_hat_full, Y_test, primary_label, "full"))
+    metrics.update(compute_cross_model_metrics(Y_hat_primary, Y_hat_complement, Y_test, primary_label, "complement"))
+    metrics.update(compute_cross_model_metrics(Y_hat_complement, Y_hat_full, Y_test, "complement", "full"))
+    if Y_hat_arbitrary is not None:
+        metrics.update(compute_cross_model_metrics(Y_hat_primary, Y_hat_arbitrary, Y_test, primary_label, "arbitrary"))
+        metrics.update(compute_cross_model_metrics(Y_hat_complement, Y_hat_arbitrary, Y_test, "complement", "arbitrary"))

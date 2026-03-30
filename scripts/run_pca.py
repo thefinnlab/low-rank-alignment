@@ -54,14 +54,13 @@ from utils.encoding import (
     get_and_offset_arbitrary_embeddings,
 )
 from utils.analysis import build_sig_mask_flat_for_elecs
-from utils.rrr_utils import add_sig_nonsig_corrs, make_sig_split_df
+from utils.rrr_utils import add_sig_nonsig_corrs, apply_sig_nonsig_splits_and_strip, make_sig_split_df
 from utils.subspace_utils import (
     evaluate_subspace_ols,
-    evaluate_complement,
-    evaluate_arbitrary,
+    evaluate_complement_and_arbitrary,
+    add_primary_cross_model_metrics,
     _add_complement_sig_nonsig,
     _add_arbitrary_sig_nonsig,
-    compute_cross_model_metrics,
 )
 
 
@@ -203,10 +202,13 @@ def _run_pca_for_unit(
             )
 
             # Complement and arbitrary evaluations
-            complement_result = evaluate_complement(
+            complement_result, arbitrary_result = evaluate_complement_and_arbitrary(
                 A,
                 X_train,
                 X_test,
+                X_arbitrary,
+                train_idx,
+                test_idx,
                 Y_train,
                 Y_test,
                 nr_result["Y_hat_train"],
@@ -214,20 +216,6 @@ def _run_pca_for_unit(
                 alphas=alphas,
                 device=device,
             )
-            arbitrary_result = None
-            if X_arbitrary is not None:
-                X_arb_train = X_arbitrary[train_idx]
-                X_arb_test = X_arbitrary[test_idx]
-                arbitrary_result = evaluate_arbitrary(
-                    X_arb_train,
-                    X_arb_test,
-                    Y_train,
-                    Y_test,
-                    nr_result["Y_hat_train"],
-                    nr_result["Y_hat"],
-                    alphas=alphas,
-                    device=device,
-                )
 
             suf = nr_result["suf"]
             metrics = {
@@ -278,31 +266,10 @@ def _run_pca_for_unit(
                 if arbitrary_result is not None
                 else None
             )
-            metrics.update(compute_cross_model_metrics(Y_hat_pca, Y_hat_full, Y_test, "pca", "full"))
-            metrics.update(compute_cross_model_metrics(Y_hat_pca, Y_hat_complement, Y_test, "pca", "complement"))
-            metrics.update(compute_cross_model_metrics(Y_hat_complement, Y_hat_full, Y_test, "complement", "full"))
-            if Y_hat_arbitrary is not None:
-                metrics.update(compute_cross_model_metrics(Y_hat_pca, Y_hat_arbitrary, Y_test, "pca", "arbitrary"))
-                metrics.update(compute_cross_model_metrics(Y_hat_complement, Y_hat_arbitrary, Y_test, "complement", "arbitrary"))
+            add_primary_cross_model_metrics(metrics, Y_hat_pca, Y_hat_full, Y_hat_complement, Y_hat_arbitrary, Y_test, "pca")
 
-            # Apply sig/nonsig splits to per-target cross-model arrays, then strip them
-            _per_target_keys = [k for k in metrics if k.endswith("_per_target")]
-            if sig_mask_flat is not None:
-                for pt_key in _per_target_keys:
-                    base = pt_key[: -len("_per_target")]
-                    arr = metrics[pt_key]
-                    metrics[f"{base}_sig"] = (
-                        float(arr[sig_mask_flat].mean())
-                        if sig_mask_flat.any()
-                        else float("nan")
-                    )
-                    metrics[f"{base}_nonsig"] = (
-                        float(arr[~sig_mask_flat].mean())
-                        if (~sig_mask_flat).any()
-                        else float("nan")
-                    )
-            for pt_key in _per_target_keys:
-                del metrics[pt_key]
+            # Split any *_per_target arrays into *_sig/*_nonsig scalars, then strip them
+            apply_sig_nonsig_splits_and_strip(metrics, sig_mask_flat)
 
             all_rows.append(metrics)
 
