@@ -52,9 +52,10 @@ def evaluate_subspace_ols(
     W, b = solve_regression(
         torch.as_tensor(X_proj_train, dtype=torch.float32, device=device),
         torch.as_tensor(Y_train, dtype=torch.float32, device=device),
-        "ols",
+        "ridge",
         device,
         standardize=False,
+        alphas=np.logspace(-2, 10, 13) if A.shape[1] < 50 else np.logspace(1, 10, 13),
     )
 
     X_proj_train_t = torch.as_tensor(X_proj_train, dtype=torch.float32, device=device)
@@ -70,7 +71,7 @@ def evaluate_subspace_ols(
         X_test,
         Y_test,
         Y_hat_full,
-        regression_type="ols",
+        regression_type="ridge",
         compute_cca=compute_cca,
         compute_procrustes=compute_procrustes,
     )
@@ -324,8 +325,8 @@ def build_nr_metrics_dict(
             suf,
             sig_mask_flat,
             [
-                (f"{prefix}corr", f"{prefix}minimal_corr_per_target"),
-                (f"{prefix}recovery_corr", f"{prefix}recovery_corr_per_target"),
+                (f"{prefix}corr", "minimal_corr_per_target"),
+                (f"{prefix}recovery_corr", "recovery_corr_per_target"),
             ],
         )
     if nr_result["cca_sim"] is not None:
@@ -481,9 +482,12 @@ def compute_stacked_joint_corr(
         BO = B_tr.sum(axis=0)
 
         # Stack into (3, 3, n_targets) then transpose to (n_targets, 3, 3)
-        XtX = np.array(
-            [[AA, AB, AO], [AB, BB, BO], [AO, BO, np.full(n_targets, n_train)]]
-        ).transpose(2, 0, 1) + eye3
+        XtX = (
+            np.array(
+                [[AA, AB, AO], [AB, BB, BO], [AO, BO, np.full(n_targets, n_train)]]
+            ).transpose(2, 0, 1)
+            + eye3
+        )
 
         AY = np.einsum("it,it->t", A_tr, Y_tr)
         BY = np.einsum("it,it->t", B_tr, Y_tr)
@@ -527,9 +531,29 @@ def add_primary_cross_model_metrics(
         Y_test: (n_test, n_targets) true neural targets.
         primary_label: Short label for the primary model (e.g. "rrr", "pca", "nr").
     """
-    metrics.update(compute_cross_model_metrics(Y_hat_primary, Y_hat_full, Y_test, primary_label, "full"))
-    metrics.update(compute_cross_model_metrics(Y_hat_primary, Y_hat_complement, Y_test, primary_label, "complement"))
-    metrics.update(compute_cross_model_metrics(Y_hat_complement, Y_hat_full, Y_test, "complement", "full"))
+    metrics.update(
+        compute_cross_model_metrics(
+            Y_hat_primary, Y_hat_full, Y_test, primary_label, "full"
+        )
+    )
+    metrics.update(
+        compute_cross_model_metrics(
+            Y_hat_primary, Y_hat_complement, Y_test, primary_label, "complement"
+        )
+    )
+    metrics.update(
+        compute_cross_model_metrics(
+            Y_hat_complement, Y_hat_full, Y_test, "complement", "full"
+        )
+    )
     if Y_hat_arbitrary is not None:
-        metrics.update(compute_cross_model_metrics(Y_hat_primary, Y_hat_arbitrary, Y_test, primary_label, "arbitrary"))
-        metrics.update(compute_cross_model_metrics(Y_hat_complement, Y_hat_arbitrary, Y_test, "complement", "arbitrary"))
+        metrics.update(
+            compute_cross_model_metrics(
+                Y_hat_primary, Y_hat_arbitrary, Y_test, primary_label, "arbitrary"
+            )
+        )
+        metrics.update(
+            compute_cross_model_metrics(
+                Y_hat_complement, Y_hat_arbitrary, Y_test, "complement", "arbitrary"
+            )
+        )
