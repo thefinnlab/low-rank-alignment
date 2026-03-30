@@ -471,31 +471,25 @@ def compute_stacked_joint_corr(
         n_train = len(train_idx)
 
         # Build XtX (n_targets, 3, 3) and XtY (n_targets, 3) via normal equations.
-        # Features per target t: [Y_hat_A[:, t], Y_hat_B[:, t], 1]
+        # Features per target t: [Y_hat_A[:, t], Y_hat_B[:, t], 1].
+        # We compute the dot products directly rather than materialising the full
+        # (n_train, n_targets, 3) design matrix, which would be ~1 GB at 100k targets.
         AA = np.einsum("it,it->t", A_tr, A_tr)
         AB = np.einsum("it,it->t", A_tr, B_tr)
-        AO = A_tr.sum(axis=0)
         BB = np.einsum("it,it->t", B_tr, B_tr)
+        AO = A_tr.sum(axis=0)
         BO = B_tr.sum(axis=0)
 
-        XtX = np.empty((n_targets, 3, 3))
-        XtX[:, 0, 0] = AA
-        XtX[:, 0, 1] = AB
-        XtX[:, 0, 2] = AO
-        XtX[:, 1, 0] = AB
-        XtX[:, 1, 1] = BB
-        XtX[:, 1, 2] = BO
-        XtX[:, 2, 0] = AO
-        XtX[:, 2, 1] = BO
-        XtX[:, 2, 2] = n_train
-        XtX += eye3  # ridge regularization
+        # Stack into (3, 3, n_targets) then transpose to (n_targets, 3, 3)
+        XtX = np.array(
+            [[AA, AB, AO], [AB, BB, BO], [AO, BO, np.full(n_targets, n_train)]]
+        ).transpose(2, 0, 1) + eye3
 
         AY = np.einsum("it,it->t", A_tr, Y_tr)
         BY = np.einsum("it,it->t", B_tr, Y_tr)
-        OY = Y_tr.sum(axis=0)
-        XtY = np.stack([AY, BY, OY], axis=-1)  # (n_targets, 3)
+        XtY = np.stack([AY, BY, Y_tr.sum(axis=0)], axis=-1)  # (n_targets, 3)
 
-        beta = np.linalg.solve(XtX, XtY)  # (n_targets, 3)
+        beta = np.linalg.solve(XtX, XtY)  # (n_targets, 3) — batched built-in solve
 
         A_te = Y_hat_A[test_idx]
         B_te = Y_hat_B[test_idx]
