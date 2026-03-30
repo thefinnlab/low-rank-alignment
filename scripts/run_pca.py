@@ -61,6 +61,7 @@ from utils.subspace_utils import (
     add_primary_cross_model_metrics,
     _add_complement_sig_nonsig,
     _add_arbitrary_sig_nonsig,
+    compute_stacked_joint_corr,
 )
 
 
@@ -158,6 +159,18 @@ def _run_pca_for_unit(
     import torch
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
+
+    # OOF predictions accumulated per rank for stacked OLS joint corr (computed post-loop)
+    per_rank_oof: dict[int, dict[str, list]] = {
+        k: {
+            "Y_hat_pca": [],
+            "Y_hat_complement": [],
+            "Y_hat_full": [],
+            "Y_hat_arbitrary": [],
+            "Y_test": [],
+        }
+        for k in config.rank_grid
+    }
 
     for fold_f in range(n_folds):
         fold_start = time.time()
@@ -268,12 +281,52 @@ def _run_pca_for_unit(
             )
             add_primary_cross_model_metrics(metrics, Y_hat_pca, Y_hat_full, Y_hat_complement, Y_hat_arbitrary, Y_test, "pca")
 
+            # Accumulate OOF predictions for stacked OLS joint corr (computed post-loop)
+            per_rank_oof[k]["Y_hat_pca"].append(Y_hat_pca)
+            per_rank_oof[k]["Y_hat_complement"].append(Y_hat_complement)
+            per_rank_oof[k]["Y_hat_full"].append(Y_hat_full)
+            per_rank_oof[k]["Y_hat_arbitrary"].append(Y_hat_arbitrary)
+            per_rank_oof[k]["Y_test"].append(Y_test)
+
             # Split any *_per_target arrays into *_sig/*_nonsig scalars, then strip them
             apply_sig_nonsig_splits_and_strip(metrics, sig_mask_flat)
 
             all_rows.append(metrics)
 
         print(f"  Fold {fold_f} done in {time.time() - fold_start:.1f}s")
+
+    # Compute stacked OLS joint corr using properly held-out OOF predictions.
+    print("\nComputing stacked OLS joint correlations...")
+    _stacked_pairs = [
+        ("pca", "full"),
+        ("pca", "complement"),
+        ("complement", "full"),
+    ]
+    for k in config.rank_grid:
+        oof = per_rank_oof[k]
+        if not oof["Y_hat_pca"]:  # rank was skipped (clamped valid_ranks)
+            continue
+        stacked_joint: dict[str, float] = {}
+        for label_a, label_b in _stacked_pairs:
+            corr = compute_stacked_joint_corr(
+                oof[f"Y_hat_{label_a}"],
+                oof[f"Y_hat_{label_b}"],
+                oof["Y_test"],
+                n_splits=n_folds,
+            )
+            stacked_joint[f"{label_a}_{label_b}_joint_corr"] = float(corr.mean())
+        if all(v is not None for v in oof["Y_hat_arbitrary"]):
+            for label_a in ("pca", "complement"):
+                corr = compute_stacked_joint_corr(
+                    oof[f"Y_hat_{label_a}"],
+                    oof["Y_hat_arbitrary"],
+                    oof["Y_test"],
+                    n_splits=n_folds,
+                )
+                stacked_joint[f"{label_a}_arbitrary_joint_corr"] = float(corr.mean())
+        for row in all_rows:
+            if row["k"] == k:
+                row.update(stacked_joint)
 
     df = pd.DataFrame(all_rows)
     df.to_csv(os.path.join(pca_unit_dir, "grid_results.csv"), index=False)

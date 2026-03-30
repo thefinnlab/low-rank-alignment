@@ -74,6 +74,7 @@ from utils.subspace_utils import (
     evaluate_complement_and_arbitrary,
     add_primary_cross_model_metrics,
     build_nr_metrics_dict,
+    compute_stacked_joint_corr,
 )
 
 
@@ -153,9 +154,26 @@ def _run_rrr_for_unit(
     n_embed = X_raw.shape[1]
     selected_idx = np.arange(n_embed)
 
+    import torch
+
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+
     all_rows = []
     # Per-fold alpha tracking (populated when config.log_alphas is True)
     per_fold_rank_alphas: list[dict[int, np.ndarray]] = []
+
+    # OOF predictions accumulated per rank for stacked OLS joint corr (post-loop)
+    per_rank_oof: dict[int, dict[str, list]] = {
+        k: {
+            "Y_hat_rrr": [],
+            "Y_hat_nr": [],
+            "Y_hat_complement": [],
+            "Y_hat_full": [],
+            "Y_hat_arbitrary": [],
+            "Y_test": [],
+        }
+        for k in config.rank_grid
+    }
 
     for fold_f in range(n_folds):
         fold_start = time.time()
@@ -185,10 +203,6 @@ def _run_rrr_for_unit(
         A_full = rrr_result["A_dense"]
         B_full = rrr_result["B_dense"]
         save_rrr_factors(rrr_unit_dir, fold=fold_f, A=A_full, B=B_full)
-
-        import torch
-
-        device = "cuda" if torch.cuda.is_available() else "cpu"
 
         rank_alpha_dict: dict[int, np.ndarray] = {}
 
@@ -329,6 +343,14 @@ def _run_rrr_for_unit(
                 "nr",
             )
 
+            # Accumulate OOF predictions for stacked OLS joint corr (computed post-loop)
+            per_rank_oof[k]["Y_hat_rrr"].append(Y_hat_rrr)
+            per_rank_oof[k]["Y_hat_nr"].append(Y_hat_nr)
+            per_rank_oof[k]["Y_hat_complement"].append(Y_hat_complement)
+            per_rank_oof[k]["Y_hat_full"].append(Y_hat_full)
+            per_rank_oof[k]["Y_hat_arbitrary"].append(Y_hat_arbitrary)
+            per_rank_oof[k]["Y_test"].append(Y_test)
+
             # Split any *_per_target arrays into *_sig/*_nonsig scalars, then strip them
             apply_sig_nonsig_splits_and_strip(metrics, sig_mask_flat)
 
@@ -336,6 +358,43 @@ def _run_rrr_for_unit(
             all_rows.append(metrics)
 
         print(f"  Fold {fold_f} done in {time.time() - fold_start:.1f}s")
+
+    # Compute stacked OLS joint corr using properly held-out OOF predictions.
+    # The joint_corr in compute_cross_model_metrics was removed because it fit and
+    # evaluated the stacking OLS on the same test fold.  Here we pool OOF predictions
+    # across all outer folds and run a second K-fold CV so the stacking weights are
+    # never trained on the data they are evaluated on.
+    print("\nComputing stacked OLS joint correlations...")
+    _stacked_pairs = [
+        ("rrr", "full"),
+        ("rrr", "complement"),
+        ("nr", "full"),
+        ("nr", "complement"),
+        ("complement", "full"),
+    ]
+    for k in config.rank_grid:
+        oof = per_rank_oof[k]
+        stacked_joint: dict[str, float] = {}
+        for label_a, label_b in _stacked_pairs:
+            corr = compute_stacked_joint_corr(
+                oof[f"Y_hat_{label_a}"],
+                oof[f"Y_hat_{label_b}"],
+                oof["Y_test"],
+                n_splits=n_folds,
+            )
+            stacked_joint[f"{label_a}_{label_b}_joint_corr"] = float(corr.mean())
+        if all(v is not None for v in oof["Y_hat_arbitrary"]):
+            for label_a in ("rrr", "nr", "complement"):
+                corr = compute_stacked_joint_corr(
+                    oof[f"Y_hat_{label_a}"],
+                    oof["Y_hat_arbitrary"],
+                    oof["Y_test"],
+                    n_splits=n_folds,
+                )
+                stacked_joint[f"{label_a}_arbitrary_joint_corr"] = float(corr.mean())
+        for row in all_rows:
+            if row["k"] == k:
+                row.update(stacked_joint)
 
     # Alpha-vs-rank diagnostic plot (aggregate across folds)
     if config.log_alphas and per_fold_rank_alphas:

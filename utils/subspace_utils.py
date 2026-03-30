@@ -413,35 +413,98 @@ def compute_cross_model_metrics(
         label_B: Short label for model B (e.g. "full", "complement", "arbitrary").
 
     Returns:
-        Dict with two keys:
-            {label_A}_{label_B}_pred_corr  – mean Pearson r between Y_hat_A and Y_hat_B
-            {label_A}_{label_B}_joint_corr – mean Pearson r of an OLS model that takes
-                [Y_hat_A, Y_hat_B] as inputs and predicts Y_test (unique-variance measure)
+        Dict with keys:
+            {label_A}_{label_B}_pred_corr         – mean Pearson r between Y_hat_A and Y_hat_B
+            {label_A}_{label_B}_pred_corr_per_target – per-target version of the above
+
+        Note: joint_corr (stacked OLS unique-variance metric) is computed separately via
+        compute_stacked_joint_corr after the full CV loop to avoid data leakage.
     """
     key_prefix = f"{label_A}_{label_B}"
 
     # Prediction correlation: how similar are the two models' predictions?
     pred_corr_per_target = compute_correlation(Y_hat_A, Y_hat_B)
 
-    # Joint model: OLS on [Y_hat_A[:, t], Y_hat_B[:, t], 1] → Y_test[:, t] per target
-    n_test, n_targets = Y_test.shape
-    joint_corr_per_target = np.empty(n_targets)
-    for t in range(n_targets):
-        X_joint = np.column_stack([Y_hat_A[:, t], Y_hat_B[:, t], np.ones(n_test)])
-        try:
-            coeffs, _, _, _ = np.linalg.lstsq(X_joint, Y_test[:, t], rcond=None)
-            Y_pred_joint = X_joint @ coeffs
-            c = np.corrcoef(Y_test[:, t], Y_pred_joint)[0, 1]
-            joint_corr_per_target[t] = float(c) if not np.isnan(c) else 0.0
-        except np.linalg.LinAlgError:
-            joint_corr_per_target[t] = 0.0
-
     return {
         f"{key_prefix}_pred_corr": float(pred_corr_per_target.mean()),
-        f"{key_prefix}_joint_corr": float(joint_corr_per_target.mean()),
         f"{key_prefix}_pred_corr_per_target": pred_corr_per_target,
-        f"{key_prefix}_joint_corr_per_target": joint_corr_per_target,
     }
+
+
+def compute_stacked_joint_corr(
+    all_Y_hat_A: list,
+    all_Y_hat_B: list,
+    all_Y_test: list,
+    n_splits: int = 5,
+) -> np.ndarray:
+    """Compute joint OLS stacking correlation via a proper second cross-validation loop.
+
+    Concatenates out-of-fold predictions from all outer folds into an N-sample dataset,
+    then runs a K-fold inner CV to train and evaluate the 2-input stacking OLS without
+    data leakage. Uses normal equations (batched across targets) for efficiency with
+    large target counts.
+
+    Args:
+        all_Y_hat_A: Per-fold predictions from model A, each (n_test_f, n_targets).
+        all_Y_hat_B: Per-fold predictions from model B, each (n_test_f, n_targets).
+        all_Y_test: Per-fold true neural targets, each (n_test_f, n_targets).
+        n_splits: Number of folds for the inner CV.
+
+    Returns:
+        (n_targets,) array of mean per-target joint correlation across inner folds.
+    """
+    from sklearn.model_selection import KFold
+
+    Y_hat_A = np.concatenate(all_Y_hat_A, axis=0)  # (N, n_targets)
+    Y_hat_B = np.concatenate(all_Y_hat_B, axis=0)
+    Y = np.concatenate(all_Y_test, axis=0)
+
+    n_targets = Y.shape[1]
+    kf = KFold(n_splits=n_splits, shuffle=False)
+    eye3 = np.eye(3) * 1e-8  # small ridge for numerical stability
+
+    fold_corrs = []
+    for train_idx, test_idx in kf.split(Y):
+        A_tr = Y_hat_A[train_idx]  # (n_train, n_targets)
+        B_tr = Y_hat_B[train_idx]
+        Y_tr = Y[train_idx]
+        n_train = len(train_idx)
+
+        # Build XtX (n_targets, 3, 3) and XtY (n_targets, 3) via normal equations.
+        # Features per target t: [Y_hat_A[:, t], Y_hat_B[:, t], 1]
+        AA = np.einsum("it,it->t", A_tr, A_tr)
+        AB = np.einsum("it,it->t", A_tr, B_tr)
+        AO = A_tr.sum(axis=0)
+        BB = np.einsum("it,it->t", B_tr, B_tr)
+        BO = B_tr.sum(axis=0)
+
+        XtX = np.empty((n_targets, 3, 3))
+        XtX[:, 0, 0] = AA
+        XtX[:, 0, 1] = AB
+        XtX[:, 0, 2] = AO
+        XtX[:, 1, 0] = AB
+        XtX[:, 1, 1] = BB
+        XtX[:, 1, 2] = BO
+        XtX[:, 2, 0] = AO
+        XtX[:, 2, 1] = BO
+        XtX[:, 2, 2] = n_train
+        XtX += eye3  # ridge regularization
+
+        AY = np.einsum("it,it->t", A_tr, Y_tr)
+        BY = np.einsum("it,it->t", B_tr, Y_tr)
+        OY = Y_tr.sum(axis=0)
+        XtY = np.stack([AY, BY, OY], axis=-1)  # (n_targets, 3)
+
+        beta = np.linalg.solve(XtX, XtY)  # (n_targets, 3)
+
+        A_te = Y_hat_A[test_idx]
+        B_te = Y_hat_B[test_idx]
+        Y_te = Y[test_idx]
+        Y_pred = A_te * beta[:, 0] + B_te * beta[:, 1] + beta[:, 2]
+
+        fold_corrs.append(compute_correlation(Y_te, Y_pred))
+
+    return np.mean(fold_corrs, axis=0)  # (n_targets,)
 
 
 def add_primary_cross_model_metrics(
