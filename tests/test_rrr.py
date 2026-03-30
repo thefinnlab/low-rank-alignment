@@ -280,35 +280,31 @@ class TestBuildXYFromSubjects:
         """Y should be column-concatenation of per-subject neural responses."""
         from utils.data_loaders import build_XY_from_subjects
 
-        n_words, n_embed, n_elecs_per_sub = 50, 8, 3
+        n_words, n_embed, n_elecs_per_sub, n_lags = 50, 8, 3, 4
 
         X_emb = rng.standard_normal((n_words, n_embed)).astype(np.float32)
         df_word = pd.DataFrame({"start": np.linspace(0, 10, n_words)})
 
-        class _FakeRaw:
-            pass
+        def _fake_load_precomputed_epochs(sub_id, data_root):
+            return {
+                "raw_data": np.zeros((n_elecs_per_sub, n_words * n_lags), dtype=np.float32),
+                "selection": np.arange(n_words),
+                "epoch_starts": np.arange(n_words) * n_lags,
+                "n_lags": n_lags,
+                "ch_names": [f"ch{sub_id}{i}" for i in range(n_elecs_per_sub)],
+            }
 
-        class _FakeEpochs:
-            selection = np.arange(n_words)
-
-        def _fake_load_raws(sub_ids, data_root, use_high_gamma, per_subject_electrodes):
-            return [_FakeRaw() for _ in sub_ids]
-
-        def _fake_build_word_epochs(raw, df_word, **kwargs):
-            data = np.zeros((n_words, n_elecs_per_sub, 4))
-            return _FakeEpochs(), data
+        def _fake_epochs_from_cache(cache, elec_names=None):
+            n_elecs = len(elec_names) if elec_names is not None else n_elecs_per_sub
+            return np.zeros((n_words, n_elecs, n_lags), dtype=np.float32)
 
         def _fake_apply_offset(X_sel, data, offset):
             n = data.shape[0]
-            X_out = X_sel
-            Y_out = data.reshape(n, -1).astype(np.float32)
-            return X_out, Y_out
-
-        monkeypatch.setattr("utils.data_loaders.load_raws", _fake_load_raws)
-        monkeypatch.setattr("utils.data_loaders.build_word_epochs", _fake_build_word_epochs)
+            return X_sel, data.reshape(n, -1).astype(np.float32)
 
         import utils.data_loaders as dl
-        monkeypatch.setattr(dl, "build_word_epochs", _fake_build_word_epochs)
+        monkeypatch.setattr(dl, "load_precomputed_epochs", _fake_load_precomputed_epochs)
+        monkeypatch.setattr(dl, "epochs_from_cache", _fake_epochs_from_cache)
 
         import utils.encoding as enc_mod
         monkeypatch.setattr(enc_mod, "apply_offset", _fake_apply_offset)

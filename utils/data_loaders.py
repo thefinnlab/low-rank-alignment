@@ -278,7 +278,8 @@ def build_XY_from_subjects(
 ) -> tuple:
     """Load neural data for multiple subjects and stack into X and Y arrays.
 
-    For each subject with significant electrodes, builds word-locked epochs and
+    Uses precomputed epoch caches (see scripts/precompute_epochs.py). For each
+    subject with significant electrodes, slices epoch windows from the cache and
     concatenates neural responses column-wise to form Y. X is taken from the first
     subject (all subjects share the same embedding sequence after alignment).
 
@@ -288,7 +289,7 @@ def build_XY_from_subjects(
         sig_electrodes: Dict mapping subject_id → list of significant electrode names.
             Subjects absent from this dict are skipped.
         aligned_embeddings: (n_words_total, n_embed) embedding array.
-        df_word: DataFrame with word onset times ('start' column).
+        df_word: Unused; retained for call-site compatibility.
 
     Returns:
         X: (n_words, n_embed) embedding matrix (from first subject with data).
@@ -308,22 +309,17 @@ def build_XY_from_subjects(
             f"No subjects with significant electrodes found in subject_ids={subject_ids}."
         )
 
-    raws = load_raws(
-        subs_to_load, enc.data_root, use_high_gamma=True,
-        per_subject_electrodes={s: sig_electrodes[s] for s in subs_to_load},
-    )
-
     Y_cols = []
     X_ref = None
     ref_selection = None
-    for raw, sub_id in zip(raws, subs_to_load):
-        epochs, data = build_word_epochs(raw, df_word)
-        X_arr, Y_sub = apply_offset(aligned_embeddings[epochs.selection], data, enc.offset)
+    for sub_id in subs_to_load:
+        cache = load_precomputed_epochs(sub_id, enc.data_root)
+        data = epochs_from_cache(cache, elec_names=sig_electrodes[sub_id])
+        X_arr, Y_sub = apply_offset(aligned_embeddings[cache["selection"]], data, enc.offset)
         if X_ref is None:
             X_ref = X_arr
-            ref_selection = epochs.selection
+            ref_selection = cache["selection"]
         Y_cols.append(Y_sub)
-    del raws
     gc.collect()
 
     return X_ref, np.concatenate(Y_cols, axis=1).astype(np.float32), ref_selection
