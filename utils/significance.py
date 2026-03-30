@@ -32,9 +32,8 @@ def batch_corrcoef(x, y):
 def significant_lags_all_electrodes_gpu(
     predicted,
     actual,
-    n_permutations=5000,
     fdr_q=0.01,
-    seed=42,
+    minimal_shift=500,
     device=None,
 ):
     """
@@ -47,7 +46,6 @@ def significant_lags_all_electrodes_gpu(
     Args:
         predicted (np.ndarray): Shape (n_electrodes, n_lags, n_words).
         actual (np.ndarray): Shape (n_electrodes, n_lags, n_words).
-        n_permutations (int): Number of permutations for the null distribution.
         fdr_q (float): FDR threshold (alpha) for Benjamini-Hochberg correction.
         seed (int): Random seed for reproducibility.
         device (torch.device, optional): Device to run on. Defaults to CUDA if
@@ -67,15 +65,16 @@ def significant_lags_all_electrodes_gpu(
 
     obs_corrs = batch_corrcoef(pred, act)  # (n_electrodes, n_lags)
 
-    rng = torch.Generator(device=device)
-    rng.manual_seed(seed)
     null_ge_count = torch.zeros(n_electrodes, n_lags, device=device)
+    valid_shifts = range(minimal_shift, n_words - minimal_shift)
 
-    for _ in tqdm(range(n_permutations), desc="Permutations"):
-        idx = torch.randperm(n_words, device=device, generator=rng)
-        null_corr = batch_corrcoef(pred, act[:, :, idx])
+    for shift in tqdm(valid_shifts, desc="Exhaustive Circular Shifts"):
+        # Roll 'act' by the current shift
+        act_shifted = torch.roll(act, shifts=shift, dims=2)
+        null_corr = batch_corrcoef(pred, act_shifted)
         null_ge_count += null_corr >= obs_corrs
 
+    n_permutations = len(valid_shifts)
     p_values = (null_ge_count / n_permutations).cpu().numpy()
     obs_corrs_np = obs_corrs.cpu().numpy()
     flat_p = p_values.ravel()
