@@ -120,11 +120,11 @@ def main():
         # ------------------------------------------------------------------
         # g. Significance test
         # ------------------------------------------------------------------
-        print(f"  Running significance test ({config.n_permutations} permutations)...")
+        print(f"  Running significance test...")
         sig, p_values, q_values, obs_corrs = significant_lags_all_electrodes_gpu(
             all_predictions.transpose(1, 2, 0),
             all_targets.transpose(1, 2, 0),
-            n_permutations=config.n_permutations,
+            minimal_shift=config.minimal_shift,
             fdr_q=config.fdr_q,
         )
         # shapes: (n_elec, n_lags)

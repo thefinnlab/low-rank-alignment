@@ -7,12 +7,15 @@ from enum import Enum
 
 class SVDMode(str, Enum):
     """Which SVD branch to run in run_svd_analysis.py."""
+
     CROSS_SUBJECT = "cross_subject"
     PER_SUBJECT = "per_subject"
     PER_REGION = "per_region"
 
 
-def get_results_dir(model: str, layer: int, offset: int, base_dir: str = "results/") -> str:
+def get_results_dir(
+    model: str, layer: int, offset: int, base_dir: str = "results/"
+) -> str:
     """Return a canonical results directory path derived from run parameters.
 
     Example: get_results_dir("gpt2xl", 24, 0) → "results/gpt2xl_layer24_offset0"
@@ -25,17 +28,21 @@ class EncodingConfig:
     """Parameters for encoding model training (used by train_encoding_models.py)."""
 
     data_root: str = "data/"
-    model: str = "gpt2xl"    # Embedding model name; used in results dir generation
-    layer: int = 24          # GPT-2-XL layer index (24=mid, 48=final)
-    offset: int = 0          # Word offset for aligning embeddings to neural data
-    subjects: list[int] | None = None   # None → defaults to 1–9 at runtime
-    run_name: str | None = None  # Output dir; auto-generated from model/layer/offset if None
-    sig_dir: str | None = None   # Override dir for significance CSVs; defaults to run_name/output_dir
-    batch: bool = False      # Process subjects one at a time (lower peak RAM)
+    model: str = "gpt2xl"  # Embedding model name; used in results dir generation
+    layer: int = 24  # GPT-2-XL layer index (24=mid, 48=final)
+    offset: int = 0  # Word offset for aligning embeddings to neural data
+    subjects: list[int] | None = None  # None → defaults to 1–9 at runtime
+    run_name: str | None = (
+        None  # Output dir; auto-generated from model/layer/offset if None
+    )
+    sig_dir: str | None = (
+        None  # Override dir for significance CSVs; defaults to run_name/output_dir
+    )
+    batch: bool = False  # Process subjects one at a time (lower peak RAM)
     ridge_alphas: list[float] | None = None  # None → use RIDGE_ALPHAS from constants.py
-    log_alphas: bool = False     # Save alpha diagnostics (.npz + .png) per subject
+    log_alphas: bool = False  # Save alpha diagnostics (.npz + .png) per subject
     refine_alphas: bool = False  # Two-pass training: coarse sweep → refined grid
-    num_folds: int = 2           # Number of cross-validation folds
+    num_folds: int = 2  # Number of cross-validation folds
 
 
 @dataclass
@@ -43,8 +50,10 @@ class SignificanceConfig:
     """Parameters for significance testing (superset of encoding)."""
 
     encoding: EncodingConfig = field(default_factory=EncodingConfig)
-    output_dir: str | None = None  # Results dir; auto-generated from model/layer/offset if None
-    n_permutations: int = 5000
+    output_dir: str | None = (
+        None  # Results dir; auto-generated from model/layer/offset if None
+    )
+    minimal_shift: int = 500
     fdr_q: float = 0.01
     save_weights: bool = False
 
@@ -60,11 +69,13 @@ class NullDistConfig:
     """
 
     encoding: EncodingConfig = field(default_factory=EncodingConfig)
-    output_dir: str | None = None      # Root results dir (for lag computation, etc.)
-    null_dir: str | None = None        # Where to write null distribution shards; defaults to {output_dir}/null_dist
-    n_iterations: int = 50             # Number of permutations per invocation
-    batch_size: int = 5                # Permutations to batch into a single model (limited by RAM)
-    seed: int | None = None            # None = random seed per invocation (for parallel batching)
+    output_dir: str | None = None  # Root results dir (for lag computation, etc.)
+    null_dir: str | None = (
+        None  # Where to write null distribution shards; defaults to {output_dir}/null_dist
+    )
+    n_iterations: int = 50  # Number of permutations per invocation
+    batch_size: int = 5  # Permutations to batch into a single model (limited by RAM)
+    seed: int | None = None  # None = random seed per invocation (for parallel batching)
 
 
 @dataclass
@@ -77,10 +88,10 @@ class NewSignificanceConfig:
     """
 
     encoding: EncodingConfig = field(default_factory=EncodingConfig)
-    output_dir: str | None = None      # Where to write significance CSVs
-    null_dir: str | None = None        # Where null distribution shards live
-    fdr_q: float = 0.01               # FDR threshold for Benjamini-Hochberg correction
-    min_permutations: int = 5000       # Warn if fewer total permutations found
+    output_dir: str | None = None  # Where to write significance CSVs
+    null_dir: str | None = None  # Where null distribution shards live
+    fdr_q: float = 0.01  # FDR threshold for Benjamini-Hochberg correction
+    min_permutations: int = 5000  # Warn if fewer total permutations found
 
 
 @dataclass
@@ -88,15 +99,19 @@ class SVDConfig:
     """Parameters for SVD decomposition analysis (run_svd_analysis.py)."""
 
     encoding: EncodingConfig = field(default_factory=EncodingConfig)
-    output_dir: str | None = None        # Root results dir; auto-generated if None
-    svd_output_dir: str | None = None    # Override for SVD subdir; defaults to {output_dir}/svd
-    n_directions: int | None = None      # Max singular vectors to compute; None → full SVD
+    output_dir: str | None = None  # Root results dir; auto-generated if None
+    svd_output_dir: str | None = (
+        None  # Override for SVD subdir; defaults to {output_dir}/svd
+    )
+    n_directions: int | None = None  # Max singular vectors to compute; None → full SVD
     k_values: list[int] = field(
         default_factory=lambda: [1, 2, 5, 10, 20, 50, 100, 200, 400, 800, 1600]
     )
-    threshold: float = 0.95              # Performance retention threshold for best_k
+    threshold: float = 0.95  # Performance retention threshold for best_k
     mode: SVDMode = SVDMode.CROSS_SUBJECT  # Which SVD branch to run
-    atlas_path: str | None = None        # Path to Destrieux 2009 .nii.gz; None = download via nilearn
+    atlas_path: str | None = (
+        None  # Path to Destrieux 2009 .nii.gz; None = download via nilearn
+    )
     atlas_region_groups: dict | None = None  # Required when mode=per_region
 
 
@@ -115,9 +130,15 @@ class RRRConfig:
     """
 
     encoding: EncodingConfig = field(default_factory=EncodingConfig)
-    output_dir: str | None = None         # Root results dir; auto from model/layer/offset if None
-    sig_dir: str | None = None            # Override dir for significance CSVs; defaults to output_dir
-    rrr_output_dir: str | None = None     # Override for RRR root subdir; default depends on mode
+    output_dir: str | None = (
+        None  # Root results dir; auto from model/layer/offset if None
+    )
+    sig_dir: str | None = (
+        None  # Override dir for significance CSVs; defaults to output_dir
+    )
+    rrr_output_dir: str | None = (
+        None  # Override for RRR root subdir; default depends on mode
+    )
     mode: SVDMode = SVDMode.CROSS_SUBJECT
 
     # Rank sweep
@@ -135,7 +156,9 @@ class RRRConfig:
     arbitrary_seed: int = 42
 
     # Per-region mode
-    atlas_path: str | None = None        # Path to Destrieux 2009 .nii.gz; None = download via nilearn
+    atlas_path: str | None = (
+        None  # Path to Destrieux 2009 .nii.gz; None = download via nilearn
+    )
     atlas_region_groups: dict | None = None  # Required when mode=per_region
 
 
@@ -154,13 +177,21 @@ class PCAConfig:
     """
 
     encoding: EncodingConfig = field(default_factory=EncodingConfig)
-    output_dir: str | None = None         # Root results dir; auto from model/layer/offset if None
-    sig_dir: str | None = None            # Override dir for significance CSVs; defaults to output_dir
-    pca_output_dir: str | None = None     # Override for PCA root subdir; default depends on mode
+    output_dir: str | None = (
+        None  # Root results dir; auto from model/layer/offset if None
+    )
+    sig_dir: str | None = (
+        None  # Override dir for significance CSVs; defaults to output_dir
+    )
+    pca_output_dir: str | None = (
+        None  # Override for PCA root subdir; default depends on mode
+    )
     mode: SVDMode = SVDMode.CROSS_SUBJECT
 
     # Rank sweep
-    rank_grid: list[int] = field(default_factory=lambda: [1, 2, 5, 10, 20, 40, 100, 200, 400, 800, 1600])
+    rank_grid: list[int] = field(
+        default_factory=lambda: [1, 2, 5, 10, 20, 40, 100, 200, 400, 800, 1600]
+    )
 
     # Optional metrics (expensive; disabled by default)
     compute_cca: bool = False
@@ -222,18 +253,28 @@ class PartialRRRConfig:
     """
 
     encoding: EncodingConfig = field(default_factory=EncodingConfig)
-    output_dir: str | None = None              # Root results dir; auto from model/layer/offset if None
-    sig_dir: str | None = None                 # Override dir for significance CSVs; defaults to output_dir
-    partial_rrr_output_dir: str | None = None  # Override for output subdir; default depends on mode
-    rrr_source_dir: str | None = None          # Where to find RRR A matrices; auto-resolved per mode
+    output_dir: str | None = (
+        None  # Root results dir; auto from model/layer/offset if None
+    )
+    sig_dir: str | None = (
+        None  # Override dir for significance CSVs; defaults to output_dir
+    )
+    partial_rrr_output_dir: str | None = (
+        None  # Override for output subdir; default depends on mode
+    )
+    rrr_source_dir: str | None = (
+        None  # Where to find RRR A matrices; auto-resolved per mode
+    )
     mode: SVDMode = SVDMode.CROSS_SUBJECT
 
     # Rank sweep — None discovers all ranks from rrr_source_dir; set to filter
     rank_grid: list[int] | None = None
 
     # Per-region mode
-    atlas_path: str | None = None              # Path to Destrieux 2009 .nii.gz; None = download via nilearn
-    atlas_region_groups: dict | None = None    # Required when mode=per_region
+    atlas_path: str | None = (
+        None  # Path to Destrieux 2009 .nii.gz; None = download via nilearn
+    )
+    atlas_region_groups: dict | None = None  # Required when mode=per_region
 
 
 @dataclass
@@ -251,13 +292,21 @@ class SRRRConfig:
     """
 
     encoding: EncodingConfig = field(default_factory=EncodingConfig)
-    output_dir: str | None = None         # Root results dir; auto from model/layer/offset if None
-    srrr_output_dir: str | None = None    # Override for SRRR root subdir; default depends on mode
-    mode: SVDMode = SVDMode.CROSS_SUBJECT # Which SVD outputs to read (mirrors SVDConfig.mode)
+    output_dir: str | None = (
+        None  # Root results dir; auto from model/layer/offset if None
+    )
+    srrr_output_dir: str | None = (
+        None  # Override for SRRR root subdir; default depends on mode
+    )
+    mode: SVDMode = (
+        SVDMode.CROSS_SUBJECT
+    )  # Which SVD outputs to read (mirrors SVDConfig.mode)
 
     # Model grid
     rank_grid: list[int] = field(default_factory=lambda: [1, 2, 5, 10, 20, 50])
-    lambda_grid: list[float] = field(default_factory=lambda: [1e-4, 1e-3, 1e-2, 1e-1, 1.0, 10.0])
+    lambda_grid: list[float] = field(
+        default_factory=lambda: [1e-4, 1e-3, 1e-2, 1e-1, 1.0, 10.0]
+    )
 
     # ProxGD
     max_iter: int = 500
@@ -267,23 +316,27 @@ class SRRRConfig:
     # Stability selection
     n_stability_iters: int = 100
     subsample_fraction: float = 0.8
-    selection_threshold: float = 0.8     # Min P_i to include direction in minimal model
+    selection_threshold: float = 0.8  # Min P_i to include direction in minimal model
 
     # Sufficiency test
-    use_null_dist: bool = False          # Set True to enable null distribution and sufficiency test
+    use_null_dist: bool = (
+        False  # Set True to enable null distribution and sufficiency test
+    )
     n_permutations: int = 5000
-    p_value_threshold: float = 0.05      # 95th percentile noise floor
+    p_value_threshold: float = 0.05  # 95th percentile noise floor
     cache_null_dist: bool = True
 
     # Analysis
-    knee_sensitivity: float = 1.0        # Kneedle sensitivity parameter
+    knee_sensitivity: float = 1.0  # Kneedle sensitivity parameter
 
     # Optional metrics (expensive; disabled by default to speed up grid sweeps)
     compute_cca: bool = False
     compute_procrustes: bool = False
 
     # Per-region mode
-    atlas_path: str | None = None        # Path to Destrieux 2009 .nii.gz; None = download via nilearn
+    atlas_path: str | None = (
+        None  # Path to Destrieux 2009 .nii.gz; None = download via nilearn
+    )
     atlas_region_groups: dict | None = None  # Required when mode=per_region
 
 
@@ -303,42 +356,54 @@ class SAEConfig:
     """
 
     encoding: EncodingConfig = field(default_factory=EncodingConfig)
-    output_dir: str | None = None         # Root results dir; auto from model/layer/offset if None
-    sig_dir: str | None = None            # Override dir for significance CSVs; defaults to output_dir
-    sae_output_dir: str | None = None     # Override for SAE root subdir; default depends on mode
-    rrr_source_dir: str | None = None     # Where to find RRR A matrices; auto-resolved per mode
+    output_dir: str | None = (
+        None  # Root results dir; auto from model/layer/offset if None
+    )
+    sig_dir: str | None = (
+        None  # Override dir for significance CSVs; defaults to output_dir
+    )
+    sae_output_dir: str | None = (
+        None  # Override for SAE root subdir; default depends on mode
+    )
+    rrr_source_dir: str | None = (
+        None  # Where to find RRR A matrices; auto-resolved per mode
+    )
     mode: SVDMode = SVDMode.CROSS_SUBJECT
 
     # RRR rank to use
     k: int = 10
 
     # SAE architecture
-    hidden_dim: int = 50                  # Must be > k
+    hidden_dim: int = 50  # Must be > k
     l1_penalty: float = 1e-3
-    l1_warmup_start: int = 0              # Epoch/cycle to begin L1 ramp (0 = immediate)
-    l1_warmup_epochs: int = 0             # Epochs/cycles to linearly ramp L1 to target (0 = no ramp)
+    l1_warmup_start: int = 0  # Epoch/cycle to begin L1 ramp (0 = immediate)
+    l1_warmup_epochs: int = (
+        0  # Epochs/cycles to linearly ramp L1 to target (0 = no ramp)
+    )
 
     # Training mode
-    training_mode: str = "end_to_end"     # "end_to_end" or "alternating"
-    regression_type: str = "ols"          # "ols" or "ridge"
+    training_mode: str = "end_to_end"  # "end_to_end" or "alternating"
+    regression_type: str = "ols"  # "ols" or "ridge"
 
     # End-to-end params
     learning_rate: float = 1e-3
     num_epochs: int = 500
-    batch_size: int | None = None         # None = full batch
-    log_every: int = 10                   # Compute & display test metrics every N epochs/cycles
+    batch_size: int | None = None  # None = full batch
+    log_every: int = 10  # Compute & display test metrics every N epochs/cycles
 
     # Alternating params
     sae_learning_rate: float = 1e-3
     sae_steps_per_cycle: int = 50
     num_cycles: int = 20
-    regression_momentum: float = 1.0      # Proximal damping: W = (1-η)W_old + η*W_optimal (1.0 = no damping)
+    regression_momentum: float = (
+        1.0  # Proximal damping: W = (1-η)W_old + η*W_optimal (1.0 = no damping)
+    )
 
     # Input jitter (Gaussian noise on X_proj during SAE training, 0 = disabled)
     input_jitter_std: float = 0.0
 
     # Dead feature resampling (0 = disabled)
-    resample_interval: int = 0            # Resample dead neurons every N epochs/cycles
+    resample_interval: int = 0  # Resample dead neurons every N epochs/cycles
 
     # Norm-weighted L1 (Anthropic 2024): weight L1 by regression column norms
     weight_l1_by_decoder_norm: bool = False
@@ -347,8 +412,8 @@ class SAEConfig:
     track_recovery_during_training: bool = False
 
     # Subject/region limiting
-    max_subjects: int | None = None       # Limit number of subjects to run
-    max_regions: int | None = None        # Limit number of regions to run
+    max_subjects: int | None = None  # Limit number of subjects to run
+    max_regions: int | None = None  # Limit number of regions to run
 
     # Per-region mode
     atlas_path: str | None = None
@@ -371,26 +436,26 @@ class AblationConfig:
     """
 
     encoding: EncodingConfig = field(default_factory=EncodingConfig)
-    output_dir: str | None = None              # Root results dir; auto from model/layer/offset if None
-    sig_dir: str | None = None                 # Override dir for significance CSVs; defaults to output_dir
-    ablation_output_dir: str | None = None     # Override for ablation root subdir
-    rrr_source_dir: str | None = None          # Where to find RRR A/B matrices; auto-resolved per mode
+    output_dir: str | None = (
+        None  # Root results dir; auto from model/layer/offset if None
+    )
+    sig_dir: str | None = (
+        None  # Override dir for significance CSVs; defaults to output_dir
+    )
+    ablation_output_dir: str | None = None  # Override for ablation root subdir
+    rrr_source_dir: str | None = (
+        None  # Where to find RRR A/B matrices; auto-resolved per mode
+    )
     mode: SVDMode = SVDMode.CROSS_SUBJECT
 
     # Rank sweep — which top-k dimensions to evaluate
-    rank_grid: list[int] = field(
-        default_factory=lambda: [1, 2, 5, 10, 20, 50]
-    )
+    rank_grid: list[int] = field(default_factory=lambda: [1, 2, 5, 10, 20, 50])
 
     # Percentile sweep — center zone sizes (percentage of distribution)
-    center_pcts: list[int] = field(
-        default_factory=lambda: [10, 30, 50, 70, 90]
-    )
+    center_pcts: list[int] = field(default_factory=lambda: [10, 30, 50, 70, 90])
 
     # Mask types to evaluate
-    mask_types: list[str] = field(
-        default_factory=lambda: ["tail", "center", "random"]
-    )
+    mask_types: list[str] = field(default_factory=lambda: ["tail", "center", "random"])
 
     # Number of random seeds for random mask (averaged for stability)
     n_random_seeds: int = 5
