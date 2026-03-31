@@ -53,9 +53,7 @@ def load_raws(
 
         if target_sr is not None:
             if int(raw.info["sfreq"]) != int(target_sr):
-                print(
-                    f"  - [Config] Resampling {raw.info['sfreq']}Hz -> {target_sr}Hz"
-                )
+                print(f"  - [Config] Resampling {raw.info['sfreq']}Hz -> {target_sr}Hz")
                 raw.resample(target_sr)
 
         if do_drop_bads:
@@ -172,9 +170,7 @@ def read_subject_mapping(participant_map_file, delimiter="\t"):
     return subject_id_map
 
 
-def read_electrode_file(
-    file_path, subject_mapping: Optional[dict] = None
-):
+def read_electrode_file(file_path, subject_mapping: Optional[dict] = None):
     """
     Parse an electrode mapping CSV file to create a subject-to-electrodes mapping.
 
@@ -315,7 +311,9 @@ def build_XY_from_subjects(
     for sub_id in subs_to_load:
         cache = load_precomputed_epochs(sub_id, enc.data_root)
         data = epochs_from_cache(cache, elec_names=sig_electrodes[sub_id])
-        X_arr, Y_sub = apply_offset(aligned_embeddings[cache["selection"]], data, enc.offset)
+        X_arr, Y_sub = apply_offset(
+            aligned_embeddings[cache["selection"]], data, enc.offset
+        )
         if X_ref is None:
             X_ref = X_arr
             ref_selection = cache["selection"]
@@ -388,7 +386,9 @@ def load_fold_indices(output_dir, subject_ids, sig_electrodes):
     subs_with_sig = [s for s in subject_ids if s in sig_electrodes]
     first_sub = subs_with_sig[0]
     enc_results = load_encoding_results(
-        os.path.join(output_dir, "subjects", f"sub_{first_sub}", "encoding_results.joblib")
+        os.path.join(
+            output_dir, "subjects", f"sub_{first_sub}", "encoding_results.joblib"
+        )
     )
     ref_test_idxs = enc_results["test_idxs"]
     lags = enc_results.get("lags", None)
@@ -411,13 +411,18 @@ def load_fold_indices(output_dir, subject_ids, sig_electrodes):
 def get_precomputed_epochs_path(sub_id, data_root):
     """Return the canonical path for a subject's precomputed 32 Hz epoch cache."""
     return os.path.join(
-        data_root, "derivatives", "ecogprep",
-        f"sub-{sub_id:02d}", "ieeg",
+        data_root,
+        "derivatives",
+        "ecogprep",
+        f"sub-{sub_id:02d}",
+        "ieeg",
         f"sub-{sub_id:02d}_task-podcast_desc-epochs32hz_ieeg.npz",
     )
 
 
-def save_precomputed_epochs(sub_id, data_root, raw_data, selection, epoch_starts, ch_names, n_lags):
+def save_precomputed_epochs(
+    sub_id, data_root, raw_data, selection, epoch_starts, ch_names, n_lags
+):
     """Save precomputed epoch cache to disk.
 
     Args:
@@ -498,9 +503,9 @@ def epochs_from_cache(cache, elec_names=None):
         idx = [ch_names.index(e) for e in elec_names]
         raw_data = raw_data[idx]
 
-    return np.stack(
-        [raw_data[:, s : s + n_lags] for s in epoch_starts], axis=0
-    ).astype(np.float32)
+    return np.stack([raw_data[:, s : s + n_lags] for s in epoch_starts], axis=0).astype(
+        np.float32
+    )
 
 
 def get_arbitrary_embeddings(X, epochs_or_selection, df_word, seed=None):
@@ -531,13 +536,20 @@ def get_arbitrary_embeddings(X, epochs_or_selection, df_word, seed=None):
     unique_words = words.unique()
     if seed is not None:
         rng = np.random.default_rng(seed)
-        emb_idxs = rng.choice(np.arange(X.shape[0]), size=len(unique_words), replace=False)
+        emb_idxs = rng.choice(
+            np.arange(X.shape[0]), size=len(unique_words), replace=False
+        )
     else:
-        emb_idxs = np.random.choice(np.arange(X.shape[0]), size=len(unique_words), replace=False)
+        rng = np.random.default_rng()
+        emb_idxs = np.random.choice(
+            np.arange(X.shape[0]), size=len(unique_words), replace=False
+        )
     arb_word_embs = X[emb_idxs]
 
     X_arb = np.zeros_like(X)
     for word_idx, word in enumerate(unique_words):
-        X_arb[words[words == word].index] = arb_word_embs[word_idx]
+        # Use line for reusing actual embeddings
+        # X_arb[words[words == word].index] = arb_word_embs[word_idx]
+        X_arb[words[words == word].index] = rng.uniform(size=(1, X.shape[1]))
 
     return X_arb

@@ -136,6 +136,7 @@ def evaluate_input_space(
 
 def evaluate_complement(
     A: np.ndarray,
+    k: int,
     X_train: np.ndarray,
     X_test: np.ndarray,
     Y_train: np.ndarray,
@@ -152,7 +153,8 @@ def evaluate_complement(
     subspace model.
 
     Args:
-        A: (n_embed, k) projection matrix defining the subspace.
+        A: (n_embed, n_embed) projection matrix defining the subspace.
+        k: int, dimension of the subspace to be complemented out.
         X_train: (n_train, n_embed) training embeddings.
         X_test: (n_test, n_embed) test embeddings.
         Y_train: (n_train, n_targets) training neural targets.
@@ -169,8 +171,14 @@ def evaluate_complement(
             complement_corr_per_target  – (n_targets,) per-target correlations
             complement_recovery_corr_per_target – (n_targets,) per-target correlations
     """
-    X_comp_train = partial_out_subspace(X_train, A.T)
-    X_comp_test = partial_out_subspace(X_test, A.T)
+    if k == A.shape[1]:
+        X_comp_train = np.ones(
+            (X_train.shape[0], 1)
+        )  # No complement when subspace is full-dim
+        X_comp_test = np.ones((X_test.shape[0], 1))
+    else:
+        X_comp_train = (X_train @ A)[:, k:]  # Project train embeddings into complement
+        X_comp_test = (X_test @ A)[:, k:]  # Project test embeddings into complement
 
     return evaluate_input_space(
         X_comp_train,
@@ -232,6 +240,7 @@ def evaluate_arbitrary(
 
 def evaluate_complement_and_arbitrary(
     A: np.ndarray,
+    k: int,
     X_train: np.ndarray,
     X_test: np.ndarray,
     X_arbitrary: "np.ndarray | None",
@@ -266,6 +275,7 @@ def evaluate_complement_and_arbitrary(
     """
     complement_result = evaluate_complement(
         A,
+        k,
         X_train,
         X_test,
         Y_train,
@@ -318,6 +328,7 @@ def build_nr_metrics_dict(
         f"{prefix}recovery_r2": suf["recovery_r2"],
         f"{prefix}recovery_corr": suf["recovery_corr"],
         f"{prefix}pred_r2": suf["pred_r2"],
+        f"{prefix}corr_per_target": suf["minimal_corr_per_target"],
     }
     if sig_mask_flat is not None:
         add_sig_nonsig_corrs(
@@ -481,19 +492,22 @@ def compute_stacked_joint_corr(
         AO = A_tr.sum(axis=0)
         BO = B_tr.sum(axis=0)
 
-        # Stack into (3, 3, n_targets) then transpose to (n_targets, 3, 3)
-        XtX = (
-            np.array(
-                [[AA, AB, AO], [AB, BB, BO], [AO, BO, np.full(n_targets, n_train)]]
-            ).transpose(2, 0, 1)
-            + eye3
-        )
+        XtX = np.empty((n_targets, 3, 3))
+        XtX[:, 0, 0] = AA
+        XtX[:, 0, 1] = XtX[:, 1, 0] = AB
+        XtX[:, 0, 2] = XtX[:, 2, 0] = AO
+        XtX[:, 1, 1] = BB
+        XtX[:, 1, 2] = XtX[:, 2, 1] = BO
+        XtX[:, 2, 2] = n_train
+        XtX += eye3
 
         AY = np.einsum("it,it->t", A_tr, Y_tr)
         BY = np.einsum("it,it->t", B_tr, Y_tr)
-        XtY = np.stack([AY, BY, Y_tr.sum(axis=0)], axis=-1)  # (n_targets, 3)
+        # Stack into (n_targets, 3, 1) to ensure explicit batching
+        XtY = np.stack([AY, BY, Y_tr.sum(axis=0)], axis=-1)[:, :, np.newaxis]
 
-        beta = np.linalg.solve(XtX, XtY)  # (n_targets, 3) — batched built-in solve
+        # beta will result in (n_targets, 3, 1)
+        beta = np.linalg.solve(XtX, XtY).squeeze(-1)  # Squeeze back to (n_targets, 3)
 
         A_te = Y_hat_A[test_idx]
         B_te = Y_hat_B[test_idx]

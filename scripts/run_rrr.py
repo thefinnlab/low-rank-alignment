@@ -102,6 +102,10 @@ def _train_ridge_on_subspace(
             - Y_hat_train: (n_samples, n_targets) predictions on training set.
             - Correlations on test set.
     """
+    X_train = torch.as_tensor(X_train, dtype=torch.float32, device=device)
+    Y_train = torch.as_tensor(Y_train, dtype=torch.float32, device=device)
+    X_test = torch.as_tensor(X_test, dtype=torch.float32, device=device)
+
     W, b = solve_regression(
         X_train @ A_subspace,
         Y_train,
@@ -250,7 +254,8 @@ def _run_rrr_for_unit(
 
             # Complement and arbitrary evaluations
             complement_result, arbitrary_result = evaluate_complement_and_arbitrary(
-                A,
+                A_full,
+                k,
                 X_train,
                 X_test,
                 X_arbitrary,
@@ -265,16 +270,16 @@ def _run_rrr_for_unit(
             )
 
             # Ridge on RRR space.
-            ridge_result = _train_ridge_on_subspace(
-                X_train,
-                Y_train,
-                X_test,
-                Y_test,
-                A_subspace=A,
-                alphas=alphas,
-                device=device,
-            )
-            suf["ridge_corr_per_target"] = ridge_result["correlations"]
+            # ridge_result = _train_ridge_on_subspace(
+            #     X_train,
+            #     Y_train,
+            #     X_test,
+            #     Y_test,
+            #     A_subspace=A,
+            #     alphas=alphas,
+            #     device=device,
+            # )
+            # suf["ridge_corr_per_target"] = ridge_result["correlations"]
 
             metrics = {
                 "full_r2": suf["full_r2"],
@@ -286,7 +291,7 @@ def _run_rrr_for_unit(
                 "recovery_corr": suf["recovery_corr"],
                 "effective_rank": effective_rank,
                 "fold": fold_f,
-                "ridge_corr": ridge_result["correlations"].mean(),
+                # "ridge_corr": ridge_result["correlations"].mean(),
                 "k": k,
             }
             if cca_sim is not None:
@@ -303,7 +308,7 @@ def _run_rrr_for_unit(
                         ("full_corr", "full_corr_per_target"),
                         ("minimal_corr", "minimal_corr_per_target"),
                         ("recovery_corr", "recovery_corr_per_target"),
-                        ("ridge_corr", "ridge_corr_per_target"),
+                        # ("ridge_corr", "ridge_corr_per_target"),
                     ],
                 )
 
@@ -355,6 +360,8 @@ def _run_rrr_for_unit(
             apply_sig_nonsig_splits_and_strip(metrics, sig_mask_flat)
 
             save_rrr_result(rrr_unit_dir, k=k, fold=fold_f, metrics=metrics)
+            # Now drop nr corr per target.
+            del metrics["nr_corr_per_target"]
             all_rows.append(metrics)
 
         print(f"  Fold {fold_f} done in {time.time() - fold_start:.1f}s")
@@ -383,6 +390,7 @@ def _run_rrr_for_unit(
                 n_splits=n_folds,
             )
             stacked_joint[f"{label_a}_{label_b}_joint_corr"] = float(corr.mean())
+            stacked_joint[f"{label_a}_{label_b}_joint_corr_per_target"] = corr
         if all(v is not None for v in oof["Y_hat_arbitrary"]):
             for label_a in ("rrr", "nr", "complement"):
                 corr = compute_stacked_joint_corr(
@@ -392,9 +400,13 @@ def _run_rrr_for_unit(
                     n_splits=n_folds,
                 )
                 stacked_joint[f"{label_a}_arbitrary_joint_corr"] = float(corr.mean())
+                stacked_joint[f"{label_a}_arbitrary_joint_corr_per_target"] = corr
         for row in all_rows:
             if row["k"] == k:
                 row.update(stacked_joint)
+
+    for metrics in all_rows:
+        apply_sig_nonsig_splits_and_strip(metrics, sig_mask_flat)
 
     # Alpha-vs-rank diagnostic plot (aggregate across folds)
     if config.log_alphas and per_fold_rank_alphas:
@@ -434,7 +446,7 @@ def _run_rrr_for_unit(
         "nr_pred_r2",
         "nr_complement_corr",
         "nr_complement_recovery_corr",
-        "ridge_corr",
+        # "ridge_corr",
         # Cross-model metrics for RRR reduced-rank model
         "rrr_full_pred_corr",
         "rrr_full_joint_corr",
@@ -562,7 +574,7 @@ def _run_rrr_for_unit(
     nr_col_map = {
         "nr_r2": "minimal_r2",
         "nr_corr": "minimal_corr",
-        "ridge_corr": "ridge_corr",
+        # "ridge_corr": "ridge_corr",
         "nr_recovery_r2": "recovery_r2",
         "nr_recovery_corr": "recovery_corr",
         "nr_pred_r2": "pred_r2",

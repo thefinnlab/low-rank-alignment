@@ -111,6 +111,7 @@ def make_sig_split_df(df: "pd.DataFrame", suffix: str) -> "pd.DataFrame":
 def apply_sig_nonsig_splits_and_strip(
     metrics: dict,
     sig_mask_flat: "np.ndarray | None",
+    sig_mask_shape=None,
 ) -> None:
     """Split any *_per_target arrays into *_sig/*_nonsig scalar means, then delete them.
 
@@ -123,7 +124,9 @@ def apply_sig_nonsig_splits_and_strip(
             base = pt_key[: -len("_per_target")]
             arr = metrics[pt_key]
             metrics[f"{base}_sig"] = (
-                float(arr[sig_mask_flat].mean()) if sig_mask_flat.any() else float("nan")
+                float(arr[sig_mask_flat].mean())
+                if sig_mask_flat.any()
+                else float("nan")
             )
             metrics[f"{base}_nonsig"] = (
                 float(arr[~sig_mask_flat].mean())
@@ -131,6 +134,10 @@ def apply_sig_nonsig_splits_and_strip(
                 else float("nan")
             )
     for pt_key in _per_target_keys:
+        if (
+            pt_key == "nr_corr_per_target"
+        ):  # Keep this one for later sig/nonsig split analysis
+            continue
         del metrics[pt_key]
 
 

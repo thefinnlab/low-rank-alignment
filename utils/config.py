@@ -42,6 +42,7 @@ class EncodingConfig:
     ridge_alphas: list[float] | None = None  # None → use RIDGE_ALPHAS from constants.py
     log_alphas: bool = False  # Save alpha diagnostics (.npz + .png) per subject
     refine_alphas: bool = False  # Two-pass training: coarse sweep → refined grid
+    arbitrary_seed: int = 42  # Seed used for generating arbitrary embedding baseline
     num_folds: int = 2  # Number of cross-validation folds
 
 

@@ -60,7 +60,7 @@ def _train_with_arbitrary(
     selection,
     df_word,
     offset,
-    config=None,
+    config: EncodingConfig = None,
     alphas=None,
 ):
     """Train real encoding model then null (arbitrary) model on same folds.
@@ -81,13 +81,17 @@ def _train_with_arbitrary(
         )
     else:
         corrs, models, tr_idxs, test_idxs, scalers = train_encoding(
-            X, Y, model_constructor, epochs_shape=(n_elecs, n_lags)
+            X,
+            Y,
+            model_constructor,
+            epochs_shape=(n_elecs, n_lags),
+            num_folds=config.num_folds if config is not None else 2,
         )
 
     original_folds = list(zip(tr_idxs, test_idxs))
 
     arb = get_and_offset_arbitrary_embeddings(
-        aligned_embeddings, selection, df_word, enc.offset, config.arbitrary_seed
+        X_arr, selection, df_word, offset, config.arbitrary_seed
     )
 
     corrs_arb, _, _, _, _ = train_encoding(
@@ -96,6 +100,7 @@ def _train_with_arbitrary(
         model_constructor,
         epochs_shape=(n_elecs, n_lags),
         provided_idxs=original_folds,
+        num_folds=config.num_folds if config is not None else 2,
     )
     return corrs, corrs_arb, models, tr_idxs, test_idxs, scalers
 

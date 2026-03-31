@@ -58,11 +58,9 @@ def _():
 
 @app.cell
 def _(mo):
-    mo.md(
-        """
+    mo.md("""
     # RRR Interpretability Explorer
-    """
-    )
+    """)
     return
 
 
@@ -159,13 +157,13 @@ def _(np):
 @app.cell(hide_code=True)
 def _(
     Path,
+    build_electrode_region_map,
+    data_root_input,
     load_encoding_results,
     load_raws,
     load_sig_electrodes,
     np,
     results_root_input,
-    data_root_input,
-    build_electrode_region_map,
     sig_dir_input,
 ):
     def load_electrode_metadata(source: str):
@@ -291,12 +289,10 @@ def _(
 
 @app.cell
 def _(mo):
-    mo.md(
-        """
+    mo.md("""
     ---
     ## Section 1: RRR — Rank vs Explained Variance
-    """
-    )
+    """)
     return
 
 
@@ -427,12 +423,10 @@ def _(mo, s1_summary, s1_threshold):
 
 @app.cell(hide_code=True)
 def _(mo):
-    mo.md(
-        """
+    mo.md("""
     ---
     ## Section 2: Direction Interpretability
-    """
-    )
+    """)
     return
 
 
@@ -550,12 +544,10 @@ def _(
 
 @app.cell(hide_code=True)
 def _(mo):
-    mo.md(
-        """
+    mo.md("""
     ---
     ## Section 3: B Matrix — Temporal Profile
-    """
-    )
+    """)
     return
 
 
@@ -814,12 +806,10 @@ def _(mo, pd, s3_b_df, s3_electrode_filter):
 
 @app.cell(hide_code=True)
 def _(mo):
-    mo.md(
-        """
+    mo.md("""
     ---
     ## Section 4: B Matrix — Brain Map
-    """
-    )
+    """)
     return
 
 
@@ -1001,12 +991,6 @@ def _(
     return coords, dir_idx, elec_names, sub_labels, time_label, values
 
 
-@app.cell
-def _(elec_names):
-    elec_names
-    return
-
-
 @app.cell(hide_code=True)
 def _(coords, dir_idx, elec_names, mo, np, pd, sub_labels, time_label, values):
     # Electrode table
@@ -1061,12 +1045,10 @@ def _(
 
 @app.cell(hide_code=True)
 def _(mo):
-    mo.md(
-        """
+    mo.md("""
     ---
     ## Section 5: Cross-Fold Consistency
-    """
-    )
+    """)
     return
 
 
@@ -1188,12 +1170,10 @@ def _(alt, get_rrr_dir, mo, np, pd, s5_k, s5_ndirs, s5_source):
 
 @app.cell(hide_code=True)
 def _(mo):
-    mo.md(
-        """
+    mo.md("""
     ---
     ## Section 6: Cross-Source Comparison
-    """
-    )
+    """)
     return
 
 
@@ -1402,12 +1382,10 @@ def _(
 
 @app.cell(hide_code=True)
 def _(mo):
-    mo.md(
-        """
+    mo.md("""
     ---
     ## Section 7: Cross-Region Electrode Similarity from B
-    """
-    )
+    """)
     return
 
 
@@ -1705,12 +1683,10 @@ def _(
 
 @app.cell
 def _(mo):
-    mo.md(
-        """
+    mo.md("""
     ---
     ## Section 8: Activation Distribution Statistics
-    """
-    )
+    """)
     return
 
 
