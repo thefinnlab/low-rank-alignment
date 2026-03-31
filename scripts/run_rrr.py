@@ -166,18 +166,10 @@ def _run_rrr_for_unit(
     # Per-fold alpha tracking (populated when config.log_alphas is True)
     per_fold_rank_alphas: list[dict[int, np.ndarray]] = []
 
-    # OOF predictions accumulated per rank for stacked OLS joint corr (post-loop)
-    per_rank_oof: dict[int, dict[str, list]] = {
-        k: {
-            "Y_hat_rrr": [],
-            "Y_hat_nr": [],
-            "Y_hat_complement": [],
-            "Y_hat_full": [],
-            "Y_hat_arbitrary": [],
-            "Y_test": [],
-        }
-        for k in config.rank_grid
-    }
+    # OOF predictions spilled to disk to avoid OOM; loaded one k at a time post-loop
+    oof_spill_dir = os.path.join(rrr_unit_dir, "_oof_spill")
+    os.makedirs(oof_spill_dir, exist_ok=True)
+    _oof_fields = ["Y_hat_rrr", "Y_hat_nr", "Y_hat_complement", "Y_hat_full", "Y_hat_arbitrary", "Y_test"]
 
     for fold_f in range(n_folds):
         fold_start = time.time()
@@ -348,13 +340,20 @@ def _run_rrr_for_unit(
                 "nr",
             )
 
-            # Accumulate OOF predictions for stacked OLS joint corr (computed post-loop)
-            per_rank_oof[k]["Y_hat_rrr"].append(Y_hat_rrr)
-            per_rank_oof[k]["Y_hat_nr"].append(Y_hat_nr)
-            per_rank_oof[k]["Y_hat_complement"].append(Y_hat_complement)
-            per_rank_oof[k]["Y_hat_full"].append(Y_hat_full)
-            per_rank_oof[k]["Y_hat_arbitrary"].append(Y_hat_arbitrary)
-            per_rank_oof[k]["Y_test"].append(Y_test)
+            # Spill OOF predictions to disk to avoid OOM (loaded one k at a time post-loop)
+            for _field, _arr in [
+                ("Y_hat_rrr", Y_hat_rrr),
+                ("Y_hat_nr", Y_hat_nr),
+                ("Y_hat_complement", Y_hat_complement),
+                ("Y_hat_full", Y_hat_full),
+                ("Y_hat_arbitrary", Y_hat_arbitrary),
+                ("Y_test", Y_test),
+            ]:
+                _spill_path = os.path.join(oof_spill_dir, f"oof_{k}_{fold_f}_{_field}.npy")
+                if _arr is not None:
+                    np.save(_spill_path, _arr)
+                else:
+                    np.save(_spill_path, np.array(None, dtype=object))
 
             # Split any *_per_target arrays into *_sig/*_nonsig scalars, then strip them
             apply_sig_nonsig_splits_and_strip(metrics, sig_mask_flat)
@@ -380,7 +379,14 @@ def _run_rrr_for_unit(
         ("complement", "full"),
     ]
     for k in config.rank_grid:
-        oof = per_rank_oof[k]
+        # Load OOF arrays for this k from disk (one k at a time to stay within RAM)
+        oof: dict[str, list] = {field: [] for field in _oof_fields}
+        for fold_f in range(n_folds):
+            for field in _oof_fields:
+                _spill_path = os.path.join(oof_spill_dir, f"oof_{k}_{fold_f}_{field}.npy")
+                _loaded = np.load(_spill_path, allow_pickle=True)
+                oof[field].append(None if _loaded.dtype == object and _loaded.ndim == 0 else _loaded)
+
         stacked_joint: dict[str, float] = {}
         for label_a, label_b in _stacked_pairs:
             corr = compute_stacked_joint_corr(
@@ -407,6 +413,10 @@ def _run_rrr_for_unit(
 
     for metrics in all_rows:
         apply_sig_nonsig_splits_and_strip(metrics, sig_mask_flat)
+
+    # Clean up OOF spill directory now that stacked joint corrs are computed
+    import shutil
+    shutil.rmtree(oof_spill_dir, ignore_errors=True)
 
     # Alpha-vs-rank diagnostic plot (aggregate across folds)
     if config.log_alphas and per_fold_rank_alphas:
