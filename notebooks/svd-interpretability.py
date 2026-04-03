@@ -15,8 +15,13 @@ def _():
     import altair as alt
     import numpy as np
     import pandas as pd
-    from scipy.stats import kurtosis as sp_kurtosis, entropy as sp_entropy, skew as sp_skew
+    from scipy.stats import (
+        kurtosis as sp_kurtosis,
+        entropy as sp_entropy,
+        skew as sp_skew,
+    )
     from pathlib import Path
+
     return Path, alt, mo, np, pd, sp_entropy, sp_kurtosis, sp_skew
 
 
@@ -24,6 +29,7 @@ def _():
 def _():
     import sys
     import os
+
     # Find repo root: walk up from CWD until we find a directory containing utils/
     _cwd = os.path.abspath(".")
     _root = _cwd
@@ -33,8 +39,12 @@ def _():
         _root = os.path.dirname(_root)
     if _root not in sys.path:
         sys.path.insert(0, _root)
-    from utils.embeddings import load_embeddings
-    from utils.examples import get_mo_display_activations, get_example_display_controls
+    from src.utils.embeddings import load_embeddings
+    from src.utils.examples import (
+        get_mo_display_activations,
+        get_example_display_controls,
+    )
+
     return get_example_display_controls, get_mo_display_activations, load_embeddings
 
 
@@ -120,7 +130,11 @@ def _(Path, np, results_root_input):
         elif source.startswith("per_region/"):
             region_name = source.split("/", 1)[1]
             npz_path = (
-                rr / "per_region_svd" / "regions" / region_name / "svd_decomposition.npz"
+                rr
+                / "per_region_svd"
+                / "regions"
+                / region_name
+                / "svd_decomposition.npz"
             )
         else:
             raise ValueError(f"Unknown source: {source}")
@@ -211,11 +225,13 @@ def _(aligned_embeddings, get_vt, np, s1_dir, s1_fold, s1_svd):
 @app.cell
 def _(alt, mo, np, pd, s1_activations, s1_dir, s1_singular_value):
     _fine_counts, _fine_edges = np.histogram(s1_activations, bins=100)
-    _hist_df = pd.DataFrame({
-        "x1": _fine_edges[:-1],
-        "x2": _fine_edges[1:],
-        "count": _fine_counts,
-    })
+    _hist_df = pd.DataFrame(
+        {
+            "x1": _fine_edges[:-1],
+            "x2": _fine_edges[1:],
+            "count": _fine_counts,
+        }
+    )
     _bars = (
         alt.Chart(_hist_df)
         .mark_bar(color="#93c5fd", stroke="#bfdbfe", strokeWidth=0.5)
@@ -234,11 +250,15 @@ def _(alt, mo, np, pd, s1_activations, s1_dir, s1_singular_value):
             ],
         )
     )
-    _chart = _bars.properties(
-        width="container",
-        height=220,
-        title=f"Direction {s1_dir.value} — singular value {s1_singular_value:.4f}",
-    ).configure_view(strokeWidth=0).configure_axis(grid=False)
+    _chart = (
+        _bars.properties(
+            width="container",
+            height=220,
+            title=f"Direction {s1_dir.value} — singular value {s1_singular_value:.4f}",
+        )
+        .configure_view(strokeWidth=0)
+        .configure_axis(grid=False)
+    )
     mo.ui.altair_chart(_chart)
     return
 
@@ -291,7 +311,9 @@ def _(mo, source_options):
         value=source_options[0],
         label="Source",
     )
-    s2_ndirs = mo.ui.slider(start=5, stop=50, value=20, step=5, label="Top-k directions")
+    s2_ndirs = mo.ui.slider(
+        start=5, stop=50, value=20, step=5, label="Top-k directions"
+    )
     mo.hstack([s2_source, s2_ndirs])
     return s2_ndirs, s2_source
 
@@ -302,7 +324,9 @@ def _(load_svd, mo, s2_source):
     mo.stop(
         s2_svd["n_folds"] < 2,
         mo.callout(
-            mo.md(f"Source `{s2_source.value}` has only {s2_svd['n_folds']} fold(s); need ≥ 2."),
+            mo.md(
+                f"Source `{s2_source.value}` has only {s2_svd['n_folds']} fold(s); need ≥ 2."
+            ),
             kind="warn",
         ),
     )
@@ -334,7 +358,13 @@ def _(alt, mo, np, pd, s2_S0, s2_S1, s2_cos_sim_matrix, s2_diag_cos, s2_n):
     _rows = []
     for _i in range(s2_n):
         for _j in range(s2_n):
-            _rows.append({"fold0_dir": _i, "fold1_dir": _j, "cos_sim": float(s2_cos_sim_matrix[_i, _j])})
+            _rows.append(
+                {
+                    "fold0_dir": _i,
+                    "fold1_dir": _j,
+                    "cos_sim": float(s2_cos_sim_matrix[_i, _j]),
+                }
+            )
     _hm_df = pd.DataFrame(_rows)
     _hm_chart = (
         alt.Chart(_hm_df)
@@ -385,22 +415,26 @@ def _(alt, mo, np, pd, s2_S0, s2_S1, s2_cos_sim_matrix, s2_diag_cos, s2_n):
     )
 
     # --- Tab C: consistency table ---
-    _tbl_df = pd.DataFrame({
-        "direction": np.arange(s2_n),
-        "abs_cos_sim": s2_diag_cos,
-        "S_fold0": s2_S0,
-        "S_fold1": s2_S1,
-    })
+    _tbl_df = pd.DataFrame(
+        {
+            "direction": np.arange(s2_n),
+            "abs_cos_sim": s2_diag_cos,
+            "S_fold0": s2_S0,
+            "S_fold1": s2_S1,
+        }
+    )
     _tbl_df["abs_cos_sim"] = _tbl_df["abs_cos_sim"].round(4)
     _tbl_df["S_fold0"] = _tbl_df["S_fold0"].round(4)
     _tbl_df["S_fold1"] = _tbl_df["S_fold1"].round(4)
     _consistency_tbl = mo.ui.table(_tbl_df)
 
-    mo.tabs({
-        "Cosine heatmap": mo.ui.altair_chart(_hm_chart),
-        "SV spectrum": mo.ui.altair_chart(_sv_chart),
-        "Consistency table": _consistency_tbl,
-    })
+    mo.tabs(
+        {
+            "Cosine heatmap": mo.ui.altair_chart(_hm_chart),
+            "SV spectrum": mo.ui.altair_chart(_sv_chart),
+            "Consistency table": _consistency_tbl,
+        }
+    )
     return
 
 
@@ -418,15 +452,21 @@ def _(mo):
 @app.cell
 def _(mo, source_options):
     _fold_opts = ["fold 0", "fold 1", "average"]
-    s3_source_a = mo.ui.dropdown(options=source_options, value=source_options[0], label="Source A")
+    s3_source_a = mo.ui.dropdown(
+        options=source_options, value=source_options[0], label="Source A"
+    )
     s3_fold_a = mo.ui.dropdown(options=_fold_opts, value="fold 0", label="Fold A")
-    s3_source_b = mo.ui.dropdown(options=source_options, value=source_options[0], label="Source B")
+    s3_source_b = mo.ui.dropdown(
+        options=source_options, value=source_options[0], label="Source B"
+    )
     s3_fold_b = mo.ui.dropdown(options=_fold_opts, value="fold 0", label="Fold B")
     s3_topk = mo.ui.slider(start=5, stop=50, value=20, step=5, label="Top-k")
-    mo.vstack([
-        mo.hstack([s3_source_a, s3_fold_a, s3_source_b, s3_fold_b]),
-        s3_topk,
-    ])
+    mo.vstack(
+        [
+            mo.hstack([s3_source_a, s3_fold_a, s3_source_b, s3_fold_b]),
+            s3_topk,
+        ]
+    )
     return s3_fold_a, s3_fold_b, s3_source_a, s3_source_b, s3_topk
 
 
@@ -460,7 +500,9 @@ def _(
 
     _clamp_msg = (
         mo.callout(
-            mo.md(f"Top-k clamped to {_k} (sources have {len(_Vt_a_full)} and {len(_Vt_b_full)} directions)."),
+            mo.md(
+                f"Top-k clamped to {_k} (sources have {len(_Vt_a_full)} and {len(_Vt_b_full)} directions)."
+            ),
             kind="info",
         )
         if s3_clamped
@@ -483,8 +525,12 @@ def _(
     # Activation correlation matrix (k x k Pearson)
     _acts_A = (aligned_embeddings @ s3_Vt_A.T).astype(np.float64)  # (n_words, k)
     _acts_B = (aligned_embeddings @ s3_Vt_B.T).astype(np.float64)
-    _A_z = (_acts_A - _acts_A.mean(0)) / np.where(_acts_A.std(0) > 0, _acts_A.std(0), 1.0)
-    _B_z = (_acts_B - _acts_B.mean(0)) / np.where(_acts_B.std(0) > 0, _acts_B.std(0), 1.0)
+    _A_z = (_acts_A - _acts_A.mean(0)) / np.where(
+        _acts_A.std(0) > 0, _acts_A.std(0), 1.0
+    )
+    _B_z = (_acts_B - _acts_B.mean(0)) / np.where(
+        _acts_B.std(0) > 0, _acts_B.std(0), 1.0
+    )
     s3_act_corr_AB = (_A_z.T @ _B_z) / len(_A_z)  # (k, k) Pearson
     return (
         s3_acts_best_A,
@@ -521,10 +567,13 @@ def _(
     _rows_cs = []
     for _i in range(s3_k):
         for _j in range(s3_k):
-            _rows_cs.append({
-                "dir_A": _i, "dir_B": _j,
-                "cos_sim": float(s3_cos_sim_AB[_i, _j]),
-            })
+            _rows_cs.append(
+                {
+                    "dir_A": _i,
+                    "dir_B": _j,
+                    "cos_sim": float(s3_cos_sim_AB[_i, _j]),
+                }
+            )
     _cs_df = pd.DataFrame(_rows_cs)
     _cs_chart = (
         alt.Chart(_cs_df)
@@ -552,10 +601,12 @@ def _(
     )
 
     # --- Tab B: activation scatter (best-matching pair) ---
-    _scatter_df = pd.DataFrame({
-        "activation_A": s3_acts_best_A,
-        "activation_B": s3_acts_best_B,
-    })
+    _scatter_df = pd.DataFrame(
+        {
+            "activation_A": s3_acts_best_A,
+            "activation_B": s3_acts_best_B,
+        }
+    )
     _scatter_base = alt.Chart(_scatter_df).encode(
         x=alt.X("activation_A:Q", title=f"Source A dir {s3_best_i}"),
         y=alt.Y("activation_B:Q", title=f"Source B dir {s3_best_j}"),
@@ -579,12 +630,16 @@ def _(
     _tp_rows = []
     for _i in range(s3_k):
         _best_j_for_i = int(np.argmax(np.abs(s3_cos_sim_AB[_i])))
-        _tp_rows.append({
-            "dir_A": _i,
-            "best_dir_B": _best_j_for_i,
-            "cos_sim": round(float(s3_cos_sim_AB[_i, _best_j_for_i]), 4),
-            "abs_cos_sim": round(float(np.abs(s3_cos_sim_AB[_i, _best_j_for_i])), 4),
-        })
+        _tp_rows.append(
+            {
+                "dir_A": _i,
+                "best_dir_B": _best_j_for_i,
+                "cos_sim": round(float(s3_cos_sim_AB[_i, _best_j_for_i]), 4),
+                "abs_cos_sim": round(
+                    float(np.abs(s3_cos_sim_AB[_i, _best_j_for_i])), 4
+                ),
+            }
+        )
     _tp_df = pd.DataFrame(_tp_rows).sort_values("abs_cos_sim", ascending=False)
     _tp_tbl = mo.ui.table(_tp_df)
 
@@ -592,10 +647,13 @@ def _(
     _rows_ac = []
     for _i in range(s3_k):
         for _j in range(s3_k):
-            _rows_ac.append({
-                "dir_A": _i, "dir_B": _j,
-                "pearson_r": float(s3_act_corr_AB[_i, _j]),
-            })
+            _rows_ac.append(
+                {
+                    "dir_A": _i,
+                    "dir_B": _j,
+                    "pearson_r": float(s3_act_corr_AB[_i, _j]),
+                }
+            )
     _ac_df = pd.DataFrame(_rows_ac)
     _ac_chart = (
         alt.Chart(_ac_df)
@@ -622,12 +680,14 @@ def _(
         .configure_view(strokeWidth=0)
     )
 
-    mo.tabs({
-        "A. Cosine heatmap": mo.ui.altair_chart(_cs_chart),
-        "B. Activation scatter": mo.ui.altair_chart(_scatter_chart),
-        "C. Top pairs": _tp_tbl,
-        "D. Activation correlations": mo.ui.altair_chart(_ac_chart),
-    })
+    mo.tabs(
+        {
+            "A. Cosine heatmap": mo.ui.altair_chart(_cs_chart),
+            "B. Activation scatter": mo.ui.altair_chart(_scatter_chart),
+            "C. Top pairs": _tp_tbl,
+            "D. Activation correlations": mo.ui.altair_chart(_ac_chart),
+        }
+    )
     return
 
 
@@ -653,11 +713,15 @@ def _(mo):
 
 @app.cell
 def _(mo, source_options):
-    s4a_source = mo.ui.dropdown(options=source_options, value=source_options[0], label="Source")
+    s4a_source = mo.ui.dropdown(
+        options=source_options, value=source_options[0], label="Source"
+    )
     s4a_fold = mo.ui.dropdown(
         options=["fold 0", "fold 1", "average"], value="fold 0", label="Fold"
     )
-    s4a_topk = mo.ui.slider(start=5, stop=50, value=20, step=5, label="Top-k directions")
+    s4a_topk = mo.ui.slider(
+        start=5, stop=50, value=20, step=5, label="Top-k directions"
+    )
     mo.hstack([s4a_source, s4a_fold, s4a_topk])
     return s4a_fold, s4a_source, s4a_topk
 
@@ -692,15 +756,17 @@ def _(
         _counts, _ = np.histogram(_a, bins=50)
         _probs = _counts / _counts.sum()
         _ent = float(sp_entropy(_probs + 1e-12))
-        _stats_rows.append({
-            "direction": _i,
-            "singular_value": round(float(_S_k[_i]), 4),
-            "mean": round(float(_a.mean()), 4),
-            "std": round(float(_a.std()), 4),
-            "kurtosis": round(float(sp_kurtosis(_a)), 4),
-            "skewness": round(float(sp_skew(_a)), 4),
-            "entropy": round(_ent, 4),
-        })
+        _stats_rows.append(
+            {
+                "direction": _i,
+                "singular_value": round(float(_S_k[_i]), 4),
+                "mean": round(float(_a.mean()), 4),
+                "std": round(float(_a.std()), 4),
+                "kurtosis": round(float(sp_kurtosis(_a)), 4),
+                "skewness": round(float(sp_skew(_a)), 4),
+                "entropy": round(_ent, 4),
+            }
+        )
     s4a_stats_df = pd.DataFrame(_stats_rows)
     return (s4a_stats_df,)
 
@@ -731,10 +797,12 @@ def _(alt, mo, pd, s4a_stats_df):
     _display_df = s4a_stats_df.copy()
     _tbl = mo.ui.table(_display_df)
 
-    mo.vstack([
-        mo.ui.altair_chart(_kurt_chart),
-        _tbl,
-    ])
+    mo.vstack(
+        [
+            mo.ui.altair_chart(_kurt_chart),
+            _tbl,
+        ]
+    )
     return
 
 
@@ -779,7 +847,13 @@ def _(get_vt, load_svd, mo, np, pd, source_options):
                 _sigma = np.clip(_sigma, -1, 1)
                 _angles = np.arccos(_sigma) * 180 / np.pi
                 _mean_angle = float(_angles.mean())
-                _overlap_rows.append({"region_A": _ra, "region_B": _rb, "mean_angle_deg": round(_mean_angle, 2)})
+                _overlap_rows.append(
+                    {
+                        "region_A": _ra,
+                        "region_B": _rb,
+                        "mean_angle_deg": round(_mean_angle, 2),
+                    }
+                )
 
         _overlap_df = pd.DataFrame(_overlap_rows)
         _hm = (
@@ -796,7 +870,9 @@ def _(get_vt, load_svd, mo, np, pd, source_options):
                 tooltip=[
                     alt.Tooltip("region_A:N"),
                     alt.Tooltip("region_B:N"),
-                    alt.Tooltip("mean_angle_deg:Q", title="Mean angle (°)", format=".1f"),
+                    alt.Tooltip(
+                        "mean_angle_deg:Q", title="Mean angle (°)", format=".1f"
+                    ),
                 ],
             )
             .properties(
@@ -822,16 +898,24 @@ def _(mo):
 @app.cell
 def _(mo, source_options):
     _fold_opts_4c = ["fold 0", "fold 1", "average"]
-    s4c_source_a = mo.ui.dropdown(options=source_options, value=source_options[0], label="Source A")
+    s4c_source_a = mo.ui.dropdown(
+        options=source_options, value=source_options[0], label="Source A"
+    )
     s4c_fold_a = mo.ui.dropdown(options=_fold_opts_4c, value="fold 0", label="Fold A")
-    s4c_source_b = mo.ui.dropdown(options=source_options, value=source_options[0], label="Source B")
+    s4c_source_b = mo.ui.dropdown(
+        options=source_options, value=source_options[0], label="Source B"
+    )
     s4c_fold_b = mo.ui.dropdown(options=_fold_opts_4c, value="fold 0", label="Fold B")
     s4c_topk = mo.ui.slider(start=5, stop=30, value=10, step=5, label="Top-k")
-    s4c_n_perm = mo.ui.slider(start=100, stop=1000, value=500, step=100, label="N permutations")
-    mo.vstack([
-        mo.hstack([s4c_source_a, s4c_fold_a, s4c_source_b, s4c_fold_b]),
-        mo.hstack([s4c_topk, s4c_n_perm]),
-    ])
+    s4c_n_perm = mo.ui.slider(
+        start=100, stop=1000, value=500, step=100, label="N permutations"
+    )
+    mo.vstack(
+        [
+            mo.hstack([s4c_source_a, s4c_fold_a, s4c_source_b, s4c_fold_b]),
+            mo.hstack([s4c_topk, s4c_n_perm]),
+        ]
+    )
     return s4c_fold_a, s4c_fold_b, s4c_n_perm, s4c_source_a, s4c_source_b, s4c_topk
 
 
@@ -858,7 +942,9 @@ def _(
     _Vt_a_k = _Vt_a[:_k]
     _Vt_b_k = _Vt_b[:_k]
 
-    _obs_diag = np.abs(np.diag(_Vt_a_k @ _Vt_b_k.T))  # (k,) observed diagonal cosine sims
+    _obs_diag = np.abs(
+        np.diag(_Vt_a_k @ _Vt_b_k.T)
+    )  # (k,) observed diagonal cosine sims
 
     # Permutation null distribution
     _rng = np.random.default_rng(42)
@@ -881,12 +967,14 @@ def _(
     _p_fdr_final = np.empty(_k)
     _p_fdr_final[_sorted_idx] = _p_fdr_mono
 
-    _sig_df = pd.DataFrame({
-        "direction": np.arange(_k),
-        "obs_cos_sim": np.round(_obs_diag, 4),
-        "p_val": np.round(_p_vals, 5),
-        "neg_log10_p_fdr": np.round(-np.log10(_p_fdr_final + 1e-10), 3),
-    })
+    _sig_df = pd.DataFrame(
+        {
+            "direction": np.arange(_k),
+            "obs_cos_sim": np.round(_obs_diag, 4),
+            "p_val": np.round(_p_vals, 5),
+            "neg_log10_p_fdr": np.round(-np.log10(_p_fdr_final + 1e-10), 3),
+        }
+    )
 
     _threshold = -np.log10(0.05)
     _scatter = (
@@ -922,10 +1010,12 @@ def _(
         .configure_view(strokeWidth=0)
         .configure_axis(grid=False)
     )
-    mo.vstack([
-        mo.ui.altair_chart(_perm_chart),
-        mo.ui.table(_sig_df),
-    ])
+    mo.vstack(
+        [
+            mo.ui.altair_chart(_perm_chart),
+            mo.ui.table(_sig_df),
+        ]
+    )
     return
 
 
@@ -941,16 +1031,24 @@ def _(mo):
 @app.cell
 def _(mo, source_options):
     _fold_opts_4d = ["fold 0", "fold 1", "average"]
-    s4d_source_a = mo.ui.dropdown(options=source_options, value=source_options[0], label="Source A")
+    s4d_source_a = mo.ui.dropdown(
+        options=source_options, value=source_options[0], label="Source A"
+    )
     s4d_fold_a = mo.ui.dropdown(options=_fold_opts_4d, value="fold 0", label="Fold A")
-    s4d_source_b = mo.ui.dropdown(options=source_options, value=source_options[0], label="Source B")
+    s4d_source_b = mo.ui.dropdown(
+        options=source_options, value=source_options[0], label="Source B"
+    )
     s4d_fold_b = mo.ui.dropdown(options=_fold_opts_4d, value="fold 0", label="Fold B")
     s4d_topk = mo.ui.slider(start=5, stop=50, value=20, step=5, label="Top-k")
-    s4d_n_perm = mo.ui.slider(start=100, stop=1000, value=500, step=100, label="N permutations")
-    mo.vstack([
-        mo.hstack([s4d_source_a, s4d_fold_a, s4d_source_b, s4d_fold_b]),
-        mo.hstack([s4d_topk, s4d_n_perm]),
-    ])
+    s4d_n_perm = mo.ui.slider(
+        start=100, stop=1000, value=500, step=100, label="N permutations"
+    )
+    mo.vstack(
+        [
+            mo.hstack([s4d_source_a, s4d_fold_a, s4d_source_b, s4d_fold_b]),
+            mo.hstack([s4d_topk, s4d_n_perm]),
+        ]
+    )
     return s4d_fold_a, s4d_fold_b, s4d_n_perm, s4d_source_a, s4d_source_b, s4d_topk
 
 
@@ -980,7 +1078,7 @@ def _(
     _, _sigma, _ = np.linalg.svd(_Vt_a_k @ _Vt_b_k.T)
     _sigma = np.clip(_sigma, -1, 1)
     _principal_angles = np.arccos(_sigma) * 180 / np.pi
-    _overlap_score = float(np.mean(_sigma ** 2))
+    _overlap_score = float(np.mean(_sigma**2))
 
     # Permutation null: shuffle features (columns) of Vt_b_k
     _rng = np.random.default_rng(42)
@@ -993,11 +1091,13 @@ def _(
         _null_scores[_perm_i] = float(np.mean(np.clip(_s_perm, -1, 1) ** 2))
     _p_val = ((_null_scores >= _overlap_score).sum() + 1) / (_n_perm + 1)
 
-    _pa_df = pd.DataFrame({
-        "index": np.arange(len(_principal_angles)),
-        "principal_angle_deg": np.round(_principal_angles, 2),
-        "cos_sigma": np.round(_sigma, 4),
-    })
+    _pa_df = pd.DataFrame(
+        {
+            "index": np.arange(len(_principal_angles)),
+            "principal_angle_deg": np.round(_principal_angles, 2),
+            "cos_sigma": np.round(_sigma, 4),
+        }
+    )
     _pa_chart = (
         alt.Chart(_pa_df)
         .mark_bar(color="#6ee7b7")
@@ -1029,7 +1129,9 @@ def _(
         alt.Chart(_null_df)
         .mark_bar(color="#d1d5db")
         .encode(
-            x=alt.X("null_score:Q", bin=alt.Bin(maxbins=40), title="Overlap score (null)"),
+            x=alt.X(
+                "null_score:Q", bin=alt.Bin(maxbins=40), title="Overlap score (null)"
+            ),
             y=alt.Y("count():Q", title="Count"),
         )
     )
@@ -1050,14 +1152,18 @@ def _(
     )
 
     _sig_kind = "success" if _p_val < 0.05 else "warn"
-    mo.vstack([
-        mo.callout(
-            mo.md(f"**Subspace overlap score** (mean σ²): **{_overlap_score:.4f}** — p = {_p_val:.4f} (permutation, N={_n_perm})"),
-            kind=_sig_kind,
-        ),
-        mo.ui.altair_chart(_pa_chart),
-        mo.ui.altair_chart(_null_chart),
-    ])
+    mo.vstack(
+        [
+            mo.callout(
+                mo.md(
+                    f"**Subspace overlap score** (mean σ²): **{_overlap_score:.4f}** — p = {_p_val:.4f} (permutation, N={_n_perm})"
+                ),
+                kind=_sig_kind,
+            ),
+            mo.ui.altair_chart(_pa_chart),
+            mo.ui.altair_chart(_null_chart),
+        ]
+    )
     return
 
 
@@ -1073,16 +1179,24 @@ def _(mo):
 @app.cell
 def _(mo, source_options):
     _fold_opts_4e = ["fold 0", "fold 1", "average"]
-    s4e_source_a = mo.ui.dropdown(options=source_options, value=source_options[0], label="Source A")
+    s4e_source_a = mo.ui.dropdown(
+        options=source_options, value=source_options[0], label="Source A"
+    )
     s4e_fold_a = mo.ui.dropdown(options=_fold_opts_4e, value="fold 0", label="Fold A")
-    s4e_source_b = mo.ui.dropdown(options=source_options, value=source_options[0], label="Source B")
+    s4e_source_b = mo.ui.dropdown(
+        options=source_options, value=source_options[0], label="Source B"
+    )
     s4e_fold_b = mo.ui.dropdown(options=_fold_opts_4e, value="fold 0", label="Fold B")
     s4e_topk = mo.ui.slider(start=5, stop=30, value=10, step=5, label="Top-k")
-    s4e_n_perm = mo.ui.slider(start=100, stop=1000, value=500, step=100, label="N permutations")
-    mo.vstack([
-        mo.hstack([s4e_source_a, s4e_fold_a, s4e_source_b, s4e_fold_b]),
-        mo.hstack([s4e_topk, s4e_n_perm]),
-    ])
+    s4e_n_perm = mo.ui.slider(
+        start=100, stop=1000, value=500, step=100, label="N permutations"
+    )
+    mo.vstack(
+        [
+            mo.hstack([s4e_source_a, s4e_fold_a, s4e_source_b, s4e_fold_b]),
+            mo.hstack([s4e_topk, s4e_n_perm]),
+        ]
+    )
     return s4e_fold_a, s4e_fold_b, s4e_n_perm, s4e_source_a, s4e_source_b, s4e_topk
 
 
@@ -1143,12 +1257,14 @@ def _(
     _p_fdr_final = np.empty(_k)
     _p_fdr_final[_sorted_idx] = _p_fdr_mono
 
-    _sig_df = pd.DataFrame({
-        "direction": np.arange(_k),
-        "obs_pearson_r": np.round(_obs_r, 4),
-        "p_val": np.round(_p_vals, 5),
-        "neg_log10_p_fdr": np.round(-np.log10(_p_fdr_final + 1e-10), 3),
-    })
+    _sig_df = pd.DataFrame(
+        {
+            "direction": np.arange(_k),
+            "obs_pearson_r": np.round(_obs_r, 4),
+            "p_val": np.round(_p_vals, 5),
+            "neg_log10_p_fdr": np.round(-np.log10(_p_fdr_final + 1e-10), 3),
+        }
+    )
 
     _threshold = -np.log10(0.05)
     _scatter = (
@@ -1164,7 +1280,9 @@ def _(
             ),
             tooltip=[
                 alt.Tooltip("direction:O"),
-                alt.Tooltip("obs_pearson_r:Q", title="Observed Pearson r", format=".3f"),
+                alt.Tooltip(
+                    "obs_pearson_r:Q", title="Observed Pearson r", format=".3f"
+                ),
                 alt.Tooltip("neg_log10_p_fdr:Q", title="-log10(p_FDR)", format=".2f"),
             ],
         )
@@ -1184,10 +1302,12 @@ def _(
         .configure_view(strokeWidth=0)
         .configure_axis(grid=False)
     )
-    mo.vstack([
-        mo.ui.altair_chart(_perm_chart),
-        mo.ui.table(_sig_df),
-    ])
+    mo.vstack(
+        [
+            mo.ui.altair_chart(_perm_chart),
+            mo.ui.table(_sig_df),
+        ]
+    )
     return
 
 
@@ -1203,16 +1323,24 @@ def _(mo):
 @app.cell
 def _(mo, source_options):
     _fold_opts_4f = ["fold 0", "fold 1", "average"]
-    s4f_source_a = mo.ui.dropdown(options=source_options, value=source_options[0], label="Source A")
+    s4f_source_a = mo.ui.dropdown(
+        options=source_options, value=source_options[0], label="Source A"
+    )
     s4f_fold_a = mo.ui.dropdown(options=_fold_opts_4f, value="fold 0", label="Fold A")
-    s4f_source_b = mo.ui.dropdown(options=source_options, value=source_options[0], label="Source B")
+    s4f_source_b = mo.ui.dropdown(
+        options=source_options, value=source_options[0], label="Source B"
+    )
     s4f_fold_b = mo.ui.dropdown(options=_fold_opts_4f, value="fold 0", label="Fold B")
     s4f_topk = mo.ui.slider(start=5, stop=50, value=20, step=5, label="Top-k")
-    s4f_n_perm = mo.ui.slider(start=100, stop=1000, value=500, step=100, label="N permutations")
-    mo.vstack([
-        mo.hstack([s4f_source_a, s4f_fold_a, s4f_source_b, s4f_fold_b]),
-        mo.hstack([s4f_topk, s4f_n_perm]),
-    ])
+    s4f_n_perm = mo.ui.slider(
+        start=100, stop=1000, value=500, step=100, label="N permutations"
+    )
+    mo.vstack(
+        [
+            mo.hstack([s4f_source_a, s4f_fold_a, s4f_source_b, s4f_fold_b]),
+            mo.hstack([s4f_topk, s4f_n_perm]),
+        ]
+    )
     return s4f_fold_a, s4f_fold_b, s4f_n_perm, s4f_source_a, s4f_source_b, s4f_topk
 
 
@@ -1266,10 +1394,12 @@ def _(
         _null_cca[_perm_i] = float(np.mean(np.clip(_s_perm, 0, 1)))
     _p_val = ((_null_cca >= _cca_score).sum() + 1) / (_n_perm + 1)
 
-    _cca_df = pd.DataFrame({
-        "index": np.arange(len(_canon_corrs)),
-        "canonical_correlation": np.round(_canon_corrs, 4),
-    })
+    _cca_df = pd.DataFrame(
+        {
+            "index": np.arange(len(_canon_corrs)),
+            "canonical_correlation": np.round(_canon_corrs, 4),
+        }
+    )
     _cca_chart = (
         alt.Chart(_cca_df)
         .mark_bar(color="#93c5fd")
@@ -1282,7 +1412,9 @@ def _(
             ),
             tooltip=[
                 alt.Tooltip("index:O"),
-                alt.Tooltip("canonical_correlation:Q", title="Canonical r", format=".4f"),
+                alt.Tooltip(
+                    "canonical_correlation:Q", title="Canonical r", format=".4f"
+                ),
             ],
         )
         .properties(
@@ -1300,7 +1432,9 @@ def _(
         alt.Chart(_null_df)
         .mark_bar(color="#d1d5db")
         .encode(
-            x=alt.X("null_cca:Q", bin=alt.Bin(maxbins=40), title="Mean canonical r (null)"),
+            x=alt.X(
+                "null_cca:Q", bin=alt.Bin(maxbins=40), title="Mean canonical r (null)"
+            ),
             y=alt.Y("count():Q", title="Count"),
         )
     )
@@ -1321,14 +1455,18 @@ def _(
     )
 
     _sig_kind = "success" if _p_val < 0.05 else "warn"
-    mo.vstack([
-        mo.callout(
-            mo.md(f"**Mean canonical correlation**: **{_cca_score:.4f}** — p = {_p_val:.4f} (permutation, N={_n_perm})"),
-            kind=_sig_kind,
-        ),
-        mo.ui.altair_chart(_cca_chart),
-        mo.ui.altair_chart(_null_chart),
-    ])
+    mo.vstack(
+        [
+            mo.callout(
+                mo.md(
+                    f"**Mean canonical correlation**: **{_cca_score:.4f}** — p = {_p_val:.4f} (permutation, N={_n_perm})"
+                ),
+                kind=_sig_kind,
+            ),
+            mo.ui.altair_chart(_cca_chart),
+            mo.ui.altair_chart(_null_chart),
+        ]
+    )
     return
 
 
@@ -1346,15 +1484,17 @@ def _(mo, source_options):
     _fold_opts_4g = ["fold 0", "fold 1", "average"]
     s4g_sources = mo.ui.multiselect(
         options=source_options,
-        value=source_options[:min(3, len(source_options))],
+        value=source_options[: min(3, len(source_options))],
         label="Sources to compare",
     )
     s4g_fold = mo.ui.dropdown(options=_fold_opts_4g, value="fold 0", label="Fold")
     s4g_topk = mo.ui.slider(start=5, stop=50, value=20, step=5, label="Top-k")
-    mo.vstack([
-        s4g_sources,
-        mo.hstack([s4g_fold, s4g_topk]),
-    ])
+    mo.vstack(
+        [
+            s4g_sources,
+            mo.hstack([s4g_fold, s4g_topk]),
+        ]
+    )
     return s4g_fold, s4g_sources, s4g_topk
 
 
@@ -1399,13 +1539,15 @@ def _(
 
             _, _sigma, _ = np.linalg.svd(_Vt_a_k @ _Vt_b_k.T)
             _sigma = np.clip(_sigma, -1, 1)
-            _score = float(np.mean(_sigma ** 2))
+            _score = float(np.mean(_sigma**2))
 
-            _rows.append({
-                "source_a": _labels[_src_a],
-                "source_b": _labels[_src_b],
-                "score": round(_score, 4),
-            })
+            _rows.append(
+                {
+                    "source_a": _labels[_src_a],
+                    "source_b": _labels[_src_b],
+                    "score": round(_score, 4),
+                }
+            )
 
     _hm_df = pd.DataFrame(_rows)
     _label_order = [_labels[s] for s in _sources]
@@ -1453,15 +1595,17 @@ def _(mo, source_options):
     _fold_opts_4h = ["fold 0", "fold 1", "average"]
     s4h_sources = mo.ui.multiselect(
         options=source_options,
-        value=source_options[:min(3, len(source_options))],
+        value=source_options[: min(3, len(source_options))],
         label="Sources to compare",
     )
     s4h_fold = mo.ui.dropdown(options=_fold_opts_4h, value="fold 0", label="Fold")
     s4h_topk = mo.ui.slider(start=5, stop=50, value=20, step=5, label="Top-k")
-    mo.vstack([
-        s4h_sources,
-        mo.hstack([s4h_fold, s4h_topk]),
-    ])
+    mo.vstack(
+        [
+            s4h_sources,
+            mo.hstack([s4h_fold, s4h_topk]),
+        ]
+    )
     return s4h_fold, s4h_sources, s4h_topk
 
 
@@ -1508,11 +1652,13 @@ def _(
             _cc = np.clip(_cc, 0, 1)
             _score = float(np.mean(_cc))
 
-            _rows.append({
-                "source_a": _labels[_src_a],
-                "source_b": _labels[_src_b],
-                "score": round(_score, 4),
-            })
+            _rows.append(
+                {
+                    "source_a": _labels[_src_a],
+                    "source_b": _labels[_src_b],
+                    "score": round(_score, 4),
+                }
+            )
 
     _hm_df = pd.DataFrame(_rows)
     _label_order = [_labels[s] for s in _sources]

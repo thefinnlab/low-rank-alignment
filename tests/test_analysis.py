@@ -1,9 +1,10 @@
 """Tests for utils/analysis.py."""
+
 import numpy as np
 import pytest
 import torch
 
-from utils.analysis import (
+from src.utils.analysis import (
     get_correlation_gpu,
     partial_out_direction,
     find_dominant_directions,
@@ -16,6 +17,7 @@ from utils.analysis import (
 # ---------------------------------------------------------------------------
 # get_correlation_gpu
 # ---------------------------------------------------------------------------
+
 
 class TestGetCorrelationGpu:
     def test_output_is_torch_tensor(self):
@@ -70,6 +72,7 @@ class TestGetCorrelationGpu:
 # partial_out_direction
 # ---------------------------------------------------------------------------
 
+
 class TestPartialOutDirection:
     def _build_fixtures(self, seed=0):
         from sklearn.preprocessing import StandardScaler
@@ -118,7 +121,11 @@ class TestPartialOutDirection:
             X_list, Y, directions, predictions_list, fold_indices, scalers
         )
         # Variance of Y projected onto direction should be reduced
-        proj_orig = Y @ direction[:Y.shape[1]] if Y.shape[1] <= len(direction) else Y.mean(axis=1)
+        proj_orig = (
+            Y @ direction[: Y.shape[1]]
+            if Y.shape[1] <= len(direction)
+            else Y.mean(axis=1)
+        )
         # Check that Y_residual differs from Y (partialing actually changed something)
         assert not np.allclose(Y_residual, Y)
 
@@ -182,6 +189,7 @@ class TestPartialOutDirection:
 # find_dominant_directions
 # ---------------------------------------------------------------------------
 
+
 class TestFindDominantDirections:
     def _make_weights(self, n_folds=2, n_models=20, embed_dim=10, seed=0):
         rng = np.random.default_rng(seed)
@@ -191,7 +199,9 @@ class TestFindDominantDirections:
         n_folds, n_models, embed_dim = 2, 20, 10
         n_directions = 5
         weights = self._make_weights(n_folds, n_models, embed_dim)
-        _, all_S, all_Vt, _ = find_dominant_directions(weights, n_directions=n_directions)
+        _, all_S, all_Vt, _ = find_dominant_directions(
+            weights, n_directions=n_directions
+        )
         for f in range(n_folds):
             assert all_Vt[f].shape == (n_directions, embed_dim)
             assert all_S[f].shape == (n_directions,)
@@ -228,6 +238,7 @@ class TestFindDominantDirections:
 # compute_truncated_correlations
 # ---------------------------------------------------------------------------
 
+
 class TestComputeTruncatedCorrelations:
     def _make_fixtures(self, seed=0):
         rng = np.random.default_rng(seed)
@@ -250,11 +261,16 @@ class TestComputeTruncatedCorrelations:
         W_sig = coefficients.reshape(n_folds, -1, n_features)
         _, _, all_Vt, _ = find_dominant_directions(W_sig, n_directions=n_features)
         # Pad to n_features rows if needed
-        Vt_arr = np.stack([
-            np.vstack([v, np.zeros((n_features - v.shape[0], n_features))])
-            if v.shape[0] < n_features else v
-            for v in all_Vt
-        ])  # (n_folds, n_features, n_features)
+        Vt_arr = np.stack(
+            [
+                (
+                    np.vstack([v, np.zeros((n_features - v.shape[0], n_features))])
+                    if v.shape[0] < n_features
+                    else v
+                )
+                for v in all_Vt
+            ]
+        )  # (n_folds, n_features, n_features)
 
         sig_mask = rng.integers(0, 2, (n_elecs, n_lags)).astype(bool)
 
@@ -262,8 +278,10 @@ class TestComputeTruncatedCorrelations:
             coefficients=coefficients,
             intercepts=intercepts,
             test_idxs=test_idxs,
-            X=X, Y=Y,
-            n_elecs=n_elecs, n_lags=n_lags,
+            X=X,
+            Y=Y,
+            n_elecs=n_elecs,
+            n_lags=n_lags,
             Vt=Vt_arr,
             k_values=k_values,
             sig_mask=sig_mask,
@@ -272,8 +290,14 @@ class TestComputeTruncatedCorrelations:
     def test_output_keys_present(self):
         f = self._make_fixtures()
         results = compute_truncated_correlations(**f)
-        for key in ["k_values", "full_corrs", "truncated_corrs", "sig_mask",
-                    "full_corrs_per_fold", "truncated_corrs_per_fold"]:
+        for key in [
+            "k_values",
+            "full_corrs",
+            "truncated_corrs",
+            "sig_mask",
+            "full_corrs_per_fold",
+            "truncated_corrs_per_fold",
+        ]:
             assert key in results
 
     def test_output_shapes(self):
@@ -284,7 +308,12 @@ class TestComputeTruncatedCorrelations:
         assert results["full_corrs"].shape == (n_elecs, n_lags)
         assert results["truncated_corrs"].shape == (n_k, n_elecs, n_lags)
         assert results["full_corrs_per_fold"].shape == (n_folds, n_elecs, n_lags)
-        assert results["truncated_corrs_per_fold"].shape == (n_k, n_folds, n_elecs, n_lags)
+        assert results["truncated_corrs_per_fold"].shape == (
+            n_k,
+            n_folds,
+            n_elecs,
+            n_lags,
+        )
 
     def test_full_k_recovers_full_performance(self):
         """At k=n_features, truncated predictions equal full predictions."""
@@ -295,10 +324,12 @@ class TestComputeTruncatedCorrelations:
         # Use orthonormal Vt built from SVD (already done), but use identity-like
         # to guarantee W_trunc == W: build full orthogonal basis per fold
         n_folds = len(f["test_idxs"])
-        Vt_ortho = np.stack([
-            np.linalg.svd(np.eye(n_features), full_matrices=False)[2]
-            for _ in range(n_folds)
-        ])
+        Vt_ortho = np.stack(
+            [
+                np.linalg.svd(np.eye(n_features), full_matrices=False)[2]
+                for _ in range(n_folds)
+            ]
+        )
         f["Vt"] = Vt_ortho
         results = compute_truncated_correlations(**f)
         np.testing.assert_allclose(
@@ -316,14 +347,15 @@ class TestComputeTruncatedCorrelations:
             pytest.skip("No significant pairs in random mask")
         sig_means = np.array([t[sig_mask].mean() for t in results["truncated_corrs"]])
         # The highest k (full subspace) should at least match the lowest k
-        assert sig_means[-1] >= sig_means[0] - 0.05, (
-            f"Full-k ({sig_means[-1]:.4f}) much worse than k=1 ({sig_means[0]:.4f})"
-        )
+        assert (
+            sig_means[-1] >= sig_means[0] - 0.05
+        ), f"Full-k ({sig_means[-1]:.4f}) much worse than k=1 ({sig_means[0]:.4f})"
 
 
 # ---------------------------------------------------------------------------
 # find_best_k
 # ---------------------------------------------------------------------------
+
 
 class TestFindBestK:
     def _make_results(self, k_values, ratios, seed=0):
@@ -333,9 +365,9 @@ class TestFindBestK:
         sig_mask = np.ones((n_elecs, n_lags), dtype=bool)
         full_corrs = np.full((n_elecs, n_lags), 1.0)
         # Build truncated_corrs so that sig mean equals ratio * 1.0 = ratio
-        truncated_corrs = np.stack([
-            np.full((n_elecs, n_lags), r) for r in ratios
-        ])  # (n_k, n_elecs, n_lags)
+        truncated_corrs = np.stack(
+            [np.full((n_elecs, n_lags), r) for r in ratios]
+        )  # (n_k, n_elecs, n_lags)
         return {
             "k_values": np.array(k_values),
             "full_corrs": full_corrs,
@@ -373,12 +405,11 @@ class TestFindBestK:
 # build_sig_mask_flat_for_elecs
 # ---------------------------------------------------------------------------
 
+
 class TestBuildSigMaskFlatForElecs:
     def test_returns_none_when_csv_missing(self, tmp_path):
         enc_results = {"lags": np.arange(5)}
-        result = build_sig_mask_flat_for_elecs(
-            str(tmp_path), {1: ["e1"]}, enc_results
-        )
+        result = build_sig_mask_flat_for_elecs(str(tmp_path), {1: ["e1"]}, enc_results)
         assert result is None
 
     def test_correct_shape_and_values(self, tmp_path):

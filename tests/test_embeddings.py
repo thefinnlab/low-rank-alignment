@@ -1,11 +1,12 @@
 """Tests for utils/embeddings.py."""
+
 import numpy as np
 import pandas as pd
 import pytest
 
 h5py = pytest.importorskip("h5py")
 
-from utils.embeddings import load_embeddings
+from src.utils.embeddings import load_embeddings
 
 
 @pytest.fixture
@@ -17,12 +18,14 @@ def tmp_hdf5_and_transcript(tmp_path):
     path.mkdir(parents=True)
     with h5py.File(path / "features.hdf5", "w") as f:
         f.create_dataset("layer-24", data=embeddings)
-    df = pd.DataFrame({
-        "word_idx": [0, 0, 1, 1, 2, 2],
-        "word": ["hello", "hello", "world", "world", "foo", "foo"],
-        "start": [0.0, 0.05, 0.2, 0.25, 0.5, 0.55],
-        "end":   [0.05, 0.2, 0.25, 0.5, 0.55, 0.7],
-    })
+    df = pd.DataFrame(
+        {
+            "word_idx": [0, 0, 1, 1, 2, 2],
+            "word": ["hello", "hello", "world", "world", "foo", "foo"],
+            "start": [0.0, 0.05, 0.2, 0.25, 0.5, 0.55],
+            "end": [0.05, 0.2, 0.25, 0.5, 0.55, 0.7],
+        }
+    )
     df.to_csv(path / "transcript.tsv", sep="\t")
     return str(tmp_path), embeddings
 
@@ -54,12 +57,14 @@ class TestLoadEmbeddings:
         path.mkdir(parents=True)
         with h5py.File(path / "features.hdf5", "w") as f:
             f.create_dataset("layer-24", data=embeddings)
-        df = pd.DataFrame({
-            "word_idx": [0, 1, 2],
-            "word": ["a", "b", "c"],
-            "start": [0.0, 0.2, 0.4],
-            "end":   [0.1, 0.3, 0.5],
-        })
+        df = pd.DataFrame(
+            {
+                "word_idx": [0, 1, 2],
+                "word": ["a", "b", "c"],
+                "start": [0.0, 0.2, 0.4],
+                "end": [0.1, 0.3, 0.5],
+            }
+        )
         df.to_csv(path / "transcript.tsv", sep="\t")
         aligned, _ = load_embeddings(str(tmp_path), layer=24)
         np.testing.assert_allclose(aligned, embeddings, rtol=1e-5)

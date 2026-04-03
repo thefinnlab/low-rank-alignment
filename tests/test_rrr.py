@@ -7,12 +7,13 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from utils.srrr import save_rrr_factors, save_rrr_result, load_rrr_result
+from src.utils.srrr import save_rrr_factors, save_rrr_result, load_rrr_result
 
 
 # ---------------------------------------------------------------------------
 # Shared fixtures
 # ---------------------------------------------------------------------------
+
 
 @pytest.fixture
 def rng():
@@ -31,6 +32,7 @@ def small_data(rng):
 # ---------------------------------------------------------------------------
 # TestSaveLoadRRRResult
 # ---------------------------------------------------------------------------
+
 
 class TestSaveLoadRRRResult:
     def test_roundtrip(self, tmp_path, rng):
@@ -78,7 +80,9 @@ class TestSaveLoadRRRResult:
             A = rng.standard_normal((6, max_k)).astype(np.float32)
             B = rng.standard_normal((4, max_k)).astype(np.float32)
             save_rrr_factors(str(tmp_path), fold=fold, A=A, B=B)
-            save_rrr_result(str(tmp_path), k=k, fold=fold, metrics={"full_r2": float(fold)})
+            save_rrr_result(
+                str(tmp_path), k=k, fold=fold, metrics={"full_r2": float(fold)}
+            )
 
         for fold in range(3):
             result = load_rrr_result(str(tmp_path), k=k, fold=fold)
@@ -104,6 +108,7 @@ class TestSaveLoadRRRResult:
 # TestRunRRRForUnit
 # ---------------------------------------------------------------------------
 
+
 def _make_baselines(X, Y, test_idxs):
     """Build per_fold_baselines from raw data using a fresh ridge model (for tests only).
 
@@ -111,7 +116,8 @@ def _make_baselines(X, Y, test_idxs):
     can call _run_rrr_for_unit without needing saved encoding_results.joblib files.
     """
     from sklearn.preprocessing import StandardScaler
-    from utils.encoding import get_ridge_model_constructor
+    from src.utils.encoding import get_ridge_model_constructor
+
     n_words, n_embed = X.shape
     baselines = []
     for test_idx in test_idxs:
@@ -127,15 +133,17 @@ def _make_baselines(X, Y, test_idxs):
         if coef.shape[0] != n_embed:
             coef = coef.T
         beta_full_raw = (coef / model[0].scale_[:, np.newaxis]).astype(np.float32)
-        baselines.append({
-            "train_idx": train_idx,
-            "test_idx": test_idx,
-            "Y_train": Y_train,
-            "Y_test": Y_test,
-            "Y_hat_full_train": np.asarray(model.predict(X[train_idx])),
-            "Y_hat_full_test": np.asarray(model.predict(X[test_idx])),
-            "beta_full_raw": beta_full_raw,
-        })
+        baselines.append(
+            {
+                "train_idx": train_idx,
+                "test_idx": test_idx,
+                "Y_train": Y_train,
+                "Y_test": Y_test,
+                "Y_hat_full_train": np.asarray(model.predict(X[train_idx])),
+                "Y_hat_full_test": np.asarray(model.predict(X[test_idx])),
+                "beta_full_raw": beta_full_raw,
+            }
+        )
     return baselines
 
 
@@ -150,7 +158,8 @@ class TestRunRRRForUnit:
             sys.path.insert(0, scripts_dir)
 
     def _make_config(self, rank_grid):
-        from utils.config import RRRConfig
+        from src.core.config import RRRConfig
+
         config = RRRConfig()
         config.rank_grid = rank_grid
         return config
@@ -202,7 +211,9 @@ class TestRunRRRForUnit:
         A_true = rng.standard_normal((n_embed, true_rank)).astype(np.float32)
         B_true = rng.standard_normal((n_targets, true_rank)).astype(np.float32)
         X = rng.standard_normal((n, n_embed)).astype(np.float32)
-        Y = X @ A_true @ B_true.T + 0.01 * rng.standard_normal((n, n_targets)).astype(np.float32)
+        Y = X @ A_true @ B_true.T + 0.01 * rng.standard_normal((n, n_targets)).astype(
+            np.float32
+        )
 
         test_idxs = [np.arange(n // 2, n)]
         config = self._make_config(rank_grid=[1, 2, 3, 5])
@@ -213,7 +224,9 @@ class TestRunRRRForUnit:
         df = pd.read_csv(os.path.join(str(tmp_path), "grid_results.csv"))
         r2_by_k = df.groupby("k")["minimal_r2"].mean().sort_index()
         # R² should be non-decreasing with rank
-        assert all(r2_by_k.diff().dropna() >= -0.05), f"R² not monotone: {r2_by_k.to_dict()}"
+        assert all(
+            r2_by_k.diff().dropna() >= -0.05
+        ), f"R² not monotone: {r2_by_k.to_dict()}"
 
     def test_recovery_r2_decreases_with_rank(self, tmp_path, rng):
         """Residual recovery R² should decrease as rank increases (less residual signal)."""
@@ -224,7 +237,9 @@ class TestRunRRRForUnit:
         A_true = rng.standard_normal((n_embed, true_rank)).astype(np.float32)
         B_true = rng.standard_normal((n_targets, true_rank)).astype(np.float32)
         X = rng.standard_normal((n, n_embed)).astype(np.float32)
-        Y = X @ A_true @ B_true.T + 0.01 * rng.standard_normal((n, n_targets)).astype(np.float32)
+        Y = X @ A_true @ B_true.T + 0.01 * rng.standard_normal((n, n_targets)).astype(
+            np.float32
+        )
 
         test_idxs = [np.arange(n // 2, n)]
         config = self._make_config(rank_grid=[1, 2, 3, 5])
@@ -235,7 +250,9 @@ class TestRunRRRForUnit:
         df = pd.read_csv(os.path.join(str(tmp_path), "grid_results.csv"))
         recovery_by_k = df.groupby("k")["recovery_r2"].mean().sort_index()
         # Recovery R² should be non-increasing
-        assert all(recovery_by_k.diff().dropna() <= 0.05), f"Recovery R² not monotone: {recovery_by_k.to_dict()}"
+        assert all(
+            recovery_by_k.diff().dropna() <= 0.05
+        ), f"Recovery R² not monotone: {recovery_by_k.to_dict()}"
 
     def test_result_files_saved_per_fold_and_rank(self, tmp_path, small_data):
         from run_rrr import _run_rrr_for_unit
@@ -266,11 +283,13 @@ class TestRunRRRForUnit:
 # TestBuildXYFromSubjects
 # ---------------------------------------------------------------------------
 
+
 class TestBuildXYFromSubjects:
     """Tests for build_XY_from_subjects using mocked data-loading functions."""
 
     def _make_enc(self):
-        from utils.config import EncodingConfig
+        from src.core.config import EncodingConfig
+
         enc = EncodingConfig()
         enc.data_root = "data/"
         enc.offset = 0
@@ -278,7 +297,7 @@ class TestBuildXYFromSubjects:
 
     def test_concatenates_Y_across_subjects(self, rng, monkeypatch):
         """Y should be column-concatenation of per-subject neural responses."""
-        from utils.data_loaders import build_XY_from_subjects
+        from src.utils.data_loaders import build_XY_from_subjects
 
         n_words, n_embed, n_elecs_per_sub, n_lags = 50, 8, 3, 4
 
@@ -287,7 +306,9 @@ class TestBuildXYFromSubjects:
 
         def _fake_load_precomputed_epochs(sub_id, data_root):
             return {
-                "raw_data": np.zeros((n_elecs_per_sub, n_words * n_lags), dtype=np.float32),
+                "raw_data": np.zeros(
+                    (n_elecs_per_sub, n_words * n_lags), dtype=np.float32
+                ),
                 "selection": np.arange(n_words),
                 "epoch_starts": np.arange(n_words) * n_lags,
                 "n_lags": n_lags,
@@ -302,11 +323,15 @@ class TestBuildXYFromSubjects:
             n = data.shape[0]
             return X_sel, data.reshape(n, -1).astype(np.float32)
 
-        import utils.data_loaders as dl
-        monkeypatch.setattr(dl, "load_precomputed_epochs", _fake_load_precomputed_epochs)
+        import src.utils.data_loaders as dl
+
+        monkeypatch.setattr(
+            dl, "load_precomputed_epochs", _fake_load_precomputed_epochs
+        )
         monkeypatch.setattr(dl, "epochs_from_cache", _fake_epochs_from_cache)
 
-        import utils.encoding as enc_mod
+        import src.utils.encoding as enc_mod
+
         monkeypatch.setattr(enc_mod, "apply_offset", _fake_apply_offset)
 
         enc = self._make_enc()
@@ -321,7 +346,7 @@ class TestBuildXYFromSubjects:
         assert Y.dtype == np.float32
 
     def test_raises_when_no_sig_electrodes(self, rng):
-        from utils.data_loaders import build_XY_from_subjects
+        from src.utils.data_loaders import build_XY_from_subjects
 
         n_words, n_embed = 50, 8
         X_emb = rng.standard_normal((n_words, n_embed)).astype(np.float32)

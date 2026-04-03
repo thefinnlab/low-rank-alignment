@@ -1,4 +1,5 @@
 """Tests for utils/data_loaders.py."""
+
 import io
 import types
 
@@ -6,7 +7,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from utils.data_loaders import (
+from src.utils.data_loaders import (
     build_word_epochs,
     get_arbitrary_embeddings,
     read_electrode_file,
@@ -17,6 +18,7 @@ from utils.data_loaders import (
 # ---------------------------------------------------------------------------
 # read_subject_mapping
 # ---------------------------------------------------------------------------
+
 
 class TestReadSubjectMapping:
     def test_basic_happy_path(self):
@@ -61,6 +63,7 @@ class TestReadSubjectMapping:
 # read_electrode_file
 # ---------------------------------------------------------------------------
 
+
 class TestReadElectrodeFile:
     def test_single_subject_multiple_electrodes(self):
         f = io.StringIO("subject,elec\n1,A1\n1,A2\n")
@@ -97,6 +100,7 @@ class TestReadElectrodeFile:
 # ---------------------------------------------------------------------------
 # get_arbitrary_embeddings
 # ---------------------------------------------------------------------------
+
 
 class TestGetArbitraryEmbeddings:
     """
@@ -150,9 +154,9 @@ class TestGetArbitraryEmbeddings:
         # All rows should be distinct (sampled without replacement from X rows)
         for i in range(n_words):
             for j in range(i + 1, n_words):
-                assert not np.array_equal(X_arb[i], X_arb[j]), (
-                    f"Rows {i} and {j} are identical but words differ"
-                )
+                assert not np.array_equal(
+                    X_arb[i], X_arb[j]
+                ), f"Rows {i} and {j} are identical but words differ"
 
     def test_repeated_words_more_than_unique(self):
         rng = np.random.default_rng(7)
@@ -199,6 +203,7 @@ class TestGetArbitraryEmbeddings:
 # build_word_epochs
 # ---------------------------------------------------------------------------
 
+
 class TestBuildWordEpochs:
     @pytest.fixture
     def synthetic_raw(self):
@@ -211,7 +216,9 @@ class TestBuildWordEpochs:
 
     @pytest.fixture
     def df_word_simple(self):
-        return pd.DataFrame({"word": ["a", "b", "c"], "start": [1.0, 3.0, 5.0], "end": [1.1, 3.1, 5.1]})
+        return pd.DataFrame(
+            {"word": ["a", "b", "c"], "start": [1.0, 3.0, 5.0], "end": [1.1, 3.1, 5.1]}
+        )
 
     def test_returns_tuple_of_two(self, synthetic_raw, df_word_simple):
         result = build_word_epochs(synthetic_raw, df_word_simple)

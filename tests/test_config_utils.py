@@ -6,8 +6,8 @@ import os
 import pytest
 import yaml
 
-from utils.config import EncodingConfig, SignificanceConfig, get_results_dir
-from utils.config_utils import (
+from src.core.config import EncodingConfig, SignificanceConfig, get_results_dir
+from src.utils.config_utils import (
     parse_override_args,
     dict_to_dataclass,
     apply_overrides,
@@ -18,6 +18,7 @@ from utils.config_utils import (
 # ---------------------------------------------------------------------------
 # parse_override_args
 # ---------------------------------------------------------------------------
+
 
 class TestParseOverrideArgs:
     def test_int(self):
@@ -66,6 +67,7 @@ class TestParseOverrideArgs:
 # dict_to_dataclass
 # ---------------------------------------------------------------------------
 
+
 class TestDictToDataclass:
     def test_flat_encoding_config(self):
         d = {"layer": 48, "offset": 1, "data_root": "other/"}
@@ -104,6 +106,7 @@ class TestDictToDataclass:
 # apply_overrides
 # ---------------------------------------------------------------------------
 
+
 class TestApplyOverrides:
     def test_flat_override_encoding(self):
         config = EncodingConfig()
@@ -131,6 +134,7 @@ class TestApplyOverrides:
 # ---------------------------------------------------------------------------
 # get_results_dir
 # ---------------------------------------------------------------------------
+
 
 class TestGetResultsDir:
     def test_default_base_dir(self):
@@ -169,6 +173,7 @@ class TestGetResultsDir:
 # load_config
 # ---------------------------------------------------------------------------
 
+
 class TestLoadConfig:
     def _write_yaml(self, d, path):
         with open(path, "w") as f:
@@ -176,8 +181,14 @@ class TestLoadConfig:
 
     def test_round_trip_significance(self):
         data = {
-            "encoding": {"layer": 48, "data_root": "data/", "offset": 0,
-                         "subjects": None, "run_name": None, "batch": False},
+            "encoding": {
+                "layer": 48,
+                "data_root": "data/",
+                "offset": 0,
+                "subjects": None,
+                "run_name": None,
+                "batch": False,
+            },
             "output_dir": None,
             "n_permutations": 5000,
             "fdr_q": 0.01,
@@ -201,7 +212,9 @@ class TestLoadConfig:
         with tempfile.TemporaryDirectory() as tmpdir:
             path = os.path.join(tmpdir, "sig.yml")
             self._write_yaml(data, path)
-            config = load_config(path, {"encoding.layer": 48, "n_permutations": 100}, SignificanceConfig)
+            config = load_config(
+                path, {"encoding.layer": 48, "n_permutations": 100}, SignificanceConfig
+            )
 
         assert config.encoding.layer == 48
         assert config.n_permutations == 100

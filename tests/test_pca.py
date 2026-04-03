@@ -7,7 +7,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from utils.subspace_utils import (
+from src.utils.subspace_utils import (
     evaluate_subspace_ols,
     evaluate_complement,
     evaluate_arbitrary,
@@ -18,6 +18,7 @@ from utils.subspace_utils import (
 # ---------------------------------------------------------------------------
 # Shared fixtures
 # ---------------------------------------------------------------------------
+
 
 @pytest.fixture
 def rng():
@@ -36,6 +37,7 @@ def small_data(rng):
 # ---------------------------------------------------------------------------
 # TestEvaluateSubspaceOLS
 # ---------------------------------------------------------------------------
+
 
 class TestEvaluateSubspaceOLS:
     """Unit tests for the shared subspace OLS evaluation utility."""
@@ -91,6 +93,7 @@ class TestEvaluateSubspaceOLS:
 # TestEvaluateComplement
 # ---------------------------------------------------------------------------
 
+
 class TestEvaluateComplement:
     """Unit tests for evaluate_complement."""
 
@@ -106,30 +109,41 @@ class TestEvaluateComplement:
         return A, X_train, X_test, Y_train, Y_test, Y_hat_train, Y_hat_test
 
     def test_returns_expected_keys(self, rng):
-        A, X_train, X_test, Y_train, Y_test, Y_hat_train, Y_hat_test = self._make_inputs(rng)
-        result = evaluate_complement(A, X_train, X_test, Y_train, Y_test, Y_hat_train, Y_hat_test)
+        A, X_train, X_test, Y_train, Y_test, Y_hat_train, Y_hat_test = (
+            self._make_inputs(rng)
+        )
+        result = evaluate_complement(
+            A, X_train, X_test, Y_train, Y_test, Y_hat_train, Y_hat_test
+        )
         assert "complement_corr" in result
         assert "complement_recovery_corr" in result
         assert "complement_corr_per_target" in result
         assert "complement_recovery_corr_per_target" in result
 
     def test_corr_is_float(self, rng):
-        A, X_train, X_test, Y_train, Y_test, Y_hat_train, Y_hat_test = self._make_inputs(rng)
-        result = evaluate_complement(A, X_train, X_test, Y_train, Y_test, Y_hat_train, Y_hat_test)
+        A, X_train, X_test, Y_train, Y_test, Y_hat_train, Y_hat_test = (
+            self._make_inputs(rng)
+        )
+        result = evaluate_complement(
+            A, X_train, X_test, Y_train, Y_test, Y_hat_train, Y_hat_test
+        )
         assert isinstance(result["complement_corr"], float)
         assert isinstance(result["complement_recovery_corr"], float)
 
     def test_per_target_shape(self, rng):
         n_targets = 5
-        A, X_train, X_test, Y_train, Y_test, Y_hat_train, Y_hat_test = self._make_inputs(
-            rng, n_targets=n_targets
+        A, X_train, X_test, Y_train, Y_test, Y_hat_train, Y_hat_test = (
+            self._make_inputs(rng, n_targets=n_targets)
         )
-        result = evaluate_complement(A, X_train, X_test, Y_train, Y_test, Y_hat_train, Y_hat_test)
+        result = evaluate_complement(
+            A, X_train, X_test, Y_train, Y_test, Y_hat_train, Y_hat_test
+        )
         assert len(result["complement_corr_per_target"]) == n_targets
 
     def test_complement_orthogonal_to_subspace(self, rng):
         """Complement projections should be orthogonal to the subspace directions."""
-        from utils.analysis import partial_out_subspace
+        from src.utils.analysis import partial_out_subspace
+
         n_embed, k = 12, 3
         A = rng.standard_normal((n_embed, k)).astype(np.float32)
         X = rng.standard_normal((20, n_embed)).astype(np.float32)
@@ -144,6 +158,7 @@ class TestEvaluateComplement:
 # ---------------------------------------------------------------------------
 # TestEvaluateArbitrary
 # ---------------------------------------------------------------------------
+
 
 class TestEvaluateArbitrary:
     """Unit tests for evaluate_arbitrary."""
@@ -179,6 +194,7 @@ class TestEvaluateArbitrary:
 # ---------------------------------------------------------------------------
 # TestBuildNrMetricsDict
 # ---------------------------------------------------------------------------
+
 
 class TestBuildNrMetricsDict:
     """Unit tests for build_nr_metrics_dict."""
@@ -245,10 +261,12 @@ class TestBuildNrMetricsDict:
 # TestRunPCAForUnit
 # ---------------------------------------------------------------------------
 
+
 def _make_baselines(X, Y, test_idxs):
     """Build per_fold_baselines from raw data using a fresh ridge model (for tests only)."""
     from sklearn.preprocessing import StandardScaler
-    from utils.encoding import get_ridge_model_constructor
+    from src.utils.encoding import get_ridge_model_constructor
+
     n_words, n_embed = X.shape
     baselines = []
     for test_idx in test_idxs:
@@ -264,15 +282,17 @@ def _make_baselines(X, Y, test_idxs):
         if coef.shape[0] != n_embed:
             coef = coef.T
         beta_full_raw = (coef / model[0].scale_[:, np.newaxis]).astype(np.float32)
-        baselines.append({
-            "train_idx": train_idx,
-            "test_idx": test_idx,
-            "Y_train": Y_train,
-            "Y_test": Y_test,
-            "Y_hat_full_train": np.asarray(model.predict(X[train_idx])),
-            "Y_hat_full_test": np.asarray(model.predict(X[test_idx])),
-            "beta_full_raw": beta_full_raw,
-        })
+        baselines.append(
+            {
+                "train_idx": train_idx,
+                "test_idx": test_idx,
+                "Y_train": Y_train,
+                "Y_test": Y_test,
+                "Y_hat_full_train": np.asarray(model.predict(X[train_idx])),
+                "Y_hat_full_test": np.asarray(model.predict(X[test_idx])),
+                "beta_full_raw": beta_full_raw,
+            }
+        )
     return baselines
 
 
@@ -287,7 +307,8 @@ class TestRunPCAForUnit:
             sys.path.insert(0, scripts_dir)
 
     def _make_config(self, rank_grid):
-        from utils.config import PCAConfig
+        from src.core.config import PCAConfig
+
         config = PCAConfig()
         config.rank_grid = rank_grid
         return config
@@ -352,7 +373,9 @@ class TestRunPCAForUnit:
         A_true = rng.standard_normal((n_embed, true_rank)).astype(np.float32)
         B_true = rng.standard_normal((n_targets, true_rank)).astype(np.float32)
         X = rng.standard_normal((n, n_embed)).astype(np.float32)
-        Y = X @ A_true @ B_true.T + 0.01 * rng.standard_normal((n, n_targets)).astype(np.float32)
+        Y = X @ A_true @ B_true.T + 0.01 * rng.standard_normal((n, n_targets)).astype(
+            np.float32
+        )
 
         test_idxs = [np.arange(n // 2, n)]
         config = self._make_config(rank_grid=[1, 2, 3, 5])
@@ -362,7 +385,9 @@ class TestRunPCAForUnit:
 
         df = pd.read_csv(os.path.join(str(tmp_path), "grid_results.csv"))
         r2_by_k = df.groupby("k")["minimal_r2"].mean().sort_index()
-        assert all(r2_by_k.diff().dropna() >= -0.05), f"R2 not monotone: {r2_by_k.to_dict()}"
+        assert all(
+            r2_by_k.diff().dropna() >= -0.05
+        ), f"R2 not monotone: {r2_by_k.to_dict()}"
 
     def test_plots_generated(self, tmp_path, small_data):
         from run_pca import _run_pca_for_unit
@@ -377,7 +402,9 @@ class TestRunPCAForUnit:
 
         assert os.path.exists(os.path.join(str(tmp_path), "rank_analysis.png"))
         # rank_analysis_rrr_raw.png is only generated when RRR overlay exists
-        assert not os.path.exists(os.path.join(str(tmp_path), "rank_analysis_rrr_raw.png"))
+        assert not os.path.exists(
+            os.path.join(str(tmp_path), "rank_analysis_rrr_raw.png")
+        )
 
     def test_rank_clamped_to_available_components(self, tmp_path, rng):
         """Ranks exceeding min(n_train, n_embed) should be silently skipped."""

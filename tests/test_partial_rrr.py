@@ -6,15 +6,16 @@ import sys
 import numpy as np
 import pytest
 
-from utils.analysis import partial_out_subspace, partial_out_svd_directions
-from utils.config import PartialRRRConfig, SVDMode
-from utils.config_utils import dict_to_dataclass
-from utils.srrr import save_rrr_factors, save_rrr_result
+from src.utils.analysis import partial_out_subspace, partial_out_svd_directions
+from src.core.config import PartialRRRConfig, SVDMode
+from src.utils.config_utils import dict_to_dataclass
+from src.utils.srrr import save_rrr_factors, save_rrr_result
 
 
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
+
 
 @pytest.fixture
 def orthogonal_basis(rng):
@@ -35,6 +36,7 @@ def sample_X(rng):
 # ---------------------------------------------------------------------------
 # partial_out_subspace tests
 # ---------------------------------------------------------------------------
+
 
 def test_partial_out_subspace_orthogonality(sample_X, rng):
     """After partialling, X_partial has zero projection onto removed subspace."""
@@ -93,7 +95,7 @@ def test_partial_out_subspace_matches_svd_version(sample_X, orthogonal_basis):
     """When directions are rows of Vt, result matches partial_out_svd_directions."""
     start, size = 2, 3
     # partial_out_subspace takes rows-as-directions, same as Vt
-    X_subspace = partial_out_subspace(sample_X, orthogonal_basis[start:start + size])
+    X_subspace = partial_out_subspace(sample_X, orthogonal_basis[start : start + size])
     X_svd = partial_out_svd_directions(sample_X, orthogonal_basis, start, size)
     np.testing.assert_allclose(X_subspace, X_svd, atol=1e-10)
 
@@ -101,6 +103,7 @@ def test_partial_out_subspace_matches_svd_version(sample_X, orthogonal_basis):
 # ---------------------------------------------------------------------------
 # Config round-trip
 # ---------------------------------------------------------------------------
+
 
 def test_partial_rrr_config_round_trip():
     """PartialRRRConfig can be serialized to dict and back."""
@@ -129,6 +132,7 @@ def test_partial_rrr_config_default_rank_grid_is_none():
 # Rank discovery tests
 # ---------------------------------------------------------------------------
 
+
 class TestDiscoverRanks:
     @pytest.fixture(autouse=True)
     def _add_scripts_to_path(self):
@@ -140,6 +144,7 @@ class TestDiscoverRanks:
     def test_discovers_all_ranks(self, tmp_path):
         """Discovers all k* directories sorted."""
         from run_partial_rrr import _discover_ranks
+
         for k in [5, 1, 10]:
             os.makedirs(tmp_path / f"k{k}" / "fold_0")
         assert _discover_ranks(str(tmp_path)) == [1, 5, 10]
@@ -147,22 +152,26 @@ class TestDiscoverRanks:
     def test_filters_by_rank_grid(self, tmp_path):
         """When rank_grid is provided, only matching ranks are returned."""
         from run_partial_rrr import _discover_ranks
+
         for k in [1, 2, 5, 10, 20]:
             os.makedirs(tmp_path / f"k{k}" / "fold_0")
         assert _discover_ranks(str(tmp_path), rank_grid=[2, 10]) == [2, 10]
 
     def test_raises_on_missing_dir(self, tmp_path):
         from run_partial_rrr import _discover_ranks
+
         with pytest.raises(FileNotFoundError):
             _discover_ranks(str(tmp_path / "nonexistent"))
 
     def test_raises_on_empty_dir(self, tmp_path):
         from run_partial_rrr import _discover_ranks
+
         with pytest.raises(FileNotFoundError, match="No k\\* rank directories"):
             _discover_ranks(str(tmp_path))
 
     def test_raises_when_no_matching_ranks(self, tmp_path):
         from run_partial_rrr import _discover_ranks
+
         os.makedirs(tmp_path / "k1" / "fold_0")
         with pytest.raises(ValueError, match="None of the requested ranks"):
             _discover_ranks(str(tmp_path), rank_grid=[99])
@@ -171,6 +180,7 @@ class TestDiscoverRanks:
 # ---------------------------------------------------------------------------
 # Sweep logic test
 # ---------------------------------------------------------------------------
+
 
 class TestPartialRRRSweep:
     """Integration test for _run_partial_rrr_sweep with synthetic data."""
@@ -214,8 +224,14 @@ class TestPartialRRRSweep:
         os.makedirs(out_dir)
 
         results = _run_partial_rrr_sweep(
-            out_dir, X, Y, rrr_dir, provided_idxs,
-            n_elecs, n_lags, rank_grid,
+            out_dir,
+            X,
+            Y,
+            rrr_dir,
+            provided_idxs,
+            n_elecs,
+            n_lags,
+            rank_grid,
         )
 
         assert set(results.keys()) == {1, 3}
@@ -232,7 +248,9 @@ class TestPartialRRRSweep:
         A_true = rng.standard_normal((n_embed, true_rank)).astype(np.float32)
         B_true = rng.standard_normal((n_targets, true_rank)).astype(np.float32)
         X = rng.standard_normal((n_words, n_embed)).astype(np.float32)
-        Y = (X @ A_true @ B_true.T + 0.5 * rng.standard_normal((n_words, n_targets))).astype(np.float32)
+        Y = (
+            X @ A_true @ B_true.T + 0.5 * rng.standard_normal((n_words, n_targets))
+        ).astype(np.float32)
 
         rank_grid = [1, 5]
         n_folds = 2
@@ -254,8 +272,14 @@ class TestPartialRRRSweep:
         os.makedirs(out_dir)
 
         results = _run_partial_rrr_sweep(
-            out_dir, X, Y, rrr_dir, provided_idxs,
-            n_elecs, n_lags, rank_grid,
+            out_dir,
+            X,
+            Y,
+            rrr_dir,
+            provided_idxs,
+            n_elecs,
+            n_lags,
+            rank_grid,
         )
 
         # Mean correlation after removing rank-5 subspace should be lower
@@ -271,6 +295,7 @@ class TestPartialRRRSweep:
 # ---------------------------------------------------------------------------
 # Save results test
 # ---------------------------------------------------------------------------
+
 
 class TestSavePartialRRRResults:
     @pytest.fixture(autouse=True)
@@ -300,6 +325,7 @@ class TestSavePartialRRRResults:
         assert os.path.exists(os.path.join(out_dir, "summary.csv"))
 
         import pandas as pd
+
         df = pd.read_csv(os.path.join(out_dir, "summary.csv"))
         assert len(df) == 2
         assert set(df["rank_k"]) == {1, 5}
