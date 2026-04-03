@@ -123,6 +123,10 @@ def apply_sig_nonsig_splits_and_strip(
         for pt_key in _per_target_keys:
             base = pt_key[: -len("_per_target")]
             arr = metrics[pt_key]
+            if arr.ndim > 1:
+                # Catch case where we left a fold dimension in; average over it
+                arr = arr.mean(0)
+
             metrics[f"{base}_sig"] = (
                 float(arr[sig_mask_flat].mean())
                 if sig_mask_flat.any()

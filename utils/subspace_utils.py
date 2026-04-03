@@ -516,7 +516,7 @@ def compute_stacked_joint_corr(
 
         fold_corrs.append(compute_correlation(Y_te, Y_pred))
 
-    return np.mean(fold_corrs, axis=0)  # (n_targets,)
+    return np.stack(fold_corrs)
 
 
 def add_primary_cross_model_metrics(
