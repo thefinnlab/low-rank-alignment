@@ -8,7 +8,7 @@ import pytest
 import torch
 import yaml
 
-from utils.sae import (
+from src.utils.sae import (
     SAEEncoder,
     SAERegressorEndToEnd,
     compute_sae_metrics,
@@ -22,6 +22,7 @@ from utils.sae import (
 # ---------------------------------------------------------------------------
 # Shared fixtures
 # ---------------------------------------------------------------------------
+
 
 @pytest.fixture
 def rng():
@@ -51,6 +52,7 @@ def structured_data(rng):
 # TestSAEEncoder
 # ---------------------------------------------------------------------------
 
+
 class TestSAEEncoder:
     def test_output_shape(self):
         encoder = SAEEncoder(input_dim=4, hidden_dim=10)
@@ -75,6 +77,7 @@ class TestSAEEncoder:
 # TestSAERegressorEndToEnd
 # ---------------------------------------------------------------------------
 
+
 class TestSAERegressorEndToEnd:
     def test_output_shapes(self):
         model = SAERegressorEndToEnd(input_dim=4, hidden_dim=10, output_dim=6)
@@ -93,6 +96,7 @@ class TestSAERegressorEndToEnd:
 # ---------------------------------------------------------------------------
 # TestComputeSAEMetrics
 # ---------------------------------------------------------------------------
+
 
 class TestComputeSAEMetrics:
     def test_all_dead_neurons(self):
@@ -136,15 +140,23 @@ class TestComputeSAEMetrics:
 # TestTrainSAEEndToEnd
 # ---------------------------------------------------------------------------
 
+
 class TestTrainSAEEndToEnd:
     def test_loss_decreases(self, structured_data):
         X, Y = structured_data
         n = X.shape[0]
         split = n // 2
         result = train_sae_end_to_end(
-            X[:split], Y[:split], X[split:], Y[split:],
-            hidden_dim=12, l1_penalty=1e-4, lr=1e-2,
-            num_epochs=50, device="cpu", log_every=1,
+            X[:split],
+            Y[:split],
+            X[split:],
+            Y[split:],
+            hidden_dim=12,
+            l1_penalty=1e-4,
+            lr=1e-2,
+            num_epochs=50,
+            device="cpu",
+            log_every=1,
         )
         log = result["training_log"]
         assert log[-1]["total_loss"] < log[0]["total_loss"]
@@ -154,9 +166,16 @@ class TestTrainSAEEndToEnd:
         n = X.shape[0]
         split = n // 2
         result = train_sae_end_to_end(
-            X[:split], Y[:split], X[split:], Y[split:],
-            hidden_dim=10, l1_penalty=1e-3, lr=1e-3,
-            num_epochs=5, device="cpu", log_every=1,
+            X[:split],
+            Y[:split],
+            X[split:],
+            Y[split:],
+            hidden_dim=10,
+            l1_penalty=1e-3,
+            lr=1e-3,
+            num_epochs=5,
+            device="cpu",
+            log_every=1,
         )
         assert "encoder_state_dict" in result
         assert "regressor_weight" in result
@@ -167,8 +186,15 @@ class TestTrainSAEEndToEnd:
         assert "Y_hat_train" in result
 
         m = result["metrics"]
-        for key in ["r2", "correlation", "l0_sparsity", "dead_neurons",
-                     "mean_activation", "l1_loss", "activation_frequency"]:
+        for key in [
+            "r2",
+            "correlation",
+            "l0_sparsity",
+            "dead_neurons",
+            "mean_activation",
+            "l1_loss",
+            "activation_frequency",
+        ]:
             assert key in m, f"Missing metric: {key}"
 
     def test_training_log_format(self, small_data):
@@ -176,14 +202,28 @@ class TestTrainSAEEndToEnd:
         n = X.shape[0]
         split = n // 2
         result = train_sae_end_to_end(
-            X[:split], Y[:split], X[split:], Y[split:],
-            hidden_dim=10, l1_penalty=1e-3, lr=1e-3,
-            num_epochs=10, device="cpu", log_every=1,
+            X[:split],
+            Y[:split],
+            X[split:],
+            Y[split:],
+            hidden_dim=10,
+            l1_penalty=1e-3,
+            lr=1e-3,
+            num_epochs=10,
+            device="cpu",
+            log_every=1,
         )
         log = result["training_log"]
         assert len(log) == 10
         for entry in log:
-            for key in ["epoch", "mse_loss", "l1_loss", "total_loss", "test_r2", "test_corr"]:
+            for key in [
+                "epoch",
+                "mse_loss",
+                "l1_loss",
+                "total_loss",
+                "test_r2",
+                "test_corr",
+            ]:
                 assert key in entry
 
     def test_log_every_skips_test_metrics(self, small_data):
@@ -191,9 +231,16 @@ class TestTrainSAEEndToEnd:
         n = X.shape[0]
         split = n // 2
         result = train_sae_end_to_end(
-            X[:split], Y[:split], X[split:], Y[split:],
-            hidden_dim=10, l1_penalty=1e-3, lr=1e-3,
-            num_epochs=10, device="cpu", log_every=5,
+            X[:split],
+            Y[:split],
+            X[split:],
+            Y[split:],
+            hidden_dim=10,
+            l1_penalty=1e-3,
+            lr=1e-3,
+            num_epochs=10,
+            device="cpu",
+            log_every=5,
         )
         log = result["training_log"]
         assert len(log) == 10
@@ -208,25 +255,49 @@ class TestTrainSAEEndToEnd:
         split = n // 2
 
         result_low = train_sae_end_to_end(
-            X[:split], Y[:split], X[split:], Y[split:],
-            hidden_dim=12, l1_penalty=1e-5, lr=1e-2,
-            num_epochs=100, device="cpu", log_every=100,
+            X[:split],
+            Y[:split],
+            X[split:],
+            Y[split:],
+            hidden_dim=12,
+            l1_penalty=1e-5,
+            lr=1e-2,
+            num_epochs=100,
+            device="cpu",
+            log_every=100,
         )
         result_high = train_sae_end_to_end(
-            X[:split], Y[:split], X[split:], Y[split:],
-            hidden_dim=12, l1_penalty=1.0, lr=1e-2,
-            num_epochs=100, device="cpu", log_every=100,
+            X[:split],
+            Y[:split],
+            X[split:],
+            Y[split:],
+            hidden_dim=12,
+            l1_penalty=1.0,
+            lr=1e-2,
+            num_epochs=100,
+            device="cpu",
+            log_every=100,
         )
-        assert result_high["metrics"]["l0_sparsity"] <= result_low["metrics"]["l0_sparsity"]
+        assert (
+            result_high["metrics"]["l0_sparsity"]
+            <= result_low["metrics"]["l0_sparsity"]
+        )
 
     def test_mini_batch(self, small_data):
         X, Y = small_data
         n = X.shape[0]
         split = n // 2
         result = train_sae_end_to_end(
-            X[:split], Y[:split], X[split:], Y[split:],
-            hidden_dim=10, l1_penalty=1e-3, lr=1e-3,
-            num_epochs=5, batch_size=16, device="cpu",
+            X[:split],
+            Y[:split],
+            X[split:],
+            Y[split:],
+            hidden_dim=10,
+            l1_penalty=1e-3,
+            lr=1e-3,
+            num_epochs=5,
+            batch_size=16,
+            device="cpu",
         )
         assert len(result["training_log"]) == 5
 
@@ -235,9 +306,15 @@ class TestTrainSAEEndToEnd:
         n = X.shape[0]
         split = n // 2
         result = train_sae_end_to_end(
-            X[:split], Y[:split], X[split:], Y[split:],
-            hidden_dim=10, l1_penalty=1e-3, lr=1e-3,
-            num_epochs=5, device="cpu",
+            X[:split],
+            Y[:split],
+            X[split:],
+            Y[split:],
+            hidden_dim=10,
+            l1_penalty=1e-3,
+            lr=1e-3,
+            num_epochs=5,
+            device="cpu",
         )
         assert result["Y_hat_test"].shape == (n - split, Y.shape[1])
         assert result["Y_hat_train"].shape == (split, Y.shape[1])
@@ -247,16 +324,25 @@ class TestTrainSAEEndToEnd:
 # TestTrainSAEAlternating
 # ---------------------------------------------------------------------------
 
+
 class TestTrainSAEAlternating:
     def test_loss_decreases(self, structured_data):
         X, Y = structured_data
         n = X.shape[0]
         split = n // 2
         result = train_sae_alternating(
-            X[:split], Y[:split], X[split:], Y[split:],
-            hidden_dim=12, l1_penalty=1e-4, regression_type="ols",
-            sae_lr=1e-2, sae_steps_per_cycle=20, num_cycles=10,
-            device="cpu", log_every=1,
+            X[:split],
+            Y[:split],
+            X[split:],
+            Y[split:],
+            hidden_dim=12,
+            l1_penalty=1e-4,
+            regression_type="ols",
+            sae_lr=1e-2,
+            sae_steps_per_cycle=20,
+            num_cycles=10,
+            device="cpu",
+            log_every=1,
         )
         log = result["training_log"]
         assert log[-1]["total_loss"] < log[0]["total_loss"]
@@ -266,9 +352,16 @@ class TestTrainSAEAlternating:
         n = X.shape[0]
         split = n // 2
         result = train_sae_alternating(
-            X[:split], Y[:split], X[split:], Y[split:],
-            hidden_dim=10, l1_penalty=1e-3, regression_type="ols",
-            sae_lr=1e-3, sae_steps_per_cycle=5, num_cycles=3,
+            X[:split],
+            Y[:split],
+            X[split:],
+            Y[split:],
+            hidden_dim=10,
+            l1_penalty=1e-3,
+            regression_type="ols",
+            sae_lr=1e-3,
+            sae_steps_per_cycle=5,
+            num_cycles=3,
             device="cpu",
         )
         assert "regressor_weight" in result
@@ -279,9 +372,16 @@ class TestTrainSAEAlternating:
         n = X.shape[0]
         split = n // 2
         result = train_sae_alternating(
-            X[:split], Y[:split], X[split:], Y[split:],
-            hidden_dim=10, l1_penalty=1e-3, regression_type="ridge",
-            sae_lr=1e-3, sae_steps_per_cycle=5, num_cycles=3,
+            X[:split],
+            Y[:split],
+            X[split:],
+            Y[split:],
+            hidden_dim=10,
+            l1_penalty=1e-3,
+            regression_type="ridge",
+            sae_lr=1e-3,
+            sae_steps_per_cycle=5,
+            num_cycles=3,
             device="cpu",
         )
         assert "regressor_weight" in result
@@ -292,13 +392,27 @@ class TestTrainSAEAlternating:
         n = X.shape[0]
         split = n // 2
         result = train_sae_alternating(
-            X[:split], Y[:split], X[split:], Y[split:],
-            hidden_dim=10, l1_penalty=1e-3, regression_type="ols",
-            sae_lr=1e-3, sae_steps_per_cycle=5, num_cycles=3,
+            X[:split],
+            Y[:split],
+            X[split:],
+            Y[split:],
+            hidden_dim=10,
+            l1_penalty=1e-3,
+            regression_type="ols",
+            sae_lr=1e-3,
+            sae_steps_per_cycle=5,
+            num_cycles=3,
             device="cpu",
         )
-        for key in ["encoder_state_dict", "regressor_weight", "regressor_bias",
-                     "metrics", "training_log", "Y_hat_test", "Y_hat_train"]:
+        for key in [
+            "encoder_state_dict",
+            "regressor_weight",
+            "regressor_bias",
+            "metrics",
+            "training_log",
+            "Y_hat_test",
+            "Y_hat_train",
+        ]:
             assert key in result
 
     def test_training_log_format(self, small_data):
@@ -306,15 +420,30 @@ class TestTrainSAEAlternating:
         n = X.shape[0]
         split = n // 2
         result = train_sae_alternating(
-            X[:split], Y[:split], X[split:], Y[split:],
-            hidden_dim=10, l1_penalty=1e-3, regression_type="ols",
-            sae_lr=1e-3, sae_steps_per_cycle=5, num_cycles=4,
-            device="cpu", log_every=1,
+            X[:split],
+            Y[:split],
+            X[split:],
+            Y[split:],
+            hidden_dim=10,
+            l1_penalty=1e-3,
+            regression_type="ols",
+            sae_lr=1e-3,
+            sae_steps_per_cycle=5,
+            num_cycles=4,
+            device="cpu",
+            log_every=1,
         )
         log = result["training_log"]
         assert len(log) == 4
         for entry in log:
-            for key in ["cycle", "mse_loss", "l1_loss", "total_loss", "test_r2", "test_corr"]:
+            for key in [
+                "cycle",
+                "mse_loss",
+                "l1_loss",
+                "total_loss",
+                "test_r2",
+                "test_corr",
+            ]:
                 assert key in entry
 
     def test_mini_batch(self, small_data):
@@ -322,10 +451,18 @@ class TestTrainSAEAlternating:
         n = X.shape[0]
         split = n // 2
         result = train_sae_alternating(
-            X[:split], Y[:split], X[split:], Y[split:],
-            hidden_dim=10, l1_penalty=1e-3, regression_type="ols",
-            sae_lr=1e-3, sae_steps_per_cycle=5, num_cycles=2,
-            batch_size=16, device="cpu",
+            X[:split],
+            Y[:split],
+            X[split:],
+            Y[split:],
+            hidden_dim=10,
+            l1_penalty=1e-3,
+            regression_type="ols",
+            sae_lr=1e-3,
+            sae_steps_per_cycle=5,
+            num_cycles=2,
+            batch_size=16,
+            device="cpu",
         )
         assert len(result["training_log"]) == 2
 
@@ -334,10 +471,11 @@ class TestTrainSAEAlternating:
 # TestSAEConfig
 # ---------------------------------------------------------------------------
 
+
 class TestSAEConfig:
     def test_roundtrip_yaml(self, tmp_path):
-        from utils.config import SAEConfig
-        from utils.config_utils import load_config
+        from src.core.config import SAEConfig
+        from src.utils.config_utils import load_config
 
         config_dict = {
             "encoding": {"model": "gpt2xl", "layer": 24, "offset": 0},
@@ -358,11 +496,11 @@ class TestSAEConfig:
         assert config.l1_penalty == 0.01
         assert config.training_mode == "alternating"
         assert config.regression_type == "ridge"
-        assert config.encoding.layer == 24
+        assert config.encoding.per_model_config == {"layer": 24}
 
     def test_cli_overrides(self, tmp_path):
-        from utils.config import SAEConfig
-        from utils.config_utils import load_config
+        from src.core.config import SAEConfig
+        from src.utils.config_utils import load_config
 
         config_dict = {"k": 5, "hidden_dim": 20}
         config_path = str(tmp_path / "sae_test.yml")
@@ -379,30 +517,47 @@ class TestSAEConfig:
 # TestPlotSAETrainingCurves
 # ---------------------------------------------------------------------------
 
+
 class TestPlotSAETrainingCurves:
     def test_saves_png(self, tmp_path, structured_data):
-        from utils.plotting import plot_sae_training_curves
+        from src.utils.plotting import plot_sae_training_curves
+
         X, Y = structured_data
         n = X.shape[0]
         split = n // 2
         result = train_sae_end_to_end(
-            X[:split], Y[:split], X[split:], Y[split:],
-            hidden_dim=12, l1_penalty=1e-3, lr=1e-2,
-            num_epochs=20, device="cpu", log_every=5,
+            X[:split],
+            Y[:split],
+            X[split:],
+            Y[split:],
+            hidden_dim=12,
+            l1_penalty=1e-3,
+            lr=1e-2,
+            num_epochs=20,
+            device="cpu",
+            log_every=5,
         )
         save_path = str(tmp_path / "curves.png")
         plot_sae_training_curves(result["training_log"], save_path=save_path)
         assert os.path.exists(save_path)
 
     def test_handles_all_logged(self, tmp_path, small_data):
-        from utils.plotting import plot_sae_training_curves
+        from src.utils.plotting import plot_sae_training_curves
+
         X, Y = small_data
         n = X.shape[0]
         split = n // 2
         result = train_sae_end_to_end(
-            X[:split], Y[:split], X[split:], Y[split:],
-            hidden_dim=10, l1_penalty=1e-3, lr=1e-3,
-            num_epochs=5, device="cpu", log_every=1,
+            X[:split],
+            Y[:split],
+            X[split:],
+            Y[split:],
+            hidden_dim=10,
+            l1_penalty=1e-3,
+            lr=1e-3,
+            num_epochs=5,
+            device="cpu",
+            log_every=1,
         )
         save_path = str(tmp_path / "curves_all.png")
         plot_sae_training_curves(result["training_log"], save_path=save_path)
@@ -412,6 +567,7 @@ class TestPlotSAETrainingCurves:
 # ---------------------------------------------------------------------------
 # TestSAEEncoderInit
 # ---------------------------------------------------------------------------
+
 
 class TestSAEEncoderInit:
     def test_bias_initialized_to_zero(self):
@@ -426,6 +582,7 @@ class TestSAEEncoderInit:
 # ---------------------------------------------------------------------------
 # TestResampleDeadNeurons
 # ---------------------------------------------------------------------------
+
 
 class TestResampleDeadNeurons:
     def test_resamples_dead_neurons(self):
@@ -490,15 +647,23 @@ class TestResampleDeadNeurons:
 # TestResamplingIntegration
 # ---------------------------------------------------------------------------
 
+
 class TestResamplingIntegration:
     def test_end_to_end_with_resampling(self, structured_data):
         X, Y = structured_data
         n = X.shape[0]
         split = n // 2
         result = train_sae_end_to_end(
-            X[:split], Y[:split], X[split:], Y[split:],
-            hidden_dim=12, l1_penalty=1e-4, lr=1e-2,
-            num_epochs=20, device="cpu", log_every=1,
+            X[:split],
+            Y[:split],
+            X[split:],
+            Y[split:],
+            hidden_dim=12,
+            l1_penalty=1e-4,
+            lr=1e-2,
+            num_epochs=20,
+            device="cpu",
+            log_every=1,
             resample_interval=5,
         )
         log = result["training_log"]
@@ -511,10 +676,18 @@ class TestResamplingIntegration:
         n = X.shape[0]
         split = n // 2
         result = train_sae_alternating(
-            X[:split], Y[:split], X[split:], Y[split:],
-            hidden_dim=12, l1_penalty=1e-4, regression_type="ols",
-            sae_lr=1e-2, sae_steps_per_cycle=10, num_cycles=6,
-            device="cpu", log_every=1,
+            X[:split],
+            Y[:split],
+            X[split:],
+            Y[split:],
+            hidden_dim=12,
+            l1_penalty=1e-4,
+            regression_type="ols",
+            sae_lr=1e-2,
+            sae_steps_per_cycle=10,
+            num_cycles=6,
+            device="cpu",
+            log_every=1,
             resample_interval=2,
         )
         log = result["training_log"]
@@ -525,6 +698,7 @@ class TestResamplingIntegration:
 # ---------------------------------------------------------------------------
 # TestComputeL1
 # ---------------------------------------------------------------------------
+
 
 class TestComputeL1:
     def test_unweighted_matches_abs_mean(self):
@@ -571,12 +745,18 @@ class TestComputeL1:
 # TestWeightedL1Integration
 # ---------------------------------------------------------------------------
 
+
 class TestPlotSAECorrsVsFull:
     def test_saves_png(self, tmp_path, rng):
-        from utils.plotting import plot_sae_corrs_vs_full
+        from src.utils.plotting import plot_sae_corrs_vs_full
+
         n_folds, n_electrodes, n_lags = 2, 5, 10
-        corrs_sae = rng.standard_normal((n_folds, n_electrodes, n_lags)).astype(np.float32)
-        corrs_full = rng.standard_normal((n_folds, n_electrodes, n_lags)).astype(np.float32)
+        corrs_sae = rng.standard_normal((n_folds, n_electrodes, n_lags)).astype(
+            np.float32
+        )
+        corrs_full = rng.standard_normal((n_folds, n_electrodes, n_lags)).astype(
+            np.float32
+        )
         lags = np.linspace(-2.0, 2.0, n_lags, endpoint=False)
         save_path = str(tmp_path / "corrs_plot.png")
         plot_sae_corrs_vs_full(corrs_sae, corrs_full, lags, save_path=save_path)
@@ -589,9 +769,16 @@ class TestWeightedL1Integration:
         n = X.shape[0]
         split = n // 2
         result = train_sae_end_to_end(
-            X[:split], Y[:split], X[split:], Y[split:],
-            hidden_dim=12, l1_penalty=1e-4, lr=1e-2,
-            num_epochs=30, device="cpu", log_every=1,
+            X[:split],
+            Y[:split],
+            X[split:],
+            Y[split:],
+            hidden_dim=12,
+            l1_penalty=1e-4,
+            lr=1e-2,
+            num_epochs=30,
+            device="cpu",
+            log_every=1,
             weight_l1_by_decoder_norm=True,
         )
         log = result["training_log"]
@@ -602,10 +789,18 @@ class TestWeightedL1Integration:
         n = X.shape[0]
         split = n // 2
         result = train_sae_alternating(
-            X[:split], Y[:split], X[split:], Y[split:],
-            hidden_dim=12, l1_penalty=1e-4, regression_type="ols",
-            sae_lr=1e-2, sae_steps_per_cycle=10, num_cycles=6,
-            device="cpu", log_every=1,
+            X[:split],
+            Y[:split],
+            X[split:],
+            Y[split:],
+            hidden_dim=12,
+            l1_penalty=1e-4,
+            regression_type="ols",
+            sae_lr=1e-2,
+            sae_steps_per_cycle=10,
+            num_cycles=6,
+            device="cpu",
+            log_every=1,
             weight_l1_by_decoder_norm=True,
         )
         log = result["training_log"]
@@ -616,12 +811,13 @@ class TestWeightedL1Integration:
 # TestSweepHelpers
 # ---------------------------------------------------------------------------
 
+
 class TestSweepHelpers:
     """Tests for sweep detection, experiment_subdir, and make_scalar_config."""
 
     def test_detect_sweep_params_no_sweep(self):
-        from utils.config import SAEConfig
-        from scripts.run_sae import _detect_sweep_params
+        from src.core.config import SAEConfig
+        from scripts.nonlinear.run_sae import _detect_sweep_params
 
         config = SAEConfig(k=5, hidden_dim=50, l1_penalty=0.01)
         k_values, sweep_params = _detect_sweep_params(config)
@@ -629,8 +825,8 @@ class TestSweepHelpers:
         assert sweep_params == {}
 
     def test_detect_sweep_params_with_lists(self):
-        from utils.config import SAEConfig
-        from scripts.run_sae import _detect_sweep_params
+        from src.core.config import SAEConfig
+        from scripts.nonlinear.run_sae import _detect_sweep_params
 
         config = SAEConfig(k=5, hidden_dim=[10, 20], l1_penalty=[0.01, 0.1])
         k_values, sweep_params = _detect_sweep_params(config)
@@ -638,8 +834,8 @@ class TestSweepHelpers:
         assert sweep_params == {"hidden_dim": [10, 20], "l1_penalty": [0.01, 0.1]}
 
     def test_detect_sweep_params_k_as_list(self):
-        from utils.config import SAEConfig
-        from scripts.run_sae import _detect_sweep_params
+        from src.core.config import SAEConfig
+        from scripts.nonlinear.run_sae import _detect_sweep_params
 
         config = SAEConfig(k=[5, 10], hidden_dim=50)
         k_values, sweep_params = _detect_sweep_params(config)
@@ -648,40 +844,43 @@ class TestSweepHelpers:
 
     def test_detect_sweep_ignores_legitimate_list_fields(self):
         """Fields typed as list (e.g. encoding.subjects) should not be treated as sweep params."""
-        from utils.config import SAEConfig, EncodingConfig
-        from scripts.run_sae import _detect_sweep_params
+        from src.core.config import SAEConfig, EncodingConfig
+        from scripts.nonlinear.run_sae import _detect_sweep_params
 
         config = SAEConfig(
             encoding=EncodingConfig(subjects=[1, 2, 3]),
-            k=5, hidden_dim=50,
+            k=5,
+            hidden_dim=50,
         )
         k_values, sweep_params = _detect_sweep_params(config)
         assert sweep_params == {}
 
     def test_build_experiment_subdir_single_param(self):
-        from scripts.run_sae import _build_experiment_subdir
+        from scripts.nonlinear.run_sae import _build_experiment_subdir
 
         result = _build_experiment_subdir({"hidden_dim": 10})
         assert result == "hidden_dim=10"
 
     def test_build_experiment_subdir_multiple_params_sorted(self):
-        from scripts.run_sae import _build_experiment_subdir
+        from scripts.nonlinear.run_sae import _build_experiment_subdir
 
         # Keys should be sorted alphabetically regardless of insertion order
         result = _build_experiment_subdir({"l1_penalty": 0.01, "hidden_dim": 10})
         assert result == os.path.join("hidden_dim=10", "l1_penalty=0.01")
 
     def test_build_experiment_subdir_empty(self):
-        from scripts.run_sae import _build_experiment_subdir
+        from scripts.nonlinear.run_sae import _build_experiment_subdir
 
         assert _build_experiment_subdir({}) is None
 
     def test_make_scalar_config(self):
-        from utils.config import SAEConfig
-        from scripts.run_sae import _make_scalar_config
+        from src.core.config import SAEConfig
+        from scripts.nonlinear.run_sae import _make_scalar_config
 
         config = SAEConfig(k=[5, 10], hidden_dim=[10, 20], l1_penalty=[0.01, 0.1])
-        scalar = _make_scalar_config(config, k_value=5, overrides={"hidden_dim": 10, "l1_penalty": 0.01})
+        scalar = _make_scalar_config(
+            config, k_value=5, overrides={"hidden_dim": 10, "l1_penalty": 0.01}
+        )
         assert scalar.k == 5
         assert scalar.hidden_dim == 10
         assert scalar.l1_penalty == 0.01
@@ -694,49 +893,60 @@ class TestSweepHelpers:
 # TestPlotSAESweepSummary
 # ---------------------------------------------------------------------------
 
+
 class TestPlotSAESweepSummary:
     def test_saves_png(self, tmp_path):
-        from utils.plotting import plot_sae_sweep_summary
+        from src.utils.plotting import plot_sae_sweep_summary
 
         # Synthetic sweep results DataFrame
         rows = []
         for hd in [10, 20, 30]:
             for l1 in [0.01, 0.1]:
                 for fold in range(3):
-                    rows.append({
-                        "fold": fold,
-                        "hidden_dim": hd,
-                        "l1_penalty": l1,
-                        "k": 5,
-                        "correlation": np.random.rand(),
-                        "r2": np.random.rand(),
-                        "l0_sparsity": np.random.rand() * 10,
-                        "dead_neurons": np.random.rand(),
-                        "mean_activation": np.random.rand(),
-                        "recovery_corr": np.random.rand(),
-                        "test_corr_start": np.random.rand() * 0.1,
-                        "test_corr_end": np.random.rand(),
-                    })
+                    rows.append(
+                        {
+                            "fold": fold,
+                            "hidden_dim": hd,
+                            "l1_penalty": l1,
+                            "k": 5,
+                            "correlation": np.random.rand(),
+                            "r2": np.random.rand(),
+                            "l0_sparsity": np.random.rand() * 10,
+                            "dead_neurons": np.random.rand(),
+                            "mean_activation": np.random.rand(),
+                            "recovery_corr": np.random.rand(),
+                            "test_corr_start": np.random.rand() * 0.1,
+                            "test_corr_end": np.random.rand(),
+                        }
+                    )
         df = pd.DataFrame(rows)
         save_path = str(tmp_path / "sweep_hidden_dim.png")
-        plot_sae_sweep_summary(df, sweep_param="hidden_dim", save_path=save_path,
-                               title_prefix="k=5")
+        plot_sae_sweep_summary(
+            df, sweep_param="hidden_dim", save_path=save_path, title_prefix="k=5"
+        )
         assert os.path.exists(save_path)
 
     def test_returns_figure_when_no_save_path(self, tmp_path):
         import matplotlib
+
         matplotlib.use("Agg")
-        from utils.plotting import plot_sae_sweep_summary
+        from src.utils.plotting import plot_sae_sweep_summary
 
         rows = []
         for hd in [10, 20]:
             for fold in range(2):
-                rows.append({
-                    "fold": fold, "hidden_dim": hd, "k": 5,
-                    "correlation": np.random.rand(), "r2": np.random.rand(),
-                })
+                rows.append(
+                    {
+                        "fold": fold,
+                        "hidden_dim": hd,
+                        "k": 5,
+                        "correlation": np.random.rand(),
+                        "r2": np.random.rand(),
+                    }
+                )
         df = pd.DataFrame(rows)
         fig = plot_sae_sweep_summary(df, sweep_param="hidden_dim")
         assert fig is not None
         import matplotlib.pyplot as plt
+
         plt.close(fig)

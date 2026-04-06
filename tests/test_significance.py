@@ -1,14 +1,16 @@
 """Tests for utils/significance.py."""
+
 import numpy as np
 import pytest
 import torch
 
-from utils.significance import batch_corrcoef, significant_lags_all_electrodes_gpu
+from src.utils.significance import batch_corrcoef, significant_lags_all_electrodes_gpu
 
 
 # ---------------------------------------------------------------------------
 # batch_corrcoef
 # ---------------------------------------------------------------------------
+
 
 class TestBatchCorrcoef:
     def _make_tensors(self, n_electrodes=4, n_lags=5, n_words=30, seed=0):
@@ -64,6 +66,7 @@ class TestBatchCorrcoef:
 # significant_lags_all_electrodes_gpu (CPU, small n_permutations)
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.slow
 class TestSignificantLagsAllElectrodes:
     @pytest.fixture
@@ -77,7 +80,7 @@ class TestSignificantLagsAllElectrodes:
         actual = rng.standard_normal((n_electrodes, n_lags, n_words)).astype(np.float32)
 
         sig, p_values, q_values, obs_corrs = significant_lags_all_electrodes_gpu(
-            pred, actual, n_permutations=100, device=cpu_device
+            pred, actual, device=cpu_device
         )
         for arr in [sig, p_values, q_values, obs_corrs]:
             assert arr.shape == (n_electrodes, n_lags)
@@ -88,9 +91,11 @@ class TestSignificantLagsAllElectrodes:
         pred = rng.standard_normal((n_electrodes, n_lags, n_words)).astype(np.float32)
 
         sig, p_values, q_values, obs_corrs = significant_lags_all_electrodes_gpu(
-            pred, pred, n_permutations=100, device=cpu_device
+            pred, pred, device=cpu_device
         )
-        np.testing.assert_allclose(obs_corrs, np.ones((n_electrodes, n_lags)), atol=1e-5)
+        np.testing.assert_allclose(
+            obs_corrs, np.ones((n_electrodes, n_lags)), atol=1e-5
+        )
 
     def test_sig_dtype_is_bool(self, cpu_device):
         rng = np.random.default_rng(2)
@@ -99,6 +104,6 @@ class TestSignificantLagsAllElectrodes:
         actual = rng.standard_normal((n_electrodes, n_lags, n_words)).astype(np.float32)
 
         sig, _, _, _ = significant_lags_all_electrodes_gpu(
-            pred, actual, n_permutations=50, device=cpu_device
+            pred, actual, device=cpu_device
         )
         assert sig.dtype == bool

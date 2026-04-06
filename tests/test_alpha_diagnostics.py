@@ -4,13 +4,13 @@ import numpy as np
 import pytest
 import torch
 
-from utils.constants import (
+from src.utils.constants import (
     RIDGE_ALPHAS,
     refine_alpha_grid,
     check_alpha_grid_boundaries,
 )
-from utils.encoding import extract_best_alphas, get_ridge_model_constructor
-from utils.sae import solve_regression
+from src.utils.encoding import extract_best_alphas, get_ridge_model_constructor
+from src.utils.sae import solve_regression
 
 
 # ---------------------------------------------------------------------------
@@ -73,7 +73,9 @@ class TestCheckAlphaGridBoundaries:
     def test_custom_threshold(self):
         grid = np.logspace(0, 4, 5)
         best = np.array([1.0, 100.0, 1000.0])  # 33% at lower
-        result = check_alpha_grid_boundaries(best, grid, boundary_fraction_threshold=0.5)
+        result = check_alpha_grid_boundaries(
+            best, grid, boundary_fraction_threshold=0.5
+        )
         assert result["hit_lower"] is False  # 33% < 50%
 
 
@@ -152,8 +154,6 @@ class TestSolveRegressionReturnAlphas:
         H = torch.as_tensor(rng.standard_normal((50, 4)), dtype=torch.float32)
         Y = torch.as_tensor(rng.standard_normal((50, 3)), dtype=torch.float32)
 
-        result = solve_regression(
-            H, Y, "ols", "cpu", return_alphas=True
-        )
+        result = solve_regression(H, Y, "ols", "cpu", return_alphas=True)
         # OLS always returns 2-tuple
         assert len(result) == 2

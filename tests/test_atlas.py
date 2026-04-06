@@ -3,12 +3,17 @@
 import numpy as np
 import pytest
 
-from utils.atlas import _lookup_atlas_labels, _build_region_map_from_arrays, group_electrodes_by_region
+from src.utils.atlas import (
+    _lookup_atlas_labels,
+    _build_region_map_from_arrays,
+    group_electrodes_by_region,
+)
 
 
 # ---------------------------------------------------------------------------
 # _lookup_atlas_labels
 # ---------------------------------------------------------------------------
+
 
 class TestLookupAtlasLabels:
     """Tests for the pure numpy/scipy spatial lookup — no nilearn required."""
@@ -16,8 +21,12 @@ class TestLookupAtlasLabels:
     def _make_atlas(self):
         """10x10x10 atlas with two labeled voxels; identity affine."""
         atlas_image = np.zeros((10, 10, 10), dtype=int)
-        atlas_image[3, 5, 7] = 1  # region 1 at voxel (3,5,7) = MNI (3,5,7) with identity
-        atlas_image[8, 2, 4] = 2  # region 2 at voxel (8,2,4) = MNI (8,2,4) with identity
+        atlas_image[3, 5, 7] = (
+            1  # region 1 at voxel (3,5,7) = MNI (3,5,7) with identity
+        )
+        atlas_image[8, 2, 4] = (
+            2  # region 2 at voxel (8,2,4) = MNI (8,2,4) with identity
+        )
         affine = np.eye(4)
         atlas_labels = ["Background", "Region1", "Region2"]
         return atlas_image, affine, atlas_labels
@@ -64,11 +73,16 @@ class TestLookupAtlasLabels:
 # group_electrodes_by_region
 # ---------------------------------------------------------------------------
 
+
 class TestGroupElectrodesByRegion:
 
     def test_basic_grouping(self):
         elec_names = ["e1", "e2", "e3"]
-        atlas_labels = ["L G_temp_sup-Lateral", "R G_temp_sup-Lateral", "L G_front_middle"]
+        atlas_labels = [
+            "L G_temp_sup-Lateral",
+            "R G_temp_sup-Lateral",
+            "L G_front_middle",
+        ]
         region_groups = {
             "temporal": ["L G_temp_sup-Lateral", "R G_temp_sup-Lateral"],
             "frontal": ["L G_front_middle"],
@@ -128,13 +142,16 @@ class TestGroupElectrodesByRegion:
         assert result == {"temporal": ["e1"]}
 
     def test_empty_input_returns_empty_dict(self):
-        result = group_electrodes_by_region([], [], {"temporal": ["L G_temp_sup-Lateral"]})
+        result = group_electrodes_by_region(
+            [], [], {"temporal": ["L G_temp_sup-Lateral"]}
+        )
         assert result == {}
 
 
 # ---------------------------------------------------------------------------
 # _build_region_map_from_arrays
 # ---------------------------------------------------------------------------
+
 
 class TestBuildRegionMapFromArrays:
     """Tests for the pure-array core of build_electrode_region_map — no file I/O."""
@@ -155,7 +172,9 @@ class TestBuildRegionMapFromArrays:
             1: (["e1"], np.array([[3.0, 5.0, 7.0]])),
         }
         region_groups = {"temporal": ["L G_temp_sup-Lateral"]}
-        result = _build_region_map_from_arrays(per_subject_data, atlas_image, affine, region_groups)
+        result = _build_region_map_from_arrays(
+            per_subject_data, atlas_image, affine, region_groups
+        )
         assert result == {"temporal": {1: ["e1"]}}
 
     def test_single_subject_multiple_regions(self):
@@ -167,7 +186,9 @@ class TestBuildRegionMapFromArrays:
             "temporal": ["L G_temp_sup-Lateral"],
             "frontal": ["L G_front_inf-Triangul"],
         }
-        result = _build_region_map_from_arrays(per_subject_data, atlas_image, affine, region_groups)
+        result = _build_region_map_from_arrays(
+            per_subject_data, atlas_image, affine, region_groups
+        )
         assert result["temporal"] == {1: ["e1"]}
         assert result["frontal"] == {1: ["e2"]}
 
@@ -178,7 +199,9 @@ class TestBuildRegionMapFromArrays:
             2: (["s2_e1"], np.array([[3.0, 5.0, 7.0]])),
         }
         region_groups = {"temporal": ["L G_temp_sup-Lateral"]}
-        result = _build_region_map_from_arrays(per_subject_data, atlas_image, affine, region_groups)
+        result = _build_region_map_from_arrays(
+            per_subject_data, atlas_image, affine, region_groups
+        )
         assert result["temporal"][1] == ["s1_e1"]
         assert result["temporal"][2] == ["s2_e1"]
 
@@ -192,7 +215,9 @@ class TestBuildRegionMapFromArrays:
             "temporal": ["L G_temp_sup-Lateral"],
             "frontal": ["L G_front_inf-Triangul"],
         }
-        result = _build_region_map_from_arrays(per_subject_data, atlas_image, affine, region_groups)
+        result = _build_region_map_from_arrays(
+            per_subject_data, atlas_image, affine, region_groups
+        )
         assert result["temporal"] == {1: ["s1_e1"]}
         assert result["frontal"] == {2: ["s2_e1"]}
 
@@ -202,7 +227,9 @@ class TestBuildRegionMapFromArrays:
             1: (["e1", "e2"], np.array([[3.0, 5.0, 7.0], [8.0, 2.0, 4.0]])),
         }
         region_groups = {"temporal": ["L G_temp_sup-Lateral"]}  # frontal not listed
-        result = _build_region_map_from_arrays(per_subject_data, atlas_image, affine, region_groups)
+        result = _build_region_map_from_arrays(
+            per_subject_data, atlas_image, affine, region_groups
+        )
         assert result == {"temporal": {1: ["e1"]}}
 
     def test_subject_with_no_matching_electrodes_excluded(self):
@@ -211,10 +238,14 @@ class TestBuildRegionMapFromArrays:
             1: (["e1"], np.array([[8.0, 2.0, 4.0]])),  # frontal only
         }
         region_groups = {"temporal": ["L G_temp_sup-Lateral"]}
-        result = _build_region_map_from_arrays(per_subject_data, atlas_image, affine, region_groups)
+        result = _build_region_map_from_arrays(
+            per_subject_data, atlas_image, affine, region_groups
+        )
         assert result == {}
 
     def test_empty_per_subject_data_returns_empty(self):
         atlas_image, affine = self._make_atlas()
-        result = _build_region_map_from_arrays({}, atlas_image, affine, {"temporal": ["L G_temp_sup-Lateral"]})
+        result = _build_region_map_from_arrays(
+            {}, atlas_image, affine, {"temporal": ["L G_temp_sup-Lateral"]}
+        )
         assert result == {}

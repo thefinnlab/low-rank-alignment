@@ -34,11 +34,14 @@ def _():
         _root = os.path.dirname(_root)
     if _root not in sys.path:
         sys.path.insert(0, _root)
-    from utils.embeddings import load_embeddings
-    from utils.examples import get_mo_display_activations, get_example_display_controls
-    from utils.encoding import load_encoding_results
-    from utils.data_loaders import load_sig_electrodes, load_raws
-    from utils.atlas import (
+    from src.utils.embeddings import load_embeddings
+    from src.utils.examples import (
+        get_mo_display_activations,
+        get_example_display_controls,
+    )
+    from src.utils.encoding import load_encoding_results
+    from src.utils.data_loaders import load_sig_electrodes, load_raws
+    from src.utils.atlas import (
         get_coord_atlas_labels,
         build_electrode_region_map,
         _lookup_atlas_labels,
@@ -58,9 +61,11 @@ def _():
 
 @app.cell
 def _(mo):
-    mo.md("""
+    mo.md(
+        """
     # RRR Interpretability Explorer
-    """)
+    """
+    )
     return
 
 
@@ -289,10 +294,12 @@ def _(
 
 @app.cell
 def _(mo):
-    mo.md("""
+    mo.md(
+        """
     ---
     ## Section 1: RRR — Rank vs Explained Variance
-    """)
+    """
+    )
     return
 
 
@@ -342,7 +349,7 @@ def _(get_rrr_dir, mo, pd, s1_source):
 
 @app.cell(hide_code=True)
 def _(s1_grid, s1_source, s1_summary):
-    from utils.plotting import plot_rrr_rank_results
+    from src.utils.plotting import plot_rrr_rank_results
 
     plot_rrr_rank_results(
         s1_summary,
@@ -423,10 +430,12 @@ def _(mo, s1_summary, s1_threshold):
 
 @app.cell(hide_code=True)
 def _(mo):
-    mo.md("""
+    mo.md(
+        """
     ---
     ## Section 2: Direction Interpretability
-    """)
+    """
+    )
     return
 
 
@@ -544,10 +553,12 @@ def _(
 
 @app.cell(hide_code=True)
 def _(mo):
-    mo.md("""
+    mo.md(
+        """
     ---
     ## Section 3: B Matrix — Temporal Profile
-    """)
+    """
+    )
     return
 
 
@@ -806,10 +817,12 @@ def _(mo, pd, s3_b_df, s3_electrode_filter):
 
 @app.cell(hide_code=True)
 def _(mo):
-    mo.md("""
+    mo.md(
+        """
     ---
     ## Section 4: B Matrix — Brain Map
-    """)
+    """
+    )
     return
 
 
@@ -1045,10 +1058,12 @@ def _(
 
 @app.cell(hide_code=True)
 def _(mo):
-    mo.md("""
+    mo.md(
+        """
     ---
     ## Section 5: Cross-Fold Consistency
-    """)
+    """
+    )
     return
 
 
@@ -1170,10 +1185,12 @@ def _(alt, get_rrr_dir, mo, np, pd, s5_k, s5_ndirs, s5_source):
 
 @app.cell(hide_code=True)
 def _(mo):
-    mo.md("""
+    mo.md(
+        """
     ---
     ## Section 6: Cross-Source Comparison
-    """)
+    """
+    )
     return
 
 
@@ -1382,10 +1399,12 @@ def _(
 
 @app.cell(hide_code=True)
 def _(mo):
-    mo.md("""
+    mo.md(
+        """
     ---
     ## Section 7: Cross-Region Electrode Similarity from B
-    """)
+    """
+    )
     return
 
 
@@ -1532,7 +1551,7 @@ def _(
     _valid_coords = np.any(_coords_arr != 0, axis=1)
     _regions = ["unknown"] * len(_elec_names)
     if _valid_coords.any():
-        from utils.atlas import DESTRIEUX_2009_LABELS, group_electrodes_by_region
+        from src.utils.atlas import DESTRIEUX_2009_LABELS, group_electrodes_by_region
 
         _atlas_labels = get_coord_atlas_labels(
             _coords_arr[_valid_coords],
@@ -1683,10 +1702,12 @@ def _(
 
 @app.cell
 def _(mo):
-    mo.md("""
+    mo.md(
+        """
     ---
     ## Section 8: Activation Distribution Statistics
-    """)
+    """
+    )
     return
 
 

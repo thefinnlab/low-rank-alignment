@@ -7,7 +7,7 @@ import numpy as np
 import pytest
 import torch
 
-from utils.srrr import (
+from src.utils.srrr import (
     build_null_distribution,
     compute_cca_similarity,
     compute_procrustes_similarity,
@@ -29,6 +29,7 @@ from utils.srrr import (
 # Shared fixtures
 # ---------------------------------------------------------------------------
 
+
 @pytest.fixture
 def rng():
     return np.random.default_rng(42)
@@ -46,6 +47,7 @@ def small_data(rng):
 # ---------------------------------------------------------------------------
 # TestProxL21
 # ---------------------------------------------------------------------------
+
 
 class TestProxL21:
     def test_zero_rows_below_threshold(self):
@@ -74,6 +76,7 @@ class TestProxL21:
 # ---------------------------------------------------------------------------
 # TestSolveBClosedForm
 # ---------------------------------------------------------------------------
+
 
 class TestSolveBClosedForm:
     def test_output_shape(self, small_data):
@@ -115,6 +118,7 @@ class TestSolveBClosedForm:
 # TestFitSRRRProxGD
 # ---------------------------------------------------------------------------
 
+
 class TestFitSRRRProxGD:
     def test_output_keys_and_shapes(self, small_data):
         X, Y = small_data
@@ -150,8 +154,15 @@ class TestFitSRRRProxGD:
         r1 = fit_srrr_proxgd(X, Y, k=k, lam=0.01, max_iter=200, tol=1e-4, device="cpu")
         # Warm start from converged solution
         r2 = fit_srrr_proxgd(
-            X, Y, k=k, lam=0.01, max_iter=200, tol=1e-4,
-            A_init=r1["A"], B_init=r1["B"], device="cpu",
+            X,
+            Y,
+            k=k,
+            lam=0.01,
+            max_iter=200,
+            tol=1e-4,
+            A_init=r1["A"],
+            B_init=r1["B"],
+            device="cpu",
         )
         assert r2["n_iter"] <= r1["n_iter"]
 
@@ -162,39 +173,70 @@ class TestFitSRRRProxGD:
         obj = result["obj_history"]
         # Allow small numerical noise
         diffs = np.diff(obj)
-        assert np.all(diffs <= 1e-4), f"Objective increased by more than 1e-4: {diffs[diffs > 1e-4]}"
+        assert np.all(
+            diffs <= 1e-4
+        ), f"Objective increased by more than 1e-4: {diffs[diffs > 1e-4]}"
 
 
 # ---------------------------------------------------------------------------
 # TestRunStabilitySelection
 # ---------------------------------------------------------------------------
 
+
 class TestRunStabilitySelection:
     def test_output_shape_and_range(self, small_data):
         X, Y = small_data
-        probs = run_stability_selection(X, Y, k=2, lam=0.1, n_iters=5,
-                                         subsample_frac=0.8, max_iter=20, device="cpu")
+        probs = run_stability_selection(
+            X, Y, k=2, lam=0.1, n_iters=5, subsample_frac=0.8, max_iter=20, device="cpu"
+        )
         assert probs.shape == (X.shape[1],)
         assert np.all(probs >= 0.0) and np.all(probs <= 1.0)
 
     def test_high_lambda_all_probs_near_zero(self, small_data):
         X, Y = small_data
-        probs = run_stability_selection(X, Y, k=2, lam=1000.0, n_iters=5,
-                                         subsample_frac=0.8, max_iter=30, device="cpu")
+        probs = run_stability_selection(
+            X,
+            Y,
+            k=2,
+            lam=1000.0,
+            n_iters=5,
+            subsample_frac=0.8,
+            max_iter=30,
+            device="cpu",
+        )
         assert np.all(probs < 0.5)
 
     def test_reproducible_with_seed(self, small_data):
         X, Y = small_data
-        p1 = run_stability_selection(X, Y, k=2, lam=0.1, n_iters=5,
-                                      subsample_frac=0.8, max_iter=20, seed=7, device="cpu")
-        p2 = run_stability_selection(X, Y, k=2, lam=0.1, n_iters=5,
-                                      subsample_frac=0.8, max_iter=20, seed=7, device="cpu")
+        p1 = run_stability_selection(
+            X,
+            Y,
+            k=2,
+            lam=0.1,
+            n_iters=5,
+            subsample_frac=0.8,
+            max_iter=20,
+            seed=7,
+            device="cpu",
+        )
+        p2 = run_stability_selection(
+            X,
+            Y,
+            k=2,
+            lam=0.1,
+            n_iters=5,
+            subsample_frac=0.8,
+            max_iter=20,
+            seed=7,
+            device="cpu",
+        )
         np.testing.assert_array_equal(p1, p2)
 
 
 # ---------------------------------------------------------------------------
 # TestSelectDirections
 # ---------------------------------------------------------------------------
+
 
 class TestSelectDirections:
     def test_empty_when_all_below_threshold(self):
@@ -216,6 +258,7 @@ class TestSelectDirections:
 # ---------------------------------------------------------------------------
 # TestComputeR2
 # ---------------------------------------------------------------------------
+
 
 class TestComputeR2:
     def test_perfect_prediction_returns_one(self, rng):
@@ -251,6 +294,7 @@ class TestComputeR2:
 # ---------------------------------------------------------------------------
 # TestComputeCorrelation
 # ---------------------------------------------------------------------------
+
 
 class TestComputeCorrelation:
     def test_perfect_prediction_returns_one(self, rng):
@@ -291,6 +335,7 @@ class TestComputeCorrelation:
 # ---------------------------------------------------------------------------
 # TestPredictFromFactors
 # ---------------------------------------------------------------------------
+
 
 class TestPredictFromFactors:
     def test_shape_without_selected_idx(self, rng):
@@ -334,6 +379,7 @@ class TestPredictFromFactors:
 # TestBuildNullDistribution
 # ---------------------------------------------------------------------------
 
+
 class TestBuildNullDistribution:
     def test_shape_ols(self, small_data):
         X, Y = small_data
@@ -342,9 +388,15 @@ class TestBuildNullDistribution:
         Y_train, Y_test = Y[:n_train], Y[n_train:]
         n_perms = 8
         null = build_null_distribution(
-            X_train, Y_train, X_test, Y_test,
+            X_train,
+            Y_train,
+            X_test,
+            Y_test,
             regression_type="ols",
-            k=2, n_permutations=n_perms, device="cpu", seed=0,
+            k=2,
+            n_permutations=n_perms,
+            device="cpu",
+            seed=0,
         )
         assert null.shape == (n_perms,)
 
@@ -355,9 +407,14 @@ class TestBuildNullDistribution:
         Y_train, Y_test = Y[:n_train], Y[n_train:]
         n_perms = 8
         null = build_null_distribution(
-            X_train, Y_train, X_test, Y_test,
+            X_train,
+            Y_train,
+            X_test,
+            Y_test,
             regression_type="ridge",
-            n_permutations=n_perms, device="cpu", seed=0,
+            n_permutations=n_perms,
+            device="cpu",
+            seed=0,
         )
         assert null.shape == (n_perms,)
 
@@ -369,9 +426,15 @@ class TestBuildNullDistribution:
         X_train, X_test = X[:40], X[40:]
         Y_train, Y_test = Y[:40], Y[40:]
         null = build_null_distribution(
-            X_train, Y_train, X_test, Y_test,
+            X_train,
+            Y_train,
+            X_test,
+            Y_test,
             regression_type="ols",
-            k=2, n_permutations=20, device="cpu", seed=1,
+            k=2,
+            n_permutations=20,
+            device="cpu",
+            seed=1,
         )
         assert np.abs(null.mean()) < 0.5  # Should be small under null
 
@@ -384,18 +447,30 @@ class TestBuildNullDistribution:
 
         # First call — computes and caches
         null1 = build_null_distribution(
-            X_train, Y_train, X_test, Y_test,
+            X_train,
+            Y_train,
+            X_test,
+            Y_test,
             regression_type="ols",
-            k=2, n_permutations=5, device="cpu", seed=42,
+            k=2,
+            n_permutations=5,
+            device="cpu",
+            seed=42,
             cache_path=cache_file,
         )
         assert os.path.exists(cache_file)
 
         # Second call — loads from cache (should be identical)
         null2 = build_null_distribution(
-            X_train, Y_train, X_test, Y_test,
+            X_train,
+            Y_train,
+            X_test,
+            Y_test,
             regression_type="ols",
-            k=2, n_permutations=5, device="cpu", seed=99,  # different seed shouldn't matter
+            k=2,
+            n_permutations=5,
+            device="cpu",
+            seed=99,  # different seed shouldn't matter
             cache_path=cache_file,
         )
         np.testing.assert_array_equal(null1, null2)
@@ -404,6 +479,7 @@ class TestBuildNullDistribution:
 # ---------------------------------------------------------------------------
 # TestRunSufficiencyTest
 # ---------------------------------------------------------------------------
+
 
 class TestRunSufficiencyTest:
     def _make_null(self, rng, n=200):
@@ -422,8 +498,13 @@ class TestRunSufficiencyTest:
         # When Y_hat_min == Y_test, residuals are zero → recovery_r2 ≈ 0
         Y_resid_train = np.zeros_like(Y_train)
         result = run_sufficiency_test(
-            X_train, Y_resid_train, X_test, Y_test,
-            Y_hat_full=Y_test, Y_hat_min=Y_test, null_r2=null,
+            X_train,
+            Y_resid_train,
+            X_test,
+            Y_test,
+            Y_hat_full=Y_test,
+            Y_hat_min=Y_test,
+            null_r2=null,
             regression_type="ridge",
         )
         assert result["sufficient"]
@@ -435,15 +516,20 @@ class TestRunSufficiencyTest:
         # Y linearly recoverable from X
         Y_train = X_train[:, :n_targets]
         Y_test = X_test[:, :n_targets]
-        Y_hat_min = np.zeros_like(Y_test)   # terrible minimal model
-        Y_hat_full = Y_test                 # perfect full model
+        Y_hat_min = np.zeros_like(Y_test)  # terrible minimal model
+        Y_hat_full = Y_test  # perfect full model
         # Large residuals on train: the full-dim model can recover them
-        Y_resid_train = Y_train             # Y_train - 0
+        Y_resid_train = Y_train  # Y_train - 0
         null = self._make_null(rng) - 0.5  # push null well below 0
 
         result = run_sufficiency_test(
-            X_train, Y_resid_train, X_test, Y_test,
-            Y_hat_full=Y_hat_full, Y_hat_min=Y_hat_min, null_r2=null,
+            X_train,
+            Y_resid_train,
+            X_test,
+            Y_test,
+            Y_hat_full=Y_hat_full,
+            Y_hat_min=Y_hat_min,
+            null_r2=null,
             regression_type="ridge",
         )
         assert not result["sufficient"]
@@ -453,15 +539,30 @@ class TestRunSufficiencyTest:
         null = self._make_null(rng)
         Y_resid_train = np.zeros_like(Y_train)
         result = run_sufficiency_test(
-            X_train, Y_resid_train, X_test, Y_test,
-            Y_hat_full=Y_test, Y_hat_min=Y_test, null_r2=null,
+            X_train,
+            Y_resid_train,
+            X_test,
+            Y_test,
+            Y_hat_full=Y_test,
+            Y_hat_min=Y_test,
+            null_r2=null,
             regression_type="ols",
         )
-        expected_keys = {"recovery_r2", "noise_floor", "sufficient", "p_value",
-                         "full_r2", "minimal_r2", "pred_r2",
-                         "full_corr", "minimal_corr", "recovery_corr",
-                         "full_corr_per_target", "minimal_corr_per_target",
-                         "recovery_corr_per_target"}
+        expected_keys = {
+            "recovery_r2",
+            "noise_floor",
+            "sufficient",
+            "p_value",
+            "full_r2",
+            "minimal_r2",
+            "pred_r2",
+            "full_corr",
+            "minimal_corr",
+            "recovery_corr",
+            "full_corr_per_target",
+            "minimal_corr_per_target",
+            "recovery_corr_per_target",
+        }
         assert expected_keys == set(result.keys())
 
     def test_p_value_in_range(self, rng):
@@ -469,8 +570,13 @@ class TestRunSufficiencyTest:
         null = self._make_null(rng)
         Y_resid_train = np.zeros_like(Y_train)
         result = run_sufficiency_test(
-            X_train, Y_resid_train, X_test, Y_test,
-            Y_hat_full=Y_test, Y_hat_min=Y_test, null_r2=null,
+            X_train,
+            Y_resid_train,
+            X_test,
+            Y_test,
+            Y_hat_full=Y_test,
+            Y_hat_min=Y_test,
+            null_r2=null,
             regression_type="ols",
         )
         assert 0.0 <= result["p_value"] <= 1.0
@@ -479,6 +585,7 @@ class TestRunSufficiencyTest:
 # ---------------------------------------------------------------------------
 # TestFindKneeLambda
 # ---------------------------------------------------------------------------
+
 
 class TestFindKneeLambda:
     def test_returns_value_in_lambda_grid(self):
@@ -490,6 +597,7 @@ class TestFindKneeLambda:
     def test_fallback_when_kneed_unavailable(self, monkeypatch):
         # Simulate kneed not installed
         import builtins
+
         real_import = builtins.__import__
 
         def mock_import(name, *args, **kwargs):
@@ -509,6 +617,7 @@ class TestFindKneeLambda:
 # ---------------------------------------------------------------------------
 # TestFitDenseRRRPrecomputed
 # ---------------------------------------------------------------------------
+
 
 class TestFitDenseRRRPrecomputed:
     """Tests for fit_dense_rrr's precomputed_Y_hat_ols / precomputed_beta_full path."""
@@ -542,30 +651,48 @@ class TestFitDenseRRRPrecomputed:
 
     def test_precomputed_matches_ridge_model_path(self, fitted_model_and_data):
         """Precomputed path should give identical A/B to the ridge_model path."""
-        model, X_train, Y_train, beta_full, Y_hat_ols, n_dirs, n_targets = fitted_model_and_data
+        model, X_train, Y_train, beta_full, Y_hat_ols, n_dirs, n_targets = (
+            fitted_model_and_data
+        )
         selected_idx = np.arange(n_dirs)
         k = 2
 
         result_model = fit_dense_rrr(
-            X_train, Y_train, k=k, selected_idx=selected_idx, ridge_model=model,
+            X_train,
+            Y_train,
+            k=k,
+            selected_idx=selected_idx,
+            ridge_model=model,
         )
         result_pre = fit_dense_rrr(
-            X_train, Y_train, k=k, selected_idx=selected_idx,
+            X_train,
+            Y_train,
+            k=k,
+            selected_idx=selected_idx,
             precomputed_Y_hat_ols=Y_hat_ols,
             precomputed_beta_full=beta_full,
         )
 
-        np.testing.assert_allclose(result_model["A_dense"], result_pre["A_dense"], atol=1e-4)
-        np.testing.assert_allclose(result_model["B_dense"], result_pre["B_dense"], atol=1e-4)
+        np.testing.assert_allclose(
+            result_model["A_dense"], result_pre["A_dense"], atol=1e-4
+        )
+        np.testing.assert_allclose(
+            result_model["B_dense"], result_pre["B_dense"], atol=1e-4
+        )
 
     def test_precomputed_with_selected_subset(self, fitted_model_and_data):
         """Precomputed path should work correctly when selected_idx is a subset."""
-        model, X_train, Y_train, beta_full, Y_hat_ols, n_dirs, n_targets = fitted_model_and_data
+        model, X_train, Y_train, beta_full, Y_hat_ols, n_dirs, n_targets = (
+            fitted_model_and_data
+        )
         selected_idx = np.array([0, 2, 4])
         k = 2
 
         result = fit_dense_rrr(
-            X_train, Y_train, k=k, selected_idx=selected_idx,
+            X_train,
+            Y_train,
+            k=k,
+            selected_idx=selected_idx,
             precomputed_Y_hat_ols=Y_hat_ols,
             precomputed_beta_full=beta_full,
         )

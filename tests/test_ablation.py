@@ -7,7 +7,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from utils.srrr import fit_dense_rrr, save_rrr_factors
+from src.utils.srrr import fit_dense_rrr, save_rrr_factors
 
 
 # ---------------------------------------------------------------------------
@@ -37,7 +37,7 @@ def small_data(rng):
 def _make_baselines(X, Y, test_idxs):
     """Build per_fold_baselines from raw data using a fresh ridge model."""
     from sklearn.preprocessing import StandardScaler
-    from utils.encoding import get_ridge_model_constructor
+    from src.utils.encoding import get_ridge_model_constructor
 
     n_words, n_embed = X.shape
     baselines = []
@@ -54,15 +54,17 @@ def _make_baselines(X, Y, test_idxs):
         if coef.shape[0] != n_embed:
             coef = coef.T
         beta_full_raw = (coef / model[0].scale_[:, np.newaxis]).astype(np.float32)
-        baselines.append({
-            "train_idx": train_idx_arr,
-            "test_idx": test_idx,
-            "Y_train": Y_train,
-            "Y_test": Y_test,
-            "Y_hat_full_train": np.asarray(model.predict(X[train_idx_arr])),
-            "Y_hat_full_test": np.asarray(model.predict(X[test_idx])),
-            "beta_full_raw": beta_full_raw,
-        })
+        baselines.append(
+            {
+                "train_idx": train_idx_arr,
+                "test_idx": test_idx,
+                "Y_train": Y_train,
+                "Y_test": Y_test,
+                "Y_hat_full_train": np.asarray(model.predict(X[train_idx_arr])),
+                "Y_hat_full_test": np.asarray(model.predict(X[test_idx])),
+                "beta_full_raw": beta_full_raw,
+            }
+        )
     return baselines
 
 
@@ -78,24 +80,35 @@ def _setup_rrr_output(tmp_path, X, Y, test_idxs):
     grid_rows = []
     for fold_f, baseline in enumerate(baselines):
         result = fit_dense_rrr(
-            X[baseline["train_idx"]], baseline["Y_train"],
-            k=max_k, selected_idx=np.arange(n_embed),
+            X[baseline["train_idx"]],
+            baseline["Y_train"],
+            k=max_k,
+            selected_idx=np.arange(n_embed),
             precomputed_Y_hat_ols=baseline["Y_hat_full_train"],
             precomputed_beta_full=baseline["beta_full_raw"],
         )
-        save_rrr_factors(rrr_dir, fold=fold_f,
-                         A=result["A_dense"], B=result["B_dense"])
+        save_rrr_factors(rrr_dir, fold=fold_f, A=result["A_dense"], B=result["B_dense"])
         for k in [1, 2, 3, 5]:
             if k > max_k:
                 continue
-            grid_rows.append({
-                "fold": fold_f, "k": k,
-                "full_r2": 0.5, "minimal_r2": 0.3, "recovery_r2": 0.1,
-                "pred_r2": 0.4, "full_corr": 0.1, "minimal_corr": 0.07,
-                "recovery_corr": 0.03, "nr_r2": 0.28, "nr_corr": 0.065,
-                "nr_recovery_r2": 0.11, "nr_recovery_corr": 0.035,
-                "nr_pred_r2": 0.38,
-            })
+            grid_rows.append(
+                {
+                    "fold": fold_f,
+                    "k": k,
+                    "full_r2": 0.5,
+                    "minimal_r2": 0.3,
+                    "recovery_r2": 0.1,
+                    "pred_r2": 0.4,
+                    "full_corr": 0.1,
+                    "minimal_corr": 0.07,
+                    "recovery_corr": 0.03,
+                    "nr_r2": 0.28,
+                    "nr_corr": 0.065,
+                    "nr_recovery_r2": 0.11,
+                    "nr_recovery_corr": 0.035,
+                    "nr_pred_r2": 0.38,
+                }
+            )
 
     pd.DataFrame(grid_rows).to_csv(
         os.path.join(rrr_dir, "grid_results.csv"), index=False
@@ -113,13 +126,14 @@ class TestMaskingFunctions:
 
     @pytest.fixture(autouse=True)
     def _add_scripts_to_path(self):
-        scripts_dir = os.path.join(os.path.dirname(__file__), "..", "scripts")
+        scripts_dir = os.path.join(os.path.dirname(__file__), "..", "scripts", "rrr")
         scripts_dir = os.path.abspath(scripts_dir)
         if scripts_dir not in sys.path:
             sys.path.insert(0, scripts_dir)
 
     def test_center_mask_keeps_correct_fraction(self, rng):
         from run_ablation import compute_quantile_thresholds, apply_quantile_mask
+
         X_proj = rng.standard_normal((1000, 5)).astype(np.float32)
         center_pct = 50
         lo, hi = compute_quantile_thresholds(X_proj, center_pct)
@@ -129,6 +143,7 @@ class TestMaskingFunctions:
 
     def test_tail_mask_zeros_center(self, rng):
         from run_ablation import compute_quantile_thresholds, apply_quantile_mask
+
         X_proj = rng.standard_normal((1000, 5)).astype(np.float32)
         center_pct = 30
         lo, hi = compute_quantile_thresholds(X_proj, center_pct)
@@ -138,6 +153,7 @@ class TestMaskingFunctions:
 
     def test_tail_and_center_are_complementary(self, rng):
         from run_ablation import compute_quantile_thresholds, apply_quantile_mask
+
         X_proj = rng.standard_normal((200, 3)).astype(np.float32)
         lo, hi = compute_quantile_thresholds(X_proj, 60)
         tail = apply_quantile_mask(X_proj, lo, hi, "tail")
@@ -147,6 +163,7 @@ class TestMaskingFunctions:
 
     def test_random_mask_zeros_correct_fraction(self, rng):
         from run_ablation import apply_random_mask
+
         X_proj = rng.standard_normal((1000, 5)).astype(np.float32)
         masked = apply_random_mask(X_proj, 0.4, rng)
         frac_zeroed = np.mean(masked == 0)
@@ -154,6 +171,7 @@ class TestMaskingFunctions:
 
     def test_masks_preserve_nonzero_values(self, rng):
         from run_ablation import compute_quantile_thresholds, apply_quantile_mask
+
         X_proj = rng.standard_normal((100, 3)).astype(np.float32)
         lo, hi = compute_quantile_thresholds(X_proj, 50)
         for mask_type in ["tail", "center"]:
@@ -163,6 +181,7 @@ class TestMaskingFunctions:
 
     def test_thresholds_centered_on_median(self, rng):
         from run_ablation import compute_quantile_thresholds
+
         X_proj = rng.standard_normal((10000, 3)).astype(np.float32)
         lo, hi = compute_quantile_thresholds(X_proj, 50)
         medians = np.median(X_proj, axis=0)
@@ -181,13 +200,14 @@ class TestRunAblationForUnit:
 
     @pytest.fixture(autouse=True)
     def _add_scripts_to_path(self):
-        scripts_dir = os.path.join(os.path.dirname(__file__), "..", "scripts")
+        scripts_dir = os.path.join(os.path.dirname(__file__), "..", "scripts", "rrr")
         scripts_dir = os.path.abspath(scripts_dir)
         if scripts_dir not in sys.path:
             sys.path.insert(0, scripts_dir)
 
     def _make_config(self, **overrides):
-        from utils.config import AblationConfig
+        from src.core.config import AblationConfig
+
         config = AblationConfig()
         for k, v in overrides.items():
             setattr(config, k, v)
@@ -209,9 +229,7 @@ class TestRunAblationForUnit:
         )
 
         ablation_dir = str(tmp_path / "ablation")
-        _run_ablation_for_unit(
-            ablation_dir, rrr_dir, X, test_idxs, baselines, config
-        )
+        _run_ablation_for_unit(ablation_dir, rrr_dir, X, test_idxs, baselines, config)
 
         csv_path = os.path.join(ablation_dir, "grid_results.csv")
         assert os.path.exists(csv_path)
@@ -237,9 +255,7 @@ class TestRunAblationForUnit:
         )
 
         ablation_dir = str(tmp_path / "ablation")
-        _run_ablation_for_unit(
-            ablation_dir, rrr_dir, X, test_idxs, baselines, config
-        )
+        _run_ablation_for_unit(ablation_dir, rrr_dir, X, test_idxs, baselines, config)
 
         summary_path = os.path.join(ablation_dir, "summary.csv")
         assert os.path.exists(summary_path)
@@ -262,9 +278,7 @@ class TestRunAblationForUnit:
         )
 
         ablation_dir = str(tmp_path / "ablation")
-        _run_ablation_for_unit(
-            ablation_dir, rrr_dir, X, test_idxs, baselines, config
-        )
+        _run_ablation_for_unit(ablation_dir, rrr_dir, X, test_idxs, baselines, config)
 
         df = pd.read_csv(os.path.join(ablation_dir, "grid_results.csv"))
         assert "none" in df["mask_type"].values
@@ -284,9 +298,7 @@ class TestRunAblationForUnit:
         )
 
         ablation_dir = str(tmp_path / "ablation")
-        _run_ablation_for_unit(
-            ablation_dir, rrr_dir, X, test_idxs, baselines, config
-        )
+        _run_ablation_for_unit(ablation_dir, rrr_dir, X, test_idxs, baselines, config)
 
         for k in [2, 3]:
             plot_path = os.path.join(ablation_dir, f"k{k}", "ablation_pct_zeroed.png")
@@ -304,9 +316,9 @@ class TestRunAblationForUnit:
         A_true = rng.standard_normal((n_embed, true_rank)).astype(np.float32)
         B_true = rng.standard_normal((n_targets, true_rank)).astype(np.float32)
         X = rng.standard_normal((n, n_embed)).astype(np.float32)
-        Y = X @ A_true @ B_true.T + 0.01 * rng.standard_normal(
-            (n, n_targets)
-        ).astype(np.float32)
+        Y = X @ A_true @ B_true.T + 0.01 * rng.standard_normal((n, n_targets)).astype(
+            np.float32
+        )
 
         test_idxs = [np.arange(n // 2, n)]
         rrr_dir, baselines = _setup_rrr_output(tmp_path, X, Y, test_idxs)
@@ -319,9 +331,7 @@ class TestRunAblationForUnit:
         )
 
         ablation_dir = str(tmp_path / "ablation")
-        _run_ablation_for_unit(
-            ablation_dir, rrr_dir, X, test_idxs, baselines, config
-        )
+        _run_ablation_for_unit(ablation_dir, rrr_dir, X, test_idxs, baselines, config)
 
         df = pd.read_csv(os.path.join(ablation_dir, "summary.csv"))
         random_df = df[df["mask_type"] == "random"].sort_values("pct_zeroed")

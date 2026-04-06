@@ -38,7 +38,7 @@ OVERRIDES       ?=   # e.g. OVERRIDES="--encoding.layer=48 --n_permutations=100"
 ##   make sig CMD=python                                           # run locally
 sig:
 	mkdir -p logs
-	$(CMD) scripts/run_significance.py --config $(SIG_CONFIG) $(OVERRIDES)
+	$(CMD) scripts/sig_lags/run_significance.py --config $(SIG_CONFIG) $(OVERRIDES)
 
 ## Train encoding models
 ## Usage:
@@ -48,7 +48,7 @@ sig:
 ##   make train CMD=python                                         # run locally
 train:
 	mkdir -p logs
-	$(CMD) scripts/train_encoding_models.py --config $(ENCODING_CONFIG) $(OVERRIDES)
+	$(CMD) scripts/encoding/train_encoding_models.py --config $(ENCODING_CONFIG) $(OVERRIDES)
 
 ## Test effects of ablating different portions of either the center or tail of RRR axes.
 ## Usage:
@@ -58,7 +58,7 @@ train:
 ##   make ablation CMD=python                                      # run locally
 ablation:
 	mkdir -p logs
-	$(CMD) scripts/run_ablation.py --config $(ABLATION_CONFIG) $(OVERRIDES)
+	$(CMD) scripts/rrr/run_ablation.py --config $(ABLATION_CONFIG) $(OVERRIDES)
 
 ## Test effects of ablating different portions of either the center or tail of RRR axes.
 ## Usage:
@@ -67,7 +67,7 @@ ablation:
 ##   make precompute-epochs CMD=python                                      # run locally
 precompute-epochs:
 	mkdir -p logs
-	$(CMD) scripts/precompute_epochs.py --config $(PRECOMPUTE_EPOCHS_CONFIG) $(OVERRIDES)
+	$(CMD) scripts/utilities/precompute_epochs.py --config $(PRECOMPUTE_EPOCHS_CONFIG) $(OVERRIDES)
 
 ## Generate null distribution for new significance test.
 ## Usage:
@@ -76,7 +76,7 @@ precompute-epochs:
 ##   make null-dist CMD=python                                      # run locally
 null-dist:
 	mkdir -p logs
-	$(CMD) scripts/generate_null_distribution.py --config $(NULL_CONFIG) $(OVERRIDES)
+	$(CMD) scripts/sig_electrodes/generate_null_distribution.py --config $(NULL_CONFIG) $(OVERRIDES)
 
 ## Apply the new significance test to an existing run directory.
 ## Usage:
@@ -85,7 +85,7 @@ null-dist:
 ##   make new-sig CMD=python                                      # run locally
 new-sig:
 	mkdir -p logs
-	$(CMD) scripts/compute_significance.py --config $(NEW_SIG_CONFIG) $(OVERRIDES)
+	$(CMD) scripts/sig_electrodes/compute_significance.py --config $(NEW_SIG_CONFIG) $(OVERRIDES)
 
 ## Generate correlation plots for an existing run directory
 ## Usage:
@@ -95,27 +95,7 @@ new-sig:
 ##   make plots RUN_DIR=results/my_run OVERRIDES="--threshold 0.90"             # SVD threshold
 ##   make plots RUN_DIR=results/my_run OVERRIDES="--svd-modes cross_subject"    # specific SVD mode
 plots:
-	python scripts/generate_plots.py --run-dir $(RUN_DIR) $(OVERRIDES)
-
-## Run SVD analysis on encoding model weights
-## Usage:
-##   make svd                                                          # default config
-##   make svd SVD_CONFIG=configs/svd/svd_default.yml                      # explicit config
-##   make svd OVERRIDES="--per_subject_svd=true"                      # per-subject mode
-##   make svd CMD=python                                               # run locally
-svd:
-	mkdir -p logs
-	$(CMD) scripts/run_svd_analysis.py --config $(SVD_CONFIG) $(OVERRIDES)
-
-## Run SRRR analysis to find minimal subset of SVD directions
-## Usage:
-##   make srrr                                                         # default config
-##   make srrr SRRR_CONFIG=configs/srrr/srrr_default.yml                   # explicit config
-##   make srrr OVERRIDES="--mode=per_subject"                         # per-subject mode
-##   make srrr CMD=python                                              # run locally
-srrr:
-	mkdir -p logs
-	$(CMD) scripts/run_srrr.py --config $(SRRR_CONFIG) $(OVERRIDES)
+	python scripts/utilities/generate_plots.py --run-dir $(RUN_DIR) $(OVERRIDES)
 
 ## Run RRR analysis (raw-input baseline: no SVD projection)
 ## Usage:
@@ -125,7 +105,7 @@ srrr:
 ##   make rrr CMD=python                                               # run locally
 rrr:
 	mkdir -p logs
-	$(CMD) scripts/run_rrr.py --config $(RRR_CONFIG) $(OVERRIDES)
+	$(CMD) scripts/rrr/run_rrr.py --config $(RRR_CONFIG) $(OVERRIDES)
 
 ## Run PCA analysis (embedding PCA subspace baseline)
 ## Usage:
@@ -135,19 +115,7 @@ rrr:
 ##   make pca CMD=python                                               # run locally
 pca:
 	mkdir -p logs
-	$(CMD) scripts/run_pca.py --config $(PCA_CONFIG) $(OVERRIDES)
-
-## Run partial SVD analysis (direction importance via partialling)
-## Usage:
-##   make partial-svd                                                     # default config
-##   make partial-svd PARTIAL_SVD_CONFIG=configs/partial_svd_per_region.yml  # per-region plots
-##   make partial-svd OVERRIDES="--partial_group_sizes=[1,5,20]"          # custom sweep
-##   make partial-svd CMD=python                                          # run locally
-PARTIAL_SVD_CONFIG ?= configs/partial_svd_default.yml
-
-partial-svd:
-	mkdir -p logs
-	$(CMD) scripts/run_partial_svd.py --config $(PARTIAL_SVD_CONFIG) $(OVERRIDES)
+	$(CMD) scripts/rrr/run_pca.py --config $(PCA_CONFIG) $(OVERRIDES)
 
 ## Run partial RRR analysis (subspace importance via partialling)
 ## Usage:
@@ -159,7 +127,7 @@ PARTIAL_RRR_CONFIG ?= configs/partial_rrr/partial_rrr_default.yml
 
 partial-rrr:
 	mkdir -p logs
-	$(CMD) scripts/run_partial_rrr.py --config $(PARTIAL_RRR_CONFIG) $(OVERRIDES)
+	$(CMD) scripts/rrr/run_partial_rrr.py --config $(PARTIAL_RRR_CONFIG) $(OVERRIDES)
 
 ## Run SAE analysis (sparse autoencoder on RRR-projected embeddings)
 ## Usage:
@@ -172,13 +140,13 @@ SAE_CONFIG ?= configs/sae/sae_default.yml
 
 sae:
 	mkdir -p logs
-	$(CMD) scripts/run_sae.py --config $(SAE_CONFIG) $(OVERRIDES)
+	$(CMD) scripts/nonlinear/run_sae.py --config $(SAE_CONFIG) $(OVERRIDES)
 
 ## Print out regions where electrode in data are located according to an atlas
 ## Usage:
 ## make print-regions DATA_ROOT=data RUN_DIR=results/my_run
 print-atlas-regions:
-	python scripts/print_atlas_regions.py --data_root=$(DATA_ROOT) --output_dir=$(RUN_DIR) --atlas_path=$(ATLAS_PATH)
+	python scripts/utilities/print_atlas_regions.py --data_root=$(DATA_ROOT) --output_dir=$(RUN_DIR) --atlas_path=$(ATLAS_PATH)
 
 ## Quick smoke-test: 1 subject, 100 permutations
 sig-test:

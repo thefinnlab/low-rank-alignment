@@ -6,8 +6,8 @@ import os
 import pytest
 import yaml
 
-from utils.config import EncodingConfig, SignificanceConfig, get_results_dir
-from utils.config_utils import (
+from src.core.config import EncodingConfig, SignificanceConfig, get_results_dir
+from src.utils.config_utils import (
     parse_override_args,
     dict_to_dataclass,
     apply_overrides,
@@ -18,6 +18,7 @@ from utils.config_utils import (
 # ---------------------------------------------------------------------------
 # parse_override_args
 # ---------------------------------------------------------------------------
+
 
 class TestParseOverrideArgs:
     def test_int(self):
@@ -66,37 +67,38 @@ class TestParseOverrideArgs:
 # dict_to_dataclass
 # ---------------------------------------------------------------------------
 
+
 class TestDictToDataclass:
     def test_flat_encoding_config(self):
-        d = {"layer": 48, "offset": 1, "data_root": "other/"}
+        d = {"per_model_config": {"layer": 48}, "offset": 1, "data_root": "other/"}
         config = dict_to_dataclass(d, EncodingConfig)
-        assert config.layer == 48
+        assert config.per_model_config == {"layer": 48}
         assert config.offset == 1
         assert config.data_root == "other/"
         assert config.batch is False  # default
 
     def test_nested_significance_config(self):
         d = {
-            "encoding": {"layer": 48, "data_root": "my_data/"},
-            "n_permutations": 200,
+            "encoding": {"per_model_config": {"layer": 48}, "data_root": "my_data/"},
+            "minimal_shift": 250,
         }
         config = dict_to_dataclass(d, SignificanceConfig)
         assert isinstance(config.encoding, EncodingConfig)
-        assert config.encoding.layer == 48
+        assert config.encoding.per_model_config == {"layer": 48}
         assert config.encoding.data_root == "my_data/"
-        assert config.n_permutations == 200
+        assert config.minimal_shift == 250
         assert config.fdr_q == 0.01  # default
 
     def test_partial_dict_uses_defaults(self):
         config = dict_to_dataclass({}, EncodingConfig)
-        assert config.layer == 24
+        assert config.per_model_config == {"layer": 24}
         assert config.offset == 0
         assert config.subjects is None
 
     def test_unknown_keys_silently_ignored(self):
-        d = {"layer": 48, "unknown_field": "oops"}
+        d = {"offset": 2, "unknown_field": "oops"}
         config = dict_to_dataclass(d, EncodingConfig)
-        assert config.layer == 48
+        assert config.offset == 2
         assert not hasattr(config, "unknown_field")
 
 
@@ -104,27 +106,28 @@ class TestDictToDataclass:
 # apply_overrides
 # ---------------------------------------------------------------------------
 
+
 class TestApplyOverrides:
     def test_flat_override_encoding(self):
         config = EncodingConfig()
-        result = apply_overrides(config, {"layer": 48})
-        assert result.layer == 48
+        result = apply_overrides(config, {"offset": 2})
+        assert result.offset == 2
 
     def test_nested_override_significance(self):
         config = SignificanceConfig()
-        result = apply_overrides(config, {"encoding.layer": 48})
-        assert result.encoding.layer == 48
+        result = apply_overrides(config, {"encoding.offset": 2})
+        assert result.encoding.offset == 2
 
     def test_original_unchanged(self):
         config = SignificanceConfig()
-        apply_overrides(config, {"encoding.layer": 48, "n_permutations": 100})
-        assert config.encoding.layer == 24
-        assert config.n_permutations == 5000
+        apply_overrides(config, {"encoding.offset": 2, "fdr_q": 0.05})
+        assert config.encoding.offset == 0
+        assert config.fdr_q == 0.01
 
     def test_multiple_overrides(self):
         config = SignificanceConfig()
-        result = apply_overrides(config, {"n_permutations": 100, "fdr_q": 0.05})
-        assert result.n_permutations == 100
+        result = apply_overrides(config, {"minimal_shift": 250, "fdr_q": 0.05})
+        assert result.minimal_shift == 250
         assert result.fdr_q == 0.05
 
 
@@ -132,42 +135,52 @@ class TestApplyOverrides:
 # get_results_dir
 # ---------------------------------------------------------------------------
 
+
 class TestGetResultsDir:
     def test_default_base_dir(self):
-        result = get_results_dir("gpt2xl", 24, 0)
+        result = get_results_dir("gpt2xl", 0, {"layer": 24})
         assert result == os.path.join("results/", "gpt2xl_layer24_offset0")
 
     def test_custom_base_dir(self):
-        result = get_results_dir("gpt2xl", 48, 0, base_dir="my_results/")
+        result = get_results_dir("gpt2xl", 0, {"layer": 48}, base_dir="my_results/")
         assert result == os.path.join("my_results/", "gpt2xl_layer48_offset0")
 
     def test_nonzero_offset(self):
-        result = get_results_dir("gpt2xl", 24, 2)
+        result = get_results_dir("gpt2xl", 2, {"layer": 24})
         assert "offset2" in result
 
     def test_negative_offset(self):
-        result = get_results_dir("gpt2xl", 24, -1)
+        result = get_results_dir("gpt2xl", -1, {"layer": 24})
         assert "offset-1" in result
 
     def test_different_models_different_dirs(self):
-        a = get_results_dir("gpt2xl", 24, 0)
-        b = get_results_dir("llama", 24, 0)
+        a = get_results_dir("gpt2xl", 0, {"layer": 24})
+        b = get_results_dir("glove", 0, {"dim": 50})
         assert a != b
 
     def test_different_layers_different_dirs(self):
-        a = get_results_dir("gpt2xl", 24, 0)
-        b = get_results_dir("gpt2xl", 48, 0)
+        a = get_results_dir("gpt2xl", 0, {"layer": 24})
+        b = get_results_dir("gpt2xl", 0, {"layer": 48})
         assert a != b
 
     def test_consistent_with_encoding_config_defaults(self):
         cfg = EncodingConfig()
-        expected = get_results_dir(cfg.model, cfg.layer, cfg.offset)
+        expected = get_results_dir(cfg.model, cfg.offset, cfg.per_model_config)
         assert expected == os.path.join("results/", "gpt2xl_layer24_offset0")
+
+    def test_glove_default_dir(self):
+        result = get_results_dir("glove", 0, {"dim": 50})
+        assert "glove_dim50_offset0" in result
+
+    def test_unknown_model_raises(self):
+        with pytest.raises(ValueError):
+            get_results_dir("llama", 0, {})
 
 
 # ---------------------------------------------------------------------------
 # load_config
 # ---------------------------------------------------------------------------
+
 
 class TestLoadConfig:
     def _write_yaml(self, d, path):
@@ -176,10 +189,16 @@ class TestLoadConfig:
 
     def test_round_trip_significance(self):
         data = {
-            "encoding": {"layer": 48, "data_root": "data/", "offset": 0,
-                         "subjects": None, "run_name": None, "batch": False},
+            "encoding": {
+                "per_model_config": {"layer": 48},
+                "data_root": "data/",
+                "offset": 0,
+                "subjects": None,
+                "run_name": None,
+                "batch": False,
+            },
             "output_dir": None,
-            "n_permutations": 5000,
+            "minimal_shift": 500,
             "fdr_q": 0.01,
             "save_weights": False,
         }
@@ -189,24 +208,26 @@ class TestLoadConfig:
             config = load_config(path, {}, SignificanceConfig)
 
         assert isinstance(config, SignificanceConfig)
-        assert config.encoding.layer == 48
-        assert config.n_permutations == 5000
+        assert config.encoding.per_model_config == {"layer": 48}
+        assert config.minimal_shift == 500
         assert config.fdr_q == 0.01
 
     def test_cli_overrides_take_precedence(self):
         data = {
-            "encoding": {"layer": 24},
-            "n_permutations": 5000,
+            "encoding": {"per_model_config": {"layer": 24}},
+            "minimal_shift": 500,
         }
         with tempfile.TemporaryDirectory() as tmpdir:
             path = os.path.join(tmpdir, "sig.yml")
             self._write_yaml(data, path)
-            config = load_config(path, {"encoding.layer": 48, "n_permutations": 100}, SignificanceConfig)
+            config = load_config(
+                path, {"encoding.offset": 2, "minimal_shift": 250}, SignificanceConfig
+            )
 
-        assert config.encoding.layer == 48
-        assert config.n_permutations == 100
+        assert config.encoding.offset == 2
+        assert config.minimal_shift == 250
 
     def test_none_config_path_uses_defaults(self):
         config = load_config(None, {}, EncodingConfig)
-        assert config.layer == 24
+        assert config.per_model_config == {"layer": 24}
         assert config.offset == 0
