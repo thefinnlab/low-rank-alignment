@@ -45,18 +45,17 @@ from src.utils.data_loaders import load_sig_electrodes
 from src.utils.atlas import build_electrode_region_map
 from src.core.config import RRRConfig, ScriptMode, get_results_dir
 from src.utils.config_utils import parse_args, load_config
+from src.utils.embeddings import get_glove_embeddings
 from src.utils.encoding import (
     load_encoding_results,
     build_enc_subjects_info,
     build_per_fold_baselines,
     get_and_offset_arbitrary_embeddings,
 )
-from src.utils.sae import solve_regression
 from src.utils.srrr import (
     fit_dense_rrr,
     save_rrr_factors,
     save_rrr_result,
-    compute_correlation,
 )
 from src.utils.analysis import build_sig_mask_flat_for_elecs
 from src.utils.rrr_utils import (
@@ -684,6 +683,7 @@ def _get_decomposition_inputs(
     word_df,
     compute_sig_nonsig=False,
     sig_dir=None,
+    word_in_glove=None,
 ):
     enc_results = load_encoding_results(
         os.path.join(
@@ -699,12 +699,13 @@ def _get_decomposition_inputs(
         print("  No significant electrodes found; skipping cross-subject RRR.")
         return
 
-    X_raw, Y_full, selection = build_XY_from_subjects(
+    X_raw, Y_full, selection, _ = build_XY_from_subjects(
         subject_ids,
         encoding_config,
         sig_electrodes,
         embeddings,
         word_df,
+        valid_rows=word_in_glove,
     )
     print(f"  X: {X_raw.shape}, Y: {Y_full.shape}")
 
@@ -722,6 +723,7 @@ def _get_decomposition_inputs(
         word_df,
         encoding_config.offset,
         encoding_config.arbitrary_seed,
+        valid_rows=word_in_glove,
     )
 
     sig_mask_flat = None
@@ -746,6 +748,7 @@ def _run_cross_subject_rrr(
     sig_electrodes,
     aligned_embeddings,
     word_df,
+    word_in_glove=None,
 ):
     """RRR on raw embeddings using all subjects' significant electrodes."""
     X_raw, X_arbitrary, per_fold_baselines, test_idxs, sig_mask_flat = (
@@ -758,6 +761,7 @@ def _run_cross_subject_rrr(
             word_df,
             compute_sig_nonsig=config.compute_sig_nonsig,
             sig_dir=sig_dir,
+            word_in_glove=word_in_glove,
         )
     )
 
@@ -808,6 +812,7 @@ def _run_per_subject_rrr(
                 word_df,
                 compute_sig_nonsig=config.compute_sig_nonsig,
                 sig_dir=sig_dir,
+                word_in_glove=word_in_glove,
             )
         )
 
@@ -837,6 +842,7 @@ def _run_per_region_rrr(
     sig_electrodes,
     aligned_embeddings,
     word_df,
+    word_in_glove=None,
 ):
     """RRR on raw embeddings independently per atlas region."""
 
@@ -879,6 +885,7 @@ def _run_per_region_rrr(
                 word_df,
                 compute_sig_nonsig=config.compute_sig_nonsig,
                 sig_dir=sig_dir,
+                word_in_glove=word_in_glove,
             )
         )
 
@@ -935,9 +942,13 @@ def main():
 
     # Load embeddings
     print("Loading embeddings...")
-    aligned_embeddings, df_word = load_embeddings(
+    aligned_embeddings, word_df = load_embeddings(
         enc.data_root, enc.model, **enc.per_model_config
     )
+
+    word_in_glove = None
+    if enc.limit_to_glove or enc.model == "glove":
+        word_in_glove = get_glove_embeddings(enc.data_root, word_df)[1]["in_glove"]
 
     branch_kwargs = dict(
         config=config,
@@ -948,7 +959,8 @@ def main():
         subject_ids=subject_ids,
         sig_electrodes=sig_electrodes,
         aligned_embeddings=aligned_embeddings,
-        df_word=df_word,
+        df_word=word_df,
+        word_in_glove=word_in_glove,
     )
 
     if config.mode == ScriptMode.PER_REGION:

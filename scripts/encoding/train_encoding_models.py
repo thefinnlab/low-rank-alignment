@@ -18,6 +18,7 @@ import gc
 import os
 
 import numpy as np
+from src.utils.data_loaders import load_data_from_cache
 import torch
 from himalaya.backend import set_backend
 
@@ -57,7 +58,6 @@ def _train_with_arbitrary(
     n_elecs,
     n_lags,
     model_constructor,
-    averaged_embeddings,
     selection,
     word_df,
     offset,
@@ -140,32 +140,26 @@ def _run_joint(
     word_df,
     data_root,
     offset,
-    layer_int,
     run_name,
     model_constructor,
-    config=None,
+    config: EncodingConfig,
     alphas=None,
     alpha_grid=None,
     word_in_glove=None,
 ):
     all_subject_ids = list(sig_elecs.keys())
-    all_datas = []
-    elec_counts = []
-    selection = None
-    for sub_id in all_subject_ids:
-        cache = load_precomputed_epochs(sub_id, data_root)
-        data_sub = epochs_from_cache(cache, elec_names=sig_elecs[sub_id])
-        all_datas.append(data_sub)
-        elec_counts.append(data_sub.shape[1])
-        if selection is None:
-            selection = cache["selection"]
 
-    datas = np.concatenate(all_datas, axis=1)  # (n_words, total_elecs, n_lags)
-    n_words, total_elecs, n_lags = datas.shape
+    X_arr, Y, selection, elec_counts = load_data_from_cache(
+        all_subject_ids,
+        data_root,
+        offset,
+        aligned_embeddings,
+        sig_elecs,
+        valid_rows=word_in_glove,
+    )
+    total_elecs, n_lags = Y.shape[1], Y.shape[2]
+
     lags = np.linspace(-2.0, 2.0, n_lags, endpoint=False)
-
-    avg_embs = aligned_embeddings[selection]
-    X_arr, Y = apply_offset(avg_embs, datas, offset, valid_rows=word_in_glove)
 
     print(f"Training joint model: {total_elecs} electrodes, {X_arr.shape[0]} words...")
     corrs, corrs_arb, models, tr_idxs, test_idxs, scalers = _train_with_arbitrary(
@@ -174,7 +168,6 @@ def _run_joint(
         total_elecs,
         n_lags,
         model_constructor,
-        avg_embs,
         selection,
         word_df,
         offset,
@@ -207,9 +200,9 @@ def _run_joint(
             scalers,
             sig_elecs[sub_id],
             offset,
-            layer_int,
             lags,
             corrs_arb=corrs_arb[:, sl, :],
+            per_model_config=config.per_model_config,
         )
 
 
@@ -225,10 +218,9 @@ def _run_batch(
     word_df,
     data_root,
     offset,
-    layer_int,
     run_name,
     model_constructor,
-    config=None,
+    config: EncodingConfig,
     alphas=None,
     alpha_grid=None,
     word_in_glove=None,
@@ -241,14 +233,16 @@ def _run_batch(
         print(f"\n{'='*60}")
         print(f"Processing subject {sub_id}")
         print(f"{'='*60}")
-
-        cache = load_precomputed_epochs(sub_id, data_root)
-        data = epochs_from_cache(cache, elec_names=sig_elecs[sub_id])
-        n_words, n_elecs, n_lags = data.shape
+        X_arr, Y, selection, _ = load_data_from_cache(
+            [sub_id],
+            data_root,
+            offset,
+            aligned_embeddings,
+            sig_elecs,
+            valid_rows=word_in_glove,
+        )
+        n_elecs, n_lags = Y.shape[1], Y.shape[2]
         lags = np.linspace(-2.0, 2.0, n_lags, endpoint=False)
-
-        avg_embs = aligned_embeddings[cache["selection"]]
-        X_arr, Y = apply_offset(avg_embs, data, offset, valid_rows=word_in_glove)
 
         corrs, corrs_arb, models, tr_idxs, test_idxs, scalers = _train_with_arbitrary(
             X_arr,
@@ -256,8 +250,7 @@ def _run_batch(
             n_elecs,
             n_lags,
             model_constructor,
-            avg_embs,
-            cache["selection"],
+            selection,
             word_df,
             offset,
             config=config,
@@ -283,12 +276,12 @@ def _run_batch(
             scalers,
             sig_elecs[sub_id],
             offset,
-            layer_int,
             lags,
             corrs_arb=corrs_arb,
+            per_model_config=config.per_model_config,
         )
 
-        del cache, data, X_arr, Y, models, scalers, corrs, corrs_arb
+        del X_arr, Y, models, scalers, corrs, corrs_arb
         gc.collect()
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
@@ -303,11 +296,10 @@ def main():
     args, overrides = parse_args("Encoding model training")
     config: EncodingConfig = load_config(args.config, overrides, EncodingConfig)
 
-    layer_int = config.layer
     subject_ids = config.subjects or list(range(1, 10))
     offset = config.offset
     run_name = config.run_name or get_results_dir(
-        config.model, config.layer, config.offset
+        config.model, config.offset, config.per_model_config
     )
 
     if torch.cuda.is_available():
@@ -325,7 +317,7 @@ def main():
     if not sig_elecs:
         raise ValueError("No significant electrodes found for the requested subjects.")
 
-    print(f"Loading embeddings (layer {layer_int})...")
+    print(f"Loading embeddings...")
     aligned_embeddings, word_df = load_embeddings(
         config.data_root, embedding_getter_name=config.model, **config.per_model_config
     )
@@ -349,7 +341,6 @@ def main():
             word_df,
             config.data_root,
             offset,
-            layer_int,
             run_name,
             model_constructor,
             config=config,
@@ -364,7 +355,6 @@ def main():
             word_df,
             config.data_root,
             offset,
-            layer_int,
             run_name,
             model_constructor,
             config=config,

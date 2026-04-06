@@ -265,12 +265,44 @@ def build_word_epochs(
     return epochs, epochs.get_data(copy=False)
 
 
+def load_data_from_cache(
+    subs_to_load, data_root, offset, embeddings, sig_electrodes=None, valid_rows=None
+):
+    import gc
+    from src.utils.encoding import apply_offset
+
+    Y_cols = []
+    X_ref = None
+    ref_selection = None
+    elec_names = []
+    for sub_id in subs_to_load:
+        cache = load_precomputed_epochs(sub_id, data_root)
+        data = epochs_from_cache(
+            cache, elec_names=sig_electrodes[sub_id] if sig_electrodes else None
+        )
+        elec_names.append(cache["ch_names"])
+        X_arr, Y_sub = apply_offset(
+            embeddings[cache["selection"]], data, offset, valid_rows=valid_rows
+        )
+        if X_ref is None:
+            X_ref = X_arr
+            ref_selection = cache["selection"]
+        Y_cols.append(Y_sub)
+    gc.collect()
+    return (
+        X_ref,
+        np.concatenate(Y_cols, axis=1).astype(np.float32),
+        ref_selection,
+        elec_names,
+    )
+
+
 def build_XY_from_subjects(
     subject_ids: list,
     enc,
     sig_electrodes: dict,
     aligned_embeddings: "np.ndarray",
-    df_word: "pd.DataFrame",
+    valid_rows: Optional[np.ndarray] = None,
 ) -> tuple:
     """Load neural data for multiple subjects and stack into X and Y arrays.
 
@@ -296,8 +328,6 @@ def build_XY_from_subjects(
     Raises:
         ValueError: If no subjects have significant electrodes.
     """
-    import gc
-    from src.utils.encoding import apply_offset
 
     subs_to_load = [s for s in subject_ids if s in sig_electrodes and sig_electrodes[s]]
     if not subs_to_load:
@@ -305,22 +335,14 @@ def build_XY_from_subjects(
             f"No subjects with significant electrodes found in subject_ids={subject_ids}."
         )
 
-    Y_cols = []
-    X_ref = None
-    ref_selection = None
-    for sub_id in subs_to_load:
-        cache = load_precomputed_epochs(sub_id, enc.data_root)
-        data = epochs_from_cache(cache, elec_names=sig_electrodes[sub_id])
-        X_arr, Y_sub = apply_offset(
-            aligned_embeddings[cache["selection"]], data, enc.offset
-        )
-        if X_ref is None:
-            X_ref = X_arr
-            ref_selection = cache["selection"]
-        Y_cols.append(Y_sub)
-    gc.collect()
-
-    return X_ref, np.concatenate(Y_cols, axis=1).astype(np.float32), ref_selection
+    return load_data_from_cache(
+        subs_to_load,
+        enc.data_root,
+        enc.offset,
+        aligned_embeddings,
+        sig_electrodes,
+        valid_rows=valid_rows,
+    )
 
 
 def load_sig_electrodes(output_dir, subject_ids, sig_dir=None):

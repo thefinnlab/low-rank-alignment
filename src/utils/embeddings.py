@@ -99,6 +99,9 @@ def get_glove_embeddings(data_root, transcript_df):
             glove_embeddings.append(glove_vectors[word])
             in_glove.append(True)
         else:
+            glove_embeddings.append(
+                np.zeros(glove_vectors.vector_size, dtype=np.float32)
+            )
             in_glove.append(False)
 
     glove_embeddings = np.stack(glove_embeddings)

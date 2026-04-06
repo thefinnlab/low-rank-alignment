@@ -563,7 +563,7 @@ def apply_offset(averaged_embeddings, data, offset, valid_rows=None):
 
 
 def get_and_offset_arbitrary_embeddings(
-    aligned_embeddings, selection, df_word, offset, seed
+    aligned_embeddings, selection, df_word, offset, seed, valid_rows=None
 ):
     X_arbitrary = get_arbitrary_embeddings(
         aligned_embeddings[selection],
@@ -571,7 +571,9 @@ def get_and_offset_arbitrary_embeddings(
         df_word,
         seed=seed,
     ).astype(np.float32)
-    X_arbitrary, _ = apply_offset(X_arbitrary, X_arbitrary, offset)
+    X_arbitrary, _ = apply_offset(
+        X_arbitrary, X_arbitrary, offset, valid_rows=valid_rows
+    )
     return X_arbitrary
 
 
@@ -587,8 +589,8 @@ def save_subject_results(
     scalers,
     elec_names,
     offset,
-    layer_int,
     lags,
+    per_model_config={},
     corrs_arb=None,
 ):
     """Build results dict and write outputs to {output_dir}/subjects/sub_{sub_id}/.
@@ -625,8 +627,8 @@ def save_subject_results(
         "elec_names": list(elec_names),
         "subject_id": sub_id,
         "offset": offset,
-        "layer": layer_int,
         "lags": lags,
+        **per_model_config,
     }
     if corrs_arb is not None:
         results["arb_corrs"] = corrs_arb

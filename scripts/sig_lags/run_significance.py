@@ -13,6 +13,7 @@ import os
 import numpy as np
 import pandas as pd
 from himalaya.backend import set_backend
+from src.utils.embeddings import get_glove_embeddings
 import torch
 
 from src.utils import (
@@ -20,15 +21,13 @@ from src.utils import (
     get_all_predictions_and_targets_test_set,
     significant_lags_all_electrodes_gpu,
     load_embeddings,
-    apply_offset,
     get_models_coefficients,
     save_subject_results,
-    load_precomputed_epochs,
-    epochs_from_cache,
 )
 from src.core.config import SignificanceConfig, get_results_dir
 from src.utils.config_utils import parse_args, load_config
 from src.utils.encoding import get_ridge_model_constructor
+from src.utils.data_loaders import load_data_from_cache
 
 
 # ---------------------------------------------------------------------------
@@ -42,7 +41,9 @@ def main():
     enc = config.encoding
 
     subject_ids = enc.subjects or list(range(1, 10))
-    output_dir = config.output_dir or get_results_dir(enc.model, enc.layer, enc.offset)
+    output_dir = config.output_dir or get_results_dir(
+        enc.model, enc.offset, enc.per_model_config
+    )
 
     # Use GPU backend if available
     if torch.cuda.is_available():
@@ -55,12 +56,15 @@ def main():
     print(f"Results directory: {output_dir}")
 
     # Load embeddings once — shared across all subjects
-    aligned_embeddings, df_word = load_embeddings(enc.data_root, enc.layer)
+    aligned_embeddings, transcript_df = load_embeddings(
+        enc.data_root, enc.model, **enc.per_model_config
+    )
 
-    # Lag axis: epochs are built with tmin=-2, tmax=2 then resampled to 32 Hz
-    # That gives 4 s * 32 Hz = 128 samples but MNE epoch layout is:
-    #   original sfreq=512 → np.arange(-2*512, 2*512, 1) / 512, then every 16th sample
-    lag_sec = np.arange(-2 * 512, 2 * 512, 16) / 512  # length 64
+    word_in_glove = None
+    if enc.limit_to_glove or enc.model == "glove":
+        word_in_glove = get_glove_embeddings(enc.data_root, transcript_df)[1][
+            "in_glove"
+        ]
 
     alphas = np.array(enc.ridge_alphas) if enc.ridge_alphas is not None else None
     model_constructor = get_ridge_model_constructor(alphas=alphas)
@@ -72,26 +76,17 @@ def main():
         print(f"Processing subject {bids_sub_id}")
         print(f"{'='*60}")
 
-        # ------------------------------------------------------------------
-        # a. Load precomputed 32 Hz cache
-        # ------------------------------------------------------------------
-        cache = load_precomputed_epochs(bids_sub_id, enc.data_root)
-        electrode_names = cache["ch_names"]
-        print(f"  Electrodes: {len(electrode_names)}")
-
-        # ------------------------------------------------------------------
-        # b. Build epochs from cache
-        # ------------------------------------------------------------------
-        data = epochs_from_cache(cache)
-        print(f"  Epoch data shape: {data.shape}")
-
-        # ------------------------------------------------------------------
-        # c. Align X and Y by epoch selection and word offset
-        # ------------------------------------------------------------------
-        n_words, n_elec, n_lags = data.shape
-        X_arr, Y = apply_offset(
-            aligned_embeddings[cache["selection"]], data, enc.offset
+        X_arr, Y, selection, elec_names = load_data_from_cache(
+            [bids_sub_id],
+            enc.data_root,
+            enc.offset,
+            aligned_embeddings,
+            valid_rows=word_in_glove,
         )
+        _, n_targets = Y.shape
+        elec_counts = [len(x) for x in elec_names]
+        n_lags = n_targets // sum(elec_counts)
+        n_elec = sum(elec_counts)
         X = [X_arr] * enc.num_folds
 
         # Update lag_sec based on actual n_lags (in case resampling gives different count)
@@ -144,7 +139,7 @@ def main():
                     for i in intercepts
                 ]
                 sig_corrs = corrs[:, sig_elec_indices, :]
-                sig_names = [electrode_names[i] for i in sig_elec_indices]
+                sig_names = [elec_names[0][i] for i in sig_elec_indices]
                 save_subject_results(
                     output_dir,
                     bids_sub_id,
@@ -157,8 +152,8 @@ def main():
                     scalers,
                     sig_names,
                     enc.offset,
-                    enc.layer,
                     actual_lag_sec,
+                    per_model_config=enc.per_model_config,
                 )
                 del coefficients, intercepts
 
