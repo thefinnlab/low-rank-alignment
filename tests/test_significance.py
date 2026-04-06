@@ -80,7 +80,7 @@ class TestSignificantLagsAllElectrodes:
         actual = rng.standard_normal((n_electrodes, n_lags, n_words)).astype(np.float32)
 
         sig, p_values, q_values, obs_corrs = significant_lags_all_electrodes_gpu(
-            pred, actual, n_permutations=100, device=cpu_device
+            pred, actual, device=cpu_device
         )
         for arr in [sig, p_values, q_values, obs_corrs]:
             assert arr.shape == (n_electrodes, n_lags)
@@ -91,7 +91,7 @@ class TestSignificantLagsAllElectrodes:
         pred = rng.standard_normal((n_electrodes, n_lags, n_words)).astype(np.float32)
 
         sig, p_values, q_values, obs_corrs = significant_lags_all_electrodes_gpu(
-            pred, pred, n_permutations=100, device=cpu_device
+            pred, pred, device=cpu_device
         )
         np.testing.assert_allclose(
             obs_corrs, np.ones((n_electrodes, n_lags)), atol=1e-5
@@ -104,6 +104,6 @@ class TestSignificantLagsAllElectrodes:
         actual = rng.standard_normal((n_electrodes, n_lags, n_words)).astype(np.float32)
 
         sig, _, _, _ = significant_lags_all_electrodes_gpu(
-            pred, actual, n_permutations=50, device=cpu_device
+            pred, actual, device=cpu_device
         )
         assert sig.dtype == bool

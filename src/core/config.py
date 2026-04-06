@@ -17,6 +17,10 @@ def gpt2_xl_results_dir(base_dir, offset, layer):
     return os.path.join(base_dir, f"gpt2xl_layer{layer}_offset{offset}")
 
 
+def glove_results_dir(base_dir, offset, dim):
+    return os.path.join(base_dir, f"glove_dim{dim}_offset{offset}")
+
+
 def get_results_dir(
     model: str, offset: int, per_model_config: dict, base_dir: str = "results/"
 ) -> str:
@@ -26,6 +30,8 @@ def get_results_dir(
     """
     if model == "gpt2xl":
         return gpt2_xl_results_dir(base_dir, offset, **per_model_config)
+    elif model == "glove":
+        return glove_results_dir(base_dir, offset, **per_model_config)
     else:
         raise ValueError(f"Model: {model} not implemented yet.")
 

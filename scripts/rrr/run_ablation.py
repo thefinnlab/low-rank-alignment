@@ -48,7 +48,7 @@ from src.utils import (
 )
 from src.utils.analysis import build_sig_mask_flat_for_elecs
 from src.utils.atlas import build_electrode_region_map
-from src.core.config import AblationConfig, SVDMode, get_results_dir
+from src.core.config import AblationConfig, ScriptMode, get_results_dir
 from src.utils.config_utils import parse_args, load_config
 from src.utils.data_loaders import load_sig_electrodes
 from src.utils.encoding import (
@@ -698,9 +698,9 @@ def main():
     # Resolve ablation output directory
     if config.ablation_output_dir:
         ablation_dir = config.ablation_output_dir
-    elif config.mode == SVDMode.PER_REGION:
+    elif config.mode == ScriptMode.PER_REGION:
         ablation_dir = os.path.join(output_dir, "per_region_ablation")
-    elif config.mode == SVDMode.PER_SUBJECT:
+    elif config.mode == ScriptMode.PER_SUBJECT:
         ablation_dir = os.path.join(output_dir, "per_subject_ablation")
     else:
         ablation_dir = os.path.join(output_dir, "ablation")
@@ -730,9 +730,9 @@ def main():
         df_word=df_word,
     )
 
-    if config.mode == SVDMode.PER_REGION:
+    if config.mode == ScriptMode.PER_REGION:
         _run_per_region_ablation(**branch_kwargs)
-    elif config.mode == SVDMode.PER_SUBJECT:
+    elif config.mode == ScriptMode.PER_SUBJECT:
         _run_per_subject_ablation(**branch_kwargs)
     else:
         _run_cross_subject_ablation(**branch_kwargs)

@@ -5,7 +5,7 @@ import os
 import numpy as np
 import pandas as pd
 
-from src.core.config import SVDMode
+from src.core.config import ScriptMode
 from src.utils.srrr import (
     compute_cca_similarity,
     compute_procrustes_similarity,
@@ -142,12 +142,12 @@ def apply_sig_nonsig_splits_and_strip(
 
 
 def resolve_rrr_source_dir(
-    mode: SVDMode, output_dir: str, override: str | None = None
+    mode: ScriptMode, output_dir: str, override: str | None = None
 ) -> str:
     """Resolve the RRR source directory given the mode.
 
     Args:
-        mode: SVDMode (cross_subject, per_subject, per_region).
+        mode: ScriptMode (cross_subject, per_subject, per_region).
         output_dir: Root results directory.
         override: Explicit override; returned as-is if not None.
 
@@ -156,8 +156,8 @@ def resolve_rrr_source_dir(
     """
     if override:
         return override
-    if mode == SVDMode.PER_REGION:
+    if mode == ScriptMode.PER_REGION:
         return os.path.join(output_dir, "per_region_rrr")
-    if mode == SVDMode.PER_SUBJECT:
+    if mode == ScriptMode.PER_SUBJECT:
         return os.path.join(output_dir, "per_subject_rrr")
     return os.path.join(output_dir, "rrr")

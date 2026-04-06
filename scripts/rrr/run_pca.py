@@ -45,7 +45,7 @@ from src.utils import (
 )
 from src.utils.data_loaders import load_sig_electrodes
 from src.utils.atlas import build_electrode_region_map
-from src.core.config import PCAConfig, SVDMode, get_results_dir
+from src.core.config import PCAConfig, ScriptMode, get_results_dir
 from src.utils.config_utils import parse_args, load_config
 from src.utils.encoding import (
     load_encoding_results,
@@ -74,11 +74,11 @@ from src.utils.subspace_utils import (
 # ---------------------------------------------------------------------------
 
 
-def _resolve_rrr_overlay_dir(mode: SVDMode, output_dir: str) -> str | None:
+def _resolve_rrr_overlay_dir(mode: ScriptMode, output_dir: str) -> str | None:
     """Return the corresponding RRR output directory for overlay, or None."""
-    if mode == SVDMode.PER_REGION:
+    if mode == ScriptMode.PER_REGION:
         candidate = os.path.join(output_dir, "per_region_rrr")
-    elif mode == SVDMode.PER_SUBJECT:
+    elif mode == ScriptMode.PER_SUBJECT:
         candidate = os.path.join(output_dir, "per_subject_rrr")
     else:
         candidate = os.path.join(output_dir, "rrr")
@@ -221,6 +221,7 @@ def _run_pca_for_unit(
             # Complement and arbitrary evaluations
             complement_result, arbitrary_result = evaluate_complement_and_arbitrary(
                 A,
+                k,
                 X_train,
                 X_test,
                 X_arbitrary,
@@ -786,9 +787,9 @@ def main():
     # Resolve PCA output directory
     if config.pca_output_dir:
         pca_dir = config.pca_output_dir
-    elif config.mode == SVDMode.PER_REGION:
+    elif config.mode == ScriptMode.PER_REGION:
         pca_dir = os.path.join(output_dir, "per_region_pca")
-    elif config.mode == SVDMode.PER_SUBJECT:
+    elif config.mode == ScriptMode.PER_SUBJECT:
         pca_dir = os.path.join(output_dir, "per_subject_pca")
     else:
         pca_dir = os.path.join(output_dir, "pca")
@@ -818,9 +819,9 @@ def main():
         df_word=df_word,
     )
 
-    if config.mode == SVDMode.PER_REGION:
+    if config.mode == ScriptMode.PER_REGION:
         _run_per_region_pca(**branch_kwargs)
-    elif config.mode == SVDMode.PER_SUBJECT:
+    elif config.mode == ScriptMode.PER_SUBJECT:
         _run_per_subject_pca(**branch_kwargs)
     else:
         _run_cross_subject_pca(**branch_kwargs)

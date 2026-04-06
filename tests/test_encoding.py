@@ -277,6 +277,51 @@ class TestApplyOffset:
         assert X.dtype == np.float32
         assert Y.dtype == np.float32
 
+    def test_valid_rows_filters_zero_offset(self):
+        rng = np.random.default_rng(4)
+        embs = rng.standard_normal((10, 6)).astype(np.float32)
+        data = rng.standard_normal((10, 3, 2)).astype(np.float32)
+        # Keep only even-indexed rows
+        mask = np.array([True, False] * 5)
+        X, Y = apply_offset(embs, data, offset=0, valid_rows=mask)
+        assert X.shape[0] == 5
+        assert Y.shape[0] == 5
+        np.testing.assert_array_equal(X, embs[mask])
+
+    def test_valid_rows_filters_after_positive_offset(self):
+        rng = np.random.default_rng(5)
+        embs = rng.standard_normal((10, 6)).astype(np.float32)
+        data = rng.standard_normal((10, 3, 2)).astype(np.float32)
+        # offset=2 trims to 8 rows; mask is applied to those 8
+        mask = np.array([True, False] * 5)  # 10 elements; offset slices to [2:]→mask[2:]
+        X, Y = apply_offset(embs, data, offset=2, valid_rows=mask)
+        expected_mask = mask[2:]  # valid_rows[offset:]
+        assert X.shape[0] == expected_mask.sum()
+        assert Y.shape[0] == expected_mask.sum()
+        np.testing.assert_array_equal(X, embs[2:][expected_mask])
+
+    def test_valid_rows_filters_after_negative_offset(self):
+        rng = np.random.default_rng(6)
+        embs = rng.standard_normal((10, 6)).astype(np.float32)
+        data = rng.standard_normal((10, 3, 2)).astype(np.float32)
+        # offset=-2 trims to 8 rows; mask is applied to those 8
+        mask = np.array([True, False] * 5)  # valid_rows[:offset] → mask[:-2]
+        X, Y = apply_offset(embs, data, offset=-2, valid_rows=mask)
+        expected_mask = mask[:-2]
+        assert X.shape[0] == expected_mask.sum()
+        assert Y.shape[0] == expected_mask.sum()
+        np.testing.assert_array_equal(X, embs[:-2][expected_mask])
+
+    def test_valid_rows_none_unchanged(self):
+        """Passing valid_rows=None should behave identically to omitting it."""
+        rng = np.random.default_rng(7)
+        embs = rng.standard_normal((10, 6)).astype(np.float32)
+        data = rng.standard_normal((10, 3, 2)).astype(np.float32)
+        X_none, Y_none = apply_offset(embs, data, offset=1, valid_rows=None)
+        X_omit, Y_omit = apply_offset(embs, data, offset=1)
+        np.testing.assert_array_equal(X_none, X_omit)
+        np.testing.assert_array_equal(Y_none, Y_omit)
+
 
 # ---------------------------------------------------------------------------
 # save_subject_results
@@ -304,7 +349,6 @@ class TestSaveSubjectResults:
             scalers=[None, None],
             elec_names=[f"E{i}" for i in range(n_elec)],
             offset=0,
-            layer_int=24,
             lags=lags,
         )
 
@@ -349,7 +393,6 @@ def _make_subject_args(rng, n_elec, n_folds=2, n_lags=3, n_feat=5):
         scalers=[None] * n_folds,
         elec_names=[f"S{n_elec}E{i}" for i in range(n_elec)],
         offset=0,
-        layer_int=0,
         lags=lags,
     )
 

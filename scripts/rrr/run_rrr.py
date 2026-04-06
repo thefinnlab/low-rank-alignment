@@ -242,7 +242,8 @@ def _run_k_for_rrr(
 
 
 def _calculate_joint_correlations(
-    oof_spill_dir: str, n_folds: int, config: RRRConfig, sig_mask_flat, all_rows
+    oof_spill_dir: str, n_folds: int, config: RRRConfig, sig_mask_flat, all_rows,
+    rrr_unit_dir: str = None,
 ):
     _oof_fields = [
         "Y_hat_rrr",
@@ -268,9 +269,13 @@ def _calculate_joint_correlations(
 
         stacked_joint: dict[str, float] = {}
         for label_a, label_b in _stacked_pairs:
+            all_A = oof[f"Y_hat_{label_a}"]
+            all_B = oof[f"Y_hat_{label_b}"]
+            if any(a is None for a in all_A) or any(b is None for b in all_B):
+                continue
             corr = compute_stacked_joint_corr(
-                oof[f"Y_hat_{label_a}"],
-                oof[f"Y_hat_{label_b}"],
+                all_A,
+                all_B,
                 oof["Y_test"],
                 n_splits=n_folds,
             )
@@ -430,6 +435,7 @@ def _plot_results(df, X_arbitrary, sig_mask_flat, rrr_unit_dir):
                     "complement_arbitrary_joint_corr_nonsig",
                 ]
             )
+    agg_cols = [c for c in agg_cols if c in df.columns]
     summary = df.groupby("k")[agg_cols].mean().reset_index()
     summary.to_csv(os.path.join(rrr_unit_dir, "summary.csv"), index=False)
 
@@ -636,7 +642,8 @@ def _run_rrr_for_unit(
     # never trained on the data they are evaluated on.
     print("\nComputing stacked OLS joint correlations...")
     all_rows = _calculate_joint_correlations(
-        oof_spill_dir, n_folds, config, sig_mask_flat, all_rows
+        oof_spill_dir, n_folds, config, sig_mask_flat, all_rows,
+        rrr_unit_dir=rrr_unit_dir,
     )
 
     # Alpha-vs-rank diagnostic plot (aggregate across folds)
@@ -791,6 +798,7 @@ def _run_per_subject_rrr(
     sig_electrodes,
     aligned_embeddings,
     word_df,
+    word_in_glove=None,
 ):
     """RRR on raw embeddings independently per subject."""
     for sub_id in subject_ids:
@@ -959,7 +967,7 @@ def main():
         subject_ids=subject_ids,
         sig_electrodes=sig_electrodes,
         aligned_embeddings=aligned_embeddings,
-        df_word=word_df,
+        word_df=word_df,
         word_in_glove=word_in_glove,
     )
 

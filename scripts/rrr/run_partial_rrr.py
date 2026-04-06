@@ -52,7 +52,7 @@ from src.utils import (
 )
 from src.utils.analysis import partial_out_subspace
 from src.utils.atlas import build_electrode_region_map
-from src.core.config import PartialRRRConfig, SVDMode, get_results_dir
+from src.core.config import PartialRRRConfig, ScriptMode, get_results_dir
 from src.utils.config_utils import parse_args, load_config
 from src.utils.encoding import get_ridge_model_constructor
 from src.utils.data_loaders import load_sig_electrodes, load_fold_indices
@@ -723,9 +723,9 @@ def main():
     # Resolve output directory based on mode
     if config.partial_rrr_output_dir:
         partial_rrr_dir = config.partial_rrr_output_dir
-    elif config.mode == SVDMode.PER_REGION:
+    elif config.mode == ScriptMode.PER_REGION:
         partial_rrr_dir = os.path.join(output_dir, "per_region_partial_rrr")
-    elif config.mode == SVDMode.PER_SUBJECT:
+    elif config.mode == ScriptMode.PER_SUBJECT:
         partial_rrr_dir = os.path.join(output_dir, "per_subject_partial_rrr")
     else:
         partial_rrr_dir = os.path.join(output_dir, "partial_rrr")
@@ -761,9 +761,9 @@ def main():
         df_word=df_word,
     )
 
-    if config.mode == SVDMode.PER_REGION:
+    if config.mode == ScriptMode.PER_REGION:
         _run_per_region(**branch_kwargs)
-    elif config.mode == SVDMode.PER_SUBJECT:
+    elif config.mode == ScriptMode.PER_SUBJECT:
         _run_per_subject(**branch_kwargs)
     else:
         _run_cross_subject(**branch_kwargs)

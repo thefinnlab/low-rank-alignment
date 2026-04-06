@@ -152,7 +152,7 @@ class TestRunRRRForUnit:
 
     @pytest.fixture(autouse=True)
     def _add_scripts_to_path(self):
-        scripts_dir = os.path.join(os.path.dirname(__file__), "..", "scripts")
+        scripts_dir = os.path.join(os.path.dirname(__file__), "..", "scripts", "rrr")
         scripts_dir = os.path.abspath(scripts_dir)
         if scripts_dir not in sys.path:
             sys.path.insert(0, scripts_dir)
@@ -319,7 +319,7 @@ class TestBuildXYFromSubjects:
             n_elecs = len(elec_names) if elec_names is not None else n_elecs_per_sub
             return np.zeros((n_words, n_elecs, n_lags), dtype=np.float32)
 
-        def _fake_apply_offset(X_sel, data, offset):
+        def _fake_apply_offset(X_sel, data, offset, valid_rows=None):
             n = data.shape[0]
             return X_sel, data.reshape(n, -1).astype(np.float32)
 
@@ -337,7 +337,7 @@ class TestBuildXYFromSubjects:
         enc = self._make_enc()
         sig_electrodes = {1: ["ch1", "ch2", "ch3"], 2: ["ch4", "ch5", "ch6"]}
 
-        X, Y, _ = build_XY_from_subjects([1, 2], enc, sig_electrodes, X_emb, df_word)
+        X, Y, _, _ = build_XY_from_subjects([1, 2], enc, sig_electrodes, X_emb)
 
         assert X.shape == (n_words, n_embed)
         # Two subjects × (n_elecs_per_sub × n_lags) columns

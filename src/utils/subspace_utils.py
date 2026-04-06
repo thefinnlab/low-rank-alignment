@@ -472,6 +472,8 @@ def compute_stacked_joint_corr(
     Y = np.concatenate(all_Y_test, axis=0)
 
     n_targets = Y.shape[1]
+    if n_splits < 2:
+        return np.zeros(n_targets)
     kf = KFold(n_splits=n_splits, shuffle=False)
     eye3 = np.eye(3) * 1e-8  # small ridge for numerical stability
 

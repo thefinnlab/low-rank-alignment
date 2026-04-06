@@ -160,7 +160,7 @@ def main():
         # ------------------------------------------------------------------
         # i. Collect rows
         # ------------------------------------------------------------------
-        for elec_idx, elec_name in enumerate(electrode_names):
+        for elec_idx, elec_name in enumerate(elec_names[0]):
             for lag_idx in range(n_lags):
                 all_rows.append(
                     {
@@ -178,7 +178,7 @@ def main():
         # ------------------------------------------------------------------
         # j. Free memory
         # ------------------------------------------------------------------
-        del cache, data, X, Y, models, scalers
+        del X_arr, X, Y, models, scalers
         del all_predictions, all_targets, sig, p_values, q_values, obs_corrs, corrs
         gc.collect()
         if torch.cuda.is_available():

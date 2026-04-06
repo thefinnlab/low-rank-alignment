@@ -54,7 +54,7 @@ from src.utils import (
 )
 from src.utils.data_loaders import load_sig_electrodes
 from src.utils.atlas import build_electrode_region_map
-from src.core.config import SAEConfig, SVDMode, get_results_dir
+from src.core.config import SAEConfig, ScriptMode, get_results_dir
 from src.utils.config_utils import parse_args, load_config
 from src.utils.encoding import (
     load_encoding_results,
@@ -658,9 +658,9 @@ _TRAINING_LOG_METRICS = [
 
 def _dispatch_branch(config, branch_kwargs):
     """Call the appropriate branch function based on config.mode."""
-    if config.mode == SVDMode.PER_REGION:
+    if config.mode == ScriptMode.PER_REGION:
         return _run_per_region_sae(**branch_kwargs)
-    elif config.mode == SVDMode.PER_SUBJECT:
+    elif config.mode == ScriptMode.PER_SUBJECT:
         return _run_per_subject_sae(**branch_kwargs)
     else:
         return _run_cross_subject_sae(**branch_kwargs)
@@ -683,9 +683,9 @@ def main():
     # Resolve SAE output directory
     if config.sae_output_dir:
         sae_dir = config.sae_output_dir
-    elif config.mode == SVDMode.PER_REGION:
+    elif config.mode == ScriptMode.PER_REGION:
         sae_dir = os.path.join(output_dir, "per_region_sae")
-    elif config.mode == SVDMode.PER_SUBJECT:
+    elif config.mode == ScriptMode.PER_SUBJECT:
         sae_dir = os.path.join(output_dir, "per_subject_sae")
     else:
         sae_dir = os.path.join(output_dir, "sae")
@@ -693,9 +693,9 @@ def main():
     # Resolve RRR source directory
     if config.rrr_source_dir:
         rrr_source_dir = config.rrr_source_dir
-    elif config.mode == SVDMode.PER_REGION:
+    elif config.mode == ScriptMode.PER_REGION:
         rrr_source_dir = os.path.join(output_dir, "per_region_rrr")
-    elif config.mode == SVDMode.PER_SUBJECT:
+    elif config.mode == ScriptMode.PER_SUBJECT:
         rrr_source_dir = os.path.join(output_dir, "per_subject_rrr")
     else:
         rrr_source_dir = os.path.join(output_dir, "rrr")

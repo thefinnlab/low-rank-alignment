@@ -106,14 +106,14 @@ class TestEvaluateComplement:
         Y_train, Y_test = Y[:n_train], Y[n_train:]
         Y_hat_train = rng.standard_normal((n_train, n_targets)).astype(np.float32)
         Y_hat_test = rng.standard_normal((n - n_train, n_targets)).astype(np.float32)
-        return A, X_train, X_test, Y_train, Y_test, Y_hat_train, Y_hat_test
+        return A, k, X_train, X_test, Y_train, Y_test, Y_hat_train, Y_hat_test
 
     def test_returns_expected_keys(self, rng):
-        A, X_train, X_test, Y_train, Y_test, Y_hat_train, Y_hat_test = (
+        A, k, X_train, X_test, Y_train, Y_test, Y_hat_train, Y_hat_test = (
             self._make_inputs(rng)
         )
         result = evaluate_complement(
-            A, X_train, X_test, Y_train, Y_test, Y_hat_train, Y_hat_test
+            A, k, X_train, X_test, Y_train, Y_test, Y_hat_train, Y_hat_test
         )
         assert "complement_corr" in result
         assert "complement_recovery_corr" in result
@@ -121,22 +121,22 @@ class TestEvaluateComplement:
         assert "complement_recovery_corr_per_target" in result
 
     def test_corr_is_float(self, rng):
-        A, X_train, X_test, Y_train, Y_test, Y_hat_train, Y_hat_test = (
+        A, k, X_train, X_test, Y_train, Y_test, Y_hat_train, Y_hat_test = (
             self._make_inputs(rng)
         )
         result = evaluate_complement(
-            A, X_train, X_test, Y_train, Y_test, Y_hat_train, Y_hat_test
+            A, k, X_train, X_test, Y_train, Y_test, Y_hat_train, Y_hat_test
         )
         assert isinstance(result["complement_corr"], float)
         assert isinstance(result["complement_recovery_corr"], float)
 
     def test_per_target_shape(self, rng):
         n_targets = 5
-        A, X_train, X_test, Y_train, Y_test, Y_hat_train, Y_hat_test = (
+        A, k, X_train, X_test, Y_train, Y_test, Y_hat_train, Y_hat_test = (
             self._make_inputs(rng, n_targets=n_targets)
         )
         result = evaluate_complement(
-            A, X_train, X_test, Y_train, Y_test, Y_hat_train, Y_hat_test
+            A, k, X_train, X_test, Y_train, Y_test, Y_hat_train, Y_hat_test
         )
         assert len(result["complement_corr_per_target"]) == n_targets
 
@@ -301,7 +301,7 @@ class TestRunPCAForUnit:
 
     @pytest.fixture(autouse=True)
     def _add_scripts_to_path(self):
-        scripts_dir = os.path.join(os.path.dirname(__file__), "..", "scripts")
+        scripts_dir = os.path.join(os.path.dirname(__file__), "..", "scripts", "rrr")
         scripts_dir = os.path.abspath(scripts_dir)
         if scripts_dir not in sys.path:
             sys.path.insert(0, scripts_dir)

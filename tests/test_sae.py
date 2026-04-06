@@ -496,7 +496,7 @@ class TestSAEConfig:
         assert config.l1_penalty == 0.01
         assert config.training_mode == "alternating"
         assert config.regression_type == "ridge"
-        assert config.encoding.layer == 24
+        assert config.encoding.per_model_config == {"layer": 24}
 
     def test_cli_overrides(self, tmp_path):
         from src.core.config import SAEConfig
@@ -817,7 +817,7 @@ class TestSweepHelpers:
 
     def test_detect_sweep_params_no_sweep(self):
         from src.core.config import SAEConfig
-        from scripts.run_sae import _detect_sweep_params
+        from scripts.nonlinear.run_sae import _detect_sweep_params
 
         config = SAEConfig(k=5, hidden_dim=50, l1_penalty=0.01)
         k_values, sweep_params = _detect_sweep_params(config)
@@ -826,7 +826,7 @@ class TestSweepHelpers:
 
     def test_detect_sweep_params_with_lists(self):
         from src.core.config import SAEConfig
-        from scripts.run_sae import _detect_sweep_params
+        from scripts.nonlinear.run_sae import _detect_sweep_params
 
         config = SAEConfig(k=5, hidden_dim=[10, 20], l1_penalty=[0.01, 0.1])
         k_values, sweep_params = _detect_sweep_params(config)
@@ -835,7 +835,7 @@ class TestSweepHelpers:
 
     def test_detect_sweep_params_k_as_list(self):
         from src.core.config import SAEConfig
-        from scripts.run_sae import _detect_sweep_params
+        from scripts.nonlinear.run_sae import _detect_sweep_params
 
         config = SAEConfig(k=[5, 10], hidden_dim=50)
         k_values, sweep_params = _detect_sweep_params(config)
@@ -845,7 +845,7 @@ class TestSweepHelpers:
     def test_detect_sweep_ignores_legitimate_list_fields(self):
         """Fields typed as list (e.g. encoding.subjects) should not be treated as sweep params."""
         from src.core.config import SAEConfig, EncodingConfig
-        from scripts.run_sae import _detect_sweep_params
+        from scripts.nonlinear.run_sae import _detect_sweep_params
 
         config = SAEConfig(
             encoding=EncodingConfig(subjects=[1, 2, 3]),
@@ -856,26 +856,26 @@ class TestSweepHelpers:
         assert sweep_params == {}
 
     def test_build_experiment_subdir_single_param(self):
-        from scripts.run_sae import _build_experiment_subdir
+        from scripts.nonlinear.run_sae import _build_experiment_subdir
 
         result = _build_experiment_subdir({"hidden_dim": 10})
         assert result == "hidden_dim=10"
 
     def test_build_experiment_subdir_multiple_params_sorted(self):
-        from scripts.run_sae import _build_experiment_subdir
+        from scripts.nonlinear.run_sae import _build_experiment_subdir
 
         # Keys should be sorted alphabetically regardless of insertion order
         result = _build_experiment_subdir({"l1_penalty": 0.01, "hidden_dim": 10})
         assert result == os.path.join("hidden_dim=10", "l1_penalty=0.01")
 
     def test_build_experiment_subdir_empty(self):
-        from scripts.run_sae import _build_experiment_subdir
+        from scripts.nonlinear.run_sae import _build_experiment_subdir
 
         assert _build_experiment_subdir({}) is None
 
     def test_make_scalar_config(self):
         from src.core.config import SAEConfig
-        from scripts.run_sae import _make_scalar_config
+        from scripts.nonlinear.run_sae import _make_scalar_config
 
         config = SAEConfig(k=[5, 10], hidden_dim=[10, 20], l1_penalty=[0.01, 0.1])
         scalar = _make_scalar_config(

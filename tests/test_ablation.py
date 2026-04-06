@@ -126,7 +126,7 @@ class TestMaskingFunctions:
 
     @pytest.fixture(autouse=True)
     def _add_scripts_to_path(self):
-        scripts_dir = os.path.join(os.path.dirname(__file__), "..", "scripts")
+        scripts_dir = os.path.join(os.path.dirname(__file__), "..", "scripts", "rrr")
         scripts_dir = os.path.abspath(scripts_dir)
         if scripts_dir not in sys.path:
             sys.path.insert(0, scripts_dir)
@@ -200,7 +200,7 @@ class TestRunAblationForUnit:
 
     @pytest.fixture(autouse=True)
     def _add_scripts_to_path(self):
-        scripts_dir = os.path.join(os.path.dirname(__file__), "..", "scripts")
+        scripts_dir = os.path.join(os.path.dirname(__file__), "..", "scripts", "rrr")
         scripts_dir = os.path.abspath(scripts_dir)
         if scripts_dir not in sys.path:
             sys.path.insert(0, scripts_dir)

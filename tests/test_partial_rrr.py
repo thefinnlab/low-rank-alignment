@@ -7,7 +7,7 @@ import numpy as np
 import pytest
 
 from src.utils.analysis import partial_out_subspace, partial_out_svd_directions
-from src.core.config import PartialRRRConfig, SVDMode
+from src.core.config import PartialRRRConfig, ScriptMode
 from src.utils.config_utils import dict_to_dataclass
 from src.utils.srrr import save_rrr_factors, save_rrr_result
 
@@ -136,7 +136,7 @@ def test_partial_rrr_config_default_rank_grid_is_none():
 class TestDiscoverRanks:
     @pytest.fixture(autouse=True)
     def _add_scripts_to_path(self):
-        scripts_dir = os.path.join(os.path.dirname(__file__), "..", "scripts")
+        scripts_dir = os.path.join(os.path.dirname(__file__), "..", "scripts", "rrr")
         scripts_dir = os.path.abspath(scripts_dir)
         if scripts_dir not in sys.path:
             sys.path.insert(0, scripts_dir)
@@ -187,7 +187,7 @@ class TestPartialRRRSweep:
 
     @pytest.fixture(autouse=True)
     def _add_scripts_to_path(self):
-        scripts_dir = os.path.join(os.path.dirname(__file__), "..", "scripts")
+        scripts_dir = os.path.join(os.path.dirname(__file__), "..", "scripts", "rrr")
         scripts_dir = os.path.abspath(scripts_dir)
         if scripts_dir not in sys.path:
             sys.path.insert(0, scripts_dir)
@@ -300,7 +300,7 @@ class TestPartialRRRSweep:
 class TestSavePartialRRRResults:
     @pytest.fixture(autouse=True)
     def _add_scripts_to_path(self):
-        scripts_dir = os.path.join(os.path.dirname(__file__), "..", "scripts")
+        scripts_dir = os.path.join(os.path.dirname(__file__), "..", "scripts", "rrr")
         scripts_dir = os.path.abspath(scripts_dir)
         if scripts_dir not in sys.path:
             sys.path.insert(0, scripts_dir)
