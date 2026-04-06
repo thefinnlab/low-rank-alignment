@@ -55,7 +55,7 @@ def get_gpt2_xl_embeddings(data_root, transcript_df, layer):
 
 
 @register_embedding_getter("glove")
-def get_glove_embeddings(data_root, transcript_df):
+def get_glove_embeddings(data_root, transcript_df, dim):
     """
     Retrieves GloVe embeddings for each word in the input DataFrame.
 
@@ -74,7 +74,7 @@ def get_glove_embeddings(data_root, transcript_df):
     Returns:
 
     """
-    glove_file = os.path.join(data_root, "glove/glove.6B.50d.txt")
+    glove_file = os.path.join(data_root, f"glove/glove.6B.{dim}d.txt")
     glove_vectors = KeyedVectors.load_word2vec_format(
         glove_file, binary=False, no_header=True
     )
