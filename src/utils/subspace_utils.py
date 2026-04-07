@@ -14,7 +14,7 @@ from src.utils.sae import solve_regression
 from src.utils.srrr import compute_correlation
 
 
-def evaluate_subspace_ols(
+def evaluate_subspace_ridge(
     A: np.ndarray,
     X_train: np.ndarray,
     X_test: np.ndarray,
@@ -71,7 +71,7 @@ def evaluate_subspace_ols(
         X_test,
         Y_test,
         Y_hat_full,
-        regression_type="ols",
+        regression_type="ridge",
         compute_cca=compute_cca,
         compute_procrustes=compute_procrustes,
     )
@@ -116,7 +116,7 @@ def evaluate_input_space(
     W_resid, b_resid = solve_regression(
         torch.as_tensor(X_train, dtype=torch.float32, device=device),
         torch.as_tensor(Y_resid_train, dtype=torch.float32, device=device),
-        "ols",
+        "ridge",
         device,
         standardize=False,
         alphas=alphas,
@@ -307,13 +307,13 @@ def build_nr_metrics_dict(
     arbitrary_result: dict | None = None,
     prefix: str = "nr_",
 ) -> dict:
-    """Convert :func:`evaluate_subspace_ols` output into a flat metrics dict.
+    """Convert :func:`evaluate_subspace_ridge` output into a flat metrics dict.
 
     All keys are prefixed with ``nr_`` so they can be merged into the
     caller's metrics dict without colliding with reduced-rank columns.
 
     Args:
-        nr_result: Return value of :func:`evaluate_subspace_ols`.
+        nr_result: Return value of :func:`evaluate_subspace_ridge`.
         sig_mask_flat: Boolean mask over targets (True = significant).
         complement_result: Return value of :func:`evaluate_complement`.
         arbitrary_result: Return value of :func:`evaluate_arbitrary`.

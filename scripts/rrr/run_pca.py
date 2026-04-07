@@ -60,7 +60,7 @@ from src.utils.rrr_utils import (
     make_sig_split_df,
 )
 from src.utils.subspace_utils import (
-    evaluate_subspace_ols,
+    evaluate_subspace_ridge,
     evaluate_complement_and_arbitrary,
     add_primary_cross_model_metrics,
     _add_complement_sig_nonsig,
@@ -206,7 +206,7 @@ def _run_pca_for_unit(
         for k in tqdm(valid_ranks, desc=f"  fold {fold_f}", leave=True, unit="rank"):
             A = V_full[:, :k]  # (n_embed, k) — top-k PCA components
 
-            nr_result = evaluate_subspace_ols(
+            nr_result = evaluate_subspace_ridge(
                 A,
                 X_train,
                 X_test,

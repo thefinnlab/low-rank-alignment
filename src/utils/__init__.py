@@ -133,7 +133,7 @@ from src.utils.sae import (
     train_sae_alternating,
 )
 from src.utils.subspace_utils import (
-    evaluate_subspace_ols,
+    evaluate_subspace_ridge,
     evaluate_complement,
     evaluate_arbitrary,
     build_nr_metrics_dict,
@@ -268,7 +268,7 @@ __all__ = [
     "train_sae_end_to_end",
     "train_sae_alternating",
     # subspace_utils
-    "evaluate_subspace_ols",
+    "evaluate_subspace_ridge",
     "evaluate_complement",
     "evaluate_arbitrary",
     "build_nr_metrics_dict",

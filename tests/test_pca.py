@@ -8,7 +8,7 @@ import pandas as pd
 import pytest
 
 from src.utils.subspace_utils import (
-    evaluate_subspace_ols,
+    evaluate_subspace_ridge,
     evaluate_complement,
     evaluate_arbitrary,
     build_nr_metrics_dict,
@@ -55,7 +55,9 @@ class TestEvaluateSubspaceOLS:
 
     def test_returns_expected_keys(self, rng):
         A, X_train, X_test, Y_train, Y_test, Y_hat_full = self._make_inputs(rng)
-        result = evaluate_subspace_ols(A, X_train, X_test, Y_train, Y_test, Y_hat_full)
+        result = evaluate_subspace_ridge(
+            A, X_train, X_test, Y_train, Y_test, Y_hat_full
+        )
         assert "suf" in result
         assert "cca_sim" in result
         assert "proc_sim" in result
@@ -69,19 +71,25 @@ class TestEvaluateSubspaceOLS:
         A, X_train, X_test, Y_train, Y_test, Y_hat_full = self._make_inputs(
             rng, n=n, n_embed=n_embed, n_targets=n_targets, k=k
         )
-        result = evaluate_subspace_ols(A, X_train, X_test, Y_train, Y_test, Y_hat_full)
+        result = evaluate_subspace_ridge(
+            A, X_train, X_test, Y_train, Y_test, Y_hat_full
+        )
         assert result["Y_hat"].shape == Y_test.shape
         assert result["Y_hat_train"].shape == Y_train.shape
 
     def test_cca_sim_none_by_default(self, rng):
         A, X_train, X_test, Y_train, Y_test, Y_hat_full = self._make_inputs(rng)
-        result = evaluate_subspace_ols(A, X_train, X_test, Y_train, Y_test, Y_hat_full)
+        result = evaluate_subspace_ridge(
+            A, X_train, X_test, Y_train, Y_test, Y_hat_full
+        )
         assert result["cca_sim"] is None
         assert result["proc_sim"] is None
 
     def test_suf_has_expected_keys(self, rng):
         A, X_train, X_test, Y_train, Y_test, Y_hat_full = self._make_inputs(rng)
-        result = evaluate_subspace_ols(A, X_train, X_test, Y_train, Y_test, Y_hat_full)
+        result = evaluate_subspace_ridge(
+            A, X_train, X_test, Y_train, Y_test, Y_hat_full
+        )
         suf = result["suf"]
         assert "minimal_r2" in suf
         assert "recovery_r2" in suf

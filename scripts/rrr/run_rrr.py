@@ -65,7 +65,7 @@ from src.utils.rrr_utils import (
     run_prediction_metrics,
 )
 from src.utils.subspace_utils import (
-    evaluate_subspace_ols,
+    evaluate_subspace_ridge,
     evaluate_complement_and_arbitrary,
     add_primary_cross_model_metrics,
     build_nr_metrics_dict,
@@ -122,7 +122,7 @@ def _run_k_for_rrr(
         compute_procrustes=config.compute_procrustes,
     )
     # Non-reduced-rank OLS from k-dim subspace
-    nr_result = evaluate_subspace_ols(
+    nr_result = evaluate_subspace_ridge(
         A,
         X_train,
         X_test,
