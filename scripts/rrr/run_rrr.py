@@ -121,7 +121,6 @@ def _run_k_for_rrr(
         compute_cca=config.compute_cca,
         compute_procrustes=config.compute_procrustes,
     )
-
     # Non-reduced-rank OLS from k-dim subspace
     nr_result = evaluate_subspace_ols(
         A,
@@ -134,7 +133,6 @@ def _run_k_for_rrr(
         compute_procrustes=config.compute_procrustes,
         device=device,
     )
-
     # Complement and arbitrary evaluations
     complement_result, arbitrary_result = evaluate_complement_and_arbitrary(
         A_full,
@@ -242,7 +240,11 @@ def _run_k_for_rrr(
 
 
 def _calculate_joint_correlations(
-    oof_spill_dir: str, n_folds: int, config: RRRConfig, sig_mask_flat, all_rows,
+    oof_spill_dir: str,
+    n_folds: int,
+    config: RRRConfig,
+    sig_mask_flat,
+    all_rows,
     rrr_unit_dir: str = None,
 ):
     _oof_fields = [
@@ -642,7 +644,11 @@ def _run_rrr_for_unit(
     # never trained on the data they are evaluated on.
     print("\nComputing stacked OLS joint correlations...")
     all_rows = _calculate_joint_correlations(
-        oof_spill_dir, n_folds, config, sig_mask_flat, all_rows,
+        oof_spill_dir,
+        n_folds,
+        config,
+        sig_mask_flat,
+        all_rows,
         rrr_unit_dir=rrr_unit_dir,
     )
 
@@ -711,7 +717,6 @@ def _get_decomposition_inputs(
         encoding_config,
         sig_electrodes,
         embeddings,
-        word_df,
         valid_rows=word_in_glove,
     )
     print(f"  X: {X_raw.shape}, Y: {Y_full.shape}")
@@ -956,7 +961,9 @@ def main():
 
     word_in_glove = None
     if enc.limit_to_glove or enc.model == "glove":
-        word_in_glove = get_glove_embeddings(enc.data_root, word_df)[1]["in_glove"]
+        word_in_glove = get_glove_embeddings(
+            enc.data_root, word_df, **enc.per_model_config
+        )[1]["in_glove"]
 
     branch_kwargs = dict(
         config=config,

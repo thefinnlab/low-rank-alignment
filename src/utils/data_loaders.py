@@ -277,16 +277,23 @@ def load_data_from_cache(
     elec_names = []
     for sub_id in subs_to_load:
         cache = load_precomputed_epochs(sub_id, data_root)
+        ref_selection = cache["selection"]
         data = epochs_from_cache(
             cache, elec_names=sig_electrodes[sub_id] if sig_electrodes else None
         )
-        elec_names.append(cache["ch_names"])
+        if sig_electrodes:
+            elec_names.append(sig_electrodes[sub_id])
+        else:
+            elec_names.append(cache["ch_names"])
         X_arr, Y_sub = apply_offset(
-            embeddings[cache["selection"]], data, offset, valid_rows=valid_rows
+            embeddings[ref_selection],
+            data,
+            offset,
+            valid_rows=valid_rows[ref_selection] if valid_rows is not None else None,
         )
         if X_ref is None:
             X_ref = X_arr
-            ref_selection = cache["selection"]
+
         Y_cols.append(Y_sub)
     gc.collect()
     return (
@@ -558,20 +565,12 @@ def get_arbitrary_embeddings(X, epochs_or_selection, df_word, seed=None):
     unique_words = words.unique()
     if seed is not None:
         rng = np.random.default_rng(seed)
-        emb_idxs = rng.choice(
-            np.arange(X.shape[0]), size=len(unique_words), replace=False
-        )
     else:
         rng = np.random.default_rng()
-        emb_idxs = np.random.choice(
-            np.arange(X.shape[0]), size=len(unique_words), replace=False
-        )
-    arb_word_embs = X[emb_idxs]
 
     X_arb = np.zeros_like(X)
     for word_idx, word in enumerate(unique_words):
         # Use line for reusing actual embeddings
-        # X_arb[words[words == word].index] = arb_word_embs[word_idx]
         X_arb[words[words == word].index] = rng.uniform(size=(1, X.shape[1]))
 
     return X_arb

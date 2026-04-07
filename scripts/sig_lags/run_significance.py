@@ -62,9 +62,9 @@ def main():
 
     word_in_glove = None
     if enc.limit_to_glove or enc.model == "glove":
-        word_in_glove = get_glove_embeddings(enc.data_root, transcript_df)[1][
-            "in_glove"
-        ]
+        word_in_glove = get_glove_embeddings(
+            enc.data_root, transcript_df, **enc.per_model_config
+        )[1]["in_glove"]
 
     alphas = np.array(enc.ridge_alphas) if enc.ridge_alphas is not None else None
     model_constructor = get_ridge_model_constructor(alphas=alphas)

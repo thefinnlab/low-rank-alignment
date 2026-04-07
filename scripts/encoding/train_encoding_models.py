@@ -148,8 +148,7 @@ def _run_joint(
     word_in_glove=None,
 ):
     all_subject_ids = list(sig_elecs.keys())
-
-    X_arr, Y, selection, elec_counts = load_data_from_cache(
+    X_arr, Y, selection, elec_names = load_data_from_cache(
         all_subject_ids,
         data_root,
         offset,
@@ -157,7 +156,12 @@ def _run_joint(
         sig_elecs,
         valid_rows=word_in_glove,
     )
-    total_elecs, n_lags = Y.shape[1], Y.shape[2]
+    if word_in_glove is not None:
+        selection = selection[word_in_glove[selection]]
+
+    elec_counts = [len(x) for x in elec_names]
+    total_elecs = sum(elec_counts)
+    n_lags = Y.shape[1] // total_elecs
 
     lags = np.linspace(-2.0, 2.0, n_lags, endpoint=False)
 
@@ -241,7 +245,9 @@ def _run_batch(
             sig_elecs,
             valid_rows=word_in_glove,
         )
-        n_elecs, n_lags = Y.shape[1], Y.shape[2]
+        elec_counts = [len(x) for x in elec_names]
+        n_elecs = sum(elec_counts)
+        n_lags = Y.shape[1] // n_elecs
         lags = np.linspace(-2.0, 2.0, n_lags, endpoint=False)
 
         corrs, corrs_arb, models, tr_idxs, test_idxs, scalers = _train_with_arbitrary(
@@ -323,7 +329,9 @@ def main():
     )
     word_in_glove = None
     if config.limit_to_glove or config.model == "glove":
-        word_in_glove = get_glove_embeddings(config.data_root, word_df)[1]["in_glove"]
+        word_in_glove = get_glove_embeddings(
+            config.data_root, word_df, **config.per_model_config
+        )[1]["in_glove"]
 
     alphas = (
         np.array(config.ridge_alphas, dtype=float)

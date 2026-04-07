@@ -7,6 +7,7 @@ import numpy as np
 import pandas as pd
 
 from src.core.registry import embedding_getter_registry, register_embedding_getter
+from src.utils.data_loaders import get_arbitrary_embeddings
 
 
 def load_embeddings(
@@ -21,7 +22,7 @@ def load_embeddings(
     )
 
 
-@register_embedding_getter("gpt2-xl")
+@register_embedding_getter("gpt2xl")
 def get_gpt2_xl_embeddings(data_root, transcript_df, layer):
     """
     Load GPT-2-XL token embeddings from HDF5, average per word.
@@ -108,3 +109,28 @@ def get_glove_embeddings(data_root, transcript_df, dim):
     word_df["in_glove"] = in_glove
 
     return glove_embeddings, word_df
+
+
+@register_embedding_getter("arbitrary")
+def get_and_write_arbitrary_embeddings(
+    data_root, transcript_df, results_dir, dim, seed=42
+):
+    word_df = transcript_df.groupby("word_idx").agg(
+        dict(word="first", start="first", end="last")
+    )
+    arbitrary_embedding_path = os.path.join(
+        results_dir, f"arbitrary_embeddings_dim{dim}_seed{seed}.npy"
+    )
+    if os.path.exists(arbitrary_embedding_path):
+        print(
+            f"  Found existing arbitrary embeddings for dim={dim}, seed={seed}. Loading from disk."
+        )
+        arbitrary_embeddings = np.load(arbitrary_embedding_path)
+        return arbitrary_embeddings, word_df
+    correct_X_shape = (transcript_df.shape[0], dim)
+    arbitrary_embeddings = get_arbitrary_embeddings(correct_X_shape, dim, seed)
+    np.save(
+        arbitrary_embedding_path,
+        arbitrary_embeddings,
+    )
+    return arbitrary_embeddings, word_df

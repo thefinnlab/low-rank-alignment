@@ -566,7 +566,7 @@ def get_and_offset_arbitrary_embeddings(
     aligned_embeddings, selection, df_word, offset, seed, valid_rows=None
 ):
     X_arbitrary = get_arbitrary_embeddings(
-        aligned_embeddings[selection],
+        aligned_embeddings,
         selection,
         df_word,
         seed=seed,

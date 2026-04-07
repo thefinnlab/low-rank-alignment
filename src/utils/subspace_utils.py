@@ -52,7 +52,7 @@ def evaluate_subspace_ols(
     W, b = solve_regression(
         torch.as_tensor(X_proj_train, dtype=torch.float32, device=device),
         torch.as_tensor(Y_train, dtype=torch.float32, device=device),
-        "ridge",
+        "ols",
         device,
         standardize=False,
         alphas=np.logspace(-2, 10, 13) if A.shape[1] < 50 else np.logspace(1, 10, 13),
@@ -71,7 +71,7 @@ def evaluate_subspace_ols(
         X_test,
         Y_test,
         Y_hat_full,
-        regression_type="ridge",
+        regression_type="ols",
         compute_cca=compute_cca,
         compute_procrustes=compute_procrustes,
     )
@@ -100,7 +100,7 @@ def evaluate_input_space(
     W_raw, b_raw = solve_regression(
         torch.as_tensor(X_train, dtype=torch.float32, device=device),
         torch.as_tensor(Y_train, dtype=torch.float32, device=device),
-        "ridge",
+        "ols",
         device,
         standardize=False,
         alphas=alphas,
@@ -116,7 +116,7 @@ def evaluate_input_space(
     W_resid, b_resid = solve_regression(
         torch.as_tensor(X_train, dtype=torch.float32, device=device),
         torch.as_tensor(Y_resid_train, dtype=torch.float32, device=device),
-        "ridge",
+        "ols",
         device,
         standardize=False,
         alphas=alphas,
