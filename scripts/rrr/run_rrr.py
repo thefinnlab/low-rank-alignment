@@ -48,7 +48,6 @@ from src.utils.config_utils import parse_args, load_config
 from src.utils.embeddings import get_glove_embeddings
 from src.utils.encoding import (
     load_encoding_results,
-    build_enc_subjects_info,
     build_per_fold_baselines,
     get_and_offset_arbitrary_embeddings,
 )
@@ -722,12 +721,7 @@ def _get_decomposition_inputs(
     )
     print(f"  X: {X_raw.shape}, Y: {Y_full.shape}")
 
-    enc_subjects_info = build_enc_subjects_info(
-        output_dir, subs_with_sig, sig_electrodes
-    )
-    per_fold_baselines = build_per_fold_baselines(
-        X_raw, Y_full, test_idxs, enc_subjects_info
-    )
+    per_fold_baselines = build_per_fold_baselines(X_raw, Y_full, test_idxs)
 
     # Generate arbitrary embeddings for null baseline
     X_arbitrary = get_and_offset_arbitrary_embeddings(

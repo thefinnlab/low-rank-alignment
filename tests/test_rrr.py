@@ -110,41 +110,10 @@ class TestSaveLoadRRRResult:
 
 
 def _make_baselines(X, Y, test_idxs):
-    """Build per_fold_baselines from raw data using a fresh ridge model (for tests only).
+    """Build per_fold_baselines from raw data using a fresh ridge model."""
+    from src.utils.encoding import build_per_fold_baselines
 
-    Replicates the old per-fold scaler + ridge fit so that TestRunRRRForUnit
-    can call _run_rrr_for_unit without needing saved encoding_results.joblib files.
-    """
-    from sklearn.preprocessing import StandardScaler
-    from src.utils.encoding import get_ridge_model_constructor
-
-    n_words, n_embed = X.shape
-    baselines = []
-    for test_idx in test_idxs:
-        train_mask = np.ones(n_words, dtype=bool)
-        train_mask[test_idx] = False
-        train_idx = np.where(train_mask)[0]
-        scaler = StandardScaler()
-        Y_train = scaler.fit_transform(Y[train_idx])
-        Y_test = scaler.transform(Y[test_idx])
-        model = get_ridge_model_constructor()(0)
-        model.fit(X[train_idx], Y_train)
-        coef = np.asarray(model[-1].coef_)
-        if coef.shape[0] != n_embed:
-            coef = coef.T
-        beta_full_raw = (coef / model[0].scale_[:, np.newaxis]).astype(np.float32)
-        baselines.append(
-            {
-                "train_idx": train_idx,
-                "test_idx": test_idx,
-                "Y_train": Y_train,
-                "Y_test": Y_test,
-                "Y_hat_full_train": np.asarray(model.predict(X[train_idx])),
-                "Y_hat_full_test": np.asarray(model.predict(X[test_idx])),
-                "beta_full_raw": beta_full_raw,
-            }
-        )
-    return baselines
+    return build_per_fold_baselines(X, Y, test_idxs)
 
 
 class TestRunRRRForUnit:

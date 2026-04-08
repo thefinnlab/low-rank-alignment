@@ -49,7 +49,6 @@ from src.core.config import PCAConfig, ScriptMode, get_results_dir
 from src.utils.config_utils import parse_args, load_config
 from src.utils.encoding import (
     load_encoding_results,
-    build_enc_subjects_info,
     build_per_fold_baselines,
     get_and_offset_arbitrary_embeddings,
 )
@@ -541,12 +540,7 @@ def _run_cross_subject_pca(
     )
     print(f"  X: {X_ref.shape}, Y: {Y_full.shape}")
 
-    enc_subjects_info = build_enc_subjects_info(
-        output_dir, subs_with_sig, sig_electrodes
-    )
-    per_fold_baselines = build_per_fold_baselines(
-        X_ref, Y_full, ref_test_idxs, enc_subjects_info
-    )
+    per_fold_baselines = build_per_fold_baselines(X_ref, Y_full, ref_test_idxs)
 
     # Generate arbitrary embeddings for null baseline
     X_arbitrary = get_and_offset_arbitrary_embeddings(
@@ -629,12 +623,7 @@ def _run_per_subject_pca(
         del cache
         gc.collect()
 
-        enc_subjects_info = build_enc_subjects_info(
-            output_dir, [sub_id], {sub_id: sub_sig_elecs}
-        )
-        per_fold_baselines = build_per_fold_baselines(
-            X_arr, Y_sub, test_idxs, enc_subjects_info
-        )
+        per_fold_baselines = build_per_fold_baselines(X_arr, Y_sub, test_idxs)
 
         rrr_sub_overlay = None
         if rrr_overlay_dir:
@@ -726,12 +715,7 @@ def _run_per_region_pca(
         )
         print(f"  X: {X_ref.shape}, Y: {Y_full.shape}")
 
-        enc_subjects_info = build_enc_subjects_info(
-            output_dir, subs_in_region, per_subject_region_elecs
-        )
-        per_fold_baselines = build_per_fold_baselines(
-            X_ref, Y_full, ref_test_idxs, enc_subjects_info
-        )
+        per_fold_baselines = build_per_fold_baselines(X_ref, Y_full, ref_test_idxs)
 
         # Generate arbitrary embeddings for null baseline
         X_arbitrary = get_and_offset_arbitrary_embeddings(

@@ -17,6 +17,7 @@ from src.utils.encoding import (
     _make_col_idxs,
     build_enc_subjects_info,
     build_per_fold_baselines,
+    build_per_fold_baselines_from_saved,
 )
 
 
@@ -587,6 +588,46 @@ def _make_fitted_enc_results(rng, n_words, n_embed, elec_names, n_lags=3, n_fold
 
 
 class TestBuildPerFoldBaselines:
+    """Tests for the fresh-training build_per_fold_baselines."""
+
+    @pytest.fixture
+    def synthetic_data(self):
+        rng = np.random.default_rng(77)
+        n_words, n_embed, n_targets = 60, 6, 12
+        X = rng.standard_normal((n_words, n_embed)).astype(np.float32)
+        Y = rng.standard_normal((n_words, n_targets)).astype(np.float32)
+        from sklearn.model_selection import KFold
+
+        test_idxs = [t for _, t in KFold(2, shuffle=False).split(X)]
+        return X, Y, test_idxs, n_words, n_embed, n_targets
+
+    def test_output_length_matches_n_folds(self, synthetic_data):
+        X, Y, test_idxs, *_ = synthetic_data
+        baselines = build_per_fold_baselines(X, Y, test_idxs)
+        assert len(baselines) == len(test_idxs)
+
+    def test_shapes_are_correct(self, synthetic_data):
+        X, Y, test_idxs, n_words, n_embed, n_targets = synthetic_data
+        baselines = build_per_fold_baselines(X, Y, test_idxs)
+        fold_size = n_words // 2
+        b = baselines[0]
+        assert b["Y_train"].shape == (n_words - fold_size, n_targets)
+        assert b["Y_test"].shape == (fold_size, n_targets)
+        assert b["Y_hat_full_train"].shape == (n_words - fold_size, n_targets)
+        assert b["Y_hat_full_test"].shape == (fold_size, n_targets)
+        assert b["beta_full_raw"].shape == (n_embed, n_targets)
+
+    def test_train_test_idx_partition_all_words(self, synthetic_data):
+        X, Y, test_idxs, n_words, *_ = synthetic_data
+        baselines = build_per_fold_baselines(X, Y, test_idxs)
+        for b in baselines:
+            combined = np.sort(np.concatenate([b["train_idx"], b["test_idx"]]))
+            np.testing.assert_array_equal(combined, np.arange(n_words))
+
+
+class TestBuildPerFoldBaselinesFromSaved:
+    """Tests for the legacy build_per_fold_baselines_from_saved."""
+
     @pytest.fixture
     def synthetic_setup(self):
         rng = np.random.default_rng(77)
@@ -618,7 +659,7 @@ class TestBuildPerFoldBaselines:
         n_targets = len(target_elecs) * n_lags
         Y_target = Y_full[:, :n_targets]
         enc_info = self._make_enc_subjects_info(enc_results, target_elecs)
-        baselines = build_per_fold_baselines(
+        baselines = build_per_fold_baselines_from_saved(
             X, Y_target, enc_results["test_idxs"], enc_info
         )
         assert len(baselines) == len(enc_results["test_idxs"])
@@ -629,7 +670,7 @@ class TestBuildPerFoldBaselines:
         n_targets = len(target_elecs) * n_lags
         Y_target = Y_full[:, :n_targets]
         enc_info = self._make_enc_subjects_info(enc_results, target_elecs)
-        baselines = build_per_fold_baselines(
+        baselines = build_per_fold_baselines_from_saved(
             X, Y_target, enc_results["test_idxs"], enc_info
         )
 
@@ -646,7 +687,7 @@ class TestBuildPerFoldBaselines:
         target_elecs = elec_names
         n_targets = len(target_elecs) * n_lags
         enc_info = self._make_enc_subjects_info(enc_results, target_elecs)
-        baselines = build_per_fold_baselines(
+        baselines = build_per_fold_baselines_from_saved(
             X, Y_full, enc_results["test_idxs"], enc_info
         )
 
