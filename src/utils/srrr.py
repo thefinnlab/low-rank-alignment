@@ -11,6 +11,7 @@ import warnings
 import numpy as np
 import torch
 from tqdm import tqdm
+from himalaya.scoring import correlation_score
 
 from src.utils.tensor_utils import to_numpy, to_torch
 
@@ -482,27 +483,6 @@ def compute_r2(Y_true: np.ndarray, Y_pred: np.ndarray) -> np.ndarray:
     return r2
 
 
-def compute_correlation(Y_true: np.ndarray, Y_pred: np.ndarray) -> np.ndarray:
-    """Compute per-column Pearson correlation.
-
-    Constant columns return 0.0 instead of NaN.
-
-    Args:
-        Y_true: (n, n_targets).
-        Y_pred: (n, n_targets).
-
-    Returns:
-        corr: (n_targets,) array.
-    """
-    Y_true_c = Y_true - Y_true.mean(axis=0, keepdims=True)
-    Y_pred_c = Y_pred - Y_pred.mean(axis=0, keepdims=True)
-    num = np.sum(Y_true_c * Y_pred_c, axis=0)
-    denom = np.sqrt(np.sum(Y_true_c**2, axis=0) * np.sum(Y_pred_c**2, axis=0))
-    with np.errstate(divide="ignore", invalid="ignore"):
-        corr = np.where(denom < 1e-12, 0.0, num / denom)
-    return corr
-
-
 # ---------------------------------------------------------------------------
 # E. Sufficiency test
 # ---------------------------------------------------------------------------
@@ -663,8 +643,8 @@ def run_sufficiency_test(
     minimal_r2 = float(compute_r2(Y_test, Y_hat_min).mean())
     pred_r2 = float(compute_r2(Y_hat_full, Y_hat_min).mean())
 
-    full_corr_arr = compute_correlation(Y_test, Y_hat_full)
-    minimal_corr_arr = compute_correlation(Y_test, Y_hat_min)
+    full_corr_arr = correlation_score(Y_test, Y_hat_full)
+    minimal_corr_arr = correlation_score(Y_test, Y_hat_min)
     full_corr = float(full_corr_arr.mean())
     minimal_corr = float(minimal_corr_arr.mean())
 
@@ -682,7 +662,7 @@ def run_sufficiency_test(
     Y_resid_hat = to_numpy(X_test_t @ W + b)
 
     recovery_r2 = float(compute_r2(Y_resid_test, Y_resid_hat).mean())
-    recovery_corr_arr = compute_correlation(Y_resid_test, Y_resid_hat)
+    recovery_corr_arr = correlation_score(Y_resid_test, Y_resid_hat)
     recovery_corr = float(recovery_corr_arr.mean())
 
     if null_r2 is not None:
@@ -883,11 +863,13 @@ def save_rrr_result(
         fold: Fold index.
         metrics: Dict of scalar metrics.
     """
+    from src.utils.tensor_utils import to_numpy
+
     fold_dir = os.path.join(output_dir, f"k{k}", f"fold_{fold}")
     os.makedirs(fold_dir, exist_ok=True)
     np.savez(
         os.path.join(fold_dir, "metrics.npz"),
-        **{k_: np.array(v) for k_, v in metrics.items() if v is not None},
+        **{k_: to_numpy(v) for k_, v in metrics.items() if v is not None},
     )
 
 

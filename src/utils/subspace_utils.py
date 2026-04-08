@@ -11,7 +11,7 @@ import torch
 from src.utils.analysis import partial_out_subspace
 from src.utils.rrr_utils import add_sig_nonsig_corrs, run_prediction_metrics
 from src.utils.sae import solve_regression
-from src.utils.srrr import compute_correlation
+from himalaya.scoring import correlation_score
 
 
 def evaluate_subspace_ridge(
@@ -52,7 +52,7 @@ def evaluate_subspace_ridge(
     W, b = solve_regression(
         torch.as_tensor(X_proj_train, dtype=torch.float32, device=device),
         torch.as_tensor(Y_train, dtype=torch.float32, device=device),
-        "ols",
+        "ridge",
         device,
         standardize=False,
         alphas=np.logspace(-2, 10, 13) if A.shape[1] < 50 else np.logspace(1, 10, 13),
@@ -100,14 +100,14 @@ def evaluate_input_space(
     W_raw, b_raw = solve_regression(
         torch.as_tensor(X_train, dtype=torch.float32, device=device),
         torch.as_tensor(Y_train, dtype=torch.float32, device=device),
-        "ols",
+        "ridge",
         device,
         standardize=False,
         alphas=alphas,
     )
     X_test_t = torch.as_tensor(X_test, dtype=torch.float32, device=device)
     Y_hat = (X_test_t @ W_raw + b_raw).cpu().numpy()
-    comp_corr_arr = compute_correlation(Y_test, Y_hat)
+    comp_corr_arr = correlation_score(Y_test, Y_hat)
 
     # Predict residuals from complement
     Y_resid_train = Y_train - Y_hat_subspace_train
@@ -122,7 +122,7 @@ def evaluate_input_space(
         alphas=alphas,
     )
     Y_hat_resid = (X_test_t @ W_resid + b_resid).cpu().numpy()
-    comp_recovery_corr_arr = compute_correlation(Y_resid_test, Y_hat_resid)
+    comp_recovery_corr_arr = correlation_score(Y_resid_test, Y_hat_resid)
 
     prefix = f"{subspace_name}_" if subspace_name else ""
     return {
@@ -435,7 +435,7 @@ def compute_cross_model_metrics(
     key_prefix = f"{label_A}_{label_B}"
 
     # Prediction correlation: how similar are the two models' predictions?
-    pred_corr_per_target = compute_correlation(Y_hat_A, Y_hat_B)
+    pred_corr_per_target = correlation_score(Y_hat_A, Y_hat_B)
 
     return {
         f"{key_prefix}_pred_corr": float(pred_corr_per_target.mean()),
@@ -466,6 +466,7 @@ def compute_stacked_joint_corr(
         (n_targets,) array of mean per-target joint correlation across inner folds.
     """
     from sklearn.model_selection import KFold
+    from src.utils.tensor_utils import to_numpy
 
     Y_hat_A = np.concatenate(all_Y_hat_A, axis=0)  # (N, n_targets)
     Y_hat_B = np.concatenate(all_Y_hat_B, axis=0)
@@ -516,7 +517,7 @@ def compute_stacked_joint_corr(
         Y_te = Y[test_idx]
         Y_pred = A_te * beta[:, 0] + B_te * beta[:, 1] + beta[:, 2]
 
-        fold_corrs.append(compute_correlation(Y_te, Y_pred))
+        fold_corrs.append(to_numpy(correlation_score(Y_te, Y_pred)))
 
     return np.mean(fold_corrs, axis=0)  # (n_targets,)
 

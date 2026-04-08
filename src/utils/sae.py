@@ -8,7 +8,7 @@ from torch.utils.data import DataLoader, TensorDataset
 from tqdm import tqdm
 
 from src.utils.tensor_utils import to_numpy, to_torch
-from src.utils.srrr import compute_r2, compute_correlation
+from src.utils.srrr import compute_r2
 
 
 class SAEEncoder(nn.Module):
@@ -359,7 +359,7 @@ def train_sae_end_to_end(
                 preds_te, acts_te = model(X_te)
                 test_r2 = float(compute_r2(to_numpy(Y_te), to_numpy(preds_te)).mean())
                 test_corr = float(
-                    compute_correlation(to_numpy(Y_te), to_numpy(preds_te)).mean()
+                    correlation_score(to_numpy(Y_te), to_numpy(preds_te)).mean()
                 )
                 step_sae_metrics = compute_sae_metrics(acts_te)
                 l0 = step_sae_metrics["l0_sparsity"]
@@ -412,7 +412,7 @@ def train_sae_end_to_end(
 
     sae_metrics = compute_sae_metrics(acts_te)
     test_r2 = float(compute_r2(to_numpy(Y_te), to_numpy(preds_te)).mean())
-    test_corr = float(compute_correlation(to_numpy(Y_te), to_numpy(preds_te)).mean())
+    test_corr = float(correlation_score(to_numpy(Y_te), to_numpy(preds_te)).mean())
 
     metrics = {
         "r2": test_r2,
@@ -625,7 +625,7 @@ def train_sae_alternating(
                 preds_te = H_test @ reg_W + reg_b
                 test_r2 = float(compute_r2(to_numpy(Y_te), to_numpy(preds_te)).mean())
                 test_corr = float(
-                    compute_correlation(to_numpy(Y_te), to_numpy(preds_te)).mean()
+                    correlation_score(to_numpy(Y_te), to_numpy(preds_te)).mean()
                 )
                 step_sae_metrics = compute_sae_metrics(H_test)
                 l0 = step_sae_metrics["l0_sparsity"]
@@ -678,7 +678,7 @@ def train_sae_alternating(
 
     sae_metrics = compute_sae_metrics(H_test)
     test_r2 = float(compute_r2(to_numpy(Y_te), to_numpy(preds_te)).mean())
-    test_corr = float(compute_correlation(to_numpy(Y_te), to_numpy(preds_te)).mean())
+    test_corr = float(correlation_score(to_numpy(Y_te), to_numpy(preds_te)).mean())
 
     metrics = {
         "r2": test_r2,

@@ -1,11 +1,12 @@
 encoding:
   data_root: data/
   model: gpt2xl
-  layer: 48
   offset: 0
   subjects: null
   run_name: null
   batch: false
+  per_model_config:
+    layer: 48
 output_dir: null
 rrr_output_dir: null
 mode: cross_subject

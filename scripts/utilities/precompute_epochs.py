@@ -101,14 +101,18 @@ def main():
     print(f"Precomputing epochs for subjects: {subject_ids}")
     print(f"  data_root: {config.data_root}")
 
-    _, df_word = load_embeddings(config.data_root, config.layer)
+    _, df_word = load_embeddings(
+        config.data_root, config.model, **config.per_model_config
+    )
 
     for sub_id in tqdm(subject_ids, desc="Subjects"):
         print(f"\n{'='*60}")
         print(f"Subject {sub_id}")
         print(f"{'='*60}")
 
-        raws = load_raws([sub_id], config.data_root, use_high_gamma=True)
+        raws = load_raws(
+            [sub_id], config.data_root, use_high_gamma=True, do_drop_bads=True
+        )
         raw = raws[0]
         print(f"  Loaded raw: {len(raw.ch_names)} electrodes, {raw.info['sfreq']} Hz")
 

@@ -388,6 +388,7 @@ def build_enc_subjects_info(
     output_dir: str,
     subs_in_unit: list,
     target_elecs_per_sub: dict,
+    location=None,
 ) -> list:
     """Load per-subject encoding results and build info dicts for baseline computation.
 
@@ -412,7 +413,8 @@ def build_enc_subjects_info(
         enc_results = load_encoding_results(
             os.path.join(
                 output_dir, "subjects", f"sub_{sub_id}", "encoding_results.joblib"
-            )
+            ),
+            location=location,
         )
         target_elecs = target_elecs_per_sub[sub_id]
         col_idxs = _make_col_idxs(enc_results, target_elecs)

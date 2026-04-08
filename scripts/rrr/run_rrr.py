@@ -57,6 +57,7 @@ from src.utils.srrr import (
     save_rrr_factors,
     save_rrr_result,
 )
+from src.utils.tensor_utils import to_numpy
 from src.utils.analysis import build_sig_mask_flat_for_elecs
 from src.utils.rrr_utils import (
     add_sig_nonsig_corrs,
@@ -151,13 +152,13 @@ def _run_k_for_rrr(
     )
 
     metrics = {
-        "full_r2": suf["full_r2"],
-        "minimal_r2": suf["minimal_r2"],
-        "recovery_r2": suf["recovery_r2"],
-        "pred_r2": suf["pred_r2"],
-        "full_corr": suf["full_corr"],
-        "minimal_corr": suf["minimal_corr"],
-        "recovery_corr": suf["recovery_corr"],
+        "full_r2": to_numpy(suf["full_r2"]),
+        "minimal_r2": to_numpy(suf["minimal_r2"]),
+        "recovery_r2": to_numpy(suf["recovery_r2"]),
+        "pred_r2": to_numpy(suf["pred_r2"]),
+        "full_corr": to_numpy(suf["full_corr"]),
+        "minimal_corr": to_numpy(suf["minimal_corr"]),
+        "recovery_corr": to_numpy(suf["recovery_corr"]),
         "effective_rank": effective_rank,
         "fold": fold_f,
         # "ridge_corr": ridge_result["correlations"].mean(),
@@ -763,19 +764,22 @@ def _run_cross_subject_rrr(
     word_in_glove=None,
 ):
     """RRR on raw embeddings using all subjects' significant electrodes."""
-    X_raw, X_arbitrary, per_fold_baselines, test_idxs, sig_mask_flat = (
-        _get_decomposition_inputs(
-            subject_ids,
-            output_dir,
-            sig_electrodes,
-            enc,
-            aligned_embeddings,
-            word_df,
-            compute_sig_nonsig=config.compute_sig_nonsig,
-            sig_dir=sig_dir,
-            word_in_glove=word_in_glove,
-        )
+    results = _get_decomposition_inputs(
+        subject_ids,
+        output_dir,
+        sig_electrodes,
+        enc,
+        aligned_embeddings,
+        word_df,
+        compute_sig_nonsig=config.compute_sig_nonsig,
+        sig_dir=sig_dir,
+        word_in_glove=word_in_glove,
     )
+
+    if results is None:
+        return
+
+    X_raw, X_arbitrary, per_fold_baselines, test_idxs, sig_mask_flat = results
 
     _run_rrr_for_unit(
         rrr_unit_dir=rrr_dir,
@@ -815,19 +819,19 @@ def _run_per_subject_rrr(
             print(f"  No significant electrodes; skipping.")
             continue
 
-        X_raw, X_arbitrary, per_fold_baselines, test_idxs, sig_mask_flat = (
-            _get_decomposition_inputs(
-                [sub_id],
-                output_dir,
-                sub_sig_elecs,
-                enc,
-                aligned_embeddings,
-                word_df,
-                compute_sig_nonsig=config.compute_sig_nonsig,
-                sig_dir=sig_dir,
-                word_in_glove=word_in_glove,
-            )
+        results = _get_decomposition_inputs(
+            [sub_id],
+            output_dir,
+            {sub_id: sub_sig_elecs},
+            enc,
+            aligned_embeddings,
+            word_df,
+            compute_sig_nonsig=config.compute_sig_nonsig,
+            sig_dir=sig_dir,
+            word_in_glove=word_in_glove,
         )
+
+        X_raw, X_arbitrary, per_fold_baselines, test_idxs, sig_mask_flat = results
 
         _run_rrr_for_unit(
             rrr_unit_dir=rrr_sub_dir,
@@ -888,19 +892,19 @@ def _run_per_region_rrr(
 
         subs_in_region = list(per_subject_region_elecs.keys())
 
-        X_raw, X_arbitrary, per_fold_baselines, test_idxs, sig_mask_flat = (
-            _get_decomposition_inputs(
-                subs_in_region,
-                output_dir,
-                per_subject_region_elecs,
-                enc,
-                aligned_embeddings,
-                word_df,
-                compute_sig_nonsig=config.compute_sig_nonsig,
-                sig_dir=sig_dir,
-                word_in_glove=word_in_glove,
-            )
+        results = _get_decomposition_inputs(
+            subs_in_region,
+            output_dir,
+            per_subject_region_elecs,
+            enc,
+            aligned_embeddings,
+            word_df,
+            compute_sig_nonsig=config.compute_sig_nonsig,
+            sig_dir=sig_dir,
+            word_in_glove=word_in_glove,
         )
+
+        X_raw, X_arbitrary, per_fold_baselines, test_idxs, sig_mask_flat = results
 
         _run_rrr_for_unit(
             rrr_unit_dir=rrr_region_dir,

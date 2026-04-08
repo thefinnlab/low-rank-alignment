@@ -10,4 +10,4 @@ encoding:
 output_dir: null
 rrr_output_dir: null
 mode: cross_subject
-rank_grid: [1, 2, 5, 7, 10, 20, 40, 49]
+rank_grid: [1, 2, 5, 7, 10, 20, 40, 50]

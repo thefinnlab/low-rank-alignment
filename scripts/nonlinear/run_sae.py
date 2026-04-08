@@ -63,7 +63,7 @@ from src.utils.encoding import (
 )
 from src.utils.srrr import (
     compute_r2,
-    compute_correlation,
+    correlation_score,
     run_sufficiency_test,
     load_rrr_result,
 )
@@ -272,8 +272,8 @@ def _run_sae_for_unit(
         if n_electrodes is not None:
             n_targets = Y_test.shape[1]
             n_lags = n_targets // n_electrodes
-            per_target_corr_sae = compute_correlation(Y_test, Y_hat_sae)
-            per_target_corr_full = compute_correlation(Y_test, Y_hat_full)
+            per_target_corr_sae = correlation_score(Y_test, Y_hat_sae)
+            per_target_corr_full = correlation_score(Y_test, Y_hat_full)
             fold_corrs_sae.append(per_target_corr_sae.reshape(n_electrodes, n_lags))
             fold_corrs_full.append(per_target_corr_full.reshape(n_electrodes, n_lags))
 
