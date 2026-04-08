@@ -9,6 +9,7 @@ from tqdm import tqdm
 
 from src.utils.tensor_utils import to_numpy, to_torch
 from src.utils.srrr import compute_r2
+from himalaya.scoring import correlation_score
 
 
 class SAEEncoder(nn.Module):

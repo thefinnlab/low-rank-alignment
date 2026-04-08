@@ -436,12 +436,81 @@ def build_per_fold_baselines(
     X_raw: np.ndarray,
     Y_full: np.ndarray,
     test_idxs: list,
+    alphas: np.ndarray | None = None,
+) -> list:
+    """Train a fresh ridge encoding model per fold and pre-compute baselines.
+
+    For each fold, fits a StandardScaler on Y_train, then trains a ridge model
+    via solve_regression (which absorbs the X-scaler into W, b).  Returns the
+    same dict structure consumed by _run_rrr_for_unit / _run_ablation_for_unit.
+
+    Args:
+        X_raw: (n_words, n_embed) raw embedding matrix.
+        Y_full: (n_words, n_targets) assembled neural response matrix.
+        test_idxs: List of test index arrays, one per fold.
+        alphas: Optional ridge alpha grid for RidgeCV.
+
+    Returns:
+        List of dicts, one per fold, each containing:
+            train_idx:       training index array
+            test_idx:        test index array
+            Y_train:         (n_train, n_targets) scaled neural responses
+            Y_test:          (n_test, n_targets) scaled neural responses
+            Y_hat_full_train:(n_train, n_targets) baseline model predictions on train
+            Y_hat_full_test: (n_test, n_targets) baseline model predictions on test
+            beta_full_raw:   (n_embed, n_targets) coefficients mapping raw X → scaled Y
+    """
+    from sklearn.preprocessing import StandardScaler
+    from src.utils.sae import solve_regression
+    import torch
+
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    n_words, n_embed = X_raw.shape
+    baselines = []
+
+    for fold_f, test_idx in enumerate(test_idxs):
+        train_mask = np.ones(n_words, dtype=bool)
+        train_mask[test_idx] = False
+        train_idx = np.where(train_mask)[0]
+
+        y_scaler = StandardScaler()
+        Y_train = y_scaler.fit_transform(Y_full[train_idx]).astype(np.float32)
+        Y_test = y_scaler.transform(Y_full[test_idx]).astype(np.float32)
+
+        W, b = solve_regression(
+            X_raw[train_idx], Y_train, "ridge", device, alphas=alphas
+        )
+        W = to_numpy(W)
+        b = to_numpy(b)
+
+        Y_hat_train = (X_raw[train_idx] @ W + b).astype(np.float32)
+        Y_hat_test = (X_raw[test_idx] @ W + b).astype(np.float32)
+
+        baselines.append(
+            {
+                "train_idx": train_idx,
+                "test_idx": test_idx,
+                "Y_train": Y_train,
+                "Y_test": Y_test,
+                "Y_hat_full_train": Y_hat_train,
+                "Y_hat_full_test": Y_hat_test,
+                "beta_full_raw": W.astype(np.float32),
+            }
+        )
+
+    return baselines
+
+
+def build_per_fold_baselines_from_saved(
+    X_raw: np.ndarray,
+    Y_full: np.ndarray,
+    test_idxs: list,
     enc_subjects_info: list,
 ) -> list:
     """Pre-compute per-fold scaled Y arrays, baseline predictions, and raw coefficients.
 
-    Replaces the fresh StandardScaler + ridge model training inside the per-fold loops
-    of _run_rrr_for_unit and _run_srrr_for_unit by reusing the saved encoding models.
+    Legacy version that reuses saved encoding models and scalers.  Prefer
+    build_per_fold_baselines() which trains fresh models per fold.
 
     Args:
         X_raw: (n_words, n_embed) raw embedding matrix.
