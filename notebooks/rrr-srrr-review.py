@@ -17,8 +17,23 @@ def _():
         skew as sp_skew,
     )
     from pathlib import Path
+    from scipy.cluster.hierarchy import linkage, dendrogram, fcluster, inconsistent
 
-    return Path, alt, mo, np, pd, plt, sp_entropy, sp_kurtosis, sp_skew
+    return (
+        Path,
+        alt,
+        dendrogram,
+        fcluster,
+        inconsistent,
+        linkage,
+        mo,
+        np,
+        pd,
+        plt,
+        sp_entropy,
+        sp_kurtosis,
+        sp_skew,
+    )
 
 
 @app.cell
@@ -56,16 +71,15 @@ def _():
         load_encoding_results,
         load_raws,
         load_sig_electrodes,
+        os,
     )
 
 
 @app.cell
 def _(mo):
-    mo.md(
-        """
+    mo.md("""
     # RRR Interpretability Explorer
-    """
-    )
+    """)
     return
 
 
@@ -86,9 +100,23 @@ def _(mo):
         label="Significance dir (blank = results root)",
         full_width=True,
     )
+    model_type_input = mo.ui.text(
+        value="gpt2xl",
+        label="Model"
+    )
+    model_configs_input = mo.ui.text(
+        value="layer:24",
+        label="Model Config"
+    )
     layer_input = mo.ui.number(value=24, label="Layer")
-    mo.hstack([results_root_input, data_root_input, sig_dir_input, layer_input])
-    return data_root_input, layer_input, results_root_input, sig_dir_input
+    mo.hstack([results_root_input, data_root_input, model_type_input, model_configs_input, sig_dir_input, layer_input])
+    return (
+        data_root_input,
+        model_configs_input,
+        model_type_input,
+        results_root_input,
+        sig_dir_input,
+    )
 
 
 @app.cell(hide_code=True)
@@ -120,9 +148,20 @@ def _(Path, mo, results_root_input):
 
 
 @app.cell(hide_code=True)
-def _(data_root_input, layer_input, load_embeddings, np):
+def _(
+    data_root_input,
+    load_embeddings,
+    model_configs_input,
+    model_type_input,
+    np,
+):
+    model_config = {}
+    for _config in model_configs_input.value.split(","):
+        _k, _v = _config.split(":")
+        model_config[_k] = _v
+
     aligned_embeddings, df_word = load_embeddings(
-        data_root_input.value, int(layer_input.value)
+        data_root_input.value, model_type_input.value, **model_config
     )
 
     class _AllWords:
@@ -294,12 +333,10 @@ def _(
 
 @app.cell
 def _(mo):
-    mo.md(
-        """
+    mo.md("""
     ---
     ## Section 1: RRR — Rank vs Explained Variance
-    """
-    )
+    """)
     return
 
 
@@ -430,12 +467,10 @@ def _(mo, s1_summary, s1_threshold):
 
 @app.cell(hide_code=True)
 def _(mo):
-    mo.md(
-        """
+    mo.md("""
     ---
     ## Section 2: Direction Interpretability
-    """
-    )
+    """)
     return
 
 
@@ -553,12 +588,10 @@ def _(
 
 @app.cell(hide_code=True)
 def _(mo):
-    mo.md(
-        """
+    mo.md("""
     ---
     ## Section 3: B Matrix — Temporal Profile
-    """
-    )
+    """)
     return
 
 
@@ -817,12 +850,10 @@ def _(mo, pd, s3_b_df, s3_electrode_filter):
 
 @app.cell(hide_code=True)
 def _(mo):
-    mo.md(
-        """
+    mo.md("""
     ---
     ## Section 4: B Matrix — Brain Map
-    """
-    )
+    """)
     return
 
 
@@ -1058,12 +1089,10 @@ def _(
 
 @app.cell(hide_code=True)
 def _(mo):
-    mo.md(
-        """
+    mo.md("""
     ---
     ## Section 5: Cross-Fold Consistency
-    """
-    )
+    """)
     return
 
 
@@ -1185,12 +1214,10 @@ def _(alt, get_rrr_dir, mo, np, pd, s5_k, s5_ndirs, s5_source):
 
 @app.cell(hide_code=True)
 def _(mo):
-    mo.md(
-        """
+    mo.md("""
     ---
     ## Section 6: Cross-Source Comparison
-    """
-    )
+    """)
     return
 
 
@@ -1399,12 +1426,10 @@ def _(
 
 @app.cell(hide_code=True)
 def _(mo):
-    mo.md(
-        """
+    mo.md("""
     ---
     ## Section 7: Cross-Region Electrode Similarity from B
-    """
-    )
+    """)
     return
 
 
@@ -1702,12 +1727,10 @@ def _(
 
 @app.cell
 def _(mo):
-    mo.md(
-        """
+    mo.md("""
     ---
     ## Section 8: Activation Distribution Statistics
-    """
-    )
+    """)
     return
 
 
@@ -1807,6 +1830,959 @@ def _(
             mo.ui.table(_stats_df),
         ]
     )
+    return
+
+
+@app.cell
+def _(mo):
+    mo.md("""
+    ## Section 9: Cluster Analysis
+    """)
+    return
+
+
+@app.cell(hide_code=True)
+def _(mo, rrr_options):
+    mo.stop(
+        len(rrr_options) == 0,
+        mo.callout(mo.md("No RRR results found."), kind="warn"),
+    )
+    s9_source = mo.ui.dropdown(
+        options=rrr_options,
+        value=rrr_options[0] if rrr_options else None,
+        label="Source",
+    )
+    s9_fold = mo.ui.dropdown(
+        options=["fold_0", "fold_1"],
+        value="fold_0",
+        label="Fold",
+    )
+    s9_k = mo.ui.number(value=20, start=1, stop=50, label="Rank k")
+    mo.hstack([s9_source, s9_fold, s9_k])
+    return s9_k, s9_source
+
+
+@app.cell(hide_code=True)
+def _(
+    aligned_embeddings,
+    get_rrr_dir,
+    load_encoding_results,
+    load_rrr_AB,
+    np,
+    os,
+    pd,
+    s9_k,
+    s9_source,
+):
+    _unit_dir = get_rrr_dir(s9_source.value)
+
+    _enc_path = os.path.join(
+                get_rrr_dir(s9_source.value).parent, "subjects", f"sub_1", "encoding_results.joblib"
+            )
+    _test_idxs = load_encoding_results(_enc_path, location="cpu")["test_idxs"]
+
+    cluster_preds = []
+    for _fold in range(len(_test_idxs)):
+        _A, _B = load_rrr_AB(_unit_dir, "fold_" + str(_fold), int(s9_k.value))
+        _curr_embeds = aligned_embeddings[_test_idxs[_fold]]
+        cluster_preds.append(_curr_embeds @ _A @ _B.T)
+
+    cluster_preds = np.concatenate(cluster_preds, axis=0)
+
+    _detailed_sigs = pd.read_csv(_unit_dir.parent / "significance_detailed.csv")
+    _sig_elecs = pd.read_csv(_unit_dir.parent / "all_subject_sig.csv")
+
+    # 1. Repeat each row 128 times
+    _b_labels = _sig_elecs.loc[_sig_elecs.index.repeat(128)].reset_index(drop=True)
+
+    # 2. Add the 'sample_index' column (0 to 127 for each block)
+    _b_labels['lag_idx'] = np.tile(np.arange(128), len(_sig_elecs))
+    _b_labels["electrode"] = _b_labels["elec"]
+    _detailed_df_filtered = _detailed_sigs.merge(
+        _b_labels[['subject', 'electrode', 'lag_idx']], 
+        on=['subject', 'electrode', 'lag_idx'], 
+        how='inner'
+    )
+    _b_labels = _b_labels.merge(_detailed_df_filtered, on=['subject', 'electrode', 'lag_idx'], how='left')
+
+    # 2. Index into the rows where the boolean is True
+    final_b_labels = _b_labels[_b_labels['sig']].copy()
+    sig_cluster_preds = cluster_preds[:, final_b_labels.index]
+    return final_b_labels, sig_cluster_preds
+
+
+@app.cell(hide_code=True)
+def _():
+    import torch
+
+    def get_correlation_gpu(array_a, array_b):
+        a = torch.tensor(array_a, device='cuda', dtype=torch.float32)
+        b = torch.tensor(array_b, device='cuda', dtype=torch.float32)
+
+        # Standardize on GPU
+        a = (a - a.mean(dim=0)) / a.std(dim=0)
+        b = (b - b.mean(dim=0)) / b.std(dim=0)
+
+        corr_matrix = (a.T @ b) / array_a.shape[0]
+        return corr_matrix.cpu().numpy()
+
+    def get_correlation(array_a, array_B):
+        a = (array_a - array_a.mean(axis=0)) / array_a.std(axis=0)
+        b = (array_B - array_B.mean(axis=0)) / array_B.std(axis=0)
+
+        corr_matrix = (a.T @ b) / array_a.shape[0]
+        return corr_matrix.cpu().numpy()
+
+    return (get_correlation_gpu,)
+
+
+@app.cell
+def _(get_correlation_gpu, np, sig_cluster_preds):
+    # rng = np.random.default_rng(42)
+    # sub_idx = rng.choice(cluster_preds.shape[1], size=1000, replace=False)
+    # pairwise_corrs = get_correlation_gpu(cluster_preds[:, sub_idx], cluster_preds[:, sub_idx])
+    # pairwise_D = np.arccos(pairwise_corrs)
+    # np.fill_diagonal(pairwise_D, 0)
+
+
+    pairwise_corrs = get_correlation_gpu(sig_cluster_preds, sig_cluster_preds)
+    pairwise_D = np.arccos(np.abs(pairwise_corrs))
+    np.fill_diagonal(pairwise_D, 0)
+    return (pairwise_D,)
+
+
+@app.cell(hide_code=True)
+def _(dendrogram, fcluster, inconsistent, np, plt):
+    def plot_cluster_diagnostics(Z, labels=None, figsize=(18, 20), tail_fraction=0.05):
+        """
+        Diagnostic plots for choosing a dendrogram distance cutoff.
+
+        Parameters
+        ----------
+        Z : ndarray
+            Linkage matrix from scipy.cluster.hierarchy.linkage.
+        labels : list, optional
+            Labels for leaf nodes in the dendrogram.
+        figsize : tuple
+            Figure size.
+        tail_fraction : float
+            Fraction of top merges to focus on for detailed plots (default 5%).
+        """
+        merge_dists = Z[:, 2]
+        n_merges = len(merge_dists)
+        n_samples = n_merges + 1
+        n_tail = max(int(n_merges * tail_fraction), 50)
+
+        fig, axes = plt.subplots(3, 2, figsize=figsize)
+
+        # 1. Dendrogram (truncated for large datasets)
+        ax = axes[0, 0]
+        truncate = n_samples > 80
+        dendrogram(
+            Z,
+            ax=ax,
+            truncate_mode='lastp' if truncate else None,
+            p=40 if truncate else n_samples,
+            leaf_rotation=90,
+            leaf_font_size=8,
+            labels=labels if not truncate else None,
+            color_threshold=0,
+        )
+        ax.set_title(f'Dendrogram{" (truncated)" if truncate else ""}')
+        ax.set_ylabel('Merge distance')
+
+        # 2. Sorted merge distances — zoomed to tail
+        ax = axes[0, 1]
+        sorted_dists = np.sort(merge_dists)
+        tail = sorted_dists[-n_tail:]
+        ax.plot(range(n_tail), tail, marker='.', ms=4)
+        gaps = np.diff(sorted_dists)
+        top_gap_idxs = np.argsort(gaps)[-min(5, len(gaps)):]
+        for idx in top_gap_idxs:
+            cut_val = (sorted_dists[idx] + sorted_dists[idx + 1]) / 2
+            if cut_val >= tail[0]:
+                ax.axhline(cut_val, color='red', alpha=0.5, ls='--', lw=1)
+        ax.set_title(f'Last {n_tail} merge distances (red = largest gaps)')
+        ax.set_xlabel(f'Merge index (of top {n_tail})')
+        ax.set_ylabel('Distance')
+
+        # 3. Number of clusters vs. cut threshold — focused on interesting range
+        ax = axes[1, 0]
+        t_lo = np.percentile(merge_dists, max(80, 100 - tail_fraction * 200))
+        t_hi = merge_dists.max() * 1.05
+        t_range = np.linspace(t_lo, t_hi, 300)
+        n_clusters = np.array([
+            len(np.unique(fcluster(Z, t=t, criterion='distance'))) for t in t_range
+        ])
+        ax.plot(t_range, n_clusters)
+        ax.set_title('Number of clusters vs. distance threshold')
+        ax.set_xlabel('Distance threshold t')
+        ax.set_ylabel('Number of clusters')
+        ax.set_yscale('log')
+        for nc in np.unique(n_clusters):
+            mask = n_clusters == nc
+            t_vals = t_range[mask]
+            t_width = t_vals.max() - t_vals.min()
+            if t_width / (t_range[-1] - t_range[0]) > 0.03:
+                ax.axhspan(nc - 0.3, nc + 0.3, alpha=0.08, color='green')
+
+        # 4. Top merge distance gaps
+        ax = axes[1, 1]
+        n_gaps_show = min(40, len(gaps))
+        top_gaps = np.sort(gaps)[::-1][:n_gaps_show]
+        ax.bar(range(n_gaps_show), top_gaps, width=0.8)
+        ax.set_title(f'Top {n_gaps_show} merge distance gaps')
+        ax.set_xlabel('Rank')
+        ax.set_ylabel('Gap size')
+
+        # 5. Inconsistency coefficients
+        ax = axes[2, 0]
+        incons = inconsistent(Z, d=2)
+        incons_vals = incons[:, 3]
+        ax.hist(incons_vals, bins=80, edgecolor='black', linewidth=0.3)
+        # zoom into the right tail via a twin axis
+        threshold_99 = np.percentile(incons_vals, 99)
+        ax.axvline(threshold_99, color='red', ls='--', lw=1,
+                   label=f'99th percentile ({threshold_99:.2f})')
+        ax.legend()
+        ax.set_title('Inconsistency coefficient distribution (depth=2)')
+        ax.set_xlabel('Inconsistency coefficient')
+        ax.set_ylabel('Count')
+
+        # 6. Cluster size distribution at candidate thresholds
+        ax = axes[2, 1]
+        candidates = []
+        if len(gaps) > 0:
+            for idx in np.argsort(gaps)[-min(4, len(gaps)):]:
+                candidates.append((sorted_dists[idx] + sorted_dists[idx + 1]) / 2)
+        candidates = sorted(set(candidates))
+
+        if candidates:
+            bar_width = 0.8 / len(candidates)
+            for i, t in enumerate(candidates):
+                cl = fcluster(Z, t=t, criterion='distance')
+                sizes = np.sort(np.bincount(cl)[1:])[::-1]
+                # only show top clusters to keep readable
+                n_show = min(30, len(sizes))
+                ax.bar(
+                    np.arange(n_show) + i * bar_width,
+                    sizes[:n_show],
+                    width=bar_width,
+                    label=f't={t:.3f} ({len(sizes)} cl)',
+                    alpha=0.7,
+                )
+            ax.legend(fontsize=8)
+        ax.set_title('Cluster size distribution at candidate thresholds')
+        ax.set_xlabel('Cluster rank (largest first)')
+        ax.set_ylabel('Cluster size')
+
+        plt.tight_layout()
+        plt.savefig('cluster_diagnostics.png', dpi=150, bbox_inches='tight')
+        plt.show()
+
+        # Summary table
+        print(f"\n=== Candidate cut thresholds ({n_samples} samples, {n_merges} merges) ===")
+        if candidates:
+            for t in candidates:
+                cl = fcluster(Z, t=t, criterion='distance')
+                sizes = np.sort(np.bincount(cl)[1:])[::-1]
+                print(f"  t={t:.4f} → {len(sizes):4d} clusters | "
+                      f"largest: {sizes[0]:5d} | median: {np.median(sizes):5.0f} | "
+                      f"singletons: {np.sum(sizes == 1):4d}")
+
+    return (plot_cluster_diagnostics,)
+
+
+@app.cell(hide_code=True)
+def _(np, plt):
+    from matplotlib.gridspec import GridSpec
+    from sklearn.cluster import KMeans, MiniBatchKMeans
+    from sklearn.decomposition import PCA
+    from sklearn.manifold import TSNE
+    from sklearn.metrics import silhouette_score
+    from sklearn.neighbors import NearestNeighbors
+    from sklearn.preprocessing import normalize
+    from sklearn.manifold import MDS
+
+    ALL_DIAGNOSTICS = {"hopkins", "silhouette", "gap", "elbow", "pca", "tsne", "umap", "hdbscan"}
+
+
+    def analyze_clusterability(
+        X: np.ndarray,
+        k_range: tuple = (2, 11),
+        k_step: int = 10,
+        random_state: int = 42,
+        metric: str = "euclidean",
+        subsample: int | None = None,
+        n_gap_refs: int = 10,
+        diagnostics: set[str] | None = None,
+        color_by: str = "kmeans",
+    ):
+        """
+        Analyze how clusterable a dataset is using multiple diagnostics.
+
+        Parameters
+        ----------
+        X : np.ndarray of shape (n_samples, dim) or (n_samples, n_samples)
+            The input data, or a precomputed distance matrix if metric="precomputed".
+        k_range : tuple
+            Range of K values to test (start, stop). Default (2, 11) tests K=2..10.
+        k_step : int
+            Step between K values.
+        random_state : int
+            Random seed for reproducibility.
+        metric : str
+            Distance metric: "euclidean", "cosine", or "precomputed".
+        subsample : int or None
+            If set, subsample to this many points for expensive operations.
+        n_gap_refs : int
+            Number of reference datasets for the gap statistic. Default 10.
+        diagnostics : set of str, or None
+            Which analyses to run. Any subset of:
+                {"hopkins", "silhouette", "gap", "elbow", "pca", "tsne", "umap", "hdbscan"}
+            None (default) runs all of them.
+        color_by : str
+            How to color embedding scatter plots: "kmeans" (default) or "hdbscan".
+            If "hdbscan", the hdbscan diagnostic is implicitly enabled.
+
+        Returns
+        -------
+        results : dict
+            Dictionary containing all computed metrics and embeddings.
+        fig : matplotlib.figure.Figure or None
+            The summary figure, or None if no plottable diagnostics were requested.
+        """
+        # ── Resolve diagnostics set ───────────────────────────────────────────
+        if diagnostics is None:
+            run = ALL_DIAGNOSTICS.copy()
+        else:
+            unknown = diagnostics - ALL_DIAGNOSTICS
+            if unknown:
+                raise ValueError(
+                    f"Unknown diagnostics: {unknown}. Choose from {sorted(ALL_DIAGNOSTICS)}"
+                )
+            run = diagnostics.copy()
+
+        if color_by not in ("kmeans", "hdbscan"):
+            raise ValueError(f"color_by must be 'kmeans' or 'hdbscan', got '{color_by}'")
+
+        # If coloring by hdbscan, make sure it runs
+        if color_by == "hdbscan":
+            run.add("hdbscan")
+
+        has_embeddings = bool(run & {"pca", "tsne", "umap"})
+        needs_kmeans = bool(run & {"silhouette", "gap", "elbow"}) or (
+            color_by == "kmeans" and has_embeddings
+        )
+
+        rng = np.random.default_rng(random_state)
+        ks = list(range(k_range[0], k_range[1], k_step))
+        precomputed = metric == "precomputed"
+        use_cosine = metric == "cosine"
+
+        # ── 0. Prepare data ───────────────────────────────────────────────────
+        if precomputed:
+            assert X.shape[0] == X.shape[1], "Precomputed metric requires a square distance matrix"
+            D = X
+            n_samples = D.shape[0]
+            dim = None
+
+            n_mds_components = min(50, n_samples - 1)
+            mds = MDS(
+                n_components=n_mds_components, dissimilarity="precomputed",
+                random_state=random_state, normalized_stress="auto",
+            )
+            X_embedded = mds.fit_transform(D)
+            X_clust = X_embedded
+            dim_label = f"MDS-{n_mds_components}"
+        else:
+            n_samples = X.shape[0]
+            dim = X.shape[1]
+            dim_label = str(dim)
+            D = None
+            X_clust = normalize(X, norm="l2") if use_cosine else X.copy()
+
+        # Subsample
+        do_subsample = subsample is not None and subsample < n_samples
+        if do_subsample:
+            sub_idx = rng.choice(n_samples, size=subsample, replace=False)
+            X_sub = X_clust[sub_idx]
+            if precomputed:
+                D_sub = D[np.ix_(sub_idx, sub_idx)]
+                X_sub_raw = X_embedded[sub_idx]
+            else:
+                X_sub_raw = X[sub_idx]
+            print(f"Subsampling: {subsample}/{n_samples} points for t-SNE, UMAP, silhouette")
+        else:
+            sub_idx = np.arange(n_samples)
+            X_sub = X_clust
+            if precomputed:
+                D_sub = D
+                X_sub_raw = X_embedded
+            else:
+                X_sub_raw = X
+
+        use_minibatch = n_samples > 20_000
+        if use_minibatch and needs_kmeans:
+            print(f"Using MiniBatchKMeans (n={n_samples})")
+
+        def make_kmeans(k, n_init=10):
+            if use_minibatch:
+                return MiniBatchKMeans(
+                    n_clusters=k, n_init=n_init, random_state=random_state, batch_size=2048
+                )
+            return KMeans(n_clusters=k, n_init=n_init, random_state=random_state)
+
+        results = {"metric": metric}
+
+        # ── 1. Hopkins Statistic ──────────────────────────────────────────────
+        if "hopkins" in run:
+            m = min(n_samples // 10, 200)
+            idx = rng.choice(n_samples, size=m, replace=False)
+            X_sample = X_clust[idx]
+
+            mins, maxs = X_clust.min(axis=0), X_clust.max(axis=0)
+            X_uniform = rng.uniform(mins, maxs, size=(m, X_clust.shape[1]))
+            if use_cosine:
+                X_uniform = normalize(X_uniform, norm="l2")
+
+            nn = NearestNeighbors(n_neighbors=2)
+            nn.fit(X_clust)
+
+            u_dists, _ = nn.kneighbors(X_uniform, n_neighbors=1)
+            w_dists, _ = nn.kneighbors(X_sample, n_neighbors=2)
+            w_dists = w_dists[:, 1]
+
+            hopkins = u_dists.sum() / (u_dists.sum() + w_dists.sum())
+            results["hopkins"] = hopkins
+            results["hopkins_note"] = (
+                "computed on MDS embedding" if precomputed else "computed on feature space"
+            )
+
+        # ── 2. KMeans ─────────────────────────────────────────────────────────
+        all_km_models = {}
+        labels_full_by_k = {}
+        inertias = []
+        silhouettes = []
+
+        if needs_kmeans:
+            for k in ks:
+                km = make_kmeans(k)
+                labels_full = km.fit_predict(X_clust)
+                all_km_models[k] = km
+                labels_full_by_k[k] = labels_full
+
+                if "elbow" in run:
+                    inertias.append(km.inertia_)
+
+                if "silhouette" in run:
+                    if do_subsample:
+                        labels_sub = labels_full[sub_idx]
+                        if len(np.unique(labels_sub)) >= 2:
+                            if precomputed:
+                                silhouettes.append(
+                                    silhouette_score(D_sub, labels_sub, metric="precomputed")
+                                )
+                            else:
+                                silhouettes.append(silhouette_score(X_sub, labels_sub))
+                        else:
+                            silhouettes.append(0.0)
+                    else:
+                        if precomputed:
+                            silhouettes.append(
+                                silhouette_score(D, labels_full, metric="precomputed")
+                            )
+                        else:
+                            silhouettes.append(silhouette_score(X_clust, labels_full))
+
+            if "silhouette" in run:
+                results["silhouettes"] = dict(zip(ks, silhouettes))
+                best_k_idx = int(np.argmax(silhouettes))
+                best_k_sil = ks[best_k_idx]
+                results["best_k_silhouette"] = best_k_sil
+            if "elbow" in run:
+                results["inertias"] = dict(zip(ks, inertias))
+            results["kmeans_models"] = all_km_models
+
+        # ── 3. Gap Statistic ─────────────────────────────────────────────────
+        if "gap" in run:
+            gap_n = min(n_samples, 20_000) if do_subsample else n_samples
+            X_gap = X_clust[:gap_n]
+            mins_gap, maxs_gap = X_gap.min(axis=0), X_gap.max(axis=0)
+
+            gaps = []
+            gap_stds = []
+            for k in ks:
+                km = make_kmeans(k, n_init=5)
+                km.fit(X_gap)
+                log_wk = np.log(km.inertia_)
+
+                ref_log_wks = []
+                for _ in range(n_gap_refs):
+                    X_ref = rng.uniform(mins_gap, maxs_gap, size=(gap_n, X_clust.shape[1]))
+                    if use_cosine:
+                        X_ref = normalize(X_ref, norm="l2")
+                    km_ref = make_kmeans(k, n_init=3)
+                    km_ref.fit(X_ref)
+                    ref_log_wks.append(np.log(km_ref.inertia_))
+
+                gap = np.mean(ref_log_wks) - log_wk
+                gap_std = np.std(ref_log_wks) * np.sqrt(1 + 1 / n_gap_refs)
+                gaps.append(gap)
+                gap_stds.append(gap_std)
+
+            results["gaps"] = dict(zip(ks, gaps))
+            results["gap_stds"] = dict(zip(ks, gap_stds))
+
+        # ── 4. HDBSCAN ───────────────────────────────────────────────────────
+        hdbscan_labels_full = None
+        hdbscan_labels_sub = None
+        has_hdbscan = False
+
+        if "hdbscan" in run:
+            try:
+                import hdbscan as _hdbscan
+
+                if precomputed:
+                    hdb = _hdbscan.HDBSCAN(metric="precomputed", min_cluster_size=15)
+                    hdbscan_labels_full = hdb.fit_predict(D)
+                else:
+                    hdb_metric = "euclidean"  # hdbscan handles cosine poorly; use normalized data
+                    hdb = _hdbscan.HDBSCAN(metric=hdb_metric, min_cluster_size=15)
+                    hdbscan_labels_full = hdb.fit_predict(X_clust)
+
+                hdbscan_labels_sub = hdbscan_labels_full[sub_idx]
+                n_hdb_clusters = len(set(hdbscan_labels_full)) - (1 if -1 in hdbscan_labels_full else 0)
+                n_noise = int((hdbscan_labels_full == -1).sum())
+                has_hdbscan = True
+
+                results["hdbscan_labels_full"] = hdbscan_labels_full
+                results["hdbscan_labels_sub"] = hdbscan_labels_sub
+                results["hdbscan_n_clusters"] = n_hdb_clusters
+                results["hdbscan_n_noise"] = n_noise
+                results["hdbscan_probabilities"] = hdb.probabilities_
+                results["hdbscan_model"] = hdb
+
+                # Silhouette for HDBSCAN (excluding noise) on subsample
+                non_noise_mask = hdbscan_labels_sub != -1
+                if non_noise_mask.sum() > 1 and len(np.unique(hdbscan_labels_sub[non_noise_mask])) >= 2:
+                    if precomputed:
+                        hdb_sil = silhouette_score(
+                            D_sub[np.ix_(non_noise_mask, non_noise_mask)],
+                            hdbscan_labels_sub[non_noise_mask],
+                            metric="precomputed",
+                        )
+                    else:
+                        hdb_sil = silhouette_score(
+                            X_sub[non_noise_mask], hdbscan_labels_sub[non_noise_mask]
+                        )
+                    results["hdbscan_silhouette"] = hdb_sil
+
+            except ImportError:
+                print("hdbscan not installed, skipping HDBSCAN diagnostic")
+
+        # ── 5. Dimensionality Reduction Embeddings ────────────────────────────
+        X_pca = X_tsne = X_umap = None
+        pca_var = (None, None)
+        has_umap = False
+
+        if "pca" in run:
+            if precomputed:
+                mds_2d = MDS(
+                    n_components=2, dissimilarity="precomputed",
+                    random_state=random_state, normalized_stress="auto",
+                )
+                X_pca_full = mds_2d.fit_transform(D)
+                pca_var = (None, None)
+            else:
+                pca = PCA(n_components=2, random_state=random_state)
+                X_pca_full = pca.fit_transform(X)
+                pca_var = pca.explained_variance_ratio_
+            X_pca = X_pca_full[sub_idx]
+            results["pca_embedding"] = X_pca
+            results["pca_explained_var"] = pca_var
+
+        if "tsne" in run:
+            perplexity = min(30, len(X_sub) - 1)
+            if precomputed:
+                tsne = TSNE(
+                    n_components=2, perplexity=perplexity,
+                    metric="precomputed", init="random", random_state=random_state,
+                )
+                X_tsne = tsne.fit_transform(D_sub if do_subsample else D)
+            else:
+                tsne_metric = "cosine" if use_cosine else "euclidean"
+                tsne = TSNE(
+                    n_components=2, perplexity=perplexity,
+                    metric=tsne_metric, random_state=random_state,
+                )
+                X_tsne = tsne.fit_transform(X_sub_raw if use_cosine else X_sub)
+            results["tsne_embedding"] = X_tsne
+
+        if "umap" in run:
+            try:
+                import umap
+                if precomputed:
+                    reducer = umap.UMAP(
+                        n_components=2, metric="precomputed", random_state=random_state,
+                    )
+                    X_umap = reducer.fit_transform(D_sub if do_subsample else D)
+                else:
+                    umap_metric = "cosine" if use_cosine else "euclidean"
+                    reducer = umap.UMAP(
+                        n_components=2, metric=umap_metric, random_state=random_state,
+                    )
+                    X_umap = reducer.fit_transform(X_sub_raw if use_cosine else X_sub)
+                has_umap = True
+                results["umap_embedding"] = X_umap
+            except ImportError:
+                has_umap = False
+
+        # ── 6. Resolve coloring labels for embeddings ─────────────────────────
+        color_labels_sub = None
+        color_k_label = None  # for the suptitle
+
+        if color_by == "hdbscan" and has_hdbscan:
+            color_labels_sub = hdbscan_labels_sub
+            color_k_label = f"HDBSCAN ({results['hdbscan_n_clusters']} clusters, {results['hdbscan_n_noise']} noise)"
+        elif color_by == "hdbscan" and not has_hdbscan:
+            print("HDBSCAN unavailable, falling back to KMeans coloring")
+            color_by = "kmeans"  # fall through
+
+        if color_by == "kmeans":
+            best_k = results.get("best_k_silhouette")
+            if best_k is not None:
+                labels_best_full = labels_full_by_k[best_k]
+                color_labels_sub = labels_best_full[sub_idx]
+                color_k_label = f"KMeans K={best_k}"
+            elif all_km_models:
+                best_k = ks[len(ks) // 2]
+                labels_best_full = labels_full_by_k.get(best_k)
+                if labels_best_full is not None:
+                    color_labels_sub = labels_best_full[sub_idx]
+                    color_k_label = f"KMeans K={best_k}"
+
+        if color_labels_sub is not None:
+            results["color_labels_sub"] = color_labels_sub
+            results["color_by"] = color_by
+        results["subsample_idx"] = sub_idx
+
+        # ── 7. Plot ───────────────────────────────────────────────────────────
+        top_panels = [d for d in ["silhouette", "gap", "elbow"] if d in run]
+        bot_panels = [d for d in ["pca", "tsne", "umap"] if d in run and
+                      (d != "umap" or has_umap)]
+
+        # HDBSCAN gets its own summary panel in the top row
+        if "hdbscan" in run and has_hdbscan:
+            top_panels.append("hdbscan")
+
+        if not top_panels and not bot_panels:
+            return results, None
+
+        n_rows = (1 if top_panels else 0) + (1 if bot_panels else 0)
+        n_cols = max(len(top_panels), len(bot_panels), 1)
+        fig = plt.figure(figsize=(6 * n_cols, 6 * n_rows + 1))
+        fig.patch.set_facecolor("#fafafa")
+        gs = GridSpec(n_rows, n_cols, figure=fig, hspace=0.35, wspace=0.35)
+
+        # Colormap: need to handle noise label (-1) for HDBSCAN
+        if color_labels_sub is not None:
+            n_unique = len(set(color_labels_sub) - {-1})
+        else:
+            n_unique = 2
+        cmap = "tab10" if n_unique <= 10 else "tab20"
+
+        row = 0
+
+        # -- Hopkins banner --
+        if "hopkins" in run and "hopkins" in results:
+            ax_title = fig.add_axes([0.0, 0.95, 1.0, 0.05])
+            ax_title.set_axis_off()
+            h = results["hopkins"]
+            hop_color = "#2ecc71" if h > 0.7 else ("#f39c12" if h > 0.55 else "#e74c3c")
+            hop_label = (
+                "strong clustering" if h > 0.7
+                else ("moderate" if h > 0.55 else "weak / random")
+            )
+            hop_note = " (via MDS embedding)" if precomputed else ""
+            ax_title.text(
+                0.5, 0.5,
+                f"Hopkins Statistic = {h:.3f}  →  {hop_label}{hop_note}  [metric: {metric}]",
+                ha="center", va="center", fontsize=16, fontweight="bold", color=hop_color,
+                transform=ax_title.transAxes,
+            )
+
+        # -- Top row: metric plots --
+        if top_panels:
+            for col, panel in enumerate(top_panels):
+                ax = fig.add_subplot(gs[row, col])
+                if panel == "silhouette":
+                    ax.plot(ks, silhouettes, "o-", color="#2c3e50", linewidth=2, markersize=6)
+                    ax.axhline(0, color="grey", linestyle="--", alpha=0.5)
+                    ax.set_xlabel("K"); ax.set_ylabel("Silhouette Score")
+                    sil_note = (
+                        " (precomputed dist)" if precomputed
+                        else (" (subsampled)" if do_subsample else "")
+                    )
+                    ax.set_title(f"Silhouette Score vs K{sil_note}")
+                    ax.set_xticks(ks)
+                elif panel == "gap":
+                    g = list(results["gaps"].values())
+                    gs_ = list(results["gap_stds"].values())
+                    ax.plot(ks, g, "o-", color="#8e44ad", linewidth=2, markersize=6)
+                    ax.fill_between(
+                        ks, np.array(g) - np.array(gs_), np.array(g) + np.array(gs_),
+                        alpha=0.2, color="#8e44ad",
+                    )
+                    ax.set_xlabel("K"); ax.set_ylabel("Gap")
+                    ax.set_title(f"Gap Statistic vs K{' (via MDS)' if precomputed else ''}")
+                    ax.set_xticks(ks)
+                elif panel == "elbow":
+                    ax.plot(ks, inertias, "o-", color="#e67e22", linewidth=2, markersize=6)
+                    ax.set_xlabel("K"); ax.set_ylabel("Inertia")
+                    ax.set_title(f"Elbow Plot{' (via MDS)' if precomputed else ''}")
+                    ax.set_xticks(ks)
+                elif panel == "hdbscan":
+                    # Bar chart: cluster sizes + noise
+                    hdb_labels = results["hdbscan_labels_full"]
+                    unique_labels = sorted(set(hdb_labels))
+                    counts = [int((hdb_labels == l).sum()) for l in unique_labels]
+                    bar_labels = [f"Noise" if l == -1 else f"C{l}" for l in unique_labels]
+                    bar_colors = ["#bdc3c7" if l == -1 else plt.cm.tab10(l % 10) for l in unique_labels]
+                    ax.bar(bar_labels, counts, color=bar_colors, edgecolor="white")
+                    ax.set_ylabel("Count")
+                    hdb_sil_str = ""
+                    if "hdbscan_silhouette" in results:
+                        hdb_sil_str = f"  sil={results['hdbscan_silhouette']:.3f}"
+                    ax.set_title(
+                        f"HDBSCAN: {results['hdbscan_n_clusters']} clusters, "
+                        f"{results['hdbscan_n_noise']} noise{hdb_sil_str}"
+                    )
+                    if len(bar_labels) > 15:
+                        ax.tick_params(axis="x", rotation=90, labelsize=7)
+            row += 1
+
+        # -- Bottom row: embeddings --
+        if bot_panels:
+            scatter_kw = dict(s=12, alpha=0.7, edgecolors="none")
+
+            # Build color array: noise points get grey
+            if color_labels_sub is not None:
+                c_array = color_labels_sub.astype(float)
+                noise_mask = color_labels_sub == -1
+            else:
+                c_array = "#2c3e50"
+                noise_mask = None
+
+            for col, panel in enumerate(bot_panels):
+                ax = fig.add_subplot(gs[row, col])
+                if panel == "pca":
+                    emb = X_pca
+                elif panel == "tsne":
+                    emb = X_tsne
+                elif panel == "umap":
+                    emb = X_umap
+
+                if noise_mask is not None and noise_mask.any():
+                    # Plot noise in grey first, then clusters on top
+                    ax.scatter(
+                        emb[noise_mask, 0], emb[noise_mask, 1],
+                        c="#bdc3c7", s=8, alpha=0.3, edgecolors="none", label="noise",
+                    )
+                    cluster_mask = ~noise_mask
+                    ax.scatter(
+                        emb[cluster_mask, 0], emb[cluster_mask, 1],
+                        c=c_array[cluster_mask], cmap=cmap, **scatter_kw,
+                    )
+                else:
+                    ax.scatter(emb[:, 0], emb[:, 1], c=c_array, cmap=cmap, **scatter_kw)
+
+                if panel == "pca":
+                    if precomputed:
+                        ax.set_title("MDS (2D from distance matrix)")
+                        ax.set_xlabel("MDS1"); ax.set_ylabel("MDS2")
+                    else:
+                        ax.set_title(f"PCA  (var: {pca_var[0]:.1%} + {pca_var[1]:.1%})")
+                        ax.set_xlabel("PC1"); ax.set_ylabel("PC2")
+                elif panel == "tsne":
+                    ax.set_title("t-SNE")
+                elif panel == "umap":
+                    ax.set_title("UMAP")
+
+        n_plot = len(X_sub)
+        color_str = color_k_label or "uncolored"
+        fig.suptitle(
+            f"Clusterability Analysis  (n={n_samples}, dim={dim_label}, "
+            f"colored by {color_str}, plotting {n_plot} pts)",
+            fontsize=14, y=1.0,
+        )
+
+        if precomputed:
+            results["mds_embedding_full"] = X_embedded
+
+        return results, fig
+
+    return
+
+
+@app.cell(hide_code=True)
+def _():
+    # analyze_clusterability(pairwise_D, metric="precomputed", diagnostics=set(["hopkins"]), k_range = (2, 30), k_step = 5)
+    # plt.show()
+    return
+
+
+@app.cell
+def _():
+    from scipy.spatial.distance import squareform
+
+    return (squareform,)
+
+
+@app.cell
+def _(linkage, pairwise_D, plot_cluster_diagnostics, squareform):
+    condensed = squareform(pairwise_D, checks=False)
+    Z_corr = linkage(condensed, method='ward')
+    plot_cluster_diagnostics(Z_corr)
+    return (Z_corr,)
+
+
+@app.cell
+def _(Z_corr, fcluster, final_b_labels, np, plt):
+    num_clusters = 7
+    cluster_labels = fcluster(Z_corr, t=num_clusters, criterion='maxclust')
+
+    final_b_labels["cluster"] = cluster_labels
+    cluster_counts = final_b_labels[["subject", "lag_sec", "cluster"]].groupby("cluster").value_counts().reset_index()
+
+    from matplotlib.colors import ListedColormap
+
+    _all_clusters = np.sort(final_b_labels["cluster"].unique())
+    _base_cmap = plt.cm.get_cmap("tab10", max(len(_all_clusters), 1))
+    cluster_colors = {c: _base_cmap(i) for i, c in enumerate(_all_clusters)}
+    return cluster_colors, cluster_counts
+
+
+@app.cell(hide_code=True)
+def _(cluster_colors, cluster_counts, plt):
+    for cluster in sorted(cluster_counts["cluster"].unique()):
+        lag_counts = (
+            cluster_counts[cluster_counts["cluster"] == cluster]
+            .groupby("lag_sec")["count"]
+            .sum()
+            .reset_index()
+        )
+        plt.plot(
+            lag_counts["lag_sec"],
+            lag_counts["count"],
+            label=f"cluster {cluster}",
+            color=cluster_colors[cluster],
+        )
+    plt.legend()
+    plt.show()
+    return
+
+
+@app.cell(hide_code=True)
+def _(cluster_colors, final_b_labels, meta, mo, np):
+    def _():
+        mo.stop(
+            len(meta["subjects"]) == 0 or len(meta["lags"]) == 0,
+            mo.callout(mo.md("Could not load electrode metadata."), kind="warn"),
+        )
+        from collections import defaultdict
+        elec_cluster_counts = defaultdict(lambda: defaultdict(int))
+        elec_total_counts = defaultdict(int)
+
+        for _, row in final_b_labels.iterrows():
+            key = (row["subject"], row["elec"])
+            elec_cluster_counts[key][row["cluster"]] += 1
+            elec_total_counts[key] += 1
+
+        cluster_map = {}
+        for _, row in final_b_labels.iterrows():
+            cluster_map[(row["subject"], row["elec"])] = row["cluster"]
+
+        all_coords = []
+        all_cluster_ids = []
+        all_names = []
+        for _sub in meta["subjects"]:
+            sub_id = _sub["sub_id"]
+            for i, name in enumerate(_sub["elec_names"]):
+                coord = _sub["coords"][i]
+                if np.all(coord == 0):
+                    continue
+                all_coords.append(coord)
+                all_names.append(f"sub{sub_id}_{name}")
+                all_cluster_ids.append(cluster_map.get((sub_id, name), None))
+
+        mo.stop(
+            len(all_coords) == 0,
+            mo.callout(mo.md("No valid electrode coordinates found."), kind="warn"),
+        )
+        all_coords = np.vstack(all_coords)
+        unique_clusters = np.sort([c for c in set(all_cluster_ids) if c is not None])
+
+        from nilearn.plotting import plot_glass_brain
+        import matplotlib.pyplot as plt
+
+        for clust in unique_clusters:
+            mask = np.array([c == clust for c in all_cluster_ids])
+            masked_names = [all_names[i] for i in range(len(all_names)) if mask[i]]
+            masked_coords = all_coords[mask]
+
+            base_color = cluster_colors[clust]
+            alpha_values = []
+            for name in masked_names:
+                parts = name.split("_", 1)
+                sub_id = int(parts[0].replace("sub", ""))
+                elec = parts[1]
+                key = (sub_id, elec)
+                frac = elec_cluster_counts[key][clust] / elec_total_counts[key]
+                alpha_values.append(max(frac, 0.05))
+
+            alpha_values = np.array(alpha_values)
+
+            # Render empty glass brain as a background
+            display = plot_glass_brain(
+                None,
+                display_mode="lzr",
+                figure=plt.figure(figsize=(14, 5)),
+            )
+
+            # Scatter electrodes directly onto each axis
+            for key, nilearn_ax in display.axes.items():
+                ax = nilearn_ax.ax
+                direction = key  # 'l', 'r', or 'z'
+
+                for i, coord_3d in enumerate(masked_coords):
+                    x, y, z = coord_3d
+
+                    # Project 3D MNI -> 2D depending on the view
+                    if direction in ("l", "r"):  # sagittal
+                        px, py = y, z
+                    elif direction == "z":       # axial
+                        px, py = x, y
+                    else:
+                        continue
+
+                    ax.scatter(
+                        px, py,
+                        s=50,
+                        color=(*base_color[:3], alpha_values[i]),
+                        edgecolors="none",
+                        zorder=10,
+                    )
+
+            plt.suptitle(f"Cluster {clust}", fontsize=13, y=1.02)
+            plt.show()
+
+    _()
+    return
+
+
+@app.cell
+def _():
     return
 
 
