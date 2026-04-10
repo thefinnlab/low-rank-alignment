@@ -113,8 +113,6 @@ from src.utils.srrr import (
     select_directions,
     fit_dense_rrr,
     predict_from_factors,
-    compute_r2,
-    build_null_distribution,
     run_sufficiency_test,
     compute_cca_similarity,
     compute_procrustes_similarity,
@@ -133,10 +131,8 @@ from src.utils.sae import (
     train_sae_alternating,
 )
 from src.utils.subspace_utils import (
-    evaluate_subspace_ridge,
     evaluate_complement,
     evaluate_arbitrary,
-    build_nr_metrics_dict,
 )
 from src.utils.examples import (
     _make_context,
@@ -250,8 +246,6 @@ __all__ = [
     "select_directions",
     "fit_dense_rrr",
     "predict_from_factors",
-    "compute_r2",
-    "build_null_distribution",
     "run_sufficiency_test",
     "compute_cca_similarity",
     "compute_procrustes_similarity",
@@ -268,10 +262,8 @@ __all__ = [
     "train_sae_end_to_end",
     "train_sae_alternating",
     # subspace_utils
-    "evaluate_subspace_ridge",
     "evaluate_complement",
     "evaluate_arbitrary",
-    "build_nr_metrics_dict",
     # examples
     "_make_context",
     "_sample",
