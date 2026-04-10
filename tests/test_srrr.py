@@ -12,7 +12,6 @@ from src.utils.srrr import (
     compute_cca_similarity,
     compute_procrustes_similarity,
     correlation_score,
-    compute_r2,
     find_knee_lambda,
     fit_dense_rrr,
     fit_srrr_proxgd,
@@ -253,42 +252,6 @@ class TestSelectDirections:
         probs = np.array([0.9, 0.1])
         idx = select_directions(probs, threshold=0.8)
         assert idx.dtype in (np.int32, np.int64, int)
-
-
-# ---------------------------------------------------------------------------
-# TestComputeR2
-# ---------------------------------------------------------------------------
-
-
-class TestComputeR2:
-    def test_perfect_prediction_returns_one(self, rng):
-        Y = rng.standard_normal((30, 4)).astype(np.float32)
-        r2 = compute_r2(Y, Y)
-        np.testing.assert_allclose(r2, 1.0, atol=1e-5)
-
-    def test_mean_prediction_returns_zero(self, rng):
-        Y = rng.standard_normal((30, 4)).astype(np.float32)
-        Y_pred = np.broadcast_to(Y.mean(axis=0), Y.shape)
-        r2 = compute_r2(Y, Y_pred)
-        np.testing.assert_allclose(r2, 0.0, atol=1e-5)
-
-    def test_output_shape(self, rng):
-        Y = rng.standard_normal((20, 5)).astype(np.float32)
-        r2 = compute_r2(Y, Y * 0.9)
-        assert r2.shape == (5,)
-
-    def test_negative_r2_allowed(self, rng):
-        Y = rng.standard_normal((20, 2)).astype(np.float32)
-        Y_bad = -Y * 10
-        r2 = compute_r2(Y, Y_bad)
-        assert np.any(r2 < 0.0)
-
-    def test_constant_column_returns_zero_not_nan(self):
-        Y = np.ones((20, 1), dtype=np.float32)
-        Y_pred = np.zeros((20, 1), dtype=np.float32)
-        r2 = compute_r2(Y, Y_pred)
-        assert np.isfinite(r2[0])
-        assert r2[0] == 0.0
 
 
 # ---------------------------------------------------------------------------

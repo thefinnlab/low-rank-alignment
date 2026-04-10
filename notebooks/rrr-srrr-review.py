@@ -327,7 +327,7 @@ def _(mo, rrr_options):
         stop=0.10,
         value=0.01,
         step=0.005,
-        label="Sufficiency threshold (full_r2 − minimal_r2 ≤)",
+        label="Sufficiency threshold (full_r2 − rrr_r2 ≤)",
     )
     mo.hstack([s1_source, s1_show_folds, s1_threshold])
     return s1_source, s1_threshold
@@ -394,10 +394,10 @@ def _(alt, mo, s1_summary):
 
 @app.cell(hide_code=True)
 def _(mo, s1_summary, s1_threshold):
-    # Sufficiency summary
-    if "full_r2" in s1_summary.columns and "minimal_r2" in s1_summary.columns:
-        _gap = s1_summary["full_r2"] - s1_summary["minimal_r2"]
-        _ratio = s1_summary["minimal_r2"] / s1_summary["full_r2"].replace(
+    # Sufficiency summary: find smallest k where RRR explains nearly as much as full model
+    if "full_r2" in s1_summary.columns and "rrr_r2" in s1_summary.columns:
+        _gap = s1_summary["full_r2"] - s1_summary["rrr_r2"]
+        _ratio = s1_summary["rrr_r2"] / s1_summary["full_r2"].replace(
             0, float("nan")
         )
         _suf = s1_summary[_gap <= s1_threshold.value]
@@ -408,7 +408,7 @@ def _(mo, s1_summary, s1_threshold):
             mo.callout(
                 mo.md(
                     f"**Minimum sufficient rank (RRR):** k = **{_min_k}**  \n"
-                    f"First rank where avg. `full_r2 − minimal_r2 ≤ {s1_threshold.value:.3f}` "
+                    f"First rank where avg. `full_r2 − rrr_r2 ≤ {s1_threshold.value:.3f}` "
                     f"(gap = {_gap_at_k:.4f}, ratio = {_ratio_at_k:.3f})"
                 ),
                 kind="success",
@@ -416,14 +416,14 @@ def _(mo, s1_summary, s1_threshold):
         else:
             mo.callout(
                 mo.md(
-                    f"No rank achieves `full_r2 − minimal_r2 ≤ {s1_threshold.value:.3f}`. "
+                    f"No rank achieves `full_r2 − rrr_r2 ≤ {s1_threshold.value:.3f}`. "
                     "Try a larger threshold or a larger rank grid."
                 ),
                 kind="warn",
             )
     else:
         mo.callout(
-            mo.md("*`full_r2` or `minimal_r2` not found in summary.csv.*"), kind="warn"
+            mo.md("*`full_r2` or `rrr_r2` not found in summary.csv.*"), kind="warn"
         )
     return
 

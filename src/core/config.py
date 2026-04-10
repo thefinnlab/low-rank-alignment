@@ -154,6 +154,9 @@ class RRRConfig:
     # Arbitrary embedding seed for null baseline
     arbitrary_seed: int = 42
 
+    # PCA baseline: run PCA subspace analysis alongside RRR using the same rank_grid
+    run_pca_baseline: bool = False
+
     # Per-region mode
     atlas_path: str | None = (
         None  # Path to Destrieux 2009 .nii.gz; None = download via nilearn

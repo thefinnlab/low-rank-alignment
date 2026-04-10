@@ -11,7 +11,7 @@ import warnings
 import numpy as np
 import torch
 from tqdm import tqdm
-from himalaya.scoring import correlation_score
+from himalaya.scoring import correlation_score, r2_score
 
 from src.utils.tensor_utils import to_numpy, to_torch
 
@@ -463,24 +463,6 @@ def predict_from_factors(
     return X_use @ A @ B.T
 
 
-def compute_r2(Y_true: np.ndarray, Y_pred: np.ndarray) -> np.ndarray:
-    """Compute per-column R^2 (coefficient of determination).
-
-    Constant columns return 0.0 instead of NaN.
-
-    Args:
-        Y_true: (n, n_targets).
-        Y_pred: (n, n_targets).
-
-    Returns:
-        r2: (n_targets,) array.
-    """
-    ss_res = np.sum((Y_true - Y_pred) ** 2, axis=0)
-    ss_tot = np.sum((Y_true - Y_true.mean(axis=0, keepdims=True)) ** 2, axis=0)
-    # Where ss_tot == 0 the column is constant; R^2 is defined as 0
-    with np.errstate(divide="ignore", invalid="ignore"):
-        r2 = np.where(ss_tot < 1e-12, 0.0, 1.0 - ss_res / ss_tot)
-    return r2
 
 
 # ---------------------------------------------------------------------------
@@ -568,7 +550,7 @@ def build_null_distribution(
                 selected_idx=np.arange(n_dirs),
             )
 
-        r2_vals = compute_r2(Y_test, Y_hat)
+        r2_vals = r2_score(Y_test, Y_hat)
         null_r2[i] = float(r2_vals.mean())
 
     if cache_path is not None:
@@ -639,9 +621,9 @@ def run_sufficiency_test(
     if device is None:
         device = "cuda" if torch.cuda.is_available() else "cpu"
 
-    full_r2 = float(compute_r2(Y_test, Y_hat_full).mean())
-    minimal_r2 = float(compute_r2(Y_test, Y_hat_min).mean())
-    pred_r2 = float(compute_r2(Y_hat_full, Y_hat_min).mean())
+    full_r2 = float(r2_score(Y_test, Y_hat_full).mean())
+    minimal_r2 = float(r2_score(Y_test, Y_hat_min).mean())
+    pred_r2 = float(r2_score(Y_hat_full, Y_hat_min).mean())
 
     full_corr_arr = correlation_score(Y_test, Y_hat_full)
     minimal_corr_arr = correlation_score(Y_test, Y_hat_min)
@@ -661,7 +643,7 @@ def run_sufficiency_test(
     X_test_t = to_torch(X_proj_test, dtype=torch.float32, device=device)
     Y_resid_hat = to_numpy(X_test_t @ W + b)
 
-    recovery_r2 = float(compute_r2(Y_resid_test, Y_resid_hat).mean())
+    recovery_r2 = float(r2_score(Y_resid_test, Y_resid_hat).mean())
     recovery_corr_arr = correlation_score(Y_resid_test, Y_resid_hat)
     recovery_corr = float(recovery_corr_arr.mean())
 
