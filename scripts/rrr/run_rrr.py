@@ -678,8 +678,6 @@ def _run_pca_for_unit(
 
         # Save full model metrics once per fold (not per-k)
         _save_full_model_metrics_once(pca_unit_dir, fold_f, Y_test, Y_hat_full)
-        full_corr = float(correlation_score(Y_test, Y_hat_full).mean())
-        full_r2 = float(r2_score(Y_test, Y_hat_full).mean())
 
         # Compute PCA on training data only (proper CV)
         X_mean = X_train.mean(axis=0)
@@ -712,7 +710,7 @@ def _run_pca_for_unit(
                 oof_spill_dir,
                 primary_label="pca",
             )
-            row = {"fold": fold_f, "k": k, "full_corr": full_corr, "full_r2": full_r2, **common}
+            row = {"fold": fold_f, "k": k, **common}
             all_rows.append(row)
 
         print(f"  Fold {fold_f} done in {time.time() - fold_start:.1f}s")
