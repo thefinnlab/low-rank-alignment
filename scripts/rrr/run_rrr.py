@@ -683,6 +683,327 @@ def _run_rrr_for_unit(
 
 
 # ---------------------------------------------------------------------------
+# Branch: leave-one-subject-out RRR
+# ---------------------------------------------------------------------------
+
+
+def _run_loso_transfer_for_unit(
+    transfer_unit_dir: str,
+    n_minus_1_unit_dir: str,
+    X_raw: np.ndarray,
+    test_idxs: list,
+    per_fold_baselines_sub: list,
+    config: RRRConfig,
+    sig_mask_flat_sub: np.ndarray | None = None,
+    X_arbitrary: np.ndarray | None = None,
+) -> pd.DataFrame:
+    """Evaluate transfer of the n-1-subject A matrix to a held-out subject.
+
+    Loads per-fold A matrices saved by the n-1-subject RRR run, projects the
+    held-out subject's embeddings through each A, trains a fresh ridge in the
+    projected space on the training words, and evaluates on the held-out fold.
+    This is identical to the NR (non-reduced-rank) evaluation in _run_rrr_for_unit
+    except the A matrix is sourced externally rather than fitted here.
+
+    Args:
+        transfer_unit_dir: Output directory for this transfer analysis.
+        n_minus_1_unit_dir: Directory containing fold_{f}/A.npy from the n-1 subject run.
+        X_raw: (n_words, n_embed) shared embedding matrix.
+        test_idxs: List of test index arrays (one per fold).
+        per_fold_baselines_sub: Output of build_per_fold_baselines for the held-out subject.
+        config: RRRConfig.
+        sig_mask_flat_sub: Boolean mask over held-out subject's targets (True = significant).
+        X_arbitrary: (n_words, n_embed) arbitrary embeddings for null baseline.
+
+    Returns:
+        DataFrame of per-(fold, k) metrics for grid_results.csv.
+    """
+    os.makedirs(transfer_unit_dir, exist_ok=True)
+
+    enc = config.encoding
+    alphas = np.array(enc.ridge_alphas) if enc.ridge_alphas is not None else None
+
+    n_folds = len(test_idxs)
+
+    import torch
+
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+
+    all_rows = []
+
+    oof_spill_dir = os.path.join(transfer_unit_dir, "_oof_spill")
+    os.makedirs(oof_spill_dir, exist_ok=True)
+
+    for fold_f in range(n_folds):
+        fold_start = time.time()
+        print(f"\n[Fold {fold_f + 1}/{n_folds}]")
+
+        baseline = per_fold_baselines_sub[fold_f]
+        train_idx = baseline["train_idx"]
+        test_idx = baseline["test_idx"]
+        X_train = X_raw[train_idx]
+        X_test = X_raw[test_idx]
+        Y_train = baseline["Y_train"]
+        Y_test = baseline["Y_test"]
+        Y_hat_full = baseline["Y_hat_full_test"]
+
+        # Load A matrix learned from n-1 subjects for this fold
+        A_full = np.load(os.path.join(n_minus_1_unit_dir, f"fold_{fold_f}", "A.npy"))
+
+        print(f"  Running {len(config.rank_grid)} rank(s): {config.rank_grid}")
+        for k in tqdm(
+            config.rank_grid, desc=f"  fold {fold_f} transfer", leave=True, unit="rank"
+        ):
+            A_k = A_full[:, :k]
+
+            # Transfer: project held-out subject through n-1 subject A, train fresh ridge
+            nr_result = evaluate_subspace_ridge(
+                A_k,
+                X_train,
+                X_test,
+                Y_train,
+                Y_test,
+                Y_hat_full,
+                compute_cca=config.compute_cca,
+                compute_procrustes=config.compute_procrustes,
+                device=device,
+            )
+            complement_result, arbitrary_result = evaluate_complement_and_arbitrary(
+                A_full,
+                k,
+                X_train,
+                X_test,
+                X_arbitrary,
+                train_idx,
+                test_idx,
+                Y_train,
+                Y_test,
+                nr_result["Y_hat_train"],
+                nr_result["Y_hat"],
+                alphas=np.logspace(1, 10, 13) if k < 50 else np.logspace(-2, 10, 13),
+                device=device,
+            )
+
+            metrics = {
+                "fold": fold_f,
+                "k": k,
+            }
+            metrics.update(
+                build_nr_metrics_dict(
+                    nr_result,
+                    sig_mask_flat=sig_mask_flat_sub,
+                    complement_result=complement_result,
+                    arbitrary_result=arbitrary_result,
+                )
+            )
+
+            Y_hat_nr = nr_result["Y_hat"]
+            Y_hat_complement = complement_result["complement_Y_hat"]
+            Y_hat_arbitrary = (
+                arbitrary_result["arbitrary_Y_hat"]
+                if arbitrary_result is not None
+                else None
+            )
+            add_primary_cross_model_metrics(
+                metrics,
+                Y_hat_nr,
+                Y_hat_full,
+                Y_hat_complement,
+                Y_hat_arbitrary,
+                Y_test,
+                "nr",
+            )
+
+            # Spill OOF predictions; Y_hat_rrr is None (no reduced-rank model in transfer)
+            for _field, _arr in [
+                ("Y_hat_rrr", None),
+                ("Y_hat_nr", Y_hat_nr),
+                ("Y_hat_complement", Y_hat_complement),
+                ("Y_hat_full", Y_hat_full),
+                ("Y_hat_arbitrary", Y_hat_arbitrary),
+                ("Y_test", Y_test),
+            ]:
+                _spill_path = os.path.join(
+                    oof_spill_dir, f"oof_{k}_{fold_f}_{_field}.npy"
+                )
+                if _arr is not None:
+                    np.save(_spill_path, _arr)
+                else:
+                    np.save(_spill_path, np.array(None, dtype=object))
+
+            apply_sig_nonsig_splits_and_strip(metrics, sig_mask_flat_sub)
+            save_rrr_result(transfer_unit_dir, k=k, fold=fold_f, metrics=metrics)
+            del metrics["nr_corr_per_target"]
+            all_rows.append(metrics)
+
+        print(f"  Fold {fold_f} done in {time.time() - fold_start:.1f}s")
+
+    print("\nComputing stacked OLS joint correlations...")
+    all_rows = _calculate_joint_correlations(
+        oof_spill_dir,
+        n_folds,
+        config,
+        sig_mask_flat_sub,
+        all_rows,
+        rrr_unit_dir=transfer_unit_dir,
+    )
+
+    df = pd.DataFrame(all_rows)
+    df.to_csv(os.path.join(transfer_unit_dir, "grid_results.csv"), index=False)
+    _plot_results(df, X_arbitrary, sig_mask_flat_sub, transfer_unit_dir)
+
+    return df
+
+
+def _run_loso_rrr(
+    config: RRRConfig,
+    enc,
+    output_dir,
+    sig_dir,
+    rrr_dir,
+    subject_ids,
+    sig_electrodes,
+    aligned_embeddings,
+    word_df,
+    word_in_glove=None,
+):
+    """Leave-one-subject-out RRR.
+
+    For each held-out subject:
+      1. Train standard RRR on the remaining n-1 subjects.
+      2. Transfer the learned A matrix to the held-out subject: project its
+         embeddings through A, train a new ridge on training words, evaluate
+         on the held-out word fold.
+      3. Run standard per-subject RRR on the held-out subject alone as baseline.
+
+    Subject set is controlled by enc.subjects (defaults to all 9 subjects).
+    X_raw and test_idxs are shared across all subjects; only Y differs.
+    """
+    holdout_candidates = [s for s in subject_ids if sig_electrodes.get(s)]
+    if len(holdout_candidates) < 2:
+        print(
+            f"  Need ≥2 subjects with significant electrodes for LOSO "
+            f"(found {len(holdout_candidates)}); skipping."
+        )
+        return
+
+    # Load shared fold structure (word folds are identical across subjects)
+    first_sub = holdout_candidates[0]
+    enc_results = load_encoding_results(
+        os.path.join(
+            output_dir, "subjects", f"sub_{first_sub}", "encoding_results.joblib"
+        )
+    )
+    test_idxs = enc_results["test_idxs"]
+
+    # Build X_raw and X_arbitrary once — identical for all subjects
+    print("Building shared X_raw and arbitrary embeddings...")
+    X_raw, _, selection, _ = build_XY_from_subjects(
+        holdout_candidates,
+        enc,
+        sig_electrodes,
+        aligned_embeddings,
+        valid_rows=word_in_glove,
+    )
+    X_arbitrary = get_and_offset_arbitrary_embeddings(
+        aligned_embeddings,
+        selection,
+        word_df,
+        enc.offset,
+        enc.arbitrary_seed,
+        valid_rows=word_in_glove,
+    )
+    print(f"  X: {X_raw.shape}")
+
+    for s_out in holdout_candidates:
+        training_subs = [s for s in holdout_candidates if s != s_out]
+        training_sig_elecs = {s: sig_electrodes[s] for s in training_subs}
+
+        held_out_dir = os.path.join(rrr_dir, f"held_out_sub_{s_out}")
+        n_minus_1_dir = os.path.join(held_out_dir, "n_minus_1_subjects")
+        transfer_dir = os.path.join(held_out_dir, "transfer_to_subject")
+        baseline_dir = os.path.join(held_out_dir, "baseline_per_subject")
+
+        print(f"\n{'='*60}")
+        print(f"Held-out subject: {s_out}  |  Training subjects: {training_subs}")
+
+        # --- Step 1: n-1 subjects RRR ---
+        print(f"\n[Step 1/3] n-1 subjects RRR → {n_minus_1_dir}")
+        _, Y_train_subs, _, _ = build_XY_from_subjects(
+            training_subs,
+            enc,
+            training_sig_elecs,
+            aligned_embeddings,
+            valid_rows=word_in_glove,
+        )
+        per_fold_baselines_train = build_per_fold_baselines(
+            X_raw, Y_train_subs, test_idxs
+        )
+        sig_mask_train = None
+        if config.compute_sig_nonsig:
+            sig_mask_train = build_sig_mask_flat_for_elecs(
+                output_dir,
+                training_sig_elecs,
+                enc_results,
+                sig_dir=sig_dir,
+            )
+        _run_rrr_for_unit(
+            rrr_unit_dir=n_minus_1_dir,
+            X_raw=X_raw,
+            test_idxs=test_idxs,
+            per_fold_baselines=per_fold_baselines_train,
+            config=config,
+            sig_mask_flat=sig_mask_train,
+            X_arbitrary=X_arbitrary,
+        )
+
+        # Build held-out subject's data (reused for transfer and baseline)
+        _, Y_sub, _, _ = build_XY_from_subjects(
+            [s_out],
+            enc,
+            {s_out: sig_electrodes[s_out]},
+            aligned_embeddings,
+            valid_rows=word_in_glove,
+        )
+        per_fold_baselines_sub = build_per_fold_baselines(X_raw, Y_sub, test_idxs)
+        sig_mask_sub = None
+        if config.compute_sig_nonsig:
+            sig_mask_sub = build_sig_mask_flat_for_elecs(
+                output_dir,
+                {s_out: sig_electrodes[s_out]},
+                enc_results,
+                sig_dir=sig_dir,
+            )
+
+        # --- Step 2: Transfer A to held-out subject ---
+        print(f"\n[Step 2/3] Transfer to subject {s_out} → {transfer_dir}")
+        _run_loso_transfer_for_unit(
+            transfer_unit_dir=transfer_dir,
+            n_minus_1_unit_dir=n_minus_1_dir,
+            X_raw=X_raw,
+            test_idxs=test_idxs,
+            per_fold_baselines_sub=per_fold_baselines_sub,
+            config=config,
+            sig_mask_flat_sub=sig_mask_sub,
+            X_arbitrary=X_arbitrary,
+        )
+
+        # --- Step 3: Baseline — per-subject RRR on held-out subject alone ---
+        print(f"\n[Step 3/3] Baseline RRR for subject {s_out} → {baseline_dir}")
+        _run_rrr_for_unit(
+            rrr_unit_dir=baseline_dir,
+            X_raw=X_raw,
+            test_idxs=test_idxs,
+            per_fold_baselines=per_fold_baselines_sub,
+            config=config,
+            sig_mask_flat=sig_mask_sub,
+            X_arbitrary=X_arbitrary,
+        )
+
+        gc.collect()
+
+
+# ---------------------------------------------------------------------------
 # Branch: cross-subject RRR
 # ---------------------------------------------------------------------------
 
@@ -939,6 +1260,8 @@ def main():
         rrr_dir = os.path.join(output_dir, "per_region_rrr")
     elif config.mode == ScriptMode.PER_SUBJECT:
         rrr_dir = os.path.join(output_dir, "per_subject_rrr")
+    elif config.mode == ScriptMode.LEAVE_ONE_SUBJECT_OUT:
+        rrr_dir = os.path.join(output_dir, "loso_rrr")
     else:
         rrr_dir = os.path.join(output_dir, "rrr")
 
@@ -980,6 +1303,8 @@ def main():
         _run_per_region_rrr(**branch_kwargs)
     elif config.mode == ScriptMode.PER_SUBJECT:
         _run_per_subject_rrr(**branch_kwargs)
+    elif config.mode == ScriptMode.LEAVE_ONE_SUBJECT_OUT:
+        _run_loso_rrr(**branch_kwargs)
     else:
         _run_cross_subject_rrr(**branch_kwargs)
 

@@ -11,6 +11,7 @@ class ScriptMode(str, Enum):
     CROSS_SUBJECT = "cross_subject"
     PER_SUBJECT = "per_subject"
     PER_REGION = "per_region"
+    LEAVE_ONE_SUBJECT_OUT = "leave_one_subject_out"
 
 
 def gpt2_xl_results_dir(base_dir, offset, layer):
@@ -123,9 +124,10 @@ class RRRConfig:
     explained by an unconstrained ridge baseline.
 
     Mode → output directory mapping (default, overridable via rrr_output_dir):
-        cross_subject : {output_dir}/rrr/
-        per_subject   : {output_dir}/per_subject_rrr/
-        per_region    : {output_dir}/per_region_rrr/
+        cross_subject         : {output_dir}/rrr/
+        per_subject           : {output_dir}/per_subject_rrr/
+        per_region            : {output_dir}/per_region_rrr/
+        leave_one_subject_out : {output_dir}/loso_rrr/
     """
 
     encoding: EncodingConfig = field(default_factory=EncodingConfig)
