@@ -1,6 +1,5 @@
 """Unit tests for utils/srrr.py."""
 
-import os
 import warnings
 
 import numpy as np
@@ -8,11 +7,9 @@ import pytest
 import torch
 
 from src.utils.srrr import (
-    build_null_distribution,
     compute_cca_similarity,
     compute_procrustes_similarity,
     correlation_score,
-    compute_r2,
     find_knee_lambda,
     fit_dense_rrr,
     fit_srrr_proxgd,
@@ -256,42 +253,6 @@ class TestSelectDirections:
 
 
 # ---------------------------------------------------------------------------
-# TestComputeR2
-# ---------------------------------------------------------------------------
-
-
-class TestComputeR2:
-    def test_perfect_prediction_returns_one(self, rng):
-        Y = rng.standard_normal((30, 4)).astype(np.float32)
-        r2 = compute_r2(Y, Y)
-        np.testing.assert_allclose(r2, 1.0, atol=1e-5)
-
-    def test_mean_prediction_returns_zero(self, rng):
-        Y = rng.standard_normal((30, 4)).astype(np.float32)
-        Y_pred = np.broadcast_to(Y.mean(axis=0), Y.shape)
-        r2 = compute_r2(Y, Y_pred)
-        np.testing.assert_allclose(r2, 0.0, atol=1e-5)
-
-    def test_output_shape(self, rng):
-        Y = rng.standard_normal((20, 5)).astype(np.float32)
-        r2 = compute_r2(Y, Y * 0.9)
-        assert r2.shape == (5,)
-
-    def test_negative_r2_allowed(self, rng):
-        Y = rng.standard_normal((20, 2)).astype(np.float32)
-        Y_bad = -Y * 10
-        r2 = compute_r2(Y, Y_bad)
-        assert np.any(r2 < 0.0)
-
-    def test_constant_column_returns_zero_not_nan(self):
-        Y = np.ones((20, 1), dtype=np.float32)
-        Y_pred = np.zeros((20, 1), dtype=np.float32)
-        r2 = compute_r2(Y, Y_pred)
-        assert np.isfinite(r2[0])
-        assert r2[0] == 0.0
-
-
-# ---------------------------------------------------------------------------
 # TestComputeCorrelation
 # ---------------------------------------------------------------------------
 
@@ -373,107 +334,6 @@ class TestPredictFromFactors:
         Y_hat = predict_from_factors(X, A, B, selected_idx=selected)
         expected = X[:, selected] @ A @ B.T
         np.testing.assert_allclose(Y_hat, expected, rtol=1e-5)
-
-
-# ---------------------------------------------------------------------------
-# TestBuildNullDistribution
-# ---------------------------------------------------------------------------
-
-
-class TestBuildNullDistribution:
-    def test_shape_ols(self, small_data):
-        X, Y = small_data
-        n_train = 40
-        X_train, X_test = X[:n_train], X[n_train:]
-        Y_train, Y_test = Y[:n_train], Y[n_train:]
-        n_perms = 8
-        null = build_null_distribution(
-            X_train,
-            Y_train,
-            X_test,
-            Y_test,
-            regression_type="ols",
-            k=2,
-            n_permutations=n_perms,
-            device="cpu",
-            seed=0,
-        )
-        assert null.shape == (n_perms,)
-
-    def test_shape_ridge(self, small_data):
-        X, Y = small_data
-        n_train = 40
-        X_train, X_test = X[:n_train], X[n_train:]
-        Y_train, Y_test = Y[:n_train], Y[n_train:]
-        n_perms = 8
-        null = build_null_distribution(
-            X_train,
-            Y_train,
-            X_test,
-            Y_test,
-            regression_type="ridge",
-            n_permutations=n_perms,
-            device="cpu",
-            seed=0,
-        )
-        assert null.shape == (n_perms,)
-
-    def test_near_zero_r2_on_random_data(self, rng):
-        # Completely random data → null R^2 should be near 0
-        n, n_dirs, n_targets = 60, 8, 3
-        X = rng.standard_normal((n, n_dirs)).astype(np.float32)
-        Y = rng.standard_normal((n, n_targets)).astype(np.float32)
-        X_train, X_test = X[:40], X[40:]
-        Y_train, Y_test = Y[:40], Y[40:]
-        null = build_null_distribution(
-            X_train,
-            Y_train,
-            X_test,
-            Y_test,
-            regression_type="ols",
-            k=2,
-            n_permutations=20,
-            device="cpu",
-            seed=1,
-        )
-        assert np.abs(null.mean()) < 0.5  # Should be small under null
-
-    def test_cache_roundtrip(self, tmp_path, small_data):
-        X, Y = small_data
-        n_train = 40
-        X_train, X_test = X[:n_train], X[n_train:]
-        Y_train, Y_test = Y[:n_train], Y[n_train:]
-        cache_file = str(tmp_path / "null_dist.npy")
-
-        # First call — computes and caches
-        null1 = build_null_distribution(
-            X_train,
-            Y_train,
-            X_test,
-            Y_test,
-            regression_type="ols",
-            k=2,
-            n_permutations=5,
-            device="cpu",
-            seed=42,
-            cache_path=cache_file,
-        )
-        assert os.path.exists(cache_file)
-
-        # Second call — loads from cache (should be identical)
-        null2 = build_null_distribution(
-            X_train,
-            Y_train,
-            X_test,
-            Y_test,
-            regression_type="ols",
-            k=2,
-            n_permutations=5,
-            device="cpu",
-            seed=99,  # different seed shouldn't matter
-            cache_path=cache_file,
-        )
-        np.testing.assert_array_equal(null1, null2)
 
 
 # ---------------------------------------------------------------------------

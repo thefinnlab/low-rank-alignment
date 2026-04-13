@@ -11,7 +11,7 @@ import warnings
 import numpy as np
 import torch
 from tqdm import tqdm
-from himalaya.scoring import correlation_score
+from himalaya.scoring import correlation_score, r2_score
 
 from src.utils.tensor_utils import to_numpy, to_torch
 
@@ -463,121 +463,11 @@ def predict_from_factors(
     return X_use @ A @ B.T
 
 
-def compute_r2(Y_true: np.ndarray, Y_pred: np.ndarray) -> np.ndarray:
-    """Compute per-column R^2 (coefficient of determination).
-
-    Constant columns return 0.0 instead of NaN.
-
-    Args:
-        Y_true: (n, n_targets).
-        Y_pred: (n, n_targets).
-
-    Returns:
-        r2: (n_targets,) array.
-    """
-    ss_res = np.sum((Y_true - Y_pred) ** 2, axis=0)
-    ss_tot = np.sum((Y_true - Y_true.mean(axis=0, keepdims=True)) ** 2, axis=0)
-    # Where ss_tot == 0 the column is constant; R^2 is defined as 0
-    with np.errstate(divide="ignore", invalid="ignore"):
-        r2 = np.where(ss_tot < 1e-12, 0.0, 1.0 - ss_res / ss_tot)
-    return r2
 
 
 # ---------------------------------------------------------------------------
 # E. Sufficiency test
 # ---------------------------------------------------------------------------
-
-
-def build_null_distribution(
-    X_proj_train: np.ndarray,
-    Y_train: np.ndarray,
-    X_proj_test: np.ndarray,
-    Y_test: np.ndarray,
-    regression_type: str = "ridge",
-    alphas: np.ndarray | None = None,
-    k: int = 2,
-    n_permutations: int = 5000,
-    cache_path: str | None = None,
-    seed: int = 42,
-    device: str | None = None,
-) -> np.ndarray:
-    """Build a null distribution for mean R^2 via label permutation.
-
-    For each permutation: shuffle Y_train rows, fit a model on the shuffled
-    labels, evaluate on un-shuffled Y_test, and record mean R^2.
-
-    Args:
-        X_proj_train: (n_train, n_dirs).
-        Y_train: (n_train, n_targets).
-        X_proj_test: (n_test, n_dirs).
-        Y_test: (n_test, n_targets).
-        regression_type: ``"ridge"`` (default) or ``"ols"``. When ``"ols"``,
-            falls back to full-dim dense RRR of rank ``k`` (used for testing).
-        alphas: Ridge alpha grid for RidgeCV. When None, uses RIDGE_ALPHAS
-            from utils.constants. Ignored when regression_type is ``"ols"``.
-        k: Rank for the RRR fallback; ignored when regression_type is ``"ridge"``.
-        n_permutations: Number of permutations.
-        cache_path: If given, load from file if it exists; save after computing.
-        seed: Random seed.
-        device: torch device string.
-
-    Returns:
-        null_r2: (n_permutations,) array of mean R^2 values under the null.
-    """
-    from src.utils.sae import solve_regression
-
-    if cache_path is not None and os.path.exists(cache_path):
-        return np.load(cache_path)
-
-    if device is None:
-        device = "cuda" if torch.cuda.is_available() else "cpu"
-
-    rng = np.random.default_rng(seed)
-    n_dirs = X_proj_train.shape[1]
-    all_idx = np.arange(X_proj_train.shape[0])
-    null_r2 = np.zeros(n_permutations)
-
-    X_test_t = to_torch(X_proj_test, dtype=torch.float32, device=device)
-
-    for i in tqdm(range(n_permutations), desc="Null distribution", unit="perm"):
-        perm_idx = rng.permutation(all_idx)
-        Y_perm = Y_train[perm_idx]
-
-        if regression_type == "ridge":
-            W, b = solve_regression(
-                to_torch(X_proj_train, dtype=torch.float32, device=device),
-                to_torch(Y_perm, dtype=torch.float32, device=device),
-                "ridge",
-                device,
-                standardize=True,
-                alphas=alphas,
-            )
-            Y_hat = to_numpy(X_test_t @ W + b)
-        else:
-            result = fit_dense_rrr(
-                X_proj_train,
-                Y_perm,
-                k=k,
-                selected_idx=np.arange(n_dirs),
-                device=device,
-            )
-            Y_hat = predict_from_factors(
-                X_proj_test,
-                result["A_dense"],
-                result["B_dense"],
-                selected_idx=np.arange(n_dirs),
-            )
-
-        r2_vals = compute_r2(Y_test, Y_hat)
-        null_r2[i] = float(r2_vals.mean())
-
-    if cache_path is not None:
-        cache_dir = os.path.dirname(cache_path)
-        if cache_dir:
-            os.makedirs(cache_dir, exist_ok=True)
-        np.save(cache_path, null_r2)
-
-    return null_r2
 
 
 def run_sufficiency_test(
@@ -639,9 +529,9 @@ def run_sufficiency_test(
     if device is None:
         device = "cuda" if torch.cuda.is_available() else "cpu"
 
-    full_r2 = float(compute_r2(Y_test, Y_hat_full).mean())
-    minimal_r2 = float(compute_r2(Y_test, Y_hat_min).mean())
-    pred_r2 = float(compute_r2(Y_hat_full, Y_hat_min).mean())
+    full_r2 = float(r2_score(Y_test, Y_hat_full).mean())
+    minimal_r2 = float(r2_score(Y_test, Y_hat_min).mean())
+    pred_r2 = float(r2_score(Y_hat_full, Y_hat_min).mean())
 
     full_corr_arr = correlation_score(Y_test, Y_hat_full)
     minimal_corr_arr = correlation_score(Y_test, Y_hat_min)
@@ -661,7 +551,7 @@ def run_sufficiency_test(
     X_test_t = to_torch(X_proj_test, dtype=torch.float32, device=device)
     Y_resid_hat = to_numpy(X_test_t @ W + b)
 
-    recovery_r2 = float(compute_r2(Y_resid_test, Y_resid_hat).mean())
+    recovery_r2 = float(r2_score(Y_resid_test, Y_resid_hat).mean())
     recovery_corr_arr = correlation_score(Y_resid_test, Y_resid_hat)
     recovery_corr = float(recovery_corr_arr.mean())
 

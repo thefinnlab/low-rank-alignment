@@ -58,10 +58,9 @@ from src.utils.encoding import (
 from src.utils.rrr_utils import (
     add_sig_nonsig_corrs,
     resolve_rrr_source_dir,
-    run_prediction_metrics,
 )
 from src.utils.sae import solve_regression
-from src.utils.srrr import run_sufficiency_test
+from himalaya.scoring import correlation_score, r2_score
 
 
 # ---------------------------------------------------------------------------
@@ -148,8 +147,6 @@ def apply_random_mask(
 def _eval_ablated(
     X_proj_train: np.ndarray,
     X_proj_test: np.ndarray,
-    X_raw_train: np.ndarray,
-    X_raw_test: np.ndarray,
     Y_train: np.ndarray,
     Y_test: np.ndarray,
     Y_hat_full: np.ndarray,
@@ -162,8 +159,6 @@ def _eval_ablated(
     Args:
         X_proj_train: (n_train, k) masked latent activations (train).
         X_proj_test: (n_test, k) masked latent activations (test).
-        X_raw_train: (n_train, n_embed) raw embeddings (train) for recovery test.
-        X_raw_test: (n_test, n_embed) raw embeddings (test) for recovery test.
         Y_train: (n_train, n_targets) neural data (train).
         Y_test: (n_test, n_targets) neural data (test).
         Y_hat_full: (n_test, n_targets) full baseline predictions.
@@ -182,42 +177,24 @@ def _eval_ablated(
         standardize=False,
         alphas=alphas,
     )
-    X_train_t = torch.as_tensor(X_proj_train, dtype=torch.float32, device=device)
     X_test_t = torch.as_tensor(X_proj_test, dtype=torch.float32, device=device)
     Y_hat_test = (X_test_t @ W + b).cpu().numpy()
-    Y_hat_train = (X_train_t @ W + b).cpu().numpy()
 
-    suf, _, _ = run_prediction_metrics(
-        Y_hat_test,
-        Y_hat_train,
-        Y_train,
-        X_raw_train,
-        X_raw_test,
-        Y_test,
-        Y_hat_full,
-        alphas=alphas,
-    )
+    nr_corr_arr = correlation_score(Y_test, Y_hat_test)
+    nr_r2_arr = r2_score(Y_test, Y_hat_test)
+    full_corr_arr = correlation_score(Y_test, Y_hat_full)
+    full_r2_arr = r2_score(Y_test, Y_hat_full)
 
     metrics = {
-        "full_r2": suf["full_r2"],
-        "minimal_r2": suf["minimal_r2"],
-        "recovery_r2": suf["recovery_r2"],
-        "pred_r2": suf["pred_r2"],
-        "full_corr": suf["full_corr"],
-        "minimal_corr": suf["minimal_corr"],
-        "recovery_corr": suf["recovery_corr"],
+        "full_corr": float(full_corr_arr.mean()),
+        "full_r2": float(full_r2_arr.mean()),
+        "nr_corr": float(nr_corr_arr.mean()),
+        "nr_r2": float(nr_r2_arr.mean()),
     }
     if sig_mask_flat is not None:
-        add_sig_nonsig_corrs(
-            metrics,
-            suf,
-            sig_mask_flat,
-            [
-                ("full_corr", "full_corr_per_target"),
-                ("minimal_corr", "minimal_corr_per_target"),
-                ("recovery_corr", "recovery_corr_per_target"),
-            ],
-        )
+        for col, arr in [("full_corr", full_corr_arr), ("nr_corr", nr_corr_arr)]:
+            metrics[f"{col}_sig"] = float(arr[sig_mask_flat].mean()) if sig_mask_flat.any() else float("nan")
+            metrics[f"{col}_nonsig"] = float(arr[~sig_mask_flat].mean()) if (~sig_mask_flat).any() else float("nan")
     return metrics
 
 
@@ -306,21 +283,9 @@ def _run_ablation_for_unit(
                         "mask_type": "none",
                         "pct_zeroed": 0.0,
                     }
-                    # Use full-model metrics as-is
-                    for col in ["full_r2", "full_corr"]:
+                    for col in ["full_r2", "full_corr", "nr_r2", "nr_corr"]:
                         if col in row.index:
                             baseline_metrics[col] = float(row[col])
-                    # Use nr_ (non-reduced-rank ridge on subspace) as the baseline
-                    nr_to_standard = {
-                        "nr_r2": "minimal_r2",
-                        "nr_corr": "minimal_corr",
-                        "nr_recovery_r2": "recovery_r2",
-                        "nr_recovery_corr": "recovery_corr",
-                        "nr_pred_r2": "pred_r2",
-                    }
-                    for nr_col, std_col in nr_to_standard.items():
-                        if nr_col in row.index:
-                            baseline_metrics[std_col] = float(row[nr_col])
                     all_rows.append(baseline_metrics)
 
             rng = np.random.default_rng(42)
@@ -344,8 +309,6 @@ def _run_ablation_for_unit(
                             m = _eval_ablated(
                                 X_masked_train,
                                 X_masked_test,
-                                X_train,
-                                X_test,
                                 Y_train,
                                 Y_test,
                                 Y_hat_full,
@@ -382,8 +345,6 @@ def _run_ablation_for_unit(
                         m = _eval_ablated(
                             X_masked_train,
                             X_masked_test,
-                            X_train,
-                            X_test,
                             Y_train,
                             Y_test,
                             Y_hat_full,

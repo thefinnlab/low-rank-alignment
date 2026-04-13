@@ -41,13 +41,9 @@ class TestSaveLoadRRRResult:
         B_full = rng.standard_normal((5, max_k)).astype(np.float32)
         metrics = {
             "full_r2": 0.5,
-            "minimal_r2": 0.4,
-            "recovery_r2": 0.05,
+            "nr_r2": 0.4,
+            "nr_corr": 0.02,
             "full_corr": 0.03,
-            "minimal_corr": 0.02,
-            "recovery_corr": 0.01,
-            "cca_similarity": 0.9,
-            "procrustes_similarity": 0.85,
             "fold": fold,
             "k": k,
         }
@@ -59,7 +55,7 @@ class TestSaveLoadRRRResult:
         np.testing.assert_array_almost_equal(result["A"], A_full[:, :k])
         np.testing.assert_array_almost_equal(result["B"], B_full[:, :k])
         assert abs(float(result["metrics"]["full_r2"]) - 0.5) < 1e-5
-        assert abs(float(result["metrics"]["recovery_r2"]) - 0.05) < 1e-5
+        assert abs(float(result["metrics"]["nr_r2"]) - 0.4) < 1e-5
 
     def test_directory_created(self, tmp_path):
         A = np.zeros((4, 5), dtype=np.float32)
@@ -170,8 +166,8 @@ class TestRunRRRForUnit:
         assert len(df) == 2
         assert set(df["k"].unique()) == {2, 5}
 
-    def test_minimal_r2_increases_with_rank(self, tmp_path, rng):
-        """For low-rank ground truth data, R² should increase monotonically with rank."""
+    def test_nr_r2_increases_with_rank(self, tmp_path, rng):
+        """For low-rank ground truth data, NR R² should increase monotonically with rank."""
         from run_rrr import _run_rrr_for_unit
 
         # Construct rank-3 signal
@@ -191,37 +187,11 @@ class TestRunRRRForUnit:
         _run_rrr_for_unit(str(tmp_path), X, test_idxs, per_fold_baselines, config)
 
         df = pd.read_csv(os.path.join(str(tmp_path), "grid_results.csv"))
-        r2_by_k = df.groupby("k")["minimal_r2"].mean().sort_index()
+        r2_by_k = df.groupby("k")["nr_r2"].mean().sort_index()
         # R² should be non-decreasing with rank
         assert all(
             r2_by_k.diff().dropna() >= -0.05
         ), f"R² not monotone: {r2_by_k.to_dict()}"
-
-    def test_recovery_r2_decreases_with_rank(self, tmp_path, rng):
-        """Residual recovery R² should decrease as rank increases (less residual signal)."""
-        from run_rrr import _run_rrr_for_unit
-
-        n, n_embed, n_targets = 120, 20, 8
-        true_rank = 3
-        A_true = rng.standard_normal((n_embed, true_rank)).astype(np.float32)
-        B_true = rng.standard_normal((n_targets, true_rank)).astype(np.float32)
-        X = rng.standard_normal((n, n_embed)).astype(np.float32)
-        Y = X @ A_true @ B_true.T + 0.01 * rng.standard_normal((n, n_targets)).astype(
-            np.float32
-        )
-
-        test_idxs = [np.arange(n // 2, n)]
-        config = self._make_config(rank_grid=[1, 2, 3, 5])
-        per_fold_baselines = _make_baselines(X, Y, test_idxs)
-
-        _run_rrr_for_unit(str(tmp_path), X, test_idxs, per_fold_baselines, config)
-
-        df = pd.read_csv(os.path.join(str(tmp_path), "grid_results.csv"))
-        recovery_by_k = df.groupby("k")["recovery_r2"].mean().sort_index()
-        # Recovery R² should be non-increasing
-        assert all(
-            recovery_by_k.diff().dropna() <= 0.05
-        ), f"Recovery R² not monotone: {recovery_by_k.to_dict()}"
 
     def test_result_files_saved_per_fold_and_rank(self, tmp_path, small_data):
         from run_rrr import _run_rrr_for_unit
@@ -245,7 +215,7 @@ class TestRunRRRForUnit:
             assert result["A"].shape[1] == 2
             assert result["B"].shape[1] == 2
             assert "full_r2" in result["metrics"]
-            assert "recovery_r2" in result["metrics"]
+            assert "nr_r2" in result["metrics"]
 
 
 # ---------------------------------------------------------------------------

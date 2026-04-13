@@ -60,8 +60,8 @@ from src.utils.encoding import (
     load_encoding_results,
     build_per_fold_baselines,
 )
+from himalaya.scoring import r2_score
 from src.utils.srrr import (
-    compute_r2,
     correlation_score,
     run_sufficiency_test,
     load_rrr_result,

@@ -96,17 +96,11 @@ def _setup_rrr_output(tmp_path, X, Y, test_idxs):
                     "fold": fold_f,
                     "k": k,
                     "full_r2": 0.5,
-                    "minimal_r2": 0.3,
-                    "recovery_r2": 0.1,
-                    "pred_r2": 0.4,
                     "full_corr": 0.1,
-                    "minimal_corr": 0.07,
-                    "recovery_corr": 0.03,
                     "nr_r2": 0.28,
                     "nr_corr": 0.065,
-                    "nr_recovery_r2": 0.11,
-                    "nr_recovery_corr": 0.035,
-                    "nr_pred_r2": 0.38,
+                    "complement_r2": 0.15,
+                    "complement_corr": 0.04,
                 }
             )
 
@@ -261,7 +255,7 @@ class TestRunAblationForUnit:
         assert os.path.exists(summary_path)
         df = pd.read_csv(summary_path)
         assert "mask_type" in df.columns
-        assert "minimal_corr" in df.columns
+        assert "nr_corr" in df.columns
 
     def test_unmasked_baseline_included(self, tmp_path, small_data):
         from run_ablation import _run_ablation_for_unit
@@ -308,7 +302,7 @@ class TestRunAblationForUnit:
         assert os.path.exists(rank_plot_path)
 
     def test_more_zeroing_reduces_performance(self, tmp_path, rng):
-        """With strong low-rank signal, zeroing more data should reduce minimal_corr."""
+        """With strong low-rank signal, zeroing more data should reduce nr_corr."""
         from run_ablation import _run_ablation_for_unit
 
         n, n_embed, n_targets = 200, 20, 8
@@ -335,6 +329,6 @@ class TestRunAblationForUnit:
 
         df = pd.read_csv(os.path.join(ablation_dir, "summary.csv"))
         random_df = df[df["mask_type"] == "random"].sort_values("pct_zeroed")
-        corrs = random_df["minimal_corr"].values
+        corrs = random_df["nr_corr"].values
         # More zeroing should reduce correlation (with tolerance)
         assert corrs[0] >= corrs[-1] - 0.1, f"Corrs not decreasing: {corrs}"

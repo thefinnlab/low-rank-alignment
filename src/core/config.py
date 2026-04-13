@@ -11,6 +11,7 @@ class ScriptMode(str, Enum):
     CROSS_SUBJECT = "cross_subject"
     PER_SUBJECT = "per_subject"
     PER_REGION = "per_region"
+    LEAVE_ONE_SUBJECT_OUT = "leave_one_subject_out"
 
 
 def gpt2_xl_results_dir(base_dir, offset, layer):
@@ -153,6 +154,9 @@ class RRRConfig:
 
     # Arbitrary embedding seed for null baseline
     arbitrary_seed: int = 42
+
+    # PCA baseline: run PCA subspace analysis alongside RRR using the same rank_grid
+    run_pca_baseline: bool = False
 
     # Per-region mode
     atlas_path: str | None = (
