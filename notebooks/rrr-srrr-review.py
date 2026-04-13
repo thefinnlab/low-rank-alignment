@@ -2622,7 +2622,7 @@ def _(np, plt):
 
         return results, fig
 
-    return
+    return (PCA,)
 
 
 @app.cell(hide_code=True)
@@ -2778,6 +2778,169 @@ def _(cluster_colors, final_b_labels, meta, mo, np):
             plt.show()
 
     _()
+    return
+
+
+@app.cell
+def _(cluster_colors, cluster_counts, final_b_labels, meta, mo, np, plt):
+    def _():
+        import matplotlib.animation as animation
+        from nilearn.plotting import plot_glass_brain
+    
+        mo.stop(
+            len(meta["subjects"]) == 0 or len(meta["lags"]) == 0,
+            mo.callout(mo.md("Could not load electrode metadata."), kind="warn"),
+        )
+
+        # 1. Pre-compute a dictionary of coordinates for fast lookup during animation
+        coord_dict = {}
+        for _sub in meta["subjects"]:
+            sub_id = _sub["sub_id"]
+            for i, name in enumerate(_sub["elec_names"]):
+                coord = _sub["coords"][i]
+                if not np.all(coord == 0):
+                    coord_dict[(sub_id, name)] = coord
+
+        mo.stop(
+            len(coord_dict) == 0,
+            mo.callout(mo.md("No valid electrode coordinates found."), kind="warn"),
+        )
+
+        # Get all unique timepoints in chronological order
+        timepoints = np.sort(final_b_labels["lag_sec"].unique())
+        # timepoints = np.sort(final_b_labels["lag_sec"].unique())[::2]
+
+        # 2. Set up the combined figure layout
+        fig = plt.figure(figsize=(14, 10))
+        # fig = plt.figure(figsize=(10, 7), dpi=70)
+
+        # Top Plot: Timecourse (using explicit bounding box [left, bottom, width, height])
+        ax_time = fig.add_axes([0.1, 0.55, 0.8, 0.4])
+        for cluster in sorted(cluster_counts["cluster"].unique()):
+            lag_counts = (
+                cluster_counts[cluster_counts["cluster"] == cluster]
+                .groupby("lag_sec")["count"]
+                .sum()
+                .reset_index()
+            )
+            ax_time.plot(
+                lag_counts["lag_sec"],
+                lag_counts["count"],
+                label=f"cluster {cluster}",
+                color=cluster_colors[cluster],
+                linewidth=2
+            )
+    
+        ax_time.legend(loc="upper right")
+        ax_time.set_xlabel("Time (lag_sec)")
+        ax_time.set_ylabel("Electrode Count")
+        ax_time.set_title("Cluster Timecourse")
+
+        # Add the sweeping vertical line for the animation
+        vline = ax_time.axvline(x=timepoints[0], color='black', linestyle='--', linewidth=2)
+
+        # Bottom Plot: Glass Brain (restricted to the bottom half of the figure)
+        display = plot_glass_brain(
+            None, 
+            display_mode="lzr", 
+            figure=fig, 
+            axes=[0.1, 0.05, 0.8, 0.45]
+        )
+
+        # 3. Animation Update Function
+        scatter_collections = []
+
+        def update(frame):
+            # Clear previous scatter points from the brain
+            for coll in scatter_collections:
+                coll.remove()
+            scatter_collections.clear()
+
+            # Update the vertical line position
+            current_lag = timepoints[frame]
+            vline.set_xdata([current_lag, current_lag])
+
+            # Filter the data for the current timepoint
+            current_df = final_b_labels[final_b_labels["lag_sec"] == current_lag]
+
+            # Scatter the new points on each glass brain axis
+            for ax_name, nilearn_ax in display.axes.items():
+                ax = nilearn_ax.ax
+                px_list, py_list, color_list = [], [], []
+
+                for _, row in current_df.iterrows():
+                    key = (row["subject"], row["elec"])
+                    if key in coord_dict:
+                        x, y, z = coord_dict[key]
+                    
+                        # Project 3D MNI -> 2D depending on the view
+                        if ax_name in ("l", "r"):  # sagittal
+                            px, py = y, z
+                        elif ax_name == "z":       # axial
+                            px, py = x, y
+                        else:
+                            continue
+                        
+                        px_list.append(px)
+                        py_list.append(py)
+                    
+                        # Keep the base RGB color, use a fixed alpha for visibility at this frame
+                        base_rgb = cluster_colors[row["cluster"]][:3]
+                        color_list.append((*base_rgb, 0.8))
+
+                # Only plot if we have points at this frame to avoid matplotlib errors
+                if px_list:
+                    coll = ax.scatter(
+                        px_list, py_list, 
+                        s=50, 
+                        color=color_list, 
+                        edgecolors="none", 
+                        zorder=10
+                    )
+                    scatter_collections.append(coll)
+
+            return [vline] + scatter_collections
+
+        # 4. Generate the Animation
+        anim = animation.FuncAnimation(
+            fig, 
+            update, 
+            frames=len(timepoints), 
+            interval=200, 
+            blit=False
+        )
+
+        # --- SAVING TO FILE ---
+        # Uncomment the line below to save the animation to an MP4 file. 
+        # (Requires ffmpeg installed on your system)
+        anim.save("cluster_dynamics.mp4", fps=5, extra_args=['-vcodec', 'libx264'])
+
+        # Close the static figure so matplotlib doesn't render it twice in the cell output
+        plt.close(fig)
+
+        # Display the interactive HTML5 widget with slider and playback controls
+        return mo.Html(anim.to_jshtml())
+
+    _()
+    return
+
+
+@app.cell
+def _(PCA, sig_cluster_preds):
+    pca = PCA(n_components=20)
+    pca.fit(sig_cluster_preds)
+    return
+
+
+@app.cell
+def _(Path, get_rrr_dir, load_encoding_results, load_rrr_AB, os):
+    _A, _B = load_rrr_AB(Path("results/gpt2xl_layer24_offset0/rrr"), "fold_0", 20)
+    _enc_path = os.path.join(
+                get_rrr_dir("cross_subject").parent, "subjects", f"sub_1", "encoding_results.joblib"
+            )
+    _enc_results = load_encoding_results(_enc_path, location="cpu")
+    _train_idxs = _enc_results["train_idxs"]
+    _test_idxs = _enc_results["test_idxs"]
     return
 
 
