@@ -5,7 +5,7 @@ Performs RRR directly from raw embeddings to neural targets — no SVD projectio
 Sweeps over a configured rank grid. Optionally also runs PCA subspace analysis
 (when RRRConfig.run_pca_baseline=True) using the same rank grid and data splits.
 
-Three modes controlled by RRRConfig.mode:
+Four modes controlled by RRRConfig.mode:
 
   cross_subject (default):
     Builds global Y across all subjects (significant electrodes).
@@ -18,6 +18,12 @@ Three modes controlled by RRRConfig.mode:
   per_region:
     Runs independently per atlas region.
     Writes to {output_dir}/per_region_rrr/regions/{region}/.
+
+  leave_one_subject_out:
+    For each held-out subject, trains RRR on the remaining n-1 subjects, then
+    evaluates transfer of the learned A matrix to the held-out subject alongside
+    a within-subject baseline.
+    Writes to {output_dir}/loso_rrr/held_out_sub_{id}/{train_subjects,transfer,baseline}/.
 
 Output layout per unit:
     {unit_dir}/
@@ -960,6 +966,222 @@ def _run_per_region_rrr(
 
 
 # ---------------------------------------------------------------------------
+# Branch: leave-one-subject-out RRR
+# ---------------------------------------------------------------------------
+
+
+def _run_loso_transfer_for_unit(
+    transfer_dir: str,
+    X_raw: np.ndarray,
+    test_idxs: list,
+    per_fold_baselines: list,
+    train_rrr_dir: str,
+    config: "RRRConfig",
+    sig_mask_flat: "np.ndarray | None" = None,
+) -> pd.DataFrame:
+    """Evaluate transfer of the A matrix learned on n-1 subjects to the held-out subject.
+
+    For each fold and rank k, loads the A matrix saved by _run_rrr_for_unit on the
+    training subjects, projects X through A_k, trains a fresh ridge on the held-out
+    subject's training data, and evaluates on the held-out fold.
+
+    Args:
+        transfer_dir: Output directory for transfer metrics.
+        X_raw: (n_words, n_embed) embedding matrix (shared across all subjects).
+        test_idxs: List of test index arrays (one per fold); used only for n_folds.
+        per_fold_baselines: Fold baselines built from the held-out subject's Y matrix.
+        train_rrr_dir: Directory where _run_rrr_for_unit saved A.npy files per fold.
+        config: RRRConfig with rank_grid and encoding settings.
+        sig_mask_flat: Optional boolean mask for significant targets in held-out subject.
+
+    Returns:
+        DataFrame with one row per (fold, k) containing transfer metrics.
+    """
+    os.makedirs(transfer_dir, exist_ok=True)
+
+    import torch
+
+    enc = config.encoding
+    alphas = np.array(enc.ridge_alphas) if enc.ridge_alphas is not None else None
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+
+    n_folds = len(test_idxs)
+    all_rows = []
+
+    for fold_f in range(n_folds):
+        fold_start = time.time()
+        print(f"\n[Transfer fold {fold_f + 1}/{n_folds}]")
+
+        # Load A matrix from training subjects (saved by _run_rrr_for_unit)
+        a_path = os.path.join(train_rrr_dir, f"fold_{fold_f}", "A.npy")
+        A_full = np.load(a_path)
+
+        baseline = per_fold_baselines[fold_f]
+        train_idx = baseline["train_idx"]
+        test_idx = baseline["test_idx"]
+        X_train = X_raw[train_idx]
+        X_test = X_raw[test_idx]
+        Y_train = baseline["Y_train"]
+        Y_test = baseline["Y_test"]
+
+        for k in tqdm(config.rank_grid, desc=f"  transfer fold {fold_f}", leave=True, unit="rank"):
+            A_k = A_full[:, :k]
+            X_train_proj = X_train @ A_k
+            X_test_proj = X_test @ A_k
+
+            result = evaluate_input_space(
+                X_train_proj,
+                X_test_proj,
+                Y_train,
+                Y_test,
+                device=device,
+                alphas=alphas,
+                subspace_name="transfer",
+            )
+
+            transfer_corr_arr = result["transfer_corr_per_target"]
+            metrics = {
+                "transfer_corr": result["transfer_corr"],
+                "transfer_r2": result["transfer_r2"],
+                "transfer_corr_per_target": transfer_corr_arr,
+            }
+            save_rrr_result(transfer_dir, k=k, fold=fold_f, metrics=metrics)
+
+            row = {
+                "fold": fold_f,
+                "k": k,
+                "transfer_corr": result["transfer_corr"],
+                "transfer_r2": result["transfer_r2"],
+            }
+            if sig_mask_flat is not None:
+                row["transfer_corr_sig"] = (
+                    float(transfer_corr_arr[sig_mask_flat].mean())
+                    if sig_mask_flat.any()
+                    else float("nan")
+                )
+                row["transfer_corr_nonsig"] = (
+                    float(transfer_corr_arr[~sig_mask_flat].mean())
+                    if (~sig_mask_flat).any()
+                    else float("nan")
+                )
+            all_rows.append(row)
+
+        print(f"  Transfer fold {fold_f} done in {time.time() - fold_start:.1f}s")
+
+    df = pd.DataFrame(all_rows)
+    df.to_csv(os.path.join(transfer_dir, "grid_results.csv"), index=False)
+    _build_results(df, sig_mask_flat, transfer_dir, primary_label="transfer")
+    return df
+
+
+def _run_leave_one_subject_out_rrr(
+    config: "RRRConfig",
+    enc,
+    output_dir,
+    sig_dir,
+    rrr_dir,
+    subject_ids,
+    sig_electrodes,
+    aligned_embeddings,
+    word_df,
+    word_in_glove=None,
+):
+    """Leave-one-subject-out RRR: train on n-1 subjects, transfer A to held-out subject.
+
+    For each held-out subject:
+      1. Train RRR on the remaining n-1 subjects (writes to train_subjects/).
+      2. Evaluate transfer of the learned A matrix to the held-out subject (writes to transfer/).
+      3. Run a within-subject RRR baseline on the held-out subject alone (writes to baseline/).
+    """
+    for held_out_sub in subject_ids:
+        print(f"\n{'='*60}\nHeld-out subject: {held_out_sub}")
+
+        loso_sub_dir = os.path.join(rrr_dir, f"held_out_sub_{held_out_sub}")
+
+        # --- Step A: train RRR on n-1 subjects ---
+        train_subs = [s for s in subject_ids if s != held_out_sub]
+        train_sig_elecs = {s: sig_electrodes.get(s, []) for s in train_subs}
+
+        print(f"  Training subjects: {train_subs}")
+        results_train = _get_decomposition_inputs(
+            train_subs,
+            output_dir,
+            train_sig_elecs,
+            enc,
+            aligned_embeddings,
+            word_df,
+            compute_sig_nonsig=config.compute_sig_nonsig,
+            sig_dir=sig_dir,
+            word_in_glove=word_in_glove,
+        )
+        if results_train is None:
+            print("  No training data; skipping this held-out subject.")
+            continue
+        X_raw, X_arbitrary, per_fold_baselines_train, test_idxs, sig_mask_train = results_train
+
+        train_dir = os.path.join(loso_sub_dir, "train_subjects")
+        print(f"  Running train-subjects RRR → {train_dir}")
+        _run_rrr_for_unit(
+            rrr_unit_dir=train_dir,
+            X_raw=X_raw,
+            test_idxs=test_idxs,
+            per_fold_baselines=per_fold_baselines_train,
+            config=config,
+            sig_mask_flat=sig_mask_train,
+            X_arbitrary=X_arbitrary,
+        )
+
+        # --- Step B: build held-out subject data ---
+        held_sig_elecs = sig_electrodes.get(held_out_sub, [])
+        if not held_sig_elecs:
+            print(f"  Subject {held_out_sub} has no significant electrodes; skipping transfer/baseline.")
+            continue
+
+        print(f"  Building held-out subject data...")
+        results_held = _get_decomposition_inputs(
+            [held_out_sub],
+            output_dir,
+            {held_out_sub: held_sig_elecs},
+            enc,
+            aligned_embeddings,
+            word_df,
+            compute_sig_nonsig=config.compute_sig_nonsig,
+            sig_dir=sig_dir,
+            word_in_glove=word_in_glove,
+        )
+        if results_held is None:
+            print(f"  No held-out subject data; skipping transfer/baseline.")
+            continue
+        X_raw_held, X_arbitrary_held, per_fold_baselines_held, _, sig_mask_held = results_held
+
+        # --- Step C: transfer A from train subjects to held-out subject ---
+        transfer_dir = os.path.join(loso_sub_dir, "transfer")
+        print(f"  Running transfer evaluation → {transfer_dir}")
+        _run_loso_transfer_for_unit(
+            transfer_dir=transfer_dir,
+            X_raw=X_raw_held,
+            test_idxs=test_idxs,
+            per_fold_baselines=per_fold_baselines_held,
+            train_rrr_dir=train_dir,
+            config=config,
+            sig_mask_flat=sig_mask_held,
+        )
+
+        # --- Step D: within-subject baseline RRR on held-out subject alone ---
+        baseline_dir = os.path.join(loso_sub_dir, "baseline")
+        print(f"  Running within-subject baseline RRR → {baseline_dir}")
+        _run_rrr_for_unit(
+            rrr_unit_dir=baseline_dir,
+            X_raw=X_raw_held,
+            test_idxs=test_idxs,
+            per_fold_baselines=per_fold_baselines_held,
+            config=config,
+            sig_mask_flat=sig_mask_held,
+            X_arbitrary=X_arbitrary_held,
+        )
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
@@ -987,6 +1209,8 @@ def main():
         rrr_dir = os.path.join(output_dir, "per_region_rrr")
     elif config.mode == ScriptMode.PER_SUBJECT:
         rrr_dir = os.path.join(output_dir, "per_subject_rrr")
+    elif config.mode == ScriptMode.LEAVE_ONE_SUBJECT_OUT:
+        rrr_dir = os.path.join(output_dir, "loso_rrr")
     else:
         rrr_dir = os.path.join(output_dir, "rrr")
 
@@ -1030,6 +1254,8 @@ def main():
         _run_per_region_rrr(**branch_kwargs)
     elif config.mode == ScriptMode.PER_SUBJECT:
         _run_per_subject_rrr(**branch_kwargs)
+    elif config.mode == ScriptMode.LEAVE_ONE_SUBJECT_OUT:
+        _run_leave_one_subject_out_rrr(**branch_kwargs)
     else:
         _run_cross_subject_rrr(**branch_kwargs)
 
