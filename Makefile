@@ -23,6 +23,7 @@ ABLATION_CONFIG ?= configs/ablation/ablation_default.yml
 NULL_CONFIG	    ?= configs/new_sig/null_dist.yml
 NEW_SIG_CONFIG  ?= configs/new_sig/new_sig.yml
 PRECOMPUTE_EPOCHS_CONFIG ?= configs/precompute_epochs/precompute_epochs_default.yml
+EMBED_CONFIG    ?= configs/embeddings/generate_gpt2_xl.yml
 RUN_DIR         ?=   # required for plots: RUN_DIR=results/my_run
 DATA_ROOT       ?= data
 ATLAS_PATH      ?= atlases/destrieux_2009/destrieux2009_rois_lateralized.nii.gz
@@ -68,6 +69,19 @@ ablation:
 precompute-epochs:
 	mkdir -p logs
 	$(CMD) scripts/utilities/precompute_epochs.py --config $(PRECOMPUTE_EPOCHS_CONFIG) $(OVERRIDES)
+
+## Generate per-token contextual embeddings for the podcast transcript from a HuggingFace model
+## Usage:
+##   make generate-embeddings                                                 # default: regenerate gpt2-xl
+##   make generate-embeddings EMBED_CONFIG=configs/embeddings/generate_gpt2.yml
+##   make generate-embeddings EMBED_CONFIG=configs/embeddings/generate_roberta_base.yml
+##   make generate-embeddings EMBED_CONFIG="configs/embeddings/generate_gpt2.yml configs/embeddings/generate_gpt2_medium.yml configs/embeddings/generate_gpt2_large.yml configs/embeddings/generate_gpt2_xl.yml"
+##                                                                            # run multiple configs sequentially in one job
+##   make generate-embeddings OVERRIDES="--context_window=2048 --stride=1024" # overrides apply to every config
+##   make generate-embeddings CMD=python                                      # run locally
+generate-embeddings:
+	mkdir -p logs
+	$(CMD) scripts/utilities/generate_embeddings.py $(foreach c,$(EMBED_CONFIG),--config $(c)) $(OVERRIDES)
 
 ## Generate null distribution for new significance test.
 ## Usage:
@@ -156,4 +170,4 @@ sig-test:
 test:
 	python -m pytest tests/ -v
 
-.PHONY: sig train plots svd srrr rrr pca partial-svd partial-rrr sae sig-test test
+.PHONY: sig train plots svd srrr rrr pca partial-svd partial-rrr sae sig-test test generate-embeddings

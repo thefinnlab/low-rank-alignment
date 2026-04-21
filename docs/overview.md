@@ -17,6 +17,24 @@ This is a neuroscience encoding analysis pipeline that studies how GPT-2-XL lang
 9. **Ablation analysis** (`run_ablation.py`) — loads pre-computed RRR A/B matrices, projects embeddings into the latent space, applies quantile-based masks (tail-only, center-only, random) to the projected activations, trains fresh ridge regressions from masked projections to neural targets, and evaluates reconstruction performance; determines whether encoding information is concentrated in distributional tails or centers; supports cross_subject, per_subject, and per_region modes
 10. **Visualization** (`make plots`) — generates correlation plots with optional significance overlays
 
+### Generating embeddings for new models
+
+`make generate-embeddings EMBED_CONFIG=configs/embeddings/generate_<model>.yml` runs
+`scripts/utilities/generate_embeddings.py`, which loads any HuggingFace model via
+`transformers`, tokenizes `data/stimuli/podcast_transcript.csv` with
+`is_split_into_words=True`, and produces per-token contextual embeddings via a
+sliding window of configurable `context_window` and `stride`. Causal models
+(GPT-2, Pythia, GPT-J, Llama) use native causal attention; bidirectional models
+(RoBERTa) use `attention_mode=bidirectional_strict` (stride=1) so each target
+sees only preceding tokens. Outputs go to `data/stimuli/{output_name}/` with
+three files matching the existing GPT-2-XL layout:
+`features.hdf5` (per-layer hidden states), `transcript.tsv` (per-token
+word/token metadata), and `metadata.json` (generation parameters). The
+`transformer` embedding getter in `src/utils/embeddings.py` loads any of these
+directories by `model_dir` + `layer`. Offline GPU hosts should pre-populate
+the HF cache (e.g. `huggingface-cli download meta-llama/Meta-Llama-3-8B`) and
+run with the default `local_files_only: true`.
+
 ---
 
 ## File Reference
@@ -83,7 +101,7 @@ Core library modules:
 | `config.py` | Dataclass definitions for `EncodingConfig`, `SignificanceConfig`, `NullDistConfig`, `NewSignificanceConfig`, `SVDConfig`, `PartialSVDConfig`, `PartialRRRConfig`, `SRRRConfig`, `RRRConfig`, `PCAConfig`, `SAEConfig`, `AblationConfig`; `get_results_dir()` for canonical output paths. Most downstream configs support `sig_dir` to override where significance CSVs are read from (defaults to `output_dir`). |
 | `config_utils.py` | Argument parsing and YAML loading with CLI override support (dot-notation, e.g. `--encoding.layer=48`) |
 | `data_loaders.py` | Loads iEEG BIDS data via MNE, GPT-2 embeddings from HDF5, builds word-aligned epochs, handles time offsets; `build_XY_from_subjects()` for stacking multi-subject neural data; `load_sig_electrodes()` and `load_fold_indices()` for shared data-loading across scripts |
-| `embeddings.py` | Loads contextual GPT-2-XL token embeddings from HDF5 and averages tokens per word |
+| `embeddings.py` | Loads contextual token embeddings from HDF5 and pools tokens per word. Registered getters: `gpt2xl` (legacy GPT-2-XL path), `transformer` (generic — reads `data/stimuli/{model_dir}/features.hdf5` produced by `generate_embeddings.py`), `glove`, `arbitrary` |
 | `encoding.py` | K-fold cross-validation ridge regression (Himalaya backend), coefficient serialization, cross-subject aggregation; `extract_best_alphas()` — extracts per-target selected alphas from fitted RidgeCV; `train_encoding_two_pass()` — coarse-then-refined alpha sweep |
 | `significance.py` | GPU-accelerated permutation testing, vectorized Pearson correlation, Benjamini-Hochberg FDR correction; `phase_randomize_raw()` for signal phase randomization preserving autocorrelation; `compute_observed_max_per_electrode()` for max-across-lags statistics |
 | `analysis.py` | SVD decomposition of weights, truncated correlation evaluation, best-k selection, residualization utilities |

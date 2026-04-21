@@ -13,13 +13,65 @@ from src.utils.data_loaders import get_arbitrary_embeddings
 def load_embeddings(
     data_root: str, embedding_getter_name: str = "gpt2-xl", **kwargs
 ) -> tuple:
-
-    transcript_path = os.path.join(data_root, "stimuli/gpt2-xl/transcript.tsv")
+    # Which on-disk transcript.tsv to load depends on which model provided the
+    # token alignment. The generic "transformer" getter passes its own model_dir;
+    # gpt2xl/glove/arbitrary all rely on the canonical gpt2-xl transcript today.
+    model_dir = kwargs.get("model_dir", "gpt2-xl")
+    transcript_path = os.path.join(data_root, "stimuli", model_dir, "transcript.tsv")
     transcript_df = pd.read_csv(transcript_path, sep="\t", index_col=0)
 
     return embedding_getter_registry[embedding_getter_name](
         data_root, transcript_df, **kwargs
     )
+
+
+@register_embedding_getter("transformer")
+def get_transformer_embeddings(
+    data_root, transcript_df, model_dir, layer, pooling="mean"
+):
+    """Load per-token hidden states for a HuggingFace model and pool per word.
+
+    Reads from ``data/stimuli/{model_dir}/features.hdf5`` (written by
+    scripts/utilities/generate_embeddings.py) and aggregates subtoken vectors into
+    per-word vectors via the ``pooling`` strategy. Matches the layout used by the
+    original GPT-2-XL embeddings so downstream code is unchanged.
+
+    Args:
+        data_root: BIDS dataset root (e.g. "data/").
+        transcript_df: per-token DataFrame (loaded by ``load_embeddings``); must contain
+            a ``word_idx`` column and have one row per subtoken.
+        model_dir: subdirectory of ``{data_root}/stimuli/`` holding features.hdf5.
+        layer: integer layer index (i.e. the ``L`` in ``layer-{L}``).
+        pooling: "mean" | "last" | "first" — how to combine subtokens of a multi-token word.
+
+    Returns:
+        aligned_embeddings: (n_words, embed_dim) float32.
+        word_df: DataFrame indexed by word_idx with columns ['word', 'start', 'end'].
+    """
+    embedding_path = os.path.join(data_root, "stimuli", model_dir, "features.hdf5")
+    with h5py.File(embedding_path, "r") as f:
+        contextual_embeddings = f[f"layer-{layer}"][...]
+
+    if pooling == "mean":
+        reduce = lambda x: x.mean(0)
+    elif pooling == "last":
+        reduce = lambda x: x[-1]
+    elif pooling == "first":
+        reduce = lambda x: x[0]
+    else:
+        raise ValueError(f"Unknown pooling strategy: {pooling}")
+
+    aligned_embeddings = []
+    for _, group in transcript_df.groupby("word_idx"):
+        indices = group.index.to_numpy()
+        aligned_embeddings.append(reduce(contextual_embeddings[indices]))
+    aligned_embeddings = np.stack(aligned_embeddings).astype(np.float32)
+
+    word_df = transcript_df.groupby("word_idx").agg(
+        dict(word="first", start="first", end="last")
+    )
+
+    return aligned_embeddings, word_df
 
 
 @register_embedding_getter("gpt2xl")

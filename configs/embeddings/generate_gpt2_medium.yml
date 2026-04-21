@@ -1,0 +1,14 @@
+hf_model_id: openai-community/gpt2-medium
+output_name: gpt2-medium
+data_root: data/
+context_window: 1024
+stride: 512
+layers: all
+pooling: mean
+attention_mode: auto
+dtype: float32
+output_dtype: float16
+device: cuda
+batch_size: 1
+local_files_only: true
+add_prefix_space: true
