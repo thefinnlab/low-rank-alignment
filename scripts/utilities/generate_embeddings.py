@@ -139,6 +139,34 @@ def _resolve_layers(cfg_layers, num_hidden_states: int) -> list[int]:
     return [int(L) for L in cfg_layers]
 
 
+def _causal_window_plan(N: int, stride: int, T: int) -> list[tuple[int, int, int, int]]:
+    """Plan the sliding windows for causal inference.
+
+    Returns a list of ``(window_start, window_end, keep_lo, keep_hi)`` tuples whose
+    keep ranges partition ``[0, T)`` exactly. The first window spans ``[0, min(N, T))``
+    and retains every position (filling the initial context); subsequent windows span
+    ``[end - N, end)`` and retain only the fresh positions ``[previous_end, end)``.
+    Using ``keep_lo = previous_end`` (rather than ``end - stride``) keeps coverage
+    disjoint at the ``T`` boundary when ``stride`` does not divide ``T - N`` evenly.
+    """
+    assert stride > 0, f"stride must be positive, got {stride}"
+    assert stride <= N, f"stride ({stride}) must be <= context_window ({N})"
+    plan: list[tuple[int, int, int, int]] = []
+    p = 0
+    is_first = True
+    while p < T:
+        end = min(p + N, T) if is_first else min(p + stride, T)
+        start = max(0, end - N)
+        keep_lo = start if is_first else p
+        keep_hi = end
+        plan.append((start, end, keep_lo, keep_hi))
+        if end == T:
+            break
+        p = end
+        is_first = False
+    return plan
+
+
 def _run_causal_sliding(
     model, input_ids: np.ndarray, layers: list[int], cfg, stride: int, out: dict
 ):
@@ -152,30 +180,37 @@ def _run_causal_sliding(
     T = input_ids.shape[0]
     ids_t = torch.from_numpy(input_ids)
 
-    p = 0
-    pbar = tqdm(total=T, desc="tokens (causal)")
-    while p < T:
-        end = min(p + N, T) if p == 0 else min(p + stride, T)
-        # The window always ends at `end` and is N tokens long (or shorter at the start).
-        start = max(0, end - N)
-        window = ids_t[start:end].unsqueeze(0).to(device)
+    plan = _causal_window_plan(N, stride, T)
+    with tqdm(total=T, desc="tokens (causal)") as pbar:
+        for start, end, keep_lo, keep_hi in plan:
+            window = ids_t[start:end].unsqueeze(0).to(device)
+            with torch.inference_mode():
+                hs = model(window, output_hidden_states=True).hidden_states  # tuple of (1, w, d)
+            for L in layers:
+                out[L][keep_lo:keep_hi] = hs[L][0, keep_lo - start : keep_hi - start].float().cpu().numpy()
+            pbar.update(keep_hi - keep_lo)
 
-        with torch.inference_mode():
-            hs = model(window, output_hidden_states=True).hidden_states  # tuple of (1, w, d)
 
-        if p == 0:
-            keep_lo, keep_hi = start, end  # fill [0, end)
-        else:
-            keep_lo, keep_hi = end - stride, end  # only fresh positions
+def _build_bidir_batch(
+    input_ids: "torch.Tensor", targets: list[int], N: int, pad_id: int
+) -> tuple["torch.Tensor", "torch.Tensor"]:
+    """Build left-padded ``(batch_ids, batch_mask)`` for bidirectional_strict inference.
 
-        for L in layers:
-            out[L][keep_lo:keep_hi] = hs[L][0, keep_lo - start : keep_hi - start].float().cpu().numpy()
-
-        pbar.update(keep_hi - keep_lo)
-        if end == T:
-            break
-        p = end
-    pbar.close()
+    For each target ``t`` in ``targets``, the window contains ``input_ids[max(0, t+1-N) : t+1]``
+    right-aligned into a length-``N`` row, with ``pad_id`` filling the left padding.
+    The attention mask is ``1`` over real tokens and ``0`` over padding, so padding
+    tokens cannot be attended to and targets near the start see only the real
+    context preceding them.
+    """
+    B = len(targets)
+    batch_ids = torch.full((B, N), pad_id, dtype=torch.long)
+    batch_mask = torch.zeros((B, N), dtype=torch.long)
+    for row, tgt in enumerate(targets):
+        lo = max(0, tgt + 1 - N)
+        seq = input_ids[lo : tgt + 1]
+        batch_ids[row, N - seq.shape[0] :] = seq
+        batch_mask[row, N - seq.shape[0] :] = 1
+    return batch_ids, batch_mask
 
 
 def _run_bidirectional_strict(
@@ -199,15 +234,7 @@ def _run_bidirectional_strict(
     B = cfg.batch_size
     for batch_start in tqdm(range(0, T, B), desc="targets (bidir-strict)"):
         targets = list(range(batch_start, min(batch_start + B, T)))
-        # Build left-padded windows ending at each target (inclusive).
-        batch_ids = torch.full((len(targets), N), pad_id, dtype=torch.long)
-        batch_mask = torch.zeros((len(targets), N), dtype=torch.long)
-        for row, tgt in enumerate(targets):
-            lo = max(0, tgt + 1 - N)
-            seq = ids_t[lo : tgt + 1]
-            batch_ids[row, N - seq.shape[0] :] = seq
-            batch_mask[row, N - seq.shape[0] :] = 1
-
+        batch_ids, batch_mask = _build_bidir_batch(ids_t, targets, N, pad_id)
         batch_ids = batch_ids.to(device)
         batch_mask = batch_mask.to(device)
 
