@@ -1,0 +1,17 @@
+# Regenerates GPT-2-XL embeddings into data/stimuli/gpt2-xl/ using the same
+# methodology applied to every other model. Use this to validate the new
+# pipeline reproduces the podcast-benchmark features within noise.
+hf_model_id: openai-community/gpt2-xl
+output_name: gpt2-xl
+data_root: data/
+context_window: 1024
+stride: 512
+layers: all
+pooling: mean
+attention_mode: auto
+dtype: float32
+output_dtype: float16
+device: cuda
+batch_size: 1
+local_files_only: true
+add_prefix_space: true

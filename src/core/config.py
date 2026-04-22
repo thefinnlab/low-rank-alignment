@@ -22,6 +22,11 @@ def glove_results_dir(base_dir, offset, dim):
     return os.path.join(base_dir, f"glove_dim{dim}_offset{offset}")
 
 
+def transformer_results_dir(base_dir, offset, model_dir, layer, pooling="mean"):
+    suffix = "" if pooling == "mean" else f"_{pooling}"
+    return os.path.join(base_dir, f"{model_dir}_layer{layer}_offset{offset}{suffix}")
+
+
 def get_results_dir(
     model: str, offset: int, per_model_config: dict, base_dir: str = "results/"
 ) -> str:
@@ -33,6 +38,8 @@ def get_results_dir(
         return gpt2_xl_results_dir(base_dir, offset, **per_model_config)
     elif model == "glove":
         return glove_results_dir(base_dir, offset, **per_model_config)
+    elif model == "transformer":
+        return transformer_results_dir(base_dir, offset, **per_model_config)
     else:
         raise ValueError(f"Model: {model} not implemented yet.")
 
@@ -377,3 +384,57 @@ class AblationConfig:
     # Per-region mode
     atlas_path: str | None = None
     atlas_region_groups: dict | None = None
+
+
+@dataclass
+class GenerateEmbeddingsConfig:
+    """Parameters for generating contextual embeddings from a HuggingFace model
+    over the podcast transcript (used by scripts/utilities/generate_embeddings.py).
+
+    Output layout under ``{data_root}/stimuli/{output_name}/``:
+      - features.hdf5  : one dataset per retained layer, ``layer-{L}`` → (n_tokens, hidden_dim)
+      - transcript.tsv : per-token rows (word_idx, word, start, end, hftoken, token_id)
+      - metadata.json  : generation parameters for reproducibility
+
+    Sliding window: each forward pass processes ``context_window`` tokens and retains
+    the last ``stride`` token positions (except the first window, which retains all of
+    its positions). Causal models enforce left-only context natively; for bidirectional
+    models use ``attention_mode='bidirectional_strict'`` with ``stride=1`` to ensure each
+    target position sees only preceding tokens.
+    """
+
+    hf_model_id: str = "openai-community/gpt2-xl"
+    output_name: str | None = None  # None → derived from hf_model_id
+    data_root: str = "data/"
+    transcript_path: str = "data/stimuli/podcast_transcript.csv"
+
+    # Sliding window
+    context_window: int = 1024
+    stride: int | None = None  # None → auto (1 if bidirectional_strict, else context_window // 2)
+
+    # Layer selection
+    layers: list[int] | str = "all"  # "all" or explicit list of hidden-state indices
+
+    # Pooling strategy for multi-token words (applied downstream in the loader)
+    pooling: str = "mean"  # "mean" | "last" | "first"
+
+    # Attention mode
+    # auto                  : causal_native for decoders, bidirectional_strict for encoders
+    # causal_native         : standard causal LM forward pass
+    # bidirectional_strict  : bidirectional attention, but stride=1 so each target sees only preceding tokens
+    # bidirectional_masked  : bidirectional model with a causal attention mask (out-of-distribution; use with care)
+    attention_mode: str = "auto"
+
+    # Inference
+    batch_size: int = 1
+    device: str = "cuda"
+    dtype: str = "float16"  # compute dtype: float32 | float16 | bfloat16
+    output_dtype: str = "float16"  # stored dtype in HDF5
+
+    # HuggingFace cache / offline
+    hf_cache_dir: str | None = None  # None → honor HF_HOME / default
+    local_files_only: bool = True  # True for offline GPU hosts; operator must pre-populate cache
+    hf_token: str | None = None  # for gated models (e.g. Llama-3); prefer HF_TOKEN env var
+
+    # Tokenizer
+    add_prefix_space: bool = True  # required for GPT-2 / RoBERTa BPE with is_split_into_words
