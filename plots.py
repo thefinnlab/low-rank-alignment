@@ -19,17 +19,29 @@ def _():
     from statsmodels.stats.multitest import multipletests
 
     from src.utils import load_sig_electrodes, build_electrode_region_map, load_raws,load_precomputed_epochs, epochs_from_cache
+    from src.utils.plot_helpers import (
+        apply_publication_style,
+        get_star_label,
+        make_viridis_cmap,
+        plot_cross_k_panel,
+        plot_lag_panel,
+    )
 
     return (
+        apply_publication_style,
         build_electrode_region_map,
         cm,
         colors,
+        get_star_label,
         load_precomputed_epochs,
         load_sig_electrodes,
+        make_viridis_cmap,
         multipletests,
         np,
         os,
         pd,
+        plot_cross_k_panel,
+        plot_lag_panel,
         plt,
         re,
     )
@@ -948,20 +960,9 @@ def _(global_p_values):
 
 
 @app.cell
-def _(base_corrs, data, global_p_values, ks, plt):
+def _(base_corrs, data, get_star_label, global_p_values, ks, plt):
     mean_corrs = data.mean((1, 2, 3))
     fold_corrs = data.mean((2, 3))
-
-    def get_star_label(p):
-        """Returns the appropriate number of stars for a given p-value."""
-        if p < 0.001:
-            return '***'
-        elif p < 0.01:
-            return '**'
-        elif p < 0.05:
-            return '*'
-        else:
-            return None
 
     # Create the plot
     plt.figure(figsize=(10, 6))
@@ -980,159 +981,68 @@ def _(base_corrs, data, global_p_values, ks, plt):
     for _i, (k, val) in enumerate(zip(ks, mean_corrs)):
         stars = get_star_label(global_p_values[_i])
         if stars:
-            plt.text(k, val + offset, stars, 
+            plt.text(k, val + offset, stars,
                      ha='center', va='bottom', color='black', fontsize=12)
 
     plt.xlabel("k (Log Scale)")
     plt.ylabel("Correlation")
     plt.legend()
     plt.show()
-    return get_star_label, offset
+    return (offset,)
 
 
 @app.cell
 def _(
+    apply_publication_style,
     base_corrs,
-    cm,
-    colors,
     data,
-    get_star_label,
     global_p_values,
     ks,
+    make_viridis_cmap,
     np,
+    plot_cross_k_panel,
+    plot_lag_panel,
     plt,
     sig_mask,
 ):
     def _():
         from matplotlib.gridspec import GridSpec
 
-        # ── Style setup ──────────────────────────────────────────────────────────
-        plt.rcParams.update({
-            "font.family": "sans-serif",
-            "font.size": 9,
-            "axes.linewidth": 0.8,
-            "axes.spines.top": False,
-            "axes.spines.right": False,
-            "xtick.major.width": 0.8,
-            "ytick.major.width": 0.8,
-            "xtick.major.size": 3.5,
-            "ytick.major.size": 3.5,
-            "legend.frameon": False,
-            "legend.fontsize": 8,
-            "figure.dpi": 300,
-        })
+        apply_publication_style()
+        CMAP = make_viridis_cmap()
 
-        # ── Colormap ─────────────────────────────────────────────────────────────
-        _raw = cm.get_cmap("viridis", 256)
-        CMAP = colors.LinearSegmentedColormap.from_list(
-            "viridis_trunc", _raw(np.linspace(0.08, 0.92, 256))
-        )
-
-        # ── Shared palette ───────────────────────────────────────────────────────
-        RED_BASELINE = "#d62728"          # Baseline — pops against viridis
-        VIRIDIS_MID  = CMAP(0.45)        # Pull a teal-green from the colormap
-        VIRIDIS_LIGHT = (*CMAP(0.45)[:3], 0.3)  # Same hue, transparent for folds
-        GRAY = "#6b7280"
-
-        # ── Figure layout ────────────────────────────────────────────────────────
         fig = plt.figure(figsize=(7.2, 3.4))
         gs = GridSpec(1, 2, figure=fig, width_ratios=[1, 1.25],
                       wspace=0.35, left=0.08, right=0.97, bottom=0.15, top=0.92)
 
         # =====================================================================
-        # Panel (a)
+        # Panel (a) — Mean Correlation vs. Subspace Rank
         # =====================================================================
         ax_a = fig.add_subplot(gs[0])
-
-        mean_corrs = data.mean((1, 2, 3))
-        fold_corrs = data.mean((2, 3))
-
-        # Individual folds — light version of the viridis midpoint
-        for fold in range(fold_corrs.shape[1]):
-            ax_a.semilogx(ks, fold_corrs[:, fold],
-                          color=VIRIDIS_LIGHT, linewidth=0.7)
-
-        # Mean line — solid viridis midpoint color
-        ax_a.semilogx(ks, mean_corrs, color=VIRIDIS_MID, marker="o", markersize=3.5,
-                      linewidth=1.4, label="RRR Space", zorder=5)
-
-        # Baseline — same red as panel (a)
-        base_mean = base_corrs.mean((0, 1, 2))
-        ax_a.axhline(base_mean, color=RED_BASELINE, ls="--", linewidth=1.0,
-                     label="Full Model (Baseline)")
-
-        # Significance stars
-        y_lo, y_hi = ax_a.get_ylim()
-        offset = (y_hi - y_lo) * 0.03
-        for _i, (k, val) in enumerate(zip(ks, mean_corrs)):
-            stars = get_star_label(global_p_values[_i])
-            if stars:
-                ax_a.text(k, val + offset, stars,
-                          ha="center", va="bottom", fontsize=8, color="k")
-
-        ax_a.set_xlabel("Rank $k$ (log scale)")
-        ax_a.set_ylabel("Correlation (r)")
-        ax_a.legend(loc="lower right", fontsize=7)
-
+        plot_cross_k_panel(
+            ax_a, ks,
+            mean_corrs=data.mean((1, 2, 3)),
+            fold_corrs=data.mean((2, 3)),
+            p_values=global_p_values,
+            base_mean=base_corrs.mean((0, 1, 2)),
+        )
         ax_a.set_title("Mean Correlation vs. Subspace Rank", fontsize=9, pad=8)
-
         ax_a.text(-0.12, 1.05, "a", transform=ax_a.transAxes,
                   fontsize=12, fontweight="bold", va="bottom")
 
         # =====================================================================
-        # Panel (b)
+        # Panel (b) — Correlation by Lag and Subspace Rank
         # =====================================================================
         ax_b = fig.add_subplot(gs[1])
-
-        # Stop at point of saturation.
-        saturation_point = sorted(ks).index(20)
-        saturated_data = data[:saturation_point + 1]
-        saturated_ks = sorted(ks)[:saturation_point + 1]
-
-        n_models, n_folds, n_elecs, l_size = saturated_data.shape
-        lags = np.linspace(-2.0, 2.0, l_size, endpoint=False)
-        norm = colors.LogNorm(vmin=min(saturated_ks), vmax=max(saturated_ks))
-
-        for i in range(n_models):
-            ax_b.plot(lags, saturated_data[i].mean((0, 1)),
-                      color=CMAP(norm(saturated_ks[i])), alpha=0.75, linewidth=0.9)
-
-        ax_b.plot(lags, base_corrs.mean((0, 1)),
-                  color=RED_BASELINE, linewidth=1.3, label="Full Model (Baseline)")
-
-        # Significance stars
-        y_min, y_max = ax_b.get_ylim()
-        marker_base = y_max + (y_max - y_min) * 0.0000
-        spacing = (y_max - y_min) * 0.025
-        sorted_indices = np.argsort(saturated_ks)
-
-        for rank, i in enumerate(sorted_indices):
-            curr_sig_mask = sig_mask[i]
-            if np.any(curr_sig_mask):
-                y_pos = marker_base + rank * spacing
-                ax_b.scatter(lags[curr_sig_mask],
-                             np.full(curr_sig_mask.sum(), y_pos),
-                             marker="*", s=14,
-                             color=CMAP(norm(saturated_ks[i])),
-                             linewidths=0)
-
-        ax_b.set_ylim(y_min, marker_base + n_models * spacing)
-        ax_b.set_xlabel("Lag (s)")
-        ax_b.set_ylabel("Correlation (r)")
-        ax_b.legend(loc="center left", bbox_to_anchor=(0.0, 0.85), fontsize=7)
-        ax_b.set_title("Correlation by Lag and Subspace Rank", fontsize=9, pad=8)
-
-        ax_b.axvline(0, color="#9ca3af", alpha=0.7, linewidth=0.5, ymax=0.9, ls="--")
-
-        # Colorbar — narrower and with more label padding
-        sm = cm.ScalarMappable(cmap=CMAP, norm=norm)
-        sm.set_array([])
-        cax = ax_b.inset_axes([1.03, 0.0, 0.025, 1.0])
-        cbar = fig.colorbar(sm, cax=cax, extend="both")
-        cbar.ax.tick_params(labelsize=7, width=0.6, length=2.5)
-        cbar.set_label("Rank $k$", fontsize=8, labelpad=1)
-        cbar.outline.set_linewidth(0.6)
-
+        lags = np.linspace(-2.0, 2.0, data.shape[-1], endpoint=False)
+        plot_lag_panel(
+            ax_b, lags, data, ks,
+            base_corrs_mean=base_corrs.mean((0, 1)),
+            sig_mask=sig_mask,
+            saturation_k=20,
+            cmap=CMAP,
+            fig=fig,
+        )
         ax_b.text(-0.12, 1.05, "b", transform=ax_b.transAxes,
                   fontsize=12, fontweight="bold", va="bottom")
 
@@ -1140,22 +1050,23 @@ def _(
         plt.savefig("figure.png", bbox_inches="tight", pad_inches=0.05, dpi=300)
         plt.show()
 
-
     _()
     return
 
 
 @app.cell
 def _(
+    apply_publication_style,
     base_corrs,
-    cm,
-    colors,
     data,
     get_star_label,
     global_p_values,
     groups,
     ks,
+    make_viridis_cmap,
     np,
+    plot_cross_k_panel,
+    plot_lag_panel,
     plt,
     region_p_vals_dict,
     sig_mask,
@@ -1163,27 +1074,8 @@ def _(
     def _():
         from matplotlib.gridspec import GridSpec, GridSpecFromSubplotSpec
 
-        # ── Style setup ──────────────────────────────────────────────────────────
-        plt.rcParams.update({
-            "font.family": "sans-serif",
-            "font.size": 9,
-            "axes.linewidth": 0.8,
-            "axes.spines.top": False,
-            "axes.spines.right": False,
-            "xtick.major.width": 0.8,
-            "ytick.major.width": 0.8,
-            "xtick.major.size": 3.5,
-            "ytick.major.size": 3.5,
-            "legend.frameon": False,
-            "legend.fontsize": 8,
-            "figure.dpi": 300,
-        })
-
-        # ── Colormap ─────────────────────────────────────────────────────────────
-        _raw = cm.get_cmap("viridis", 256)
-        CMAP = colors.LinearSegmentedColormap.from_list(
-            "viridis_trunc", _raw(np.linspace(0.08, 0.92, 256))
-        )
+        apply_publication_style()
+        CMAP = make_viridis_cmap()
 
         # ── Shared palette ───────────────────────────────────────────────────────
         RED_BASELINE = "#d62728"
@@ -1192,12 +1084,10 @@ def _(
         GRAY = "#6b7280"
 
         # ── Figure layout ────────────────────────────────────────────────────────
-        # Outer grid: 1 row, 2 columns — left stack vs right panel
         fig = plt.figure(figsize=(9.5, 3.5))
         gs_outer = GridSpec(1, 2, figure=fig, width_ratios=[1, 1.1],
                         wspace=0.25, left=0.07, right=0.96, bottom=0.10, top=0.95)
 
-        # Left column: 2 rows — panel (a) on top, panel (b) region grid below
         gs_left = GridSpecFromSubplotSpec(2, 1, subplot_spec=gs_outer[0],
                                       height_ratios=[1, 1.2], hspace=0.48)
 
@@ -1205,32 +1095,16 @@ def _(
         # Panel (a) — Mean Correlation vs. Subspace Rank (top-left)
         # =====================================================================
         ax_a = fig.add_subplot(gs_left[0])
-
         mean_corrs = data.mean((1, 2, 3))
         fold_corrs = data.mean((2, 3))
-
-        for fold in range(fold_corrs.shape[1]):
-            ax_a.semilogx(ks, fold_corrs[:, fold],
-                          color=VIRIDIS_LIGHT, linewidth=0.7)
-
-        ax_a.semilogx(ks, mean_corrs, color=VIRIDIS_MID, marker="o", markersize=3.5,
-                      linewidth=1.4, label="RRR Space", zorder=5)
-
         base_mean = base_corrs.mean((0, 1, 2))
-        ax_a.axhline(base_mean, color=RED_BASELINE, ls="--", linewidth=1.0,
-                     label="Full Model (Baseline)")
-
-        y_lo, y_hi = ax_a.get_ylim()
-        offset = (y_hi - y_lo) * 0.03
-        for _i, (k, val) in enumerate(zip(ks, mean_corrs)):
-            stars = get_star_label(global_p_values[_i])
-            if stars:
-                ax_a.text(k, val + offset, stars,
-                          ha="center", va="bottom", fontsize=8, color="k")
-
-        ax_a.set_xlabel("Rank $k$ (log scale)")
-        ax_a.set_ylabel("Correlation (r)")
-        ax_a.legend(loc="lower right", fontsize=7)
+        plot_cross_k_panel(
+            ax_a, ks,
+            mean_corrs=mean_corrs,
+            fold_corrs=fold_corrs,
+            p_values=global_p_values,
+            base_mean=base_mean,
+        )
         ax_a.set_title("Mean Correlation vs. Subspace Rank", fontsize=9, pad=8)
         ax_a.set_ylim(bottom=0.0)
         ax_a.text(-0.12, 1.05, "a", transform=ax_a.transAxes,
@@ -1304,52 +1178,15 @@ def _(
         # Panel (c) — Correlation by Lag and Subspace Rank (right, full height)
         # =====================================================================
         ax_c = fig.add_subplot(gs_outer[1])
-
-        saturation_point = sorted(ks).index(20)
-        saturated_data = data[:saturation_point + 1]
-        saturated_ks = sorted(ks)[:saturation_point + 1]
-
-        n_models, n_folds, n_elecs, l_size = saturated_data.shape
-        lags = np.linspace(-2.0, 2.0, l_size, endpoint=False)
-        norm = colors.LogNorm(vmin=min(saturated_ks), vmax=max(saturated_ks))
-
-        for i in range(n_models):
-            ax_c.plot(lags, saturated_data[i].mean((0, 1)),
-                      color=CMAP(norm(saturated_ks[i])), alpha=0.75, linewidth=0.9)
-
-        ax_c.plot(lags, base_corrs.mean((0, 1)),
-                  color=RED_BASELINE, linewidth=1.3, label="Full Model (Baseline)")
-
-        y_min, y_max = ax_c.get_ylim()
-        marker_base = y_max + (y_max - y_min) * 0.0000
-        spacing = (y_max - y_min) * 0.025
-        sorted_indices = np.argsort(saturated_ks)
-
-        for rank, i in enumerate(sorted_indices):
-            curr_sig_mask = sig_mask[i]
-            if np.any(curr_sig_mask):
-                y_pos = marker_base + rank * spacing
-                ax_c.scatter(lags[curr_sig_mask],
-                             np.full(curr_sig_mask.sum(), y_pos),
-                             marker="*", s=14,
-                             color=CMAP(norm(saturated_ks[i])),
-                             linewidths=0)
-
-        ax_c.set_ylim(y_min, marker_base + n_models * spacing)
-        ax_c.set_xlabel("Lag (s)")
-        ax_c.set_ylabel("Correlation (r)")
-        ax_c.legend(loc="center left", bbox_to_anchor=(0.0, 0.85), fontsize=7)
-        ax_c.set_title("Correlation by Lag and Subspace Rank", fontsize=9, pad=8)
-        ax_c.axvline(0, color="#9ca3af", alpha=0.7, linewidth=0.5, ymax=0.9, ls="--")
-
-        sm = cm.ScalarMappable(cmap=CMAP, norm=norm)
-        sm.set_array([])
-        cax = ax_c.inset_axes([1.03, 0.0, 0.02, 1.0])
-        cbar = fig.colorbar(sm, cax=cax, extend="both")
-        cbar.ax.tick_params(labelsize=7, width=0.6, length=2.5)
-        cbar.set_label("Rank $k$", fontsize=8, labelpad=1)
-        cbar.outline.set_linewidth(0.6)
-
+        lags = np.linspace(-2.0, 2.0, data.shape[-1], endpoint=False)
+        plot_lag_panel(
+            ax_c, lags, data, ks,
+            base_corrs_mean=base_corrs.mean((0, 1)),
+            sig_mask=sig_mask,
+            saturation_k=20,
+            cmap=CMAP,
+            fig=fig,
+        )
         ax_c.text(-0.10, 1.02, "c", transform=ax_c.transAxes,
                   fontsize=12, fontweight="bold", va="bottom")
 
@@ -1480,16 +1317,18 @@ def _(all_p_joint, cm, colors, get_star_label, joint_data, np, offset, plt):
 @app.cell
 def _(
     all_p_joint,
+    apply_publication_style,
     base_corrs,
-    cm,
-    colors,
     data,
     get_star_label,
     global_p_values,
     groups,
     joint_data,
     ks,
+    make_viridis_cmap,
     np,
+    plot_cross_k_panel,
+    plot_lag_panel,
     plt,
     region_p_vals_dict,
     sig_mask,
@@ -1497,27 +1336,8 @@ def _(
     def _():
         from matplotlib.gridspec import GridSpec, GridSpecFromSubplotSpec
 
-        # ── Style setup ──────────────────────────────────────────────────────────
-        plt.rcParams.update({
-            "font.family": "sans-serif",
-            "font.size": 9,
-            "axes.linewidth": 0.8,
-            "axes.spines.top": False,
-            "axes.spines.right": False,
-            "xtick.major.width": 0.8,
-            "ytick.major.width": 0.8,
-            "xtick.major.size": 3.5,
-            "ytick.major.size": 3.5,
-            "legend.frameon": False,
-            "legend.fontsize": 8,
-            "figure.dpi": 300,
-        })
-
-        # ── Colormap ─────────────────────────────────────────────────────────────
-        _raw = cm.get_cmap("viridis", 256)
-        CMAP = colors.LinearSegmentedColormap.from_list(
-            "viridis_trunc", _raw(np.linspace(0.08, 0.92, 256))
-        )
+        apply_publication_style()
+        CMAP = make_viridis_cmap()
 
         # ── Shared palette ───────────────────────────────────────────────────────
         RED_BASELINE = "#d62728"
@@ -1531,12 +1351,10 @@ def _(
         CLR_JOINT      = CMAP(0.63)
 
         # ── Figure layout ────────────────────────────────────────────────────────
-        # Outer grid: 1 row, 3 columns — left stack, panel c, panel d
         fig = plt.figure(figsize=(14, 3.5))
         gs_outer = GridSpec(1, 3, figure=fig, width_ratios=[1, 1.1, 0.85],
                             wspace=0.32, left=0.05, right=0.97, bottom=0.10, top=0.95)
 
-        # Left column: 2 rows — panel (a) on top, panel (b) region grid below
         gs_left = GridSpecFromSubplotSpec(2, 1, subplot_spec=gs_outer[0],
                                           height_ratios=[1, 1.2], hspace=0.48)
 
@@ -1544,44 +1362,23 @@ def _(
         # Panel (a) — Mean Correlation vs. Subspace Rank (top-left)
         # =====================================================================
         ax_a = fig.add_subplot(gs_left[0])
-
         mean_corrs = data.mean((1, 2, 3))
         fold_corrs = data.mean((2, 3))
         base_mean = base_corrs.mean((0, 1, 2))
 
-        # Draw vertical line where we first pass the base mean.
-        min_better = -1
+        # Draw vertical line at the first k where RRR beats the baseline.
         for i, gt_check in enumerate(mean_corrs > base_mean):
             if gt_check:
-                min_better = i
+                ax_a.axvline(x=ks[i], ls="--", color=GRAY, alpha=0.5, linewidth=1.0)
                 break
 
-        if min_better >= 0:
-            ax_a.axvline(x=ks[min_better], ls="--", color=GRAY, alpha=0.5, linewidth=1.0)
-
-        for fold in range(fold_corrs.shape[1]):
-            ax_a.semilogx(ks, fold_corrs[:, fold],
-                          color=VIRIDIS_LIGHT, linewidth=0.7)
-
-        ax_a.semilogx(ks, mean_corrs, color=VIRIDIS_MID, marker="o", markersize=3.5,
-                      linewidth=1.4, label="RRR Space", zorder=5)
-
-        ax_a.axhline(base_mean, color=RED_BASELINE, ls="--", linewidth=1.0,
-                     label="Full Model (Baseline)")
-
-        y_lo, y_hi = ax_a.get_ylim()
-        offset = (y_hi - y_lo) * 0.03
-        for _i, (k, val) in enumerate(zip(ks, mean_corrs)):
-            stars = get_star_label(global_p_values[_i])
-            if stars:
-                ax_a.text(k, val + offset, stars,
-                          ha="center", va="bottom", fontsize=8, color="k")
-
-
-
-        ax_a.set_xlabel("Rank $k$ (log scale)")
-        ax_a.set_ylabel("Correlation (r)")
-        ax_a.legend(loc="lower right", fontsize=7)
+        plot_cross_k_panel(
+            ax_a, ks,
+            mean_corrs=mean_corrs,
+            fold_corrs=fold_corrs,
+            p_values=global_p_values,
+            base_mean=base_mean,
+        )
         ax_a.set_title("Mean Correlation vs. Subspace Rank", fontsize=9, pad=8)
         ax_a.set_ylim(bottom=0.0)
         ax_a.text(-0.12, 1.05, "a", transform=ax_a.transAxes,
@@ -1665,52 +1462,15 @@ def _(
         # Panel (c) — Correlation by Lag and Subspace Rank (middle)
         # =====================================================================
         ax_c = fig.add_subplot(gs_outer[1])
-
-        saturation_point = sorted(ks).index(20)
-        saturated_data = data[:saturation_point + 1]
-        saturated_ks = sorted(ks)[:saturation_point + 1]
-
-        n_models, n_folds, n_elecs, l_size = saturated_data.shape
-        lags = np.linspace(-2.0, 2.0, l_size, endpoint=False)
-        norm = colors.LogNorm(vmin=min(saturated_ks), vmax=max(saturated_ks))
-
-        for i in range(n_models):
-            ax_c.plot(lags, saturated_data[i].mean((0, 1)),
-                      color=CMAP(norm(saturated_ks[i])), alpha=0.75, linewidth=0.9)
-
-        ax_c.plot(lags, base_corrs.mean((0, 1)),
-                  color=RED_BASELINE, linewidth=1.3, label="Full Model (Baseline)")
-
-        y_min, y_max = ax_c.get_ylim()
-        marker_base = y_max + (y_max - y_min) * 0.0000
-        spacing = (y_max - y_min) * 0.025
-        sorted_indices = np.argsort(saturated_ks)
-
-        for rank, i in enumerate(sorted_indices):
-            curr_sig_mask = sig_mask[i]
-            if np.any(curr_sig_mask):
-                y_pos = marker_base + rank * spacing
-                ax_c.scatter(lags[curr_sig_mask],
-                             np.full(curr_sig_mask.sum(), y_pos),
-                             marker="*", s=14,
-                             color=CMAP(norm(saturated_ks[i])),
-                             linewidths=0)
-
-        ax_c.set_ylim(y_min, marker_base + n_models * spacing)
-        ax_c.set_xlabel("Lag (s)")
-        ax_c.set_ylabel("Correlation (r)")
-        ax_c.legend(loc="center left", bbox_to_anchor=(0.0, 0.85), fontsize=7)
-        ax_c.set_title("Correlation by Lag and Subspace Rank", fontsize=9, pad=8)
-        ax_c.axvline(0, color="#9ca3af", alpha=0.7, linewidth=0.5, ymax=0.9, ls="--")
-
-        sm = cm.ScalarMappable(cmap=CMAP, norm=norm)
-        sm.set_array([])
-        cax = ax_c.inset_axes([1.03, 0.0, 0.02, 1.0])
-        cbar = fig.colorbar(sm, cax=cax, extend="both")
-        cbar.ax.tick_params(labelsize=7, width=0.6, length=2.5)
-        cbar.set_label("Rank $k$", fontsize=8, labelpad=-10)
-        cbar.outline.set_linewidth(0.6)
-
+        lags = np.linspace(-2.0, 2.0, data.shape[-1], endpoint=False)
+        plot_lag_panel(
+            ax_c, lags, data, ks,
+            base_corrs_mean=base_corrs.mean((0, 1)),
+            sig_mask=sig_mask,
+            saturation_k=20,
+            cmap=CMAP,
+            fig=fig,
+        )
         ax_c.text(-0.10, 1.02, "c", transform=ax_c.transAxes,
                   fontsize=12, fontweight="bold", va="bottom")
 

@@ -983,7 +983,9 @@ def _run_loso_transfer_for_unit(
 
     For each fold and rank k, loads the A matrix saved by _run_rrr_for_unit on the
     training subjects, projects X through A_k, trains a fresh ridge on the held-out
-    subject's training data, and evaluates on the held-out fold.
+    subject's training data, and evaluates on the held-out fold. Also evaluates the
+    complement of the transferred subspace and computes stacked joint metrics for
+    transfer + complement across folds.
 
     Args:
         transfer_dir: Output directory for transfer metrics.
@@ -1007,6 +1009,8 @@ def _run_loso_transfer_for_unit(
 
     n_folds = len(test_idxs)
     all_rows = []
+    oof_spill_dir = os.path.join(transfer_dir, "_oof_spill")
+    os.makedirs(oof_spill_dir, exist_ok=True)
 
     for fold_f in range(n_folds):
         fold_start = time.time()
@@ -1038,20 +1042,46 @@ def _run_loso_transfer_for_unit(
                 alphas=alphas,
                 subspace_name="transfer",
             )
+            complement_result = evaluate_complement(
+                A_full,
+                k,
+                X_train,
+                X_test,
+                Y_train,
+                Y_test,
+                alphas=alphas,
+                device=device,
+            )
 
             transfer_corr_arr = result["transfer_corr_per_target"]
+            complement_corr_arr = complement_result["complement_corr_per_target"]
             metrics = {
                 "transfer_corr": result["transfer_corr"],
                 "transfer_r2": result["transfer_r2"],
                 "transfer_corr_per_target": transfer_corr_arr,
+                "complement_corr": complement_result["complement_corr"],
+                "complement_r2": complement_result["complement_r2"],
+                "complement_corr_per_target": complement_corr_arr,
             }
             save_rrr_result(transfer_dir, k=k, fold=fold_f, metrics=metrics)
+
+            np.save(
+                os.path.join(oof_spill_dir, f"{k}_{fold_f}_transfer.npy"),
+                result["transfer_Y_hat"],
+            )
+            np.save(
+                os.path.join(oof_spill_dir, f"{k}_{fold_f}_complement.npy"),
+                complement_result["complement_Y_hat"],
+            )
+            np.save(os.path.join(oof_spill_dir, f"{k}_{fold_f}_Y_test.npy"), Y_test)
 
             row = {
                 "fold": fold_f,
                 "k": k,
                 "transfer_corr": result["transfer_corr"],
                 "transfer_r2": result["transfer_r2"],
+                "complement_corr": complement_result["complement_corr"],
+                "complement_r2": complement_result["complement_r2"],
             }
             if sig_mask_flat is not None:
                 row["transfer_corr_sig"] = (
@@ -1064,9 +1094,30 @@ def _run_loso_transfer_for_unit(
                     if (~sig_mask_flat).any()
                     else float("nan")
                 )
+                row["complement_corr_sig"] = (
+                    float(complement_corr_arr[sig_mask_flat].mean())
+                    if sig_mask_flat.any()
+                    else float("nan")
+                )
+                row["complement_corr_nonsig"] = (
+                    float(complement_corr_arr[~sig_mask_flat].mean())
+                    if (~sig_mask_flat).any()
+                    else float("nan")
+                )
             all_rows.append(row)
 
         print(f"  Transfer fold {fold_f} done in {time.time() - fold_start:.1f}s")
+
+    print("\nComputing stacked OLS joint correlations...")
+    _compute_and_save_joint_metrics(
+        oof_spill_dir,
+        config.rank_grid,
+        n_folds,
+        transfer_dir,
+        all_rows,
+        primary_label="transfer",
+        sig_mask_flat=sig_mask_flat,
+    )
 
     df = pd.DataFrame(all_rows)
     df.to_csv(os.path.join(transfer_dir, "grid_results.csv"), index=False)

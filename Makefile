@@ -131,18 +131,6 @@ pca:
 	mkdir -p logs
 	$(CMD) scripts/rrr/run_pca.py --config $(PCA_CONFIG) $(OVERRIDES)
 
-## Run partial RRR analysis (subspace importance via partialling)
-## Usage:
-##   make partial-rrr                                                      # default config
-##   make partial-rrr PARTIAL_RRR_CONFIG=configs/partial_rrr_default.yml  # explicit config
-##   make partial-rrr OVERRIDES="--mode=per_subject"                      # per-subject mode
-##   make partial-rrr CMD=python                                           # run locally
-PARTIAL_RRR_CONFIG ?= configs/partial_rrr/partial_rrr_default.yml
-
-partial-rrr:
-	mkdir -p logs
-	$(CMD) scripts/rrr/run_partial_rrr.py --config $(PARTIAL_RRR_CONFIG) $(OVERRIDES)
-
 ## Run SAE analysis (sparse autoencoder on RRR-projected embeddings)
 ## Usage:
 ##   make sae                                                               # default config
