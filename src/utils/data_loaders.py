@@ -226,6 +226,54 @@ def build_word_epochs(
     return epochs, epochs.get_data(copy=False)
 
 
+def compute_epoch_cache_indices(
+    raw,
+    df_word: pd.DataFrame,
+    tmin: float = -2.0,
+    tmax: float = 2.0,
+    target_sfreq: float = 32.0,
+) -> tuple[np.ndarray, np.ndarray, int]:
+    """Compute cache indices for word-locked epochs without materializing epochs.
+
+    Returns the word selection, start sample for each epoch in the resampled raw
+    array, and the number of lag samples. Duplicate onset samples are dropped,
+    keeping the first word at each sample.
+    """
+    if "start" not in df_word:
+        raise ValueError("df_word must contain a 'start' column.")
+    if tmax <= tmin:
+        raise ValueError(f"tmax must be greater than tmin, got {tmin=} {tmax=}.")
+
+    starts = pd.to_numeric(df_word["start"], errors="coerce").to_numpy()
+    finite = np.isfinite(starts)
+    original_indices = np.arange(len(df_word), dtype=int)
+
+    source_sfreq = float(raw.info["sfreq"])
+    source_onsets = np.floor(starts[finite] * source_sfreq).astype(np.int64)
+    finite_indices = original_indices[finite]
+    finite_starts = starts[finite]
+
+    _, first_positions = np.unique(source_onsets, return_index=True)
+    first_positions = np.sort(first_positions)
+    selection = finite_indices[first_positions]
+    onset_times = finite_starts[first_positions]
+
+    n_lags = int(round((tmax - tmin) * target_sfreq))
+    if n_lags <= 0:
+        raise ValueError(f"Computed non-positive n_lags={n_lags}.")
+
+    tmin_samp = int(round(tmin * target_sfreq))
+    onset_samples = raw.time_as_index(onset_times)
+    epoch_starts = onset_samples + tmin_samp
+
+    in_bounds = (epoch_starts >= 0) & (epoch_starts + n_lags <= raw.n_times)
+    return (
+        selection[in_bounds].astype(int),
+        epoch_starts[in_bounds].astype(int),
+        n_lags,
+    )
+
+
 def load_data_from_cache(
     subs_to_load,
     data_root,

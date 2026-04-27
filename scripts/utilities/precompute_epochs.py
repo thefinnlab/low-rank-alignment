@@ -6,15 +6,14 @@ After running this script, all other scripts can replace the slow
   load_raws(...) + build_word_epochs(...)
 sequence with the fast
   load_precomputed_epochs(...) + epochs_from_cache(...)
-which avoids re-running MNE's FFT resample on every script invocation.
+which avoids re-running high-gamma preprocessing/resampling on every script
+invocation and avoids materializing a full MNE Epochs array during precompute.
 
-Saves per subject to:
-  {data_root}/derivatives/ecogprep/sub-{id:02d}/ieeg/
-      sub-{id:02d}_task-podcast_desc-epochs32hz_ieeg.npz
+Saves per subject to the active dataset adapter's precomputed-epochs path.
 
 The .npz contains:
   raw_data     — (n_elecs, n_total_samples) float32 at 32 Hz
-  selection    — (n_words_kept,) int, word indices kept by MNE epoching
+  selection    — (n_words_kept,) int, word indices kept after duplicate/bounds filtering
   epoch_starts — (n_words_kept,) int, start sample in raw_data for each epoch
   n_lags       — scalar int, samples per epoch window
   ch_names     — (n_elecs,) electrode names
@@ -29,7 +28,7 @@ from tqdm import tqdm
 from src.utils import (
     load_raws,
     load_embeddings,
-    build_word_epochs,
+    compute_epoch_cache_indices,
     save_precomputed_epochs,
 )
 from src.core.config import EncodingConfig
@@ -44,10 +43,9 @@ _TMAX = 2.0
 def precompute_subject(sub_id, raw, df_word):
     """Precompute and return cache components for one subject.
 
-    Runs build_word_epochs once on the original raw to get the canonical
-    selection and n_lags, then resamples the full continuous signal to
-    32 Hz and computes per-epoch start indices by direct time-to-sample
-    conversion on the resampled object.
+    Resamples the full continuous signal to 32 Hz, then computes valid
+    word-epoch windows by direct time-to-sample conversion. This avoids
+    materializing an n_words × n_electrodes × n_lags MNE Epochs array.
 
     Returns:
         raw_data     — (n_elecs, n_samples) float32
@@ -56,14 +54,6 @@ def precompute_subject(sub_id, raw, df_word):
         ch_names     — list of str
         n_lags       — int
     """
-    import mne
-
-    print(f"  Building reference epochs (run once to get selection / n_lags)...")
-    epochs_ref, data_ref = build_word_epochs(raw, df_word, _TMIN, _TMAX, _TARGET_SFREQ)
-    selection = epochs_ref.selection
-    n_lags = data_ref.shape[2]
-    print(f"  n_words_kept={len(selection)}, n_lags={n_lags}")
-
     print(f"  Resampling full continuous signal to {_TARGET_SFREQ} Hz...")
     raw_resampled = raw.copy().resample(
         _TARGET_SFREQ, npad="auto", method="fft", window="hamming"
@@ -71,23 +61,12 @@ def precompute_subject(sub_id, raw, df_word):
     raw_data = raw_resampled.get_data().astype(np.float32)
     print(f"  raw_data shape: {raw_data.shape}")
 
-    tmin_samp = int(round(_TMIN * _TARGET_SFREQ))
-    onset_times = df_word.iloc[selection]["start"].values
-    onset_samples = raw_resampled.time_as_index(onset_times)
-    epoch_starts = onset_samples + tmin_samp
+    selection, epoch_starts, n_lags = compute_epoch_cache_indices(
+        raw_resampled, df_word, _TMIN, _TMAX, _TARGET_SFREQ
+    )
+    print(f"  n_words_kept={len(selection)}, n_lags={n_lags}")
 
-    # Sanity check: all windows must be within bounds
-    out_of_bounds = np.where(
-        (epoch_starts < 0) | (epoch_starts + n_lags > raw_data.shape[1])
-    )[0]
-    if len(out_of_bounds) > 0:
-        raise RuntimeError(
-            f"Subject {sub_id}: {len(out_of_bounds)} epochs would fall outside "
-            "the resampled raw array bounds.  This should not happen if selection "
-            "matches the original build_word_epochs output."
-        )
-
-    del raw_resampled, epochs_ref, data_ref
+    del raw_resampled
     gc.collect()
 
     return raw_data, selection, epoch_starts, raw.ch_names, n_lags

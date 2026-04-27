@@ -9,6 +9,7 @@ import pytest
 
 from src.utils.data_loaders import (
     build_word_epochs,
+    compute_epoch_cache_indices,
     get_precomputed_epochs_path,
     get_arbitrary_embeddings,
     load_data_from_cache,
@@ -17,6 +18,55 @@ from src.utils.data_loaders import (
     read_subject_mapping,
 )
 from src.core.registry import DatasetContext
+
+
+# ---------------------------------------------------------------------------
+# compute_epoch_cache_indices
+# ---------------------------------------------------------------------------
+
+
+class TestComputeEpochCacheIndices:
+    class FakeRaw:
+        def __init__(self, sfreq=32.0, n_times=320):
+            self.info = {"sfreq": sfreq}
+            self.n_times = n_times
+
+        def time_as_index(self, times):
+            return np.floor(np.asarray(times) * self.info["sfreq"]).astype(int)
+
+    def test_drops_duplicate_onset_samples_keep_first(self):
+        raw = self.FakeRaw(sfreq=32.0, n_times=320)
+        df_word = pd.DataFrame(
+            {
+                "start": [2.0, 2.0, 3.0, 3.01],
+                "word": ["first", "duplicate", "third", "fourth"],
+            }
+        )
+
+        selection, epoch_starts, n_lags = compute_epoch_cache_indices(
+            raw, df_word, tmin=-1.0, tmax=1.0, target_sfreq=32.0
+        )
+
+        np.testing.assert_array_equal(selection, np.array([0, 2]))
+        np.testing.assert_array_equal(epoch_starts, np.array([32, 64]))
+        assert n_lags == 64
+
+    def test_filters_nonfinite_and_out_of_bounds_windows(self):
+        raw = self.FakeRaw(sfreq=32.0, n_times=160)
+        df_word = pd.DataFrame(
+            {
+                "start": [0.25, 1.5, np.nan, 4.75],
+                "word": ["too_early", "kept", "nan", "too_late"],
+            }
+        )
+
+        selection, epoch_starts, n_lags = compute_epoch_cache_indices(
+            raw, df_word, tmin=-1.0, tmax=1.0, target_sfreq=32.0
+        )
+
+        np.testing.assert_array_equal(selection, np.array([1]))
+        np.testing.assert_array_equal(epoch_starts, np.array([16]))
+        assert n_lags == 64
 
 
 # ---------------------------------------------------------------------------
