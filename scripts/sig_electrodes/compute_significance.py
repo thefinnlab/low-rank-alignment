@@ -36,6 +36,7 @@ from src.utils import (
     epochs_from_cache,
 )
 from src.core.config import NewSignificanceConfig, get_results_dir
+from src.core.registry import get_dataset_adapter, resolve_dataset_context
 from src.utils.config_utils import parse_args, load_config
 from src.utils.encoding import get_ridge_model_constructor
 from src.utils.significance import compute_observed_max_per_electrode
@@ -49,7 +50,21 @@ def main():
     enc = config.encoding
 
     subject_ids = enc.subjects or list(range(1, 10))
-    output_dir = config.output_dir or get_results_dir(enc.model, enc.layer, enc.offset)
+    dataset_context = resolve_dataset_context(
+        dataset=enc.dataset,
+        subject_ids=subject_ids,
+        per_dataset_config=enc.per_dataset_config,
+        data_root=enc.data_root,
+    )
+    get_dataset_adapter(enc.dataset).validate_subjects_share_stimulus(
+        subject_ids, enc.per_dataset_config, enc.data_root
+    )
+    output_dir = config.output_dir or get_results_dir(
+        enc.model,
+        enc.offset,
+        enc.per_model_config,
+        dataset_context=dataset_context,
+    )
     null_dir = config.null_dir or os.path.join(output_dir, "null_dist")
 
     # Use GPU backend if available
@@ -66,7 +81,14 @@ def main():
     print(f"Null dir:   {null_dir}")
 
     # Load embeddings once
-    aligned_embeddings, df_word = load_embeddings(enc.data_root, enc.layer)
+    aligned_embeddings, df_word = load_embeddings(
+        enc.data_root,
+        enc.model,
+        dataset=enc.dataset,
+        per_dataset_config=enc.per_dataset_config,
+        dataset_context=dataset_context,
+        **enc.per_model_config,
+    )
 
     alphas = np.array(enc.ridge_alphas) if enc.ridge_alphas is not None else None
     model_constructor = get_ridge_model_constructor(alphas=alphas)
@@ -107,7 +129,13 @@ def main():
         # -------------------------------------------------------------------
         # 2. Re-run encoding on real (non-permuted) data
         # -------------------------------------------------------------------
-        cache = load_precomputed_epochs(bids_sub_id, enc.data_root)
+        cache = load_precomputed_epochs(
+            bids_sub_id,
+            enc.data_root,
+            dataset=enc.dataset,
+            per_dataset_config=enc.per_dataset_config,
+            dataset_context=dataset_context,
+        )
         electrode_names = cache["ch_names"]
         n_elec = len(electrode_names)
 

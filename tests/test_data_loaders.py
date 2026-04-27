@@ -9,10 +9,14 @@ import pytest
 
 from src.utils.data_loaders import (
     build_word_epochs,
+    get_precomputed_epochs_path,
     get_arbitrary_embeddings,
+    load_data_from_cache,
+    load_sig_electrodes,
     read_electrode_file,
     read_subject_mapping,
 )
+from src.core.registry import DatasetContext
 
 
 # ---------------------------------------------------------------------------
@@ -233,3 +237,69 @@ class TestBuildWordEpochs:
     def test_resampled_sfreq(self, synthetic_raw, df_word_simple):
         epochs, _ = build_word_epochs(synthetic_raw, df_word_simple, target_sfreq=32.0)
         assert int(epochs.info["sfreq"]) == 32
+
+
+class TestDatasetAwareLoaders:
+    def test_brain_treebank_cache_path_includes_movie(self):
+        context = DatasetContext(
+            dataset="brain_treebank",
+            stimulus_id="coraline",
+            stimulus_label="coraline",
+        )
+        path = get_precomputed_epochs_path(
+            3, "data/", dataset="brain_treebank", dataset_context=context
+        )
+        assert path.startswith("data/precomputed_epochs")
+        assert "movie-coraline" in path
+        assert "sub_3" in path
+
+    def test_load_data_from_cache_rejects_mixed_stimuli(self, monkeypatch):
+        def _fake_load_precomputed_epochs(sub_id, data_root, **kwargs):
+            stimulus_id = "coraline" if sub_id == 1 else "venom"
+            return {
+                "raw_data": np.zeros((1, 8), dtype=np.float32),
+                "selection": np.arange(2),
+                "epoch_starts": np.array([0, 4]),
+                "n_lags": 4,
+                "ch_names": ["A1"],
+                "stimulus_id": stimulus_id,
+            }
+
+        def _fake_epochs_from_cache(cache, elec_names=None):
+            return np.zeros((2, 1, 4), dtype=np.float32)
+
+        def _fake_apply_offset(X_sel, data, offset, valid_rows=None):
+            return X_sel, data.reshape(data.shape[0], -1).astype(np.float32)
+
+        import src.utils.data_loaders as dl
+        import src.utils.encoding as enc_mod
+
+        monkeypatch.setattr(dl, "load_precomputed_epochs", _fake_load_precomputed_epochs)
+        monkeypatch.setattr(dl, "epochs_from_cache", _fake_epochs_from_cache)
+        monkeypatch.setattr(enc_mod, "apply_offset", _fake_apply_offset)
+
+        with pytest.raises(ValueError, match="share one stimulus"):
+            load_data_from_cache(
+                [1, 2],
+                "data/",
+                0,
+                np.zeros((2, 3), dtype=np.float32),
+                dataset="brain_treebank",
+                per_dataset_config={"movie": "coraline"},
+                dataset_context=DatasetContext(
+                    dataset="brain_treebank",
+                    stimulus_id="coraline",
+                    stimulus_label="coraline",
+                ),
+            )
+
+    def test_significance_loading_uses_stimulus_scoped_dir(self, tmp_path):
+        sig_dir = tmp_path / "results" / "gpt2xl_layer24_offset0" / "movie-coraline"
+        sig_dir.mkdir(parents=True)
+        pd.DataFrame([{"subject": 1, "elec": "A1"}]).to_csv(
+            sig_dir / "all_subject_sig.csv", index=False
+        )
+
+        sig_electrodes, sig_df = load_sig_electrodes(str(sig_dir), [1])
+        assert sig_electrodes == {1: ["A1"]}
+        assert sig_df["elec"].tolist() == ["A1"]

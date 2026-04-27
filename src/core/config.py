@@ -3,6 +3,7 @@
 import os
 from dataclasses import dataclass, field
 from enum import Enum
+from typing import Any
 
 
 class ScriptMode(str, Enum):
@@ -28,20 +29,30 @@ def transformer_results_dir(base_dir, offset, model_dir, layer, pooling="mean"):
 
 
 def get_results_dir(
-    model: str, offset: int, per_model_config: dict, base_dir: str = "results/"
+    model: str,
+    offset: int,
+    per_model_config: dict,
+    base_dir: str = "results/",
+    dataset_context: Any = None,
 ) -> str:
     """Return a canonical results directory path derived from run parameters.
 
     Example: get_results_dir("gpt2xl", 24, 0) → "results/gpt2xl_layer24_offset0"
     """
     if model == "gpt2xl":
-        return gpt2_xl_results_dir(base_dir, offset, **per_model_config)
+        root = gpt2_xl_results_dir(base_dir, offset, **per_model_config)
     elif model == "glove":
-        return glove_results_dir(base_dir, offset, **per_model_config)
+        root = glove_results_dir(base_dir, offset, **per_model_config)
     elif model == "transformer":
-        return transformer_results_dir(base_dir, offset, **per_model_config)
+        root = transformer_results_dir(base_dir, offset, **per_model_config)
     else:
         raise ValueError(f"Model: {model} not implemented yet.")
+    if dataset_context is None or getattr(dataset_context, "dataset", "podcast") == "podcast":
+        return root
+    stimulus_id = getattr(dataset_context, "stimulus_id", None)
+    if not stimulus_id:
+        raise ValueError("dataset_context must provide a non-empty stimulus_id.")
+    return os.path.join(root, f"movie-{stimulus_id}")
 
 
 @dataclass
@@ -53,6 +64,7 @@ class EncodingConfig:
         "gpt2xl"  # Embedding model name; used in results dir generation. Should be registered in src.core.registry.embedding_getter_registry
     )
     offset: int = 0  # Word offset for aligning embeddings to neural data
+    dataset: str = "podcast"
     subjects: list[int] | None = None  # None → defaults to 1–9 at runtime
     run_name: str | None = (
         None  # Output dir; auto-generated from model/layer/offset if None
@@ -71,6 +83,7 @@ class EncodingConfig:
     )
     # Per model type config. Used when generating embeddings in load_embeddings.
     per_model_config: dict = field(default_factory=lambda: {"layer": 24})
+    per_dataset_config: dict = field(default_factory=dict)
 
 
 @dataclass
@@ -389,7 +402,7 @@ class AblationConfig:
 @dataclass
 class GenerateEmbeddingsConfig:
     """Parameters for generating contextual embeddings from a HuggingFace model
-    over the podcast transcript (used by scripts/utilities/generate_embeddings.py).
+    over a dataset transcript (used by scripts/utilities/generate_embeddings.py).
 
     Output layout under ``{data_root}/stimuli/{output_name}/``:
       - features.hdf5  : one dataset per retained layer, ``layer-{L}`` → (n_tokens, hidden_dim)
@@ -406,6 +419,8 @@ class GenerateEmbeddingsConfig:
     hf_model_id: str = "openai-community/gpt2-xl"
     output_name: str | None = None  # None → derived from hf_model_id
     data_root: str = "data/"
+    dataset: str = "podcast"
+    per_dataset_config: dict = field(default_factory=dict)
     transcript_path: str = "data/stimuli/podcast_transcript.csv"
 
     # Sliding window

@@ -6,28 +6,81 @@ import h5py
 import numpy as np
 import pandas as pd
 
-from src.core.registry import embedding_getter_registry, register_embedding_getter
+from src.core.registry import (
+    embedding_getter_registry,
+    get_dataset_adapter,
+    register_embedding_getter,
+    resolve_dataset_context,
+)
 from src.utils.data_loaders import get_arbitrary_embeddings
 
 
 def load_embeddings(
-    data_root: str, embedding_getter_name: str = "gpt2-xl", **kwargs
+    data_root: str,
+    embedding_getter_name: str = "gpt2xl",
+    dataset: str = "podcast",
+    per_dataset_config: dict | None = None,
+    dataset_context=None,
+    **kwargs,
 ) -> tuple:
-    # Which on-disk transcript.tsv to load depends on which model provided the
-    # token alignment. The generic "transformer" getter passes its own model_dir;
-    # gpt2xl/glove/arbitrary all rely on the canonical gpt2-xl transcript today.
+    if isinstance(embedding_getter_name, int):
+        kwargs.setdefault("layer", embedding_getter_name)
+        embedding_getter_name = "gpt2xl"
+
     model_dir = kwargs.get("model_dir", "gpt2-xl")
-    transcript_path = os.path.join(data_root, "stimuli", model_dir, "transcript.tsv")
-    transcript_df = pd.read_csv(transcript_path, sep="\t", index_col=0)
+    context = dataset_context or resolve_dataset_context(
+        dataset=dataset,
+        subject_ids=kwargs.get("subject_ids"),
+        per_dataset_config=per_dataset_config,
+        data_root=data_root,
+    )
+    adapter = get_dataset_adapter(context.dataset)
+    embedding_dir = adapter.get_embedding_dir(data_root, context, model_dir)
+    if embedding_getter_name in {"transformer", "gpt2xl"}:
+        kwargs.setdefault("embedding_dir", embedding_dir)
+        if embedding_getter_name == "transformer":
+            kwargs.setdefault("model_dir", model_dir)
+        try:
+            transcript_df = adapter.load_generated_transcript(
+                data_root, context, model_dir
+            )
+        except FileNotFoundError:
+            transcript_df = adapter.load_word_table(
+                data_root,
+                context,
+                model_dir=model_dir,
+                **kwargs,
+            )
+    else:
+        transcript_df = adapter.load_word_table(
+            data_root,
+            context,
+            model_dir=model_dir,
+            **kwargs,
+        )
 
     return embedding_getter_registry[embedding_getter_name](
         data_root, transcript_df, **kwargs
     )
 
 
+def _to_word_level_df(transcript_df: pd.DataFrame) -> pd.DataFrame:
+    if "word_idx" in transcript_df.columns:
+        return transcript_df.groupby("word_idx").agg(
+            dict(word="first", start="first", end="last")
+        )
+    if transcript_df.index.name == "word_idx":
+        return transcript_df
+    if {"word", "start", "end"} <= set(transcript_df.columns):
+        df = transcript_df.copy()
+        df.index = pd.Index(range(len(df)), name="word_idx")
+        return df
+    raise ValueError("Transcript DataFrame must contain word/start/end information.")
+
+
 @register_embedding_getter("transformer")
 def get_transformer_embeddings(
-    data_root, transcript_df, model_dir, layer, pooling="mean"
+    data_root, transcript_df, model_dir, layer, pooling="mean", embedding_dir=None
 ):
     """Load per-token hidden states for a HuggingFace model and pool per word.
 
@@ -48,7 +101,8 @@ def get_transformer_embeddings(
         aligned_embeddings: (n_words, embed_dim) float32.
         word_df: DataFrame indexed by word_idx with columns ['word', 'start', 'end'].
     """
-    embedding_path = os.path.join(data_root, "stimuli", model_dir, "features.hdf5")
+    embedding_dir = embedding_dir or os.path.join(data_root, "stimuli", model_dir)
+    embedding_path = os.path.join(embedding_dir, "features.hdf5")
     with h5py.File(embedding_path, "r") as f:
         contextual_embeddings = f[f"layer-{layer}"][...]
 
@@ -67,15 +121,15 @@ def get_transformer_embeddings(
         aligned_embeddings.append(reduce(contextual_embeddings[indices]))
     aligned_embeddings = np.stack(aligned_embeddings).astype(np.float32)
 
-    word_df = transcript_df.groupby("word_idx").agg(
-        dict(word="first", start="first", end="last")
-    )
+    word_df = _to_word_level_df(transcript_df)
 
     return aligned_embeddings, word_df
 
 
 @register_embedding_getter("gpt2xl")
-def get_gpt2_xl_embeddings(data_root, transcript_df, layer):
+def get_gpt2_xl_embeddings(
+    data_root, transcript_df, layer, embedding_dir=None, model_dir=None
+):
     """
     Load GPT-2-XL token embeddings from HDF5, average per word.
 
@@ -88,7 +142,8 @@ def get_gpt2_xl_embeddings(data_root, transcript_df, layer):
         aligned_embeddings: (n_words, embed_dim) float32.
         word_df: DataFrame indexed by word_idx with columns ['word', 'start', 'end'].
     """
-    embedding_path = os.path.join(data_root, "stimuli/gpt2-xl/features.hdf5")
+    embedding_dir = embedding_dir or os.path.join(data_root, "stimuli", "gpt2-xl")
+    embedding_path = os.path.join(embedding_dir, "features.hdf5")
     with h5py.File(embedding_path, "r") as f:
         contextual_embeddings = f[f"layer-{layer}"][...]
 
@@ -100,9 +155,7 @@ def get_gpt2_xl_embeddings(data_root, transcript_df, layer):
     aligned_embeddings = np.stack(aligned_embeddings).astype(np.float32)
 
     # Build word_df (one row per word)
-    word_df = transcript_df.groupby("word_idx").agg(
-        dict(word="first", start="first", end="last")
-    )
+    word_df = _to_word_level_df(transcript_df)
 
     return aligned_embeddings, word_df
 
@@ -139,9 +192,7 @@ def get_glove_embeddings(data_root, transcript_df, dim):
         word = re.sub(r"\b[^\w\s]+|[^\w\s]+\b", "", word)
         return word
 
-    word_df = transcript_df.groupby("word_idx").agg(
-        dict(word="first", start="first", end="last")
-    )
+    word_df = _to_word_level_df(transcript_df)
     words = word_df.word.tolist()
     preprocessed_words = [preprocess_word(word) for word in words]
     in_glove = []
@@ -167,9 +218,7 @@ def get_glove_embeddings(data_root, transcript_df, dim):
 def get_and_write_arbitrary_embeddings(
     data_root, transcript_df, results_dir, dim, seed=42
 ):
-    word_df = transcript_df.groupby("word_idx").agg(
-        dict(word="first", start="first", end="last")
-    )
+    word_df = _to_word_level_df(transcript_df)
     arbitrary_embedding_path = os.path.join(
         results_dir, f"arbitrary_embeddings_dim{dim}_seed{seed}.npy"
     )

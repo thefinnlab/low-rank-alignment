@@ -67,6 +67,7 @@ from src.utils import (
 from src.utils.data_loaders import load_sig_electrodes
 from src.utils.atlas import build_electrode_region_map
 from src.core.config import RRRConfig, ScriptMode, get_results_dir
+from src.core.registry import get_dataset_adapter, resolve_dataset_context
 from src.utils.config_utils import parse_args, load_config
 from src.utils.embeddings import get_glove_embeddings
 from src.utils.encoding import (
@@ -1249,8 +1250,20 @@ def main():
         set_backend("torch_cuda")
 
     subject_ids = enc.subjects or list(range(1, 10))
+    dataset_context = resolve_dataset_context(
+        dataset=enc.dataset,
+        subject_ids=subject_ids,
+        per_dataset_config=enc.per_dataset_config,
+        data_root=enc.data_root,
+    )
+    get_dataset_adapter(enc.dataset).validate_subjects_share_stimulus(
+        subject_ids, enc.per_dataset_config, enc.data_root
+    )
     output_dir = config.output_dir or get_results_dir(
-        enc.model, enc.offset, enc.per_model_config
+        enc.model,
+        enc.offset,
+        enc.per_model_config,
+        dataset_context=dataset_context,
     )
 
     # Resolve RRR output directory
@@ -1274,12 +1287,25 @@ def main():
 
     # Load significance CSV and build subject → electrode mapping
     sig_dir = config.sig_dir or output_dir
-    sig_electrodes, _ = load_sig_electrodes(output_dir, subject_ids, sig_dir=sig_dir)
+    sig_electrodes, _ = load_sig_electrodes(
+        output_dir,
+        subject_ids,
+        sig_dir=sig_dir,
+        dataset=enc.dataset,
+        per_dataset_config=enc.per_dataset_config,
+        dataset_context=dataset_context,
+        data_root=enc.data_root,
+    )
 
     # Load embeddings
     print("Loading embeddings...")
     aligned_embeddings, word_df = load_embeddings(
-        enc.data_root, enc.model, **enc.per_model_config
+        enc.data_root,
+        enc.model,
+        dataset=enc.dataset,
+        per_dataset_config=enc.per_dataset_config,
+        dataset_context=dataset_context,
+        **enc.per_model_config,
     )
 
     word_in_glove = None

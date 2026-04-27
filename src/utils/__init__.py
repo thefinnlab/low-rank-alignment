@@ -75,16 +75,46 @@ from src.utils.plotting import (
     plot_alpha_diagnostics,
     plot_alpha_vs_rank,
 )
-from src.utils.significance import (
-    batch_corrcoef,
-    significant_lags_all_electrodes_gpu,
-    save_significance_results,
-    load_significance_results,
-    get_sig_results,
-    phase_randomize_raw,
-    phase_randomize_data,
-    compute_observed_max_per_electrode,
-)
+def _missing_optional_dependency(dependency_name, utility_name):
+    def _missing(*args, **kwargs):
+        raise ModuleNotFoundError(
+            f"{dependency_name} is required for {utility_name} utilities."
+        )
+
+    return _missing
+
+
+try:
+    from src.utils.significance import (
+        batch_corrcoef,
+        significant_lags_all_electrodes_gpu,
+        save_significance_results,
+        load_significance_results,
+        get_sig_results,
+        phase_randomize_raw,
+        phase_randomize_data,
+        compute_observed_max_per_electrode,
+    )
+except ModuleNotFoundError as exc:
+    if exc.name != "statsmodels":
+        raise
+
+    batch_corrcoef = _missing_optional_dependency("statsmodels", "significance")
+    significant_lags_all_electrodes_gpu = _missing_optional_dependency(
+        "statsmodels", "significance"
+    )
+    save_significance_results = _missing_optional_dependency(
+        "statsmodels", "significance"
+    )
+    load_significance_results = _missing_optional_dependency(
+        "statsmodels", "significance"
+    )
+    get_sig_results = _missing_optional_dependency("statsmodels", "significance")
+    phase_randomize_raw = _missing_optional_dependency("statsmodels", "significance")
+    phase_randomize_data = _missing_optional_dependency("statsmodels", "significance")
+    compute_observed_max_per_electrode = _missing_optional_dependency(
+        "statsmodels", "significance"
+    )
 from src.utils.analysis import (
     build_global_sig_mask,
     get_correlation_gpu,
@@ -104,36 +134,74 @@ from src.utils.atlas import (
     group_electrodes_by_region,
     build_electrode_region_map,
 )
-from src.utils.srrr import (
-    load_svd_decomposition,
-    prox_l21,
-    solve_B_closed_form,
-    fit_srrr_proxgd,
-    run_stability_selection,
-    select_directions,
-    fit_dense_rrr,
-    predict_from_factors,
-    run_sufficiency_test,
-    compute_cca_similarity,
-    compute_procrustes_similarity,
-    save_srrr_result,
-    load_srrr_result,
-    save_rrr_factors,
-    save_rrr_result,
-    load_rrr_result,
-    find_knee_lambda,
-)
-from src.utils.sae import (
-    SAEEncoder,
-    SAERegressorEndToEnd,
-    compute_sae_metrics,
-    train_sae_end_to_end,
-    train_sae_alternating,
-)
-from src.utils.subspace_utils import (
-    evaluate_complement,
-    evaluate_arbitrary,
-)
+try:
+    from src.utils.srrr import (
+        load_svd_decomposition,
+        prox_l21,
+        solve_B_closed_form,
+        fit_srrr_proxgd,
+        run_stability_selection,
+        select_directions,
+        fit_dense_rrr,
+        predict_from_factors,
+        run_sufficiency_test,
+        compute_cca_similarity,
+        compute_procrustes_similarity,
+        save_srrr_result,
+        load_srrr_result,
+        save_rrr_factors,
+        save_rrr_result,
+        load_rrr_result,
+        find_knee_lambda,
+    )
+except ModuleNotFoundError as exc:
+    if exc.name != "himalaya":
+        raise
+    load_svd_decomposition = _missing_optional_dependency("himalaya", "SRRR")
+    prox_l21 = _missing_optional_dependency("himalaya", "SRRR")
+    solve_B_closed_form = _missing_optional_dependency("himalaya", "SRRR")
+    fit_srrr_proxgd = _missing_optional_dependency("himalaya", "SRRR")
+    run_stability_selection = _missing_optional_dependency("himalaya", "SRRR")
+    select_directions = _missing_optional_dependency("himalaya", "SRRR")
+    fit_dense_rrr = _missing_optional_dependency("himalaya", "SRRR")
+    predict_from_factors = _missing_optional_dependency("himalaya", "SRRR")
+    run_sufficiency_test = _missing_optional_dependency("himalaya", "SRRR")
+    compute_cca_similarity = _missing_optional_dependency("himalaya", "SRRR")
+    compute_procrustes_similarity = _missing_optional_dependency("himalaya", "SRRR")
+    save_srrr_result = _missing_optional_dependency("himalaya", "SRRR")
+    load_srrr_result = _missing_optional_dependency("himalaya", "SRRR")
+    save_rrr_factors = _missing_optional_dependency("himalaya", "SRRR")
+    save_rrr_result = _missing_optional_dependency("himalaya", "SRRR")
+    load_rrr_result = _missing_optional_dependency("himalaya", "SRRR")
+    find_knee_lambda = _missing_optional_dependency("himalaya", "SRRR")
+
+try:
+    from src.utils.sae import (
+        SAEEncoder,
+        SAERegressorEndToEnd,
+        compute_sae_metrics,
+        train_sae_end_to_end,
+        train_sae_alternating,
+    )
+except ModuleNotFoundError as exc:
+    if exc.name != "himalaya":
+        raise
+    SAEEncoder = _missing_optional_dependency("himalaya", "SAE")
+    SAERegressorEndToEnd = _missing_optional_dependency("himalaya", "SAE")
+    compute_sae_metrics = _missing_optional_dependency("himalaya", "SAE")
+    train_sae_end_to_end = _missing_optional_dependency("himalaya", "SAE")
+    train_sae_alternating = _missing_optional_dependency("himalaya", "SAE")
+
+try:
+    from src.utils.subspace_utils import (
+        evaluate_complement,
+        evaluate_arbitrary,
+    )
+except ModuleNotFoundError as exc:
+    if exc.name != "himalaya":
+        raise
+    evaluate_complement = _missing_optional_dependency("himalaya", "subspace")
+    evaluate_arbitrary = _missing_optional_dependency("himalaya", "subspace")
 from src.utils.examples import (
     _make_context,
     _sample,

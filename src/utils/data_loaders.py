@@ -4,6 +4,27 @@ from typing import Optional
 import numpy as np
 import pandas as pd
 
+from src.core.registry import get_dataset_adapter, resolve_dataset_context
+
+
+def _maybe_resolve_dataset_context(
+    dataset: str,
+    subject_ids: list[int] | None,
+    per_dataset_config: dict | None,
+    data_root: str,
+    dataset_context,
+):
+    if dataset_context is not None:
+        return dataset_context
+    if dataset == "podcast" and not per_dataset_config:
+        return None
+    return resolve_dataset_context(
+        dataset=dataset,
+        subject_ids=subject_ids,
+        per_dataset_config=per_dataset_config,
+        data_root=data_root,
+    )
+
 
 def load_raws(
     subject_ids,
@@ -15,103 +36,43 @@ def load_raws(
     per_subject_electrodes=None,
     channel_reg_ex=None,
     no_preload=False,
+    dataset="podcast",
+    per_dataset_config=None,
+    dataset_context=None,
 ):
     """
     Loads raw iEEG data with YAML-configurable preprocessing.
     All transformations (Resampling, Drop Bad, Scaling) happen here directly on the Raw object.
     """
-    import mne
-    import os
-    from mne_bids import BIDSPath
-
-    raws = []
-
-    for sub_id in subject_ids:
-        if use_high_gamma:
-            root_path = os.path.join(data_root, "derivatives/ecogprep")
-            description = "highgamma"
-            print(f"Loading High Gamma data for subject {sub_id}...")
-        else:
-            root_path = os.path.join(data_root, "derivatives/ecogprep")
-            description = None
-            print(f"Loading Raw data for subject {sub_id}...")
-
-        file_path = BIDSPath(
-            root=root_path,
-            subject=f"{sub_id:02}",
-            task="podcast",
-            datatype="ieeg",
-            description=description,
-            suffix="ieeg",
-            extension=".fif",
+    context = _maybe_resolve_dataset_context(
+        dataset, subject_ids, per_dataset_config, data_root, dataset_context
+    )
+    adapter = get_dataset_adapter(dataset if context is None else context.dataset)
+    if context is not None:
+        adapter.validate_subjects_share_stimulus(
+            subject_ids, per_dataset_config or {}, data_root
         )
 
-        if not os.path.exists(file_path):
-            raise FileNotFoundError(f"Data file not found: {file_path}")
+    load_options = {
+        "use_high_gamma": use_high_gamma,
+        "target_sr": target_sr,
+        "do_drop_bads": do_drop_bads,
+        "signal_unit": signal_unit,
+        "per_subject_electrodes": per_subject_electrodes,
+        "channel_reg_ex": channel_reg_ex,
+        "no_preload": no_preload,
+    }
 
-        raw = mne.io.read_raw_fif(file_path, preload=not no_preload, verbose=False)
-
-        if target_sr is not None:
-            if int(raw.info["sfreq"]) != int(target_sr):
-                print(f"  - [Config] Resampling {raw.info['sfreq']}Hz -> {target_sr}Hz")
-                raw.resample(target_sr)
-
-        if do_drop_bads:
-            try:
-                ch_path = file_path.copy()
-                ch_path.update(suffix="channels", extension=".tsv")
-                tsv_path = str(ch_path)
-
-                if not os.path.exists(tsv_path) and getattr(
-                    file_path, "description", None
-                ):
-                    ch_path2 = file_path.copy()
-                    ch_path2.update(
-                        description=None, suffix="channels", extension=".tsv"
-                    )
-                    tsv_path = str(ch_path2)
-
-                if not os.path.exists(tsv_path) and "derivatives" in str(file_path):
-                    raw_bids_path = BIDSPath(
-                        root=data_root,
-                        subject=f"{sub_id:02}",
-                        task="podcast",
-                        datatype="ieeg",
-                        suffix="channels",
-                        extension=".tsv",
-                    )
-                    tsv_path = str(raw_bids_path)
-
-                if os.path.exists(tsv_path):
-                    df_ch = pd.read_csv(tsv_path, sep="\t")
-                    if "status" in df_ch.columns and "name" in df_ch.columns:
-                        bad_channels = df_ch[df_ch["status"] == "bad"]["name"].tolist()
-                        if bad_channels:
-                            bad_channels = [
-                                ch for ch in bad_channels if ch in raw.ch_names
-                            ]
-                            raw.info["bads"].extend(bad_channels)
-                            print(
-                                f"  - [Config] Dropping {len(bad_channels)} bad channels"
-                            )
-                            raw.drop_channels(bad_channels)
-            except Exception as e:
-                print(f"Warning: Failed to process bad channels: {e}")
-
-        if signal_unit == "uV":
-            print(f"  - [Config] Scaling data: Volt -> MicroVolt (x 1e6)")
-            raw.apply_function(lambda x: x * 1e6, channel_wise=False)
-
-        if per_subject_electrodes:
-            subject_electrode_names = per_subject_electrodes[sub_id]
-            picks = [ch for ch in subject_electrode_names if ch in raw.ch_names]
-            raw = raw.pick(picks)
-        elif channel_reg_ex:
-            picks = mne.pick_channels_regexp(raw.ch_names, channel_reg_ex)
-            raw = raw.pick(picks)
-
+    raws = []
+    for sub_id in subject_ids:
+        print(f"Loading raw data for subject {sub_id}...")
+        raw = adapter.load_raw_recording(
+            sub_id,
+            data_root,
+            context or adapter.resolve_analysis_context([], {}, data_root),
+            load_options,
+        )
         raws.append(raw)
-
     return raws
 
 
@@ -266,17 +227,46 @@ def build_word_epochs(
 
 
 def load_data_from_cache(
-    subs_to_load, data_root, offset, embeddings, sig_electrodes=None, valid_rows=None
+    subs_to_load,
+    data_root,
+    offset,
+    embeddings,
+    sig_electrodes=None,
+    valid_rows=None,
+    dataset="podcast",
+    per_dataset_config=None,
+    dataset_context=None,
 ):
     import gc
     from src.utils.encoding import apply_offset
 
+    context = _maybe_resolve_dataset_context(
+        dataset, subs_to_load, per_dataset_config, data_root, dataset_context
+    )
     Y_cols = []
     X_ref = None
     ref_selection = None
     elec_names = []
+    ref_stimulus_id = getattr(context, "stimulus_id", None)
     for sub_id in subs_to_load:
-        cache = load_precomputed_epochs(sub_id, data_root)
+        if context is None:
+            cache = load_precomputed_epochs(sub_id, data_root)
+        else:
+            cache = load_precomputed_epochs(
+                sub_id,
+                data_root,
+                dataset=context.dataset,
+                per_dataset_config=per_dataset_config,
+                dataset_context=context,
+            )
+        cache_stimulus_id = cache.get("stimulus_id")
+        if ref_stimulus_id is None:
+            ref_stimulus_id = cache_stimulus_id
+        elif cache_stimulus_id != ref_stimulus_id:
+            raise ValueError(
+                f"Cached subjects must share one stimulus. "
+                f"Expected '{ref_stimulus_id}', got '{cache_stimulus_id}' for subject {sub_id}."
+            )
         ref_selection = cache["selection"]
         data = epochs_from_cache(
             cache, elec_names=sig_electrodes[sub_id] if sig_electrodes else None
@@ -342,6 +332,12 @@ def build_XY_from_subjects(
             f"No subjects with significant electrodes found in subject_ids={subject_ids}."
         )
 
+    dataset = getattr(enc, "dataset", "podcast")
+    per_dataset_config = getattr(enc, "per_dataset_config", {})
+    dataset_context = _maybe_resolve_dataset_context(
+        dataset, subs_to_load, per_dataset_config, enc.data_root, None
+    )
+
     return load_data_from_cache(
         subs_to_load,
         enc.data_root,
@@ -349,10 +345,21 @@ def build_XY_from_subjects(
         aligned_embeddings,
         sig_electrodes,
         valid_rows=valid_rows,
+        dataset=dataset,
+        per_dataset_config=per_dataset_config,
+        dataset_context=dataset_context,
     )
 
 
-def load_sig_electrodes(output_dir, subject_ids, sig_dir=None):
+def load_sig_electrodes(
+    output_dir,
+    subject_ids,
+    sig_dir=None,
+    dataset="podcast",
+    per_dataset_config=None,
+    dataset_context=None,
+    data_root="data/",
+):
     """Load significance CSV and build a subject → electrode list mapping.
 
     Args:
@@ -370,8 +377,11 @@ def load_sig_electrodes(output_dir, subject_ids, sig_dir=None):
         FileNotFoundError: If the significance CSV is missing.
         ValueError: If no significant electrodes are found for any subject.
     """
-    import os
-
+    context = _maybe_resolve_dataset_context(
+        dataset, subject_ids, per_dataset_config, data_root, dataset_context
+    )
+    adapter = get_dataset_adapter(dataset if context is None else context.dataset)
+    resolved_context = context or adapter.resolve_analysis_context([], {}, data_root)
     csv_dir = sig_dir if sig_dir is not None else output_dir
     sig_csv = os.path.join(csv_dir, "all_subject_sig.csv")
     if not os.path.exists(sig_csv):
@@ -379,14 +389,13 @@ def load_sig_electrodes(output_dir, subject_ids, sig_dir=None):
             f"all_subject_sig.csv not found at {sig_csv}. "
             "Run run_significance.py first."
         )
-    sig_df = pd.read_csv(sig_csv)
+    sig_electrodes, sig_df = adapter.load_significance(
+        output_dir,
+        subject_ids,
+        resolved_context,
+        sig_dir=sig_dir,
+    )
     print(f"Loaded significance CSV: {len(sig_df):,} significant electrodes")
-
-    sig_electrodes = {
-        sub_id: sig_df[sig_df["subject"] == sub_id]["elec"].tolist()
-        for sub_id in subject_ids
-    }
-    sig_electrodes = {s: e for s, e in sig_electrodes.items() if e}
 
     if not sig_electrodes:
         raise ValueError(
@@ -437,20 +446,36 @@ def load_fold_indices(output_dir, subject_ids, sig_electrodes):
     return provided_idxs, lags
 
 
-def get_precomputed_epochs_path(sub_id, data_root):
+def get_precomputed_epochs_path(
+    sub_id,
+    data_root,
+    dataset="podcast",
+    per_dataset_config=None,
+    dataset_context=None,
+):
     """Return the canonical path for a subject's precomputed 32 Hz epoch cache."""
-    return os.path.join(
+    context = _maybe_resolve_dataset_context(
+        dataset, [sub_id], per_dataset_config, data_root, dataset_context
+    )
+    adapter = get_dataset_adapter(dataset if context is None else context.dataset)
+    return adapter.get_precomputed_epochs_path(
+        sub_id,
         data_root,
-        "derivatives",
-        "ecogprep",
-        f"sub-{sub_id:02d}",
-        "ieeg",
-        f"sub-{sub_id:02d}_task-podcast_desc-epochs32hz_ieeg.npz",
+        context or adapter.resolve_analysis_context([], {}, data_root),
     )
 
 
 def save_precomputed_epochs(
-    sub_id, data_root, raw_data, selection, epoch_starts, ch_names, n_lags
+    sub_id,
+    data_root,
+    raw_data,
+    selection,
+    epoch_starts,
+    ch_names,
+    n_lags,
+    dataset="podcast",
+    per_dataset_config=None,
+    dataset_context=None,
 ):
     """Save precomputed epoch cache to disk.
 
@@ -463,7 +488,16 @@ def save_precomputed_epochs(
         ch_names: List of electrode name strings.
         n_lags: Number of samples per epoch window.
     """
-    path = get_precomputed_epochs_path(sub_id, data_root)
+    context = _maybe_resolve_dataset_context(
+        dataset, [sub_id], per_dataset_config, data_root, dataset_context
+    )
+    path = get_precomputed_epochs_path(
+        sub_id,
+        data_root,
+        dataset=dataset,
+        per_dataset_config=per_dataset_config,
+        dataset_context=context,
+    )
     os.makedirs(os.path.dirname(path), exist_ok=True)
     np.savez(
         path,
@@ -472,11 +506,24 @@ def save_precomputed_epochs(
         epoch_starts=epoch_starts,
         n_lags=np.array(n_lags),
         ch_names=np.array(ch_names),
+        dataset=np.array((context.dataset if context is not None else dataset)),
+        stimulus_id=np.array(
+            getattr(context, "stimulus_id", "podcast" if dataset == "podcast" else "")
+        ),
+        stimulus_label=np.array(
+            getattr(context, "stimulus_label", "podcast" if dataset == "podcast" else "")
+        ),
     )
     print(f"  Saved precomputed epochs: {path}")
 
 
-def load_precomputed_epochs(sub_id, data_root):
+def load_precomputed_epochs(
+    sub_id,
+    data_root,
+    dataset="podcast",
+    per_dataset_config=None,
+    dataset_context=None,
+):
     """Load precomputed epoch cache from disk.
 
     Args:
@@ -494,7 +541,16 @@ def load_precomputed_epochs(sub_id, data_root):
     Raises:
         FileNotFoundError if cache file does not exist.
     """
-    path = get_precomputed_epochs_path(sub_id, data_root)
+    context = _maybe_resolve_dataset_context(
+        dataset, [sub_id], per_dataset_config, data_root, dataset_context
+    )
+    path = get_precomputed_epochs_path(
+        sub_id,
+        data_root,
+        dataset=dataset,
+        per_dataset_config=per_dataset_config,
+        dataset_context=context,
+    )
     if not os.path.exists(path):
         raise FileNotFoundError(
             f"Precomputed epochs not found: {path}. "
@@ -507,6 +563,17 @@ def load_precomputed_epochs(sub_id, data_root):
         "epoch_starts": cache["epoch_starts"],
         "n_lags": int(cache["n_lags"]),
         "ch_names": cache["ch_names"].tolist(),
+        "dataset": str(cache["dataset"]) if "dataset" in cache else dataset,
+        "stimulus_id": (
+            str(cache["stimulus_id"])
+            if "stimulus_id" in cache
+            else getattr(context, "stimulus_id", "podcast")
+        ),
+        "stimulus_label": (
+            str(cache["stimulus_label"])
+            if "stimulus_label" in cache
+            else getattr(context, "stimulus_label", "podcast")
+        ),
     }
 
 

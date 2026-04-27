@@ -1,6 +1,6 @@
 # Repository Overview
 
-This is a neuroscience encoding analysis pipeline that studies how GPT-2-XL language model embeddings correlate with intracranial EEG (iEEG) neural activity from human subjects listening to a podcast. The pipeline trains ridge regression encoding models, performs permutation-based significance testing, and conducts SVD analysis to identify which directions in embedding space best predict neural responses.
+This is a neuroscience encoding analysis pipeline that studies how language-model embeddings correlate with intracranial EEG (iEEG) neural activity. The original/default dataset is a podcast stimulus, and the codebase now also supports Brain Treebank movie stimuli through a dataset registry that centralizes transcript loading, neural-data/cache paths, and stimulus-scoped result directories. The pipeline trains ridge regression encoding models, performs permutation-based significance testing, and conducts SVD analysis to identify which directions in embedding space best predict neural responses.
 
 ## Pipeline Stages
 
@@ -21,19 +21,21 @@ This is a neuroscience encoding analysis pipeline that studies how GPT-2-XL lang
 
 `make generate-embeddings EMBED_CONFIG=configs/embeddings/generate_<model>.yml` runs
 `scripts/utilities/generate_embeddings.py`, which loads any HuggingFace model via
-`transformers`, tokenizes `data/stimuli/podcast_transcript.csv` with
-`is_split_into_words=True`, and produces per-token contextual embeddings via a
+`transformers`, loads words through the active dataset adapter (or the legacy
+podcast `transcript_path`), tokenizes with `is_split_into_words=True`, and
+produces per-token contextual embeddings via a
 sliding window of configurable `context_window` and `stride`. Causal models
 (GPT-2, Pythia, GPT-J, Llama) use native causal attention; bidirectional models
 (RoBERTa) use `attention_mode=bidirectional_strict` (stride=1) so each target
-sees only preceding tokens. Outputs go to `data/stimuli/{output_name}/` with
-three files matching the existing GPT-2-XL layout:
+sees only preceding tokens. Podcast outputs go to `data/stimuli/{output_name}/`;
+Brain Treebank outputs go to `data/stimuli/{output_name}/movie-{movie}/`.
+Both layouts contain three files matching the existing GPT-2-XL layout:
 `features.hdf5` (per-layer hidden states), `transcript.tsv` (per-token
 word/token metadata), and `metadata.json` (generation parameters). The
 `transformer` embedding getter in `src/utils/embeddings.py` loads any of these
-directories by `model_dir` + `layer`. Offline GPU hosts should pre-populate
-the HF cache (e.g. `huggingface-cli download meta-llama/Meta-Llama-3-8B`) and
-run with the default `local_files_only: true`.
+directories by `dataset`, `model_dir`, and `layer`. Offline GPU hosts should
+pre-populate the HF cache (e.g. `huggingface-cli download meta-llama/Meta-Llama-3-8B`)
+and run with the default `local_files_only: true`.
 
 ---
 
@@ -98,10 +100,11 @@ Core library modules:
 |------|---------|
 
 | `constants.py` | Project-wide constants; `RIDGE_ALPHAS` — default alpha grid for RidgeCV; `refine_alpha_grid()` — builds a refined grid from observed best alphas; `check_alpha_grid_boundaries()` — detects when selected alphas cluster at grid edges |
-| `config.py` | Dataclass definitions for `EncodingConfig`, `SignificanceConfig`, `NullDistConfig`, `NewSignificanceConfig`, `SVDConfig`, `PartialSVDConfig`, `PartialRRRConfig`, `SRRRConfig`, `RRRConfig`, `PCAConfig`, `SAEConfig`, `AblationConfig`; `get_results_dir()` for canonical output paths. Most downstream configs support `sig_dir` to override where significance CSVs are read from (defaults to `output_dir`). |
+| `config.py` | Dataclass definitions for `EncodingConfig`, `SignificanceConfig`, `NullDistConfig`, `NewSignificanceConfig`, `SVDConfig`, `PartialSVDConfig`, `PartialRRRConfig`, `SRRRConfig`, `RRRConfig`, `PCAConfig`, `SAEConfig`, `AblationConfig`; `get_results_dir()` for canonical output paths. `EncodingConfig` now carries additive `dataset` / `per_dataset_config` fields so runs can stay model-specific while also being stimulus-scoped. Most downstream configs support `sig_dir` to override where significance CSVs are read from (defaults to `output_dir`). |
 | `config_utils.py` | Argument parsing and YAML loading with CLI override support (dot-notation, e.g. `--encoding.layer=48`) |
-| `data_loaders.py` | Loads iEEG BIDS data via MNE, GPT-2 embeddings from HDF5, builds word-aligned epochs, handles time offsets; `build_XY_from_subjects()` for stacking multi-subject neural data; `load_sig_electrodes()` and `load_fold_indices()` for shared data-loading across scripts |
-| `embeddings.py` | Loads contextual token embeddings from HDF5 and pools tokens per word. Registered getters: `gpt2xl` (legacy GPT-2-XL path), `transformer` (generic — reads `data/stimuli/{model_dir}/features.hdf5` produced by `generate_embeddings.py`), `glove`, `arbitrary` |
+| `registry.py` | Dual registries for embedding getters and dataset adapters. Dataset adapters resolve dataset-specific transcript tables, raw/cache locations, significance loading, and stimulus context. Built-in adapters cover `podcast` and movie-scoped `brain_treebank`; Brain Treebank HDF5 sEEG recordings are converted from microvolts to MNE `RawArray` objects in volts, with optional 70-200 Hz Butterworth/Hilbert high-gamma preprocessing before the shared epoching/resampling path. |
+| `data_loaders.py` | Loads iEEG data and precomputed epoch caches, now via dataset-dispatched helpers so transcript/cache/significance behavior can vary by dataset while keeping existing utility entrypoints stable. `build_XY_from_subjects()` still stacks multi-subject neural data, but rejects mixed-stimulus cache combinations. |
+| `embeddings.py` | Loads contextual token embeddings from HDF5 and pools tokens per word. Transcript and HDF5 directory selection are dataset-aware: podcast uses `data/stimuli/{model_dir}/`, while Brain Treebank uses `data/stimuli/{model_dir}/movie-{movie}/` and prefers the generated per-token `transcript.tsv` for contextual pooling. Registered getters: `gpt2xl`, `transformer`, `glove`, `arbitrary` |
 | `encoding.py` | K-fold cross-validation ridge regression (Himalaya backend), coefficient serialization, cross-subject aggregation; `extract_best_alphas()` — extracts per-target selected alphas from fitted RidgeCV; `train_encoding_two_pass()` — coarse-then-refined alpha sweep |
 | `significance.py` | GPU-accelerated permutation testing, vectorized Pearson correlation, Benjamini-Hochberg FDR correction; `phase_randomize_raw()` for signal phase randomization preserving autocorrelation; `compute_observed_max_per_electrode()` for max-across-lags statistics |
 | `analysis.py` | SVD decomposition of weights, truncated correlation evaluation, best-k selection, residualization utilities |

@@ -27,6 +27,7 @@ from tqdm import tqdm
 from transformers import AutoModel, AutoTokenizer
 
 from src.core.config import GenerateEmbeddingsConfig
+from src.core.registry import get_dataset_adapter, resolve_dataset_context
 from src.utils.config_utils import load_config, parse_override_args
 
 
@@ -137,6 +138,27 @@ def _resolve_layers(cfg_layers, num_hidden_states: int) -> list[int]:
     if cfg_layers == "all" or cfg_layers is None:
         return list(range(num_hidden_states))
     return [int(L) for L in cfg_layers]
+
+
+def _load_generation_words(cfg: GenerateEmbeddingsConfig, output_name: str):
+    context = resolve_dataset_context(
+        dataset=cfg.dataset,
+        subject_ids=[],
+        per_dataset_config=cfg.per_dataset_config,
+        data_root=cfg.data_root,
+    )
+    adapter = get_dataset_adapter(context.dataset)
+    if context.dataset == "podcast":
+        print(f"Loading transcript: {cfg.transcript_path}")
+        words_df = pd.read_csv(cfg.transcript_path)
+    else:
+        print(f"Loading {context.dataset} transcript: {context.stimulus_id}")
+        words_df = adapter.load_word_table(cfg.data_root, context)
+
+    if "word" not in words_df.columns:
+        raise ValueError("Transcript table must contain a 'word' column.")
+    out_dir = adapter.get_embedding_dir(cfg.data_root, context, output_name)
+    return words_df, context, out_dir
 
 
 def _causal_window_plan(N: int, stride: int, T: int) -> list[tuple[int, int, int, int]]:
@@ -279,8 +301,7 @@ def generate(cfg: GenerateEmbeddingsConfig):
     attention_mode, stride = _resolve_defaults(cfg, model_type)
     print(f"model_type={model_type} attention_mode={attention_mode} stride={stride}")
 
-    print(f"Loading transcript: {cfg.transcript_path}")
-    words_df = pd.read_csv(cfg.transcript_path)
+    words_df, dataset_context, out_dir = _load_generation_words(cfg, output_name)
     words = words_df["word"].tolist()
     input_ids, word_ids = _tokenize_transcript(words, tokenizer)
     T = input_ids.shape[0]
@@ -307,7 +328,6 @@ def generate(cfg: GenerateEmbeddingsConfig):
 
     transcript_df = _build_transcript_df(words_df, word_ids, input_ids, tokenizer)
 
-    out_dir = os.path.join(cfg.data_root, "stimuli", output_name)
     os.makedirs(out_dir, exist_ok=True)
     features_path = os.path.join(out_dir, "features.hdf5")
     print(f"Writing {features_path}")
@@ -336,6 +356,10 @@ def generate(cfg: GenerateEmbeddingsConfig):
         n_tokens=T,
         n_words=len(words),
         transcript_path=cfg.transcript_path,
+        dataset=dataset_context.dataset,
+        data_root=cfg.data_root,
+        stimulus_id=dataset_context.stimulus_id,
+        per_dataset_config=cfg.per_dataset_config,
     )
     metadata_path = os.path.join(out_dir, "metadata.json")
     with open(metadata_path, "w") as f:

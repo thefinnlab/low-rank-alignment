@@ -33,6 +33,7 @@ from src.utils import (
     save_precomputed_epochs,
 )
 from src.core.config import EncodingConfig
+from src.core.registry import get_dataset_adapter, resolve_dataset_context
 from src.utils.config_utils import parse_args, load_config
 
 _TARGET_SFREQ = 32.0
@@ -97,12 +98,26 @@ def main():
     config: EncodingConfig = load_config(args.config, overrides, EncodingConfig)
 
     subject_ids = config.subjects or list(range(1, 10))
+    dataset_context = resolve_dataset_context(
+        dataset=config.dataset,
+        subject_ids=subject_ids,
+        per_dataset_config=config.per_dataset_config,
+        data_root=config.data_root,
+    )
+    get_dataset_adapter(config.dataset).validate_subjects_share_stimulus(
+        subject_ids, config.per_dataset_config, config.data_root
+    )
 
     print(f"Precomputing epochs for subjects: {subject_ids}")
     print(f"  data_root: {config.data_root}")
 
     _, df_word = load_embeddings(
-        config.data_root, config.model, **config.per_model_config
+        config.data_root,
+        config.model,
+        dataset=config.dataset,
+        per_dataset_config=config.per_dataset_config,
+        dataset_context=dataset_context,
+        **config.per_model_config,
     )
 
     for sub_id in tqdm(subject_ids, desc="Subjects"):
@@ -111,7 +126,13 @@ def main():
         print(f"{'='*60}")
 
         raws = load_raws(
-            [sub_id], config.data_root, use_high_gamma=True, do_drop_bads=True
+            [sub_id],
+            config.data_root,
+            use_high_gamma=True,
+            do_drop_bads=True,
+            dataset=config.dataset,
+            per_dataset_config=config.per_dataset_config,
+            dataset_context=dataset_context,
         )
         raw = raws[0]
         print(f"  Loaded raw: {len(raw.ch_names)} electrodes, {raw.info['sfreq']} Hz")
@@ -127,6 +148,9 @@ def main():
             epoch_starts,
             ch_names,
             n_lags,
+            dataset=config.dataset,
+            per_dataset_config=config.per_dataset_config,
+            dataset_context=dataset_context,
         )
 
         del raws, raw, raw_data

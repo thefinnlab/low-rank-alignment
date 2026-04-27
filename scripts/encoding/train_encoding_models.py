@@ -36,6 +36,7 @@ from src.utils import (
     epochs_from_cache,
 )
 from src.core.config import EncodingConfig, get_results_dir
+from src.core.registry import get_dataset_adapter, resolve_dataset_context
 from src.utils.config_utils import parse_args, load_config
 from src.utils.constants import check_alpha_grid_boundaries
 from src.utils.encoding import (
@@ -143,6 +144,7 @@ def _run_joint(
     run_name,
     model_constructor,
     config: EncodingConfig,
+    dataset_context,
     alphas=None,
     alpha_grid=None,
     word_in_glove=None,
@@ -155,6 +157,9 @@ def _run_joint(
         aligned_embeddings,
         sig_elecs,
         valid_rows=word_in_glove,
+        dataset=config.dataset,
+        per_dataset_config=config.per_dataset_config,
+        dataset_context=dataset_context,
     )
     if word_in_glove is not None:
         selection = selection[word_in_glove[selection]]
@@ -225,6 +230,7 @@ def _run_batch(
     run_name,
     model_constructor,
     config: EncodingConfig,
+    dataset_context,
     alphas=None,
     alpha_grid=None,
     word_in_glove=None,
@@ -237,13 +243,16 @@ def _run_batch(
         print(f"\n{'='*60}")
         print(f"Processing subject {sub_id}")
         print(f"{'='*60}")
-        X_arr, Y, selection, _ = load_data_from_cache(
+        X_arr, Y, selection, elec_names = load_data_from_cache(
             [sub_id],
             data_root,
             offset,
             aligned_embeddings,
             sig_elecs,
             valid_rows=word_in_glove,
+            dataset=config.dataset,
+            per_dataset_config=config.per_dataset_config,
+            dataset_context=dataset_context,
         )
         elec_counts = [len(x) for x in elec_names]
         n_elecs = sum(elec_counts)
@@ -304,8 +313,20 @@ def main():
 
     subject_ids = config.subjects or list(range(1, 10))
     offset = config.offset
+    dataset_context = resolve_dataset_context(
+        dataset=config.dataset,
+        subject_ids=subject_ids,
+        per_dataset_config=config.per_dataset_config,
+        data_root=config.data_root,
+    )
+    get_dataset_adapter(config.dataset).validate_subjects_share_stimulus(
+        subject_ids, config.per_dataset_config, config.data_root
+    )
     run_name = config.run_name or get_results_dir(
-        config.model, config.offset, config.per_model_config
+        config.model,
+        config.offset,
+        config.per_model_config,
+        dataset_context=dataset_context,
     )
 
     if torch.cuda.is_available():
@@ -325,7 +346,12 @@ def main():
 
     print(f"Loading embeddings...")
     aligned_embeddings, word_df = load_embeddings(
-        config.data_root, embedding_getter_name=config.model, **config.per_model_config
+        config.data_root,
+        embedding_getter_name=config.model,
+        dataset=config.dataset,
+        per_dataset_config=config.per_dataset_config,
+        dataset_context=dataset_context,
+        **config.per_model_config,
     )
     word_in_glove = None
     if config.limit_to_glove or config.model == "glove":
@@ -352,6 +378,7 @@ def main():
             run_name,
             model_constructor,
             config=config,
+            dataset_context=dataset_context,
             alphas=alphas,
             alpha_grid=alpha_grid,
             word_in_glove=word_in_glove,
@@ -366,6 +393,7 @@ def main():
             run_name,
             model_constructor,
             config=config,
+            dataset_context=dataset_context,
             alphas=alphas,
             alpha_grid=alpha_grid,
             word_in_glove=word_in_glove,

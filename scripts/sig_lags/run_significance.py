@@ -25,6 +25,7 @@ from src.utils import (
     save_subject_results,
 )
 from src.core.config import SignificanceConfig, get_results_dir
+from src.core.registry import get_dataset_adapter, resolve_dataset_context
 from src.utils.config_utils import parse_args, load_config
 from src.utils.encoding import get_ridge_model_constructor
 from src.utils.data_loaders import load_data_from_cache
@@ -41,8 +42,20 @@ def main():
     enc = config.encoding
 
     subject_ids = enc.subjects or list(range(1, 10))
+    dataset_context = resolve_dataset_context(
+        dataset=enc.dataset,
+        subject_ids=subject_ids,
+        per_dataset_config=enc.per_dataset_config,
+        data_root=enc.data_root,
+    )
+    get_dataset_adapter(enc.dataset).validate_subjects_share_stimulus(
+        subject_ids, enc.per_dataset_config, enc.data_root
+    )
     output_dir = config.output_dir or get_results_dir(
-        enc.model, enc.offset, enc.per_model_config
+        enc.model,
+        enc.offset,
+        enc.per_model_config,
+        dataset_context=dataset_context,
     )
 
     # Use GPU backend if available
@@ -57,7 +70,12 @@ def main():
 
     # Load embeddings once — shared across all subjects
     aligned_embeddings, transcript_df = load_embeddings(
-        enc.data_root, enc.model, **enc.per_model_config
+        enc.data_root,
+        enc.model,
+        dataset=enc.dataset,
+        per_dataset_config=enc.per_dataset_config,
+        dataset_context=dataset_context,
+        **enc.per_model_config,
     )
 
     word_in_glove = None
@@ -82,6 +100,9 @@ def main():
             enc.offset,
             aligned_embeddings,
             valid_rows=word_in_glove,
+            dataset=enc.dataset,
+            per_dataset_config=enc.per_dataset_config,
+            dataset_context=dataset_context,
         )
         _, n_targets = Y.shape
         elec_counts = [len(x) for x in elec_names]

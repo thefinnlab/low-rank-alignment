@@ -7,6 +7,7 @@ import pytest
 import yaml
 
 from src.core.config import EncodingConfig, SignificanceConfig, get_results_dir
+from src.core.registry import DatasetContext
 from src.utils.config_utils import (
     parse_override_args,
     dict_to_dataclass,
@@ -92,6 +93,8 @@ class TestDictToDataclass:
     def test_partial_dict_uses_defaults(self):
         config = dict_to_dataclass({}, EncodingConfig)
         assert config.per_model_config == {"layer": 24}
+        assert config.dataset == "podcast"
+        assert config.per_dataset_config == {}
         assert config.offset == 0
         assert config.subjects is None
 
@@ -171,6 +174,32 @@ class TestGetResultsDir:
     def test_glove_default_dir(self):
         result = get_results_dir("glove", 0, {"dim": 50})
         assert "glove_dim50_offset0" in result
+
+    def test_brain_treebank_results_dir_includes_movie(self):
+        context = DatasetContext(
+            dataset="brain_treebank",
+            stimulus_id="coraline",
+            stimulus_label="coraline",
+        )
+        result = get_results_dir(
+            "gpt2xl", 0, {"layer": 24}, dataset_context=context
+        )
+        assert result.endswith(os.path.join("gpt2xl_layer24_offset0", "movie-coraline"))
+
+    def test_different_brain_treebank_movies_get_different_dirs(self):
+        coraline = DatasetContext(
+            dataset="brain_treebank",
+            stimulus_id="coraline",
+            stimulus_label="coraline",
+        )
+        venom = DatasetContext(
+            dataset="brain_treebank",
+            stimulus_id="venom",
+            stimulus_label="venom",
+        )
+        a = get_results_dir("gpt2xl", 0, {"layer": 24}, dataset_context=coraline)
+        b = get_results_dir("gpt2xl", 0, {"layer": 24}, dataset_context=venom)
+        assert a != b
 
     def test_unknown_model_raises(self):
         with pytest.raises(ValueError):

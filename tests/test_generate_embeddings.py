@@ -17,8 +17,11 @@ from scripts.utilities.generate_embeddings import (
     _build_bidir_batch,
     _build_transcript_df,
     _causal_window_plan,
+    _load_generation_words,
     _tokenize_transcript,
 )
+from src.core.config import GenerateEmbeddingsConfig
+from src.core.registry import get_dataset_adapter
 
 
 # ---------------------------------------------------------------------------
@@ -73,6 +76,38 @@ class FakeTokenizer:
 
     def convert_ids_to_tokens(self, ids):
         return [self._id_to_tok[i] for i in ids]
+
+
+class TestLoadGenerationWords:
+    def test_brain_treebank_uses_dataset_adapter_word_table(self, tmp_path, monkeypatch):
+        adapter = get_dataset_adapter("brain_treebank")
+        called = {"value": False}
+
+        def fake_load_word_table(data_root, context):
+            called["value"] = True
+            assert data_root == str(tmp_path)
+            assert context.stimulus_id == "coraline"
+            return pd.DataFrame(
+                {
+                    "word": ["Hello", "world"],
+                    "start": [0.0, 0.5],
+                    "end": [0.4, 0.9],
+                }
+            )
+
+        monkeypatch.setattr(adapter, "load_word_table", fake_load_word_table)
+        cfg = GenerateEmbeddingsConfig(
+            data_root=str(tmp_path),
+            dataset="brain_treebank",
+            per_dataset_config={"movie": "coraline"},
+        )
+
+        words_df, context, out_dir = _load_generation_words(cfg, "roberta-base")
+
+        assert called["value"] is True
+        assert words_df["word"].tolist() == ["Hello", "world"]
+        assert context.dataset == "brain_treebank"
+        assert out_dir == str(tmp_path / "stimuli" / "roberta-base" / "movie-coraline")
 
 
 # ---------------------------------------------------------------------------

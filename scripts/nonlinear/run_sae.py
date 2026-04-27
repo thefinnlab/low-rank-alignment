@@ -55,6 +55,7 @@ from src.utils import (
 from src.utils.data_loaders import load_sig_electrodes
 from src.utils.atlas import build_electrode_region_map
 from src.core.config import SAEConfig, ScriptMode, get_results_dir
+from src.core.registry import get_dataset_adapter, resolve_dataset_context
 from src.utils.config_utils import parse_args, load_config
 from src.utils.encoding import (
     load_encoding_results,
@@ -507,7 +508,12 @@ def _run_per_subject_sae(
         )
         test_idxs = enc_results["test_idxs"]
 
-        cache = load_precomputed_epochs(sub_id, enc.data_root)
+        cache = load_precomputed_epochs(
+            sub_id,
+            enc.data_root,
+            dataset=enc.dataset,
+            per_dataset_config=enc.per_dataset_config,
+        )
         data = epochs_from_cache(cache, elec_names=sub_sig_elecs)
         n_elecs_sub = data.shape[1]
         X_arr, Y_sub = apply_offset(
@@ -662,7 +668,21 @@ def main():
         set_backend("torch_cuda")
 
     subject_ids = enc.subjects or list(range(1, 10))
-    output_dir = config.output_dir or get_results_dir(enc.model, enc.layer, enc.offset)
+    dataset_context = resolve_dataset_context(
+        dataset=enc.dataset,
+        subject_ids=subject_ids,
+        per_dataset_config=enc.per_dataset_config,
+        data_root=enc.data_root,
+    )
+    get_dataset_adapter(enc.dataset).validate_subjects_share_stimulus(
+        subject_ids, enc.per_dataset_config, enc.data_root
+    )
+    output_dir = config.output_dir or get_results_dir(
+        enc.model,
+        enc.offset,
+        enc.per_model_config,
+        dataset_context=dataset_context,
+    )
 
     # Resolve SAE output directory
     if config.sae_output_dir:
@@ -693,11 +713,26 @@ def main():
 
     # Load significance CSV and build subject → electrode mapping
     sig_dir = config.sig_dir or output_dir
-    sig_electrodes, _ = load_sig_electrodes(output_dir, subject_ids, sig_dir=sig_dir)
+    sig_electrodes, _ = load_sig_electrodes(
+        output_dir,
+        subject_ids,
+        sig_dir=sig_dir,
+        dataset=enc.dataset,
+        per_dataset_config=enc.per_dataset_config,
+        dataset_context=dataset_context,
+        data_root=enc.data_root,
+    )
 
     # Load embeddings
     print("Loading embeddings...")
-    aligned_embeddings, df_word = load_embeddings(enc.data_root, enc.layer)
+    aligned_embeddings, df_word = load_embeddings(
+        enc.data_root,
+        enc.model,
+        dataset=enc.dataset,
+        per_dataset_config=enc.per_dataset_config,
+        dataset_context=dataset_context,
+        **enc.per_model_config,
+    )
 
     # Detect sweep parameters
     k_values, sweep_params = _detect_sweep_params(config)
