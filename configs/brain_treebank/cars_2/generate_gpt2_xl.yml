@@ -6,12 +6,12 @@ dataset: brain_treebank
 per_dataset_config:
   movie: cars-2
 context_window: 1024
-stride: 512
+stride: null
 layers: all
 pooling: mean
-attention_mode: auto
-dtype: float16
-output_dtype: float16
+attention_mode: podcast_per_token
+dtype: float32
+output_dtype: float32
 device: cuda
 batch_size: 1
 local_files_only: true

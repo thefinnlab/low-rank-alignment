@@ -409,11 +409,13 @@ class GenerateEmbeddingsConfig:
       - transcript.tsv : per-token rows (word_idx, word, start, end, hftoken, token_id)
       - metadata.json  : generation parameters for reproducibility
 
-    Sliding window: each forward pass processes ``context_window`` tokens and retains
-    the last ``stride`` token positions (except the first window, which retains all of
-    its positions). Causal models enforce left-only context natively; for bidirectional
-    models use ``attention_mode='bidirectional_strict'`` with ``stride=1`` to ensure each
-    target position sees only preceding tokens.
+    Generic sliding window: each forward pass processes ``context_window`` tokens and
+    retains the last ``stride`` token positions (except the first window, which retains
+    all of its positions). Causal models enforce left-only context natively; for
+    bidirectional models use ``attention_mode='bidirectional_strict'`` with ``stride=1``
+    to ensure each target position sees only preceding tokens. Podcast-compatible
+    causal LM generation uses ``attention_mode='podcast_per_token'`` and builds one
+    ``context_window + 1`` row per target token.
     """
 
     hf_model_id: str = "openai-community/gpt2-xl"
@@ -436,6 +438,7 @@ class GenerateEmbeddingsConfig:
     # Attention mode
     # auto                  : causal_native for decoders, bidirectional_strict for encoders
     # causal_native         : standard causal LM forward pass
+    # podcast_per_token     : legacy podcast causal LM contexting, logits, and tokenization
     # bidirectional_strict  : bidirectional attention, but stride=1 so each target sees only preceding tokens
     # bidirectional_masked  : bidirectional model with a causal attention mask (out-of-distribution; use with care)
     attention_mode: str = "auto"

@@ -10,15 +10,20 @@ Covers the four logic blocks called out in PR review:
 import numpy as np
 import pandas as pd
 import pytest
+import h5py
 
 torch = pytest.importorskip("torch")
 
 from scripts.utilities.generate_embeddings import (
     _build_bidir_batch,
+    _build_podcast_context_batch,
     _build_transcript_df,
     _causal_window_plan,
+    _run_podcast_per_token,
+    _tokenize_transcript_podcast,
     _load_generation_words,
     _tokenize_transcript,
+    _write_features_hdf5,
 )
 from src.core.config import GenerateEmbeddingsConfig
 from src.core.registry import get_dataset_adapter
@@ -55,6 +60,10 @@ class FakeTokenizer:
         self._id_to_tok = {
             tid: tok for toks in word_to_tokens.values() for tok, tid in toks
         }
+        self._tok_to_id = {
+            tok: tid for toks in word_to_tokens.values() for tok, tid in toks
+        }
+        self.pad_token_id = None
 
     def __call__(
         self,
@@ -74,8 +83,17 @@ class FakeTokenizer:
                 word_ids.append(w_idx)
         return _FakeEncoding(input_ids, word_ids)
 
+    def tokenize(self, text):
+        assert text.startswith(" ")
+        return [tok for tok, _ in self.word_to_tokens[text[1:]]]
+
+    def convert_tokens_to_ids(self, tokens):
+        if isinstance(tokens, str):
+            return self._tok_to_id[tokens]
+        return [self._tok_to_id[t] for t in tokens]
+
     def convert_ids_to_tokens(self, ids):
-        return [self._id_to_tok[i] for i in ids]
+        return [self._id_to_tok[int(i)] for i in ids]
 
 
 class TestLoadGenerationWords:
@@ -140,6 +158,22 @@ class TestTokenizeTranscript:
         tok = FakeTokenizer({"a": [("a", 1)], "b": [("b1", 2), ("b2", 3)]})
         input_ids, word_ids = _tokenize_transcript(["a", "b"], tok)
         assert len(input_ids) == len(word_ids) == 3
+
+
+class TestPodcastTokenizeTranscript:
+    def test_uses_space_prefixed_word_tokenization(self):
+        tok = FakeTokenizer(
+            {
+                "hello": [("Ġhello", 10)],
+                "banana": [("Ġban", 20), ("ana", 21)],
+            }
+        )
+        input_ids, word_ids, hftokens = _tokenize_transcript_podcast(["hello", "banana"], tok)
+
+        assert input_ids.dtype == np.int64
+        assert input_ids.tolist() == [10, 20, 21]
+        assert word_ids == [0, 1, 1]
+        assert hftokens == ["Ġhello", "Ġban", "ana"]
 
 
 # ---------------------------------------------------------------------------
@@ -352,3 +386,112 @@ class TestBuildBidirBatch:
         batch_ids, batch_mask = _build_bidir_batch(input_ids, targets=[], N=4, pad_id=0)
         assert batch_ids.shape == (0, 4)
         assert batch_mask.shape == (0, 4)
+
+
+# ---------------------------------------------------------------------------
+# _build_podcast_context_batch
+# ---------------------------------------------------------------------------
+
+class TestBuildPodcastContextBatch:
+    def test_rows_have_context_len_plus_one_width(self):
+        input_ids = torch.tensor([10, 20, 30], dtype=torch.long)
+        batch_ids = _build_podcast_context_batch(input_ids, targets=[0, 1], context_len=4, pad_id=0)
+        assert batch_ids.shape == (2, 5)
+
+    def test_early_tokens_are_left_padded(self):
+        input_ids = torch.tensor([10, 20, 30], dtype=torch.long)
+        batch_ids = _build_podcast_context_batch(input_ids, targets=[0, 1, 2], context_len=3, pad_id=0)
+        assert batch_ids[0].tolist() == [0, 0, 0, 10]
+        assert batch_ids[1].tolist() == [0, 0, 10, 20]
+        assert batch_ids[2].tolist() == [0, 10, 20, 30]
+
+    def test_target_sees_exact_previous_context_len_plus_self(self):
+        input_ids = torch.tensor([10, 20, 30, 40, 50, 60], dtype=torch.long)
+        batch_ids = _build_podcast_context_batch(input_ids, targets=[4, 5], context_len=3, pad_id=0)
+        assert batch_ids[0].tolist() == [20, 30, 40, 50]
+        assert batch_ids[1].tolist() == [30, 40, 50, 60]
+
+    def test_pad_id_falls_through_from_caller(self):
+        input_ids = torch.tensor([5], dtype=torch.long)
+        batch_ids = _build_podcast_context_batch(input_ids, targets=[0], context_len=2, pad_id=999)
+        assert batch_ids[0].tolist() == [999, 999, 5]
+
+
+class _FakeCausalOutput:
+    def __init__(self, hidden_states, logits):
+        self.hidden_states = hidden_states
+        self.logits = logits
+
+
+class _FakeCausalLM:
+    def __init__(self, vocab_size=8, hidden_dim=2, n_layers=25):
+        self.vocab_size = vocab_size
+        self.hidden_dim = hidden_dim
+        self.n_layers = n_layers
+        self.calls = []
+
+    def __call__(self, input_ids, output_hidden_states=False):
+        assert output_hidden_states is True
+        self.calls.append(input_ids.detach().cpu().clone())
+        B, W = input_ids.shape
+        base = input_ids.float().unsqueeze(-1)
+        hidden_states = tuple(
+            torch.cat([base + L, base + L + 0.25], dim=-1)
+            for L in range(self.n_layers)
+        )
+        logits = torch.zeros(B, W, self.vocab_size, dtype=torch.float32, device=input_ids.device)
+        for row in range(B):
+            target_id = int(input_ids[row, -1].item())
+            logits[row, -2, target_id] = 4.0
+            logits[row, -2, (target_id + 1) % self.vocab_size] = 2.0
+            logits[row, -1, (target_id + 2) % self.vocab_size] = 10.0
+        return _FakeCausalOutput(hidden_states, logits)
+
+
+class TestRunPodcastPerToken:
+    class _Cfg:
+        device = "cpu"
+        context_window = 2
+        batch_size = 2
+
+    class _Tok:
+        pad_token_id = 0
+
+    def test_reads_hidden_from_last_position_and_logits_from_second_to_last(self):
+        model = _FakeCausalLM(vocab_size=10, hidden_dim=2, n_layers=3)
+        input_ids = np.array([1, 2, 3], dtype=np.int64)
+        out = {0: np.zeros((3, 2), dtype=np.float32), 2: np.zeros((3, 2), dtype=np.float32)}
+
+        perf_df = _run_podcast_per_token(model, input_ids, [0, 2], self._Cfg, self._Tok, out)
+
+        assert model.calls[0].tolist() == [[0, 0, 1], [0, 1, 2]]
+        assert model.calls[1].tolist() == [[1, 2, 3]]
+        np.testing.assert_allclose(out[0], [[1.0, 1.25], [2.0, 2.25], [3.0, 3.25]])
+        np.testing.assert_allclose(out[2], [[3.0, 3.25], [4.0, 4.25], [5.0, 5.25]])
+        assert perf_df["top_pred"].tolist() == [1, 2, 3]
+        assert perf_df["rank"].tolist() == [0, 0, 0]
+        assert (perf_df["true_prob"] > 0).all()
+        assert (perf_df["entropy"] > 0).all()
+
+    def test_selected_layers_only_are_required_in_output(self):
+        model = _FakeCausalLM(vocab_size=10, hidden_dim=2, n_layers=25)
+        input_ids = np.array([1, 2], dtype=np.int64)
+        out = {0: np.zeros((2, 2), dtype=np.float32), 24: np.zeros((2, 2), dtype=np.float32)}
+
+        _run_podcast_per_token(model, input_ids, [0, 24], self._Cfg, self._Tok, out)
+
+        assert set(out) == {0, 24}
+        np.testing.assert_allclose(out[0], [[1.0, 1.25], [2.0, 2.25]])
+        np.testing.assert_allclose(out[24], [[25.0, 25.25], [26.0, 26.25]])
+
+    def test_selected_layers_only_are_written_to_hdf5(self, tmp_path):
+        out = {
+            0: np.ones((2, 2), dtype=np.float32),
+            24: np.full((2, 2), 24, dtype=np.float32),
+        }
+        path = tmp_path / "features.hdf5"
+
+        _write_features_hdf5(str(path), [0, 24], out)
+
+        with h5py.File(path, "r") as f:
+            assert sorted(f.keys()) == ["layer-0", "layer-24"]

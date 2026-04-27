@@ -22,16 +22,23 @@ This is a neuroscience encoding analysis pipeline that studies how language-mode
 `make generate-embeddings EMBED_CONFIG=configs/embeddings/generate_<model>.yml` runs
 `scripts/utilities/generate_embeddings.py`, which loads any HuggingFace model via
 `transformers`, loads words through the active dataset adapter (or the legacy
-podcast `transcript_path`), tokenizes with `is_split_into_words=True`, and
-produces per-token contextual embeddings via a
-sliding window of configurable `context_window` and `stride`. Causal models
-(GPT-2, Pythia, GPT-J, Llama) use native causal attention; bidirectional models
-(RoBERTa) use `attention_mode=bidirectional_strict` (stride=1) so each target
-sees only preceding tokens. Podcast outputs go to `data/stimuli/{output_name}/`;
-Brain Treebank outputs go to `data/stimuli/{output_name}/movie-{movie}/`.
-Both layouts contain three files matching the existing GPT-2-XL layout:
+podcast `transcript_path`), and produces per-token contextual embeddings.
+Generic HuggingFace generation tokenizes with `is_split_into_words=True` and
+uses a sliding window of configurable `context_window` and `stride`. Causal
+models (GPT-2, Pythia, GPT-J, Llama) use native causal attention; bidirectional
+models (RoBERTa) use `attention_mode=bidirectional_strict` (stride=1) so each
+target sees only preceding tokens. GPT-2-XL configs default to
+`attention_mode=podcast_per_token`, which matches the legacy podcast generator:
+each word is tokenized as `tokenizer.tokenize(" " + word)`, each target token
+gets its own left-padded context row of `context_window + 1` tokens, causal LM
+hidden states are read from the target position, and next-token metrics
+(`rank`, `true_prob`, `top_pred`, `entropy`) are written to `transcript.tsv` and
+`performance.json`. Podcast outputs go to `data/stimuli/{output_name}/`; Brain
+Treebank outputs go to `data/stimuli/{output_name}/movie-{movie}/`.
+Both layouts contain files matching the existing GPT-2-XL layout:
 `features.hdf5` (per-layer hidden states), `transcript.tsv` (per-token
-word/token metadata), and `metadata.json` (generation parameters). The
+word/token metadata), and `metadata.json` (generation parameters), with
+`performance.json` present for podcast-compatible causal LM runs. The
 `transformer` embedding getter in `src/utils/embeddings.py` loads any of these
 directories by `dataset`, `model_dir`, and `layer`. Offline GPU hosts should
 pre-populate the HF cache (e.g. `huggingface-cli download meta-llama/Meta-Llama-3-8B`)
@@ -83,6 +90,7 @@ Main entry points for the pipeline:
 | `compute_significance.py` | Reads null distribution shards, re-runs encoding on real data, computes per-electrode p-values via max-statistic procedure, applies FDR correction, outputs `all_subject_sig.csv` and `significance_detailed.csv` |
 | `train_encoding_models.py` | Trains ridge regression models on significant electrodes; outputs coefficients, correlations, and plots. When `log_alphas=True`, saves alpha diagnostic plots and `.npz` files. When `refine_alphas=True`, uses a two-pass coarse→refined alpha sweep |
 | `generate_plots.py` | Generates or regenerates correlation plots from existing run results; supports backfilling SVD plots for cross_subject, per_subject, and per_region modes (auto-detected or via `--svd-modes`) |
+| `electrode_region_distribution.py` | Dataset-aware utility for per-subject electrode region distributions. It supports podcast FIF headers via Destrieux atlas lookup and Brain Treebank electrode-label/localization metadata, defaults Brain Treebank summaries to all subjects unless `--movie`/`--subjects` are supplied, and writes detailed/summary CSVs plus stacked region-distribution, 2D/3D location, and nilearn glass-brain projection plots. |
 | `run_svd_analysis.py` | SVD decomposition of encoding weights; evaluates truncation at various k values and selects optimal k |
 | `run_srrr.py` | SRRR analysis; reads SVD decompositions and finds minimal direction subset via stability selection and sufficiency testing; supports cross_subject, per_subject, and per_region modes |
 | `run_partial_svd.py` | Partial SVD analysis; removes windows of SVD directions from embeddings, retrains ridge regression, and measures correlation drop; generates cross-subject, per-subject, and per-region sweep plots |
