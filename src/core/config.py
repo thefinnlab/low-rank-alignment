@@ -452,4 +452,5 @@ class GenerateEmbeddingsConfig:
     hf_token: str | None = None  # for gated models (e.g. Llama-3); prefer HF_TOKEN env var
 
     # Tokenizer
+    tokenizer_name_or_path: str | None = None  # None → use hf_model_id; can point to a local tokenizer dir
     add_prefix_space: bool = True  # required for GPT-2 / RoBERTa BPE with is_split_into_words

@@ -49,6 +49,10 @@ def _auto_output_name(hf_model_id: str) -> str:
     return hf_model_id.split("/")[-1]
 
 
+def _tokenizer_name_or_path(cfg: GenerateEmbeddingsConfig) -> str:
+    return cfg.tokenizer_name_or_path or cfg.hf_model_id
+
+
 def _is_causal(model_type: str) -> bool:
     if model_type in _CAUSAL_MODEL_TYPES:
         return True
@@ -274,7 +278,8 @@ def _run_bidirectional_strict(
 def generate(cfg: GenerateEmbeddingsConfig):
     output_name = cfg.output_name or _auto_output_name(cfg.hf_model_id)
 
-    print(f"Loading tokenizer: {cfg.hf_model_id}")
+    tokenizer_name_or_path = _tokenizer_name_or_path(cfg)
+    print(f"Loading tokenizer: {tokenizer_name_or_path}")
     tok_kwargs = dict(
         cache_dir=cfg.hf_cache_dir,
         local_files_only=cfg.local_files_only,
@@ -282,11 +287,11 @@ def generate(cfg: GenerateEmbeddingsConfig):
     )
     try:
         tokenizer = AutoTokenizer.from_pretrained(
-            cfg.hf_model_id, add_prefix_space=cfg.add_prefix_space, **tok_kwargs
+            tokenizer_name_or_path, add_prefix_space=cfg.add_prefix_space, **tok_kwargs
         )
     except TypeError:
         # Some tokenizers (e.g. SentencePiece/Llama) don't accept add_prefix_space.
-        tokenizer = AutoTokenizer.from_pretrained(cfg.hf_model_id, **tok_kwargs)
+        tokenizer = AutoTokenizer.from_pretrained(tokenizer_name_or_path, **tok_kwargs)
 
     print(f"Loading model: {cfg.hf_model_id} (dtype={cfg.dtype}, device={cfg.device})")
     model = AutoModel.from_pretrained(
