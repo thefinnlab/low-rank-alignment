@@ -1,0 +1,16 @@
+encoding:
+  data_root: data/brain-treebank
+  dataset: brain_treebank
+  per_dataset_config:
+    movie: coraline
+  model: gpt2xl
+  per_model_config:
+    layer: 24
+  offset: 0
+  subjects: null
+  run_name: null
+  batch: false
+output_dir: null
+null_dir: null
+fdr_q: 0.01
+min_permutations: 5000

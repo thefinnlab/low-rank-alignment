@@ -1,0 +1,18 @@
+encoding:
+  data_root: data/brain-treebank
+  dataset: brain_treebank
+  per_dataset_config:
+    movie: coraline
+  model: gpt2xl
+  per_model_config:
+    layer: 24
+  offset: 0
+  subjects: null
+  run_name: null
+  sig_dir: null
+  batch: false
+output_dir: null
+sig_dir: null
+rrr_output_dir: null
+mode: cross_subject
+rank_grid: [1, 2, 5, 7, 10, 20, 40, 60, 80, 100, 200, 400, 800, 1600]
