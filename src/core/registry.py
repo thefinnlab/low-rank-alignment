@@ -352,8 +352,14 @@ class BrainTreebankDatasetAdapter:
             df = df.drop(columns=unnamed)
         if "text" not in df.columns:
             raise ValueError(f"Brain Treebank transcript missing 'text' column: {path}")
+        valid_text = (
+            df["text"].notna()
+            & df["text"].map(lambda value: isinstance(value, str))
+            & df["text"].map(lambda value: isinstance(value, str) and value.strip() != "")
+        )
         keep = (
-            df["start"].notna()
+            valid_text
+            & df["start"].notna()
             & df["end"].notna()
             & pd.to_numeric(df["start"], errors="coerce").notna()
             & pd.to_numeric(df["end"], errors="coerce").notna()

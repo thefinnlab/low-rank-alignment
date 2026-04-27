@@ -85,7 +85,9 @@ class TestDatasetRegistry:
             [
                 {"text": "Hello", "start": 1.0, "end": 1.2, "word_idx": 10},
                 {"text": "skip", "start": None, "end": 1.4, "word_idx": 11},
-                {"text": "world", "start": 2.0, "end": 2.2, "word_idx": 12},
+                {"text": np.nan, "start": 1.5, "end": 1.6, "word_idx": 12},
+                {"text": "   ", "start": 1.7, "end": 1.8, "word_idx": 13},
+                {"text": "world", "start": 2.0, "end": 2.2, "word_idx": 14},
             ],
         )
 
@@ -100,7 +102,7 @@ class TestDatasetRegistry:
 
         assert df["word"].tolist() == ["Hello", "world"]
         assert df["word_idx"].tolist() == [0, 1]
-        assert df["source_word_idx"].tolist() == [10, 12]
+        assert df["source_word_idx"].tolist() == [10, 14]
         assert {"start", "end"} <= set(df.columns)
 
     def test_brain_treebank_rejects_mixed_movie_subjects(self, tmp_path):
