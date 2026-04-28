@@ -98,6 +98,7 @@ def main():
         dataset_context=dataset_context,
         **config.per_model_config,
     )
+    dataset_adapter = get_dataset_adapter(config.dataset)
 
     for sub_id in tqdm(subject_ids, desc="Subjects"):
         print(f"\n{'='*60}")
@@ -116,8 +117,18 @@ def main():
         raw = raws[0]
         print(f"  Loaded raw: {len(raw.ch_names)} electrodes, {raw.info['sfreq']} Hz")
 
+        subject_df_word = df_word
+        if hasattr(dataset_adapter, "load_subject_word_table"):
+            subject_df_word = dataset_adapter.load_subject_word_table(
+                config.data_root,
+                dataset_context,
+                sub_id,
+                df_word,
+            )
+            print(f"  Subject-aligned words: {len(subject_df_word)}")
+
         raw_data, selection, epoch_starts, ch_names, n_lags = precompute_subject(
-            sub_id, raw, df_word
+            sub_id, raw, subject_df_word
         )
         save_precomputed_epochs(
             sub_id,

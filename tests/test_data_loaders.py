@@ -68,6 +68,26 @@ class TestComputeEpochCacheIndices:
         np.testing.assert_array_equal(epoch_starts, np.array([16]))
         assert n_lags == 64
 
+    def test_uses_estimated_sample_indices_when_present(self):
+        raw = self.FakeRaw(sfreq=32.0, n_times=320)
+        df_word = pd.DataFrame(
+            {
+                "word_idx": [10, 11, 12],
+                "start": [99.0, 99.5, 100.0],
+                "est_idx": [2048, 4096, 4100],
+                "est_idx_sfreq": [2048.0, 2048.0, 2048.0],
+                "word": ["first", "second", "duplicate_at_32hz"],
+            }
+        )
+
+        selection, epoch_starts, n_lags = compute_epoch_cache_indices(
+            raw, df_word, tmin=-1.0, tmax=1.0, target_sfreq=32.0
+        )
+
+        np.testing.assert_array_equal(selection, np.array([10, 11]))
+        np.testing.assert_array_equal(epoch_starts, np.array([0, 32]))
+        assert n_lags == 64
+
 
 # ---------------------------------------------------------------------------
 # read_subject_mapping
@@ -334,6 +354,37 @@ class TestDatasetAwareLoaders:
                 "data/",
                 0,
                 np.zeros((2, 3), dtype=np.float32),
+                dataset="brain_treebank",
+                per_dataset_config={"movie": "coraline"},
+                dataset_context=DatasetContext(
+                    dataset="brain_treebank",
+                    stimulus_id="coraline",
+                    stimulus_label="coraline",
+                ),
+            )
+
+    def test_load_data_from_cache_rejects_mismatched_word_selections(self, monkeypatch):
+        def _fake_load_precomputed_epochs(sub_id, data_root, **kwargs):
+            selection = np.array([0, 1]) if sub_id == 1 else np.array([0, 2])
+            return {
+                "raw_data": np.zeros((1, 8), dtype=np.float32),
+                "selection": selection,
+                "epoch_starts": np.array([0, 4]),
+                "n_lags": 4,
+                "ch_names": ["A1"],
+                "stimulus_id": "coraline",
+            }
+
+        import src.utils.data_loaders as dl
+
+        monkeypatch.setattr(dl, "load_precomputed_epochs", _fake_load_precomputed_epochs)
+
+        with pytest.raises(ValueError, match="identical word selections"):
+            load_data_from_cache(
+                [1, 2],
+                "data/",
+                0,
+                np.zeros((3, 3), dtype=np.float32),
                 dataset="brain_treebank",
                 per_dataset_config={"movie": "coraline"},
                 dataset_context=DatasetContext(
