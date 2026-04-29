@@ -111,8 +111,8 @@ def _save_full_model_metrics_once(
     path = os.path.join(fold_dir, "full_model_metrics.npz")
     if os.path.exists(path):
         return
-    corr_arr = correlation_score(Y_test, Y_hat_full)
-    r2_arr = r2_score(Y_test, Y_hat_full)
+    corr_arr = correlation_score(Y_test, Y_hat_full).detach().cpu().numpy()
+    r2_arr = r2_score(Y_test, Y_hat_full).detach().cpu().numpy()
     np.savez(
         path,
         full_corr=float(corr_arr.mean()),
@@ -144,7 +144,9 @@ def _strip_per_target_and_add_sig_nonsig(
             base = pt_key[: -len("_per_target")]
             arr = metrics[pt_key]
             metrics[f"{base}_sig"] = (
-                float(arr[sig_mask_flat].mean()) if sig_mask_flat.any() else float("nan")
+                float(arr[sig_mask_flat].mean())
+                if sig_mask_flat.any()
+                else float("nan")
             )
             metrics[f"{base}_nonsig"] = (
                 float(arr[~sig_mask_flat].mean())
@@ -188,9 +190,7 @@ def _run_common_subspace_fold_k(
     A_k = A_full[:, :k]
 
     # NR: project X into k-dim subspace, train ridge
-    nr_alphas = (
-        np.logspace(-2, 10, 13) if k < 50 else np.logspace(1, 10, 13)
-    )
+    nr_alphas = np.logspace(-2, 10, 13) if k < 50 else np.logspace(1, 10, 13)
     X_proj_train = X_train @ A_k
     X_proj_test = X_test @ A_k
     nr_result = evaluate_input_space(
@@ -204,9 +204,7 @@ def _run_common_subspace_fold_k(
     )
 
     # Complement evaluation
-    comp_alphas = (
-        np.logspace(1, 10, 13) if k < 50 else np.logspace(-2, 10, 13)
-    )
+    comp_alphas = np.logspace(1, 10, 13) if k < 50 else np.logspace(-2, 10, 13)
     complement_result = evaluate_complement(
         A_full,
         k,
@@ -234,7 +232,9 @@ def _run_common_subspace_fold_k(
     metrics = {
         f"{primary_label}_corr": nr_result[f"{primary_label}_corr"],
         f"{primary_label}_r2": nr_result[f"{primary_label}_r2"],
-        f"{primary_label}_corr_per_target": nr_result[f"{primary_label}_corr_per_target"],
+        f"{primary_label}_corr_per_target": nr_result[
+            f"{primary_label}_corr_per_target"
+        ],
         "complement_corr": complement_result["complement_corr"],
         "complement_r2": complement_result["complement_r2"],
         "complement_corr_per_target": complement_result["complement_corr_per_target"],
@@ -242,7 +242,9 @@ def _run_common_subspace_fold_k(
     if arbitrary_result is not None:
         metrics["arbitrary_corr"] = arbitrary_result["arbitrary_corr"]
         metrics["arbitrary_r2"] = arbitrary_result["arbitrary_r2"]
-        metrics["arbitrary_corr_per_target"] = arbitrary_result["arbitrary_corr_per_target"]
+        metrics["arbitrary_corr_per_target"] = arbitrary_result[
+            "arbitrary_corr_per_target"
+        ]
 
     # Save to metrics.npz (includes per-target)
     save_rrr_result(unit_dir, k=k, fold=fold_f, metrics=metrics)
@@ -297,7 +299,9 @@ def _compute_and_save_joint_metrics(
 
         for fold_f in range(n_folds):
             all_primary.append(
-                np.load(os.path.join(oof_spill_dir, f"{k}_{fold_f}_{primary_label}.npy"))
+                np.load(
+                    os.path.join(oof_spill_dir, f"{k}_{fold_f}_{primary_label}.npy")
+                )
             )
             all_complement.append(
                 np.load(os.path.join(oof_spill_dir, f"{k}_{fold_f}_complement.npy"))
@@ -334,7 +338,9 @@ def _compute_and_save_joint_metrics(
             if sig_mask_flat is not None:
                 arr = jm_comp["corr_per_target"]
                 row[f"{comp_joint_key}_corr_sig"] = (
-                    float(arr[sig_mask_flat].mean()) if sig_mask_flat.any() else float("nan")
+                    float(arr[sig_mask_flat].mean())
+                    if sig_mask_flat.any()
+                    else float("nan")
                 )
                 row[f"{comp_joint_key}_corr_nonsig"] = (
                     float(arr[~sig_mask_flat].mean())
@@ -347,7 +353,9 @@ def _compute_and_save_joint_metrics(
                 if sig_mask_flat is not None:
                     arr = jm_arb["corr_per_target"]
                     row[f"{arb_joint_key}_corr_sig"] = (
-                        float(arr[sig_mask_flat].mean()) if sig_mask_flat.any() else float("nan")
+                        float(arr[sig_mask_flat].mean())
+                        if sig_mask_flat.any()
+                        else float("nan")
                     )
                     row[f"{arb_joint_key}_corr_nonsig"] = (
                         float(arr[~sig_mask_flat].mean())
@@ -357,7 +365,9 @@ def _compute_and_save_joint_metrics(
 
         # Append per-target arrays to each fold's metrics.npz
         for fold_f in range(n_folds):
-            metrics_path = os.path.join(unit_dir, f"k{k}", f"fold_{fold_f}", "metrics.npz")
+            metrics_path = os.path.join(
+                unit_dir, f"k{k}", f"fold_{fold_f}", "metrics.npz"
+            )
             if not os.path.exists(metrics_path):
                 continue
             existing = dict(np.load(metrics_path, allow_pickle=True))
@@ -515,7 +525,9 @@ def _run_rrr_for_unit(
         save_rrr_factors(rrr_unit_dir, fold=fold_f, A=A_full, B=B_full)
 
         print(f"  Running {len(config.rank_grid)} rank(s): {config.rank_grid}")
-        for k in tqdm(config.rank_grid, desc=f"  fold {fold_f}", leave=True, unit="rank"):
+        for k in tqdm(
+            config.rank_grid, desc=f"  fold {fold_f}", leave=True, unit="rank"
+        ):
             A_k = A_full[:, :k]
             B_k = B_full[:, :k]
 
@@ -527,8 +539,8 @@ def _run_rrr_for_unit(
 
             # Raw RRR predictions (project Y through B)
             Y_hat_rrr = Y_hat_full @ B_k @ B_k.T
-            rrr_corr_arr = correlation_score(Y_test, Y_hat_rrr)
-            rrr_r2_arr = r2_score(Y_test, Y_hat_rrr)
+            rrr_corr_arr = correlation_score(Y_test, Y_hat_rrr).cpu().detach().numpy()
+            rrr_r2_arr = r2_score(Y_test, Y_hat_rrr).cpu().detach().numpy()
 
             # Shared NR + complement + arbitrary evaluation
             common = _run_common_subspace_fold_k(
@@ -934,7 +946,9 @@ def _run_per_region_rrr(
             sub_id: [e for e in elecs if e in set(sig_electrodes.get(sub_id, []))]
             for sub_id, elecs in sub_elec_map.items()
         }
-        per_subject_region_elecs = {s: e for s, e in per_subject_region_elecs.items() if e}
+        per_subject_region_elecs = {
+            s: e for s, e in per_subject_region_elecs.items() if e
+        }
 
         if not per_subject_region_elecs:
             print("  No significant electrodes in region; skipping.")
@@ -1029,7 +1043,9 @@ def _run_loso_transfer_for_unit(
         Y_train = baseline["Y_train"]
         Y_test = baseline["Y_test"]
 
-        for k in tqdm(config.rank_grid, desc=f"  transfer fold {fold_f}", leave=True, unit="rank"):
+        for k in tqdm(
+            config.rank_grid, desc=f"  transfer fold {fold_f}", leave=True, unit="rank"
+        ):
             A_k = A_full[:, :k]
             X_train_proj = X_train @ A_k
             X_test_proj = X_test @ A_k
@@ -1169,7 +1185,9 @@ def _run_leave_one_subject_out_rrr(
         if results_train is None:
             print("  No training data; skipping this held-out subject.")
             continue
-        X_raw, X_arbitrary, per_fold_baselines_train, test_idxs, sig_mask_train = results_train
+        X_raw, X_arbitrary, per_fold_baselines_train, test_idxs, sig_mask_train = (
+            results_train
+        )
 
         train_dir = os.path.join(loso_sub_dir, "train_subjects")
         print(f"  Running train-subjects RRR → {train_dir}")
@@ -1186,7 +1204,9 @@ def _run_leave_one_subject_out_rrr(
         # --- Step B: build held-out subject data ---
         held_sig_elecs = sig_electrodes.get(held_out_sub, [])
         if not held_sig_elecs:
-            print(f"  Subject {held_out_sub} has no significant electrodes; skipping transfer/baseline.")
+            print(
+                f"  Subject {held_out_sub} has no significant electrodes; skipping transfer/baseline."
+            )
             continue
 
         print(f"  Building held-out subject data...")
@@ -1204,7 +1224,9 @@ def _run_leave_one_subject_out_rrr(
         if results_held is None:
             print(f"  No held-out subject data; skipping transfer/baseline.")
             continue
-        X_raw_held, X_arbitrary_held, per_fold_baselines_held, _, sig_mask_held = results_held
+        X_raw_held, X_arbitrary_held, per_fold_baselines_held, _, sig_mask_held = (
+            results_held
+        )
 
         # --- Step C: transfer A from train subjects to held-out subject ---
         transfer_dir = os.path.join(loso_sub_dir, "transfer")

@@ -1,10 +1,12 @@
 # See generate_roberta_base.yml for notes on bidirectional_strict mode.
-hf_model_id: FacebookAI/roberta-large
+# hf_model_id: FacebookAI/roberta-large
+hf_model_id: model_cache/models/roberta-large/
+tokenizer_name_or_path: model_cache/models/roberta-large/
 output_name: roberta-large
 data_root: data/
 context_window: 512
 stride: 1
-layers: all
+layers: [0, 12, 24]
 pooling: mean
 attention_mode: bidirectional_strict
 dtype: float32

@@ -8,5 +8,5 @@ encoding:
   batch: false
 output_dir: null
 rrr_output_dir: null
-mode: cross_subject
-rank_grid: [1, 2, 5, 7, 10, 20, 40, 60, 80, 100, 200, 400, 800, 1600]
+mode: leave_one_subject_out
+rank_grid: [1, 2, 5, 10, 20, 40, 100] # [1, 2, 5, 7, 10, 20, 40, 60, 80, 100, 200, 400, 800, 1600]

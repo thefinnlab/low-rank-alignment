@@ -1,14 +1,16 @@
-hf_model_id: EleutherAI/gpt-j-6b
+# hf_model_id: EleutherAI/gpt-j-6b
+hf_model_id: model_cache/models/gpt-j
+tokenizer_name_or_path: model_cache/gpt2-xl
 output_name: gpt-j-6b
 data_root: data/
 context_window: 1024
 stride: 512
-layers: all
+layers: [1, 14, 28]
 pooling: mean
 attention_mode: auto
 dtype: float16
 output_dtype: float16
 device: cuda
-batch_size: 1
+batch_size: 32
 local_files_only: true
 add_prefix_space: true
