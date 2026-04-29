@@ -170,6 +170,28 @@ class TestRunRRRForUnit:
         assert "nr_complement_joint_corr" in df.columns
         assert "rrr_corr" in df.columns
 
+    def test_optional_joint_ridge_columns_written(self, tmp_path, small_data):
+        from run_rrr import _run_rrr_for_unit
+
+        X, Y = small_data
+        n = X.shape[0]
+        test_idxs = [np.arange(0, n // 2), np.arange(n // 2, n)]
+        config = self._make_config(rank_grid=[2])
+        config.compute_joint_ridge = True
+        per_fold_baselines = _make_baselines(X, Y, test_idxs)
+
+        _run_rrr_for_unit(str(tmp_path), X, test_idxs, per_fold_baselines, config)
+
+        grid_df = pd.read_csv(os.path.join(str(tmp_path), "grid_results.csv"))
+        summary_df = pd.read_csv(os.path.join(str(tmp_path), "summary.csv"))
+        assert "nr_complement_joint_ridge_corr" in grid_df.columns
+        assert "nr_complement_joint_ridge_r2" in grid_df.columns
+        assert "nr_complement_joint_ridge_corr" in summary_df.columns
+
+        metrics = np.load(os.path.join(str(tmp_path), "k2", "fold_0", "metrics.npz"))
+        assert "nr_complement_joint_corr_per_target" in metrics.files
+        assert "nr_complement_joint_ridge_corr_per_target" not in metrics.files
+
     def test_nr_r2_increases_with_rank(self, tmp_path, rng):
         """For low-rank ground truth data, NR R² should increase monotonically with rank."""
         from run_rrr import _run_rrr_for_unit

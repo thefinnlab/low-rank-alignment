@@ -43,6 +43,7 @@ Metrics (per k, per fold in grid_results.csv):
     NR ridge   : nr_corr, nr_r2
     Complement : complement_corr, complement_r2
     Joint (NR + complement)  : nr_complement_joint_corr, nr_complement_joint_r2
+    Ridge joint check        : nr_complement_joint_ridge_corr, nr_complement_joint_ridge_r2  [if enabled]
     Joint (NR + arbitrary)   : nr_arbitrary_joint_corr, nr_arbitrary_joint_r2  [if arbitrary]
     Effective rank: effective_rank
 
@@ -66,6 +67,7 @@ from src.utils import (
     load_embeddings,
     build_XY_from_subjects,
 )
+from src.utils.tensor_utils import to_numpy
 from src.utils.data_loaders import load_sig_electrodes
 from src.utils.atlas import build_electrode_region_map
 from src.core.config import RRRConfig, ScriptMode, get_results_dir
@@ -96,6 +98,7 @@ from src.utils.subspace_utils import (
     evaluate_complement,
     evaluate_arbitrary,
     compute_stacked_joint_metrics,
+    compute_stacked_joint_ridge_means,
 )
 from himalaya.scoring import correlation_score, r2_score
 
@@ -117,8 +120,8 @@ def _save_full_model_metrics_once(
     path = os.path.join(fold_dir, "full_model_metrics.npz")
     if os.path.exists(path):
         return
-    corr_arr = correlation_score(Y_test, Y_hat_full).detach().cpu().numpy()
-    r2_arr = r2_score(Y_test, Y_hat_full).detach().cpu().numpy()
+    corr_arr = to_numpy(correlation_score(Y_test, Y_hat_full))
+    r2_arr = to_numpy(r2_score(Y_test, Y_hat_full))
     np.savez(
         path,
         full_corr=float(corr_arr.mean()),
@@ -385,6 +388,8 @@ def _compute_and_save_joint_metrics(
     all_rows: list,
     primary_label: str,
     sig_mask_flat: "np.ndarray | None",
+    compute_joint_ridge: bool = False,
+    device: str = "cpu",
 ) -> None:
     """Post-loop: compute stacked joint metrics, update rows and metrics.npz files.
 
@@ -393,7 +398,9 @@ def _compute_and_save_joint_metrics(
         - {primary_label} + arbitrary  (if arbitrary OOF files exist)
 
     Updates all_rows in-place with joint scalar metrics.
-    Appends joint *_per_target arrays to each k/fold metrics.npz.
+    Appends OLS joint *_per_target arrays to each k/fold metrics.npz.
+    When compute_joint_ridge=True, also stores ridge-stacked scalar means in
+    grid_results.csv/summary.csv only.
     Cleans up the OOF spill directory when done.
     """
     import shutil
@@ -427,14 +434,34 @@ def _compute_and_save_joint_metrics(
             all_primary, all_complement, all_y_test, n_splits=n_folds
         )
         comp_joint_key = f"{primary_label}_complement_joint"
+        jm_comp_ridge = None
+        comp_ridge_key = f"{primary_label}_complement_joint_ridge"
+        if compute_joint_ridge:
+            jm_comp_ridge = compute_stacked_joint_ridge_means(
+                all_primary,
+                all_complement,
+                all_y_test,
+                n_splits=n_folds,
+                device=device,
+            )
 
         # Joint: primary + arbitrary
         jm_arb = None
         arb_joint_key = f"{primary_label}_arbitrary_joint"
+        jm_arb_ridge = None
+        arb_ridge_key = f"{primary_label}_arbitrary_joint_ridge"
         if has_arbitrary and all_arbitrary:
             jm_arb = compute_stacked_joint_metrics(
                 all_primary, all_arbitrary, all_y_test, n_splits=n_folds
             )
+            if compute_joint_ridge:
+                jm_arb_ridge = compute_stacked_joint_ridge_means(
+                    all_primary,
+                    all_arbitrary,
+                    all_y_test,
+                    n_splits=n_folds,
+                    device=device,
+                )
 
         # Update in-memory rows
         for row in all_rows:
@@ -454,6 +481,9 @@ def _compute_and_save_joint_metrics(
                     if (~sig_mask_flat).any()
                     else float("nan")
                 )
+            if jm_comp_ridge is not None:
+                row[f"{comp_ridge_key}_corr"] = float(jm_comp_ridge["corr"])
+                row[f"{comp_ridge_key}_r2"] = float(jm_comp_ridge["r2"])
             if jm_arb is not None:
                 row[f"{arb_joint_key}_corr"] = float(jm_arb["corr_per_target"].mean())
                 row[f"{arb_joint_key}_r2"] = float(jm_arb["r2_per_target"].mean())
@@ -469,6 +499,9 @@ def _compute_and_save_joint_metrics(
                         if (~sig_mask_flat).any()
                         else float("nan")
                     )
+            if jm_arb_ridge is not None:
+                row[f"{arb_ridge_key}_corr"] = float(jm_arb_ridge["corr"])
+                row[f"{arb_ridge_key}_r2"] = float(jm_arb_ridge["r2"])
 
         # Append per-target arrays to each fold's metrics.npz
         for fold_f in range(n_folds):
@@ -505,8 +538,12 @@ def _build_results(
         "complement_r2",
         f"{primary_label}_complement_joint_corr",
         f"{primary_label}_complement_joint_r2",
+        f"{primary_label}_complement_joint_ridge_corr",
+        f"{primary_label}_complement_joint_ridge_r2",
         f"{primary_label}_arbitrary_joint_corr",
         f"{primary_label}_arbitrary_joint_r2",
+        f"{primary_label}_arbitrary_joint_ridge_corr",
+        f"{primary_label}_arbitrary_joint_ridge_r2",
         "arbitrary_corr",
         "arbitrary_r2",
         "effective_rank",
@@ -631,6 +668,7 @@ def _run_rrr_for_unit(
                 alphas=alphas,
                 device=device,
                 refresh=config.refresh,
+                compute_joint_ridge=config.compute_joint_ridge,
             )
         return df
 
@@ -654,8 +692,8 @@ def _run_rrr_for_unit(
 
         # Save full model metrics once per fold (not per-k)
         _save_full_model_metrics_once(rrr_unit_dir, fold_f, Y_test, Y_hat_full)
-        full_corr = float(correlation_score(Y_test, Y_hat_full).mean())
-        full_r2 = float(r2_score(Y_test, Y_hat_full).mean())
+        full_corr = float(to_numpy(correlation_score(Y_test, Y_hat_full)).mean())
+        full_r2 = float(to_numpy(r2_score(Y_test, Y_hat_full)).mean())
 
         # Fit RRR once at max rank; truncate to each k below
         max_k = max(config.rank_grid)
@@ -684,8 +722,8 @@ def _run_rrr_for_unit(
 
             # Raw RRR predictions (project Y through B)
             Y_hat_rrr = Y_hat_full @ B_k @ B_k.T
-            rrr_corr_arr = correlation_score(Y_test, Y_hat_rrr).cpu().detach().numpy()
-            rrr_r2_arr = r2_score(Y_test, Y_hat_rrr).cpu().detach().numpy()
+            rrr_corr_arr = to_numpy(correlation_score(Y_test, Y_hat_rrr))
+            rrr_r2_arr = to_numpy(r2_score(Y_test, Y_hat_rrr))
 
             # Shared NR + complement + arbitrary evaluation
             common = _run_common_subspace_fold_k(
@@ -744,8 +782,9 @@ def _run_rrr_for_unit(
 
         print(f"  Fold {fold_f} done in {time.time() - fold_start:.1f}s")
 
-    # Compute stacked OLS joint correlations (requires held-out OOF predictions)
-    print("\nComputing stacked OLS joint correlations...")
+    # Compute stacked joint correlations (requires held-out OOF predictions)
+    joint_label = "OLS + ridge" if config.compute_joint_ridge else "OLS"
+    print(f"\nComputing stacked {joint_label} joint correlations...")
     _compute_and_save_joint_metrics(
         oof_spill_dir,
         ranks_to_run,
@@ -754,6 +793,8 @@ def _run_rrr_for_unit(
         all_rows,
         primary_label="nr",
         sig_mask_flat=sig_mask_flat,
+        compute_joint_ridge=config.compute_joint_ridge,
+        device=device,
     )
 
     df = _merge_grid_rows(existing_grid, all_rows, completed_ranks, config.rank_grid)
@@ -775,6 +816,7 @@ def _run_rrr_for_unit(
             alphas=alphas,
             device=device,
             refresh=config.refresh,
+            compute_joint_ridge=config.compute_joint_ridge,
         )
 
     return df
@@ -791,6 +833,7 @@ def _run_pca_for_unit(
     alphas: "np.ndarray | None" = None,
     device: str = "cpu",
     refresh: bool = False,
+    compute_joint_ridge: bool = False,
 ) -> pd.DataFrame:
     """PCA subspace analysis for one unit — structurally parallel to _run_rrr_for_unit.
 
@@ -897,8 +940,9 @@ def _run_pca_for_unit(
 
         print(f"  Fold {fold_f} done in {time.time() - fold_start:.1f}s")
 
-    # Compute stacked OLS joint correlations
-    print("\nComputing stacked OLS joint correlations...")
+    # Compute stacked joint correlations
+    joint_label = "OLS + ridge" if compute_joint_ridge else "OLS"
+    print(f"\nComputing stacked {joint_label} joint correlations...")
     _compute_and_save_joint_metrics(
         oof_spill_dir,
         ranks_to_run,
@@ -907,6 +951,8 @@ def _run_pca_for_unit(
         all_rows,
         primary_label="pca",
         sig_mask_flat=sig_mask_flat,
+        compute_joint_ridge=compute_joint_ridge,
+        device=device,
     )
 
     df = _merge_grid_rows(existing_grid, all_rows, completed_ranks, rank_grid)
@@ -1318,7 +1364,8 @@ def _run_loso_transfer_for_unit(
 
         print(f"  Transfer fold {fold_f} done in {time.time() - fold_start:.1f}s")
 
-    print("\nComputing stacked OLS joint correlations...")
+    joint_label = "OLS + ridge" if config.compute_joint_ridge else "OLS"
+    print(f"\nComputing stacked {joint_label} joint correlations...")
     _compute_and_save_joint_metrics(
         oof_spill_dir,
         ranks_to_run,
@@ -1327,6 +1374,8 @@ def _run_loso_transfer_for_unit(
         all_rows,
         primary_label="transfer",
         sig_mask_flat=sig_mask_flat,
+        compute_joint_ridge=config.compute_joint_ridge,
+        device=device,
     )
 
     df = _merge_grid_rows(existing_grid, all_rows, completed_ranks, config.rank_grid)

@@ -6,7 +6,7 @@ encoding:
   run_name: null
   batch: false
   per_model_config:
-    dim: 50
+    dim: 300
 output_dir: null
 rrr_output_dir: null
 mode: cross_subject

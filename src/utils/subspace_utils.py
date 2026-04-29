@@ -10,6 +10,7 @@ import torch
 
 from src.utils.analysis import partial_out_subspace
 from src.utils.sae import solve_regression
+from src.utils.tensor_utils import to_numpy
 from himalaya.scoring import r2_score
 from himalaya.scoring import correlation_score
 
@@ -51,10 +52,10 @@ def evaluate_input_space(
         alphas=alphas,
     )
     X_test_t = torch.as_tensor(X_test, dtype=torch.float32, device=device)
-    Y_hat = (X_test_t @ W + b).cpu().numpy()
+    Y_hat = to_numpy(X_test_t @ W + b)
 
-    corr_arr = correlation_score(Y_test, Y_hat)
-    r2_arr = r2_score(Y_test, Y_hat)
+    corr_arr = to_numpy(correlation_score(Y_test, Y_hat))
+    r2_arr = to_numpy(r2_score(Y_test, Y_hat))
 
     prefix = f"{subspace_name}_" if subspace_name else ""
     return {
@@ -171,7 +172,6 @@ def compute_stacked_joint_metrics(
             r2_per_target   – (n_targets,) mean per-target joint R²
     """
     from sklearn.model_selection import KFold
-    from src.utils.tensor_utils import to_numpy
 
     Y_hat_A = np.concatenate(all_Y_hat_A, axis=0)
     Y_hat_B = np.concatenate(all_Y_hat_B, axis=0)
@@ -224,4 +224,176 @@ def compute_stacked_joint_metrics(
     return {
         "corr_per_target": np.mean(fold_corrs, axis=0),
         "r2_per_target": np.mean(fold_r2s, axis=0),
+    }
+
+
+def _targetwise_standardize_pair(
+    A: np.ndarray, B: np.ndarray
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Standardize target-specific A/B prediction pairs.
+
+    Each target has its own two stacking features: ``A[:, t]`` and ``B[:, t]``.
+    This mirrors ``StandardScaler`` for those per-target 2-feature designs while
+    keeping the computation batched across targets.
+    """
+    means = np.stack([A.mean(axis=0), B.mean(axis=0)], axis=0)
+    scales = np.stack([A.std(axis=0), B.std(axis=0)], axis=0)
+    scales[scales == 0] = 1.0
+    return (A - means[0]) / scales[0], (B - means[1]) / scales[1], means, scales
+
+
+def _fit_targetwise_ridge_coefficients(
+    A_train: np.ndarray,
+    B_train: np.ndarray,
+    Y_train: np.ndarray,
+    alphas: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Fit target-specific 2-feature ridge stackers in one batched solve."""
+    ZA, ZB, means, scales = _targetwise_standardize_pair(A_train, B_train)
+    Y_mean = Y_train.mean(axis=0)
+    Y_centered = Y_train - Y_mean
+
+    n_targets = Y_train.shape[1]
+    n_alphas = len(alphas)
+
+    AA = np.einsum("it,it->t", ZA, ZA)
+    AB = np.einsum("it,it->t", ZA, ZB)
+    BB = np.einsum("it,it->t", ZB, ZB)
+    AY = np.einsum("it,it->t", ZA, Y_centered)
+    BY = np.einsum("it,it->t", ZB, Y_centered)
+
+    XtX = np.empty((n_alphas, n_targets, 2, 2), dtype=np.float64)
+    XtX[:, :, 0, 0] = AA[np.newaxis, :] + alphas[:, np.newaxis]
+    XtX[:, :, 0, 1] = XtX[:, :, 1, 0] = AB[np.newaxis, :]
+    XtX[:, :, 1, 1] = BB[np.newaxis, :] + alphas[:, np.newaxis]
+    XtY = np.stack([AY, BY], axis=-1)[np.newaxis, :, :, np.newaxis]
+    beta = np.linalg.solve(XtX, XtY).squeeze(-1)  # (n_alphas, n_targets, 2)
+    return beta, means, scales, Y_mean
+
+
+def _predict_targetwise_ridge_stack(
+    A: np.ndarray,
+    B: np.ndarray,
+    beta: np.ndarray,
+    means: np.ndarray,
+    scales: np.ndarray,
+    Y_mean: np.ndarray,
+    alpha_idx: int | np.ndarray,
+) -> np.ndarray:
+    """Predict from batched target-wise ridge stacker coefficients."""
+    ZA_test = (A - means[0]) / scales[0]
+    ZB_test = (B - means[1]) / scales[1]
+    if np.isscalar(alpha_idx):
+        beta_alpha = beta[int(alpha_idx)]
+    else:
+        target_idx = np.arange(A.shape[1])
+        beta_alpha = beta[alpha_idx, target_idx]
+    return ZA_test * beta_alpha[:, 0] + ZB_test * beta_alpha[:, 1] + Y_mean
+
+
+def _select_targetwise_ridge_alphas(
+    A_train: np.ndarray,
+    B_train: np.ndarray,
+    Y_train: np.ndarray,
+    alphas: np.ndarray,
+) -> np.ndarray:
+    """Select per-target ridge alphas with the same fold structure as RidgeCV."""
+    from sklearn.model_selection import KFold
+
+    n_train = Y_train.shape[0]
+    inner_splits = min(5, n_train)
+    if inner_splits < 2:
+        return np.zeros(Y_train.shape[1], dtype=int)
+
+    fold_mse = []
+    for inner_train_idx, inner_val_idx in KFold(
+        n_splits=inner_splits, shuffle=False
+    ).split(Y_train):
+        beta, means, scales, Y_mean = _fit_targetwise_ridge_coefficients(
+            A_train[inner_train_idx],
+            B_train[inner_train_idx],
+            Y_train[inner_train_idx],
+            alphas,
+        )
+        alpha_mse = np.empty((len(alphas), Y_train.shape[1]), dtype=np.float64)
+        for alpha_idx in range(len(alphas)):
+            Y_val_pred = _predict_targetwise_ridge_stack(
+                A_train[inner_val_idx],
+                B_train[inner_val_idx],
+                beta,
+                means,
+                scales,
+                Y_mean,
+                alpha_idx,
+            )
+            err = Y_val_pred - Y_train[inner_val_idx]
+            alpha_mse[alpha_idx] = np.mean(err**2, axis=0)
+        fold_mse.append(alpha_mse)
+
+    return np.argmin(np.mean(fold_mse, axis=0), axis=0)
+
+
+def compute_stacked_joint_ridge_means(
+    all_Y_hat_A: list,
+    all_Y_hat_B: list,
+    all_Y_test: list,
+    n_splits: int = 5,
+    alphas: np.ndarray | None = None,
+    device: str = "cpu",
+) -> dict:
+    """Compute scalar ridge-stacked joint metrics via second-level CV.
+
+    This mirrors ``compute_stacked_joint_metrics`` but fits a ridge stacker on
+    the two prediction streams instead of OLS. Each target still gets its own
+    A/B stacking weights and alpha, but the ridge solves and alpha search are
+    batched across targets instead of fitting one estimator per target.
+    Only mean correlation/R² are returned because this is intended as an
+    optional robustness check.
+    """
+    from sklearn.model_selection import KFold
+    from src.utils.constants import RIDGE_ALPHAS
+
+    Y_hat_A = np.concatenate(all_Y_hat_A, axis=0)
+    Y_hat_B = np.concatenate(all_Y_hat_B, axis=0)
+    Y = np.concatenate(all_Y_test, axis=0)
+
+    if n_splits < 2:
+        return {"corr": 0.0, "r2": 0.0}
+
+    if alphas is None:
+        alphas = RIDGE_ALPHAS
+    alphas = np.asarray(alphas, dtype=np.float64)
+
+    kf = KFold(n_splits=n_splits, shuffle=False)
+    fold_corrs = []
+    fold_r2s = []
+
+    for train_idx, test_idx in kf.split(Y):
+        A_tr = Y_hat_A[train_idx]
+        B_tr = Y_hat_B[train_idx]
+        Y_tr = Y[train_idx]
+
+        best_alpha_idx = _select_targetwise_ridge_alphas(A_tr, B_tr, Y_tr, alphas)
+        beta, means, scales, Y_mean = _fit_targetwise_ridge_coefficients(
+            A_tr,
+            B_tr,
+            Y_tr,
+            alphas,
+        )
+        Y_pred = _predict_targetwise_ridge_stack(
+            Y_hat_A[test_idx],
+            Y_hat_B[test_idx],
+            beta,
+            means,
+            scales,
+            Y_mean,
+            best_alpha_idx,
+        )
+
+        fold_corrs.append(to_numpy(correlation_score(Y[test_idx], Y_pred)))
+        fold_r2s.append(to_numpy(r2_score(Y[test_idx], Y_pred)))
+
+    return {
+        "corr": float(np.mean(fold_corrs)),
+        "r2": float(np.mean(fold_r2s)),
     }

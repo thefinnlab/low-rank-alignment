@@ -357,9 +357,13 @@ def train_sae_end_to_end(
             model.eval()
             with torch.no_grad():
                 preds_te, acts_te = model(X_te)
-                test_r2 = float(r2_score(to_numpy(Y_te), to_numpy(preds_te)).mean())
+                test_r2 = float(
+                    to_numpy(r2_score(to_numpy(Y_te), to_numpy(preds_te))).mean()
+                )
                 test_corr = float(
-                    correlation_score(to_numpy(Y_te), to_numpy(preds_te)).mean()
+                    to_numpy(
+                        correlation_score(to_numpy(Y_te), to_numpy(preds_te))
+                    ).mean()
                 )
                 step_sae_metrics = compute_sae_metrics(acts_te)
                 l0 = step_sae_metrics["l0_sparsity"]
@@ -411,8 +415,10 @@ def train_sae_end_to_end(
         preds_tr, acts_tr = model(X_tr)
 
     sae_metrics = compute_sae_metrics(acts_te)
-    test_r2 = float(r2_score(to_numpy(Y_te), to_numpy(preds_te)).mean())
-    test_corr = float(correlation_score(to_numpy(Y_te), to_numpy(preds_te)).mean())
+    test_r2 = float(to_numpy(r2_score(to_numpy(Y_te), to_numpy(preds_te))).mean())
+    test_corr = float(
+        to_numpy(correlation_score(to_numpy(Y_te), to_numpy(preds_te))).mean()
+    )
 
     metrics = {
         "r2": test_r2,
@@ -623,9 +629,13 @@ def train_sae_alternating(
             with torch.no_grad():
                 H_test = encoder(X_te)
                 preds_te = H_test @ reg_W + reg_b
-                test_r2 = float(r2_score(to_numpy(Y_te), to_numpy(preds_te)).mean())
+                test_r2 = float(
+                    to_numpy(r2_score(to_numpy(Y_te), to_numpy(preds_te))).mean()
+                )
                 test_corr = float(
-                    correlation_score(to_numpy(Y_te), to_numpy(preds_te)).mean()
+                    to_numpy(
+                        correlation_score(to_numpy(Y_te), to_numpy(preds_te))
+                    ).mean()
                 )
                 step_sae_metrics = compute_sae_metrics(H_test)
                 l0 = step_sae_metrics["l0_sparsity"]
@@ -677,8 +687,10 @@ def train_sae_alternating(
         preds_tr = H_train @ reg_W + reg_b
 
     sae_metrics = compute_sae_metrics(H_test)
-    test_r2 = float(r2_score(to_numpy(Y_te), to_numpy(preds_te)).mean())
-    test_corr = float(correlation_score(to_numpy(Y_te), to_numpy(preds_te)).mean())
+    test_r2 = float(to_numpy(r2_score(to_numpy(Y_te), to_numpy(preds_te))).mean())
+    test_corr = float(
+        to_numpy(correlation_score(to_numpy(Y_te), to_numpy(preds_te))).mean()
+    )
 
     metrics = {
         "r2": test_r2,

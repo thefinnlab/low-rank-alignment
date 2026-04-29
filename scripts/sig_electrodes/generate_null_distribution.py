@@ -52,6 +52,7 @@ from src.utils.significance import (
     phase_randomize_data,
     compute_observed_max_per_electrode,
 )
+from src.utils.tensor_utils import to_numpy
 
 from himalaya.backend import get_backend
 from himalaya.ridge import RidgeCV
@@ -183,18 +184,18 @@ def _run_batched_permutations(
 
     # 6. Scoring (GPU Vectorized)
     # corrs shape: (batch * n_elec * n_lags)
-    corrs = correlation_score(Y_test, Y_pred)
+    corrs = to_numpy(correlation_score(Y_test, Y_pred))
 
     # 7. Max-across-lags and Max-across-electrodes
     # Reshape back to (batch, n_elec, n_lags)
-    corrs_reshaped = corrs.view(batch_size, -1, n_lags)
+    corrs_reshaped = corrs.reshape(batch_size, -1, n_lags)
 
     # Max over lags (dim 2), then Max over electrodes (dim 1)
-    null_maxes = corrs_reshaped.max(dim=2)[0].max(dim=1)[0]
+    null_maxes = corrs_reshaped.max(axis=2).max(axis=1)
 
     print_gpu_utilization()
 
-    return null_maxes.cpu().numpy()
+    return null_maxes
 
 
 def run_config(config: NullDistConfig):

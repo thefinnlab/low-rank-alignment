@@ -6,6 +6,8 @@ import torch
 from statsmodels.stats.multitest import multipletests
 from tqdm import tqdm
 
+from src.utils.tensor_utils import to_numpy
+
 
 def batch_corrcoef(x, y):
     """
@@ -75,8 +77,8 @@ def significant_lags_all_electrodes_gpu(
         null_ge_count += null_corr >= obs_corrs
 
     n_permutations = len(valid_shifts)
-    p_values = (null_ge_count / n_permutations).cpu().numpy()
-    obs_corrs_np = obs_corrs.cpu().numpy()
+    p_values = to_numpy(null_ge_count / n_permutations)
+    obs_corrs_np = to_numpy(obs_corrs)
     flat_p = p_values.ravel()
     reject_flat, q_flat, _, _ = multipletests(flat_p, alpha=fdr_q, method="fdr_bh")
     sig = reject_flat.reshape(n_electrodes, n_lags)

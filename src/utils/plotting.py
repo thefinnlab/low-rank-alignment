@@ -362,11 +362,15 @@ def plot_rrr_rank_results(
         "arbitrary": "#78716c",  # gray
         "comp_joint": "#10b981", # green — NR+complement joint
         "arb_joint": "#f59e0b",  # amber — NR+arbitrary joint
+        "comp_joint_ridge": "#047857", # dark green — ridge-stacked joint
+        "arb_joint_ridge": "#b45309",  # dark amber — ridge-stacked joint
     }
 
     primary_color = _colors.get(primary_label, "#3b82f6")
     comp_joint_col = f"{primary_label}_complement_joint_corr"
+    comp_joint_ridge_col = f"{primary_label}_complement_joint_ridge_corr"
     arb_joint_col = f"{primary_label}_arbitrary_joint_corr"
+    arb_joint_ridge_col = f"{primary_label}_arbitrary_joint_ridge_corr"
 
     # ---- Local helpers ----
 
@@ -421,8 +425,10 @@ def plot_rrr_rank_results(
     _mean_line(ax_corr, primary_corr_col, summary_df, primary_color, primary_label)
     _mean_line(ax_corr, "complement_corr", summary_df, _colors["complement"], "complement", ls="--")
     _mean_line(ax_corr, comp_joint_col, summary_df, _colors["comp_joint"], f"{primary_label}+complement joint", ls="-.", mk="s")
+    _mean_line(ax_corr, comp_joint_ridge_col, summary_df, _colors["comp_joint_ridge"], f"{primary_label}+complement ridge joint", ls=":", mk="s", ms=3)
     _mean_line(ax_corr, "arbitrary_corr", summary_df, _colors["arbitrary"], "arbitrary", ls=":")
     _mean_line(ax_corr, arb_joint_col, summary_df, _colors["arb_joint"], f"{primary_label}+arbitrary joint", ls="-.", mk="D", ms=3)
+    _mean_line(ax_corr, arb_joint_ridge_col, summary_df, _colors["arb_joint_ridge"], f"{primary_label}+arbitrary ridge joint", ls=":", mk="D", ms=3)
     _panel_finish(ax_corr, "Rank k", "Correlation", f"{title}\n(correlation vs rank)", hline=0)
 
     ax_corr_folds = axes[0, 1]
@@ -436,7 +442,9 @@ def plot_rrr_rank_results(
 
     primary_r2_col = f"{primary_label}_r2"
     comp_joint_r2_col = f"{primary_label}_complement_joint_r2"
+    comp_joint_ridge_r2_col = f"{primary_label}_complement_joint_ridge_r2"
     arb_joint_r2_col = f"{primary_label}_arbitrary_joint_r2"
+    arb_joint_ridge_r2_col = f"{primary_label}_arbitrary_joint_ridge_r2"
 
     ax_r2 = axes[1, 0]
     _fold_traces(ax_r2, primary_r2_col, primary_color)
@@ -445,8 +453,10 @@ def plot_rrr_rank_results(
     _mean_line(ax_r2, primary_r2_col, summary_df, primary_color, primary_label)
     _mean_line(ax_r2, "complement_r2", summary_df, _colors["complement"], "complement", ls="--")
     _mean_line(ax_r2, comp_joint_r2_col, summary_df, _colors["comp_joint"], f"{primary_label}+complement joint", ls="-.", mk="s")
+    _mean_line(ax_r2, comp_joint_ridge_r2_col, summary_df, _colors["comp_joint_ridge"], f"{primary_label}+complement ridge joint", ls=":", mk="s", ms=3)
     _mean_line(ax_r2, "arbitrary_r2", summary_df, _colors["arbitrary"], "arbitrary", ls=":")
     _mean_line(ax_r2, arb_joint_r2_col, summary_df, _colors["arb_joint"], f"{primary_label}+arbitrary joint", ls="-.", mk="D", ms=3)
+    _mean_line(ax_r2, arb_joint_ridge_r2_col, summary_df, _colors["arb_joint_ridge"], f"{primary_label}+arbitrary ridge joint", ls=":", mk="D", ms=3)
     _panel_finish(ax_r2, "Rank k", "R²", f"{title}\n(R² vs rank)", hline=0)
 
     ax_r2_folds = axes[1, 1]

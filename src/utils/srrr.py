@@ -203,8 +203,8 @@ def fit_srrr_proxgd(
         A = prox_l21(A - lr * grad_A, lr * lam)
 
     return {
-        "A": A.cpu().numpy(),
-        "B": B.cpu().numpy(),
+        "A": to_numpy(A),
+        "B": to_numpy(B),
         "n_iter": it + 1,
         "converged": converged,
         "obj_history": obj_history,
@@ -433,8 +433,8 @@ def fit_dense_rrr(
         )
 
     return {
-        "A_dense": A_dense.cpu().numpy(),
-        "B_dense": B_dense.cpu().numpy(),
+        "A_dense": to_numpy(A_dense),
+        "B_dense": to_numpy(B_dense),
         "selected_idx": selected_idx,
     }
 
@@ -529,12 +529,12 @@ def run_sufficiency_test(
     if device is None:
         device = "cuda" if torch.cuda.is_available() else "cpu"
 
-    full_r2 = float(r2_score(Y_test, Y_hat_full).mean())
-    minimal_r2 = float(r2_score(Y_test, Y_hat_min).mean())
-    pred_r2 = float(r2_score(Y_hat_full, Y_hat_min).mean())
+    full_r2 = float(to_numpy(r2_score(Y_test, Y_hat_full)).mean())
+    minimal_r2 = float(to_numpy(r2_score(Y_test, Y_hat_min)).mean())
+    pred_r2 = float(to_numpy(r2_score(Y_hat_full, Y_hat_min)).mean())
 
-    full_corr_arr = correlation_score(Y_test, Y_hat_full)
-    minimal_corr_arr = correlation_score(Y_test, Y_hat_min)
+    full_corr_arr = to_numpy(correlation_score(Y_test, Y_hat_full))
+    minimal_corr_arr = to_numpy(correlation_score(Y_test, Y_hat_min))
     full_corr = float(full_corr_arr.mean())
     minimal_corr = float(minimal_corr_arr.mean())
 
@@ -551,8 +551,8 @@ def run_sufficiency_test(
     X_test_t = to_torch(X_proj_test, dtype=torch.float32, device=device)
     Y_resid_hat = to_numpy(X_test_t @ W + b)
 
-    recovery_r2 = float(r2_score(Y_resid_test, Y_resid_hat).mean())
-    recovery_corr_arr = correlation_score(Y_resid_test, Y_resid_hat)
+    recovery_r2 = float(to_numpy(r2_score(Y_resid_test, Y_resid_hat)).mean())
+    recovery_corr_arr = to_numpy(correlation_score(Y_resid_test, Y_resid_hat))
     recovery_corr = float(recovery_corr_arr.mean())
 
     if null_r2 is not None:

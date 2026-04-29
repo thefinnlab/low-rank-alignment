@@ -91,11 +91,9 @@ def train_encoding(
         if not fix_model:
             model.fit(X1_train, Y_train)
         Y_preds = model.predict(X1_test)
-        corr = correlation_score(Y_test, Y_preds)
+        corr = to_numpy(correlation_score(Y_test, Y_preds))
         if epochs_shape:
             corr = corr.reshape(epochs_shape)
-
-        corr = to_numpy(corr)
 
         corrs.append(corr)
         models.append(model)

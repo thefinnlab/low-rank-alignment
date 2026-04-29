@@ -61,6 +61,7 @@ from src.utils.rrr_utils import (
     resolve_rrr_source_dir,
 )
 from src.utils.sae import solve_regression
+from src.utils.tensor_utils import to_numpy
 from himalaya.scoring import correlation_score, r2_score
 
 
@@ -179,12 +180,12 @@ def _eval_ablated(
         alphas=alphas,
     )
     X_test_t = torch.as_tensor(X_proj_test, dtype=torch.float32, device=device)
-    Y_hat_test = (X_test_t @ W + b).cpu().numpy()
+    Y_hat_test = to_numpy(X_test_t @ W + b)
 
-    nr_corr_arr = correlation_score(Y_test, Y_hat_test)
-    nr_r2_arr = r2_score(Y_test, Y_hat_test)
-    full_corr_arr = correlation_score(Y_test, Y_hat_full)
-    full_r2_arr = r2_score(Y_test, Y_hat_full)
+    nr_corr_arr = to_numpy(correlation_score(Y_test, Y_hat_test))
+    nr_r2_arr = to_numpy(r2_score(Y_test, Y_hat_test))
+    full_corr_arr = to_numpy(correlation_score(Y_test, Y_hat_full))
+    full_r2_arr = to_numpy(r2_score(Y_test, Y_hat_full))
 
     metrics = {
         "full_corr": float(full_corr_arr.mean()),
