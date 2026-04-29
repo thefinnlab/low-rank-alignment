@@ -260,6 +260,7 @@ class BrainTreebankDatasetAdapter:
     name = "brain_treebank"
     sfreq = 2048.0
     hdf5_unit_scale_to_volts = 1e-6
+    preprocessing_sfreq = 512.0
 
     def _metadata_records(self, data_root: str, subject_id: int) -> list[dict]:
         pattern = os.path.join(
@@ -371,6 +372,87 @@ class BrainTreebankDatasetAdapter:
         df["word_idx"] = range(len(df))
         return df
 
+    def load_subject_word_table(
+        self,
+        data_root: str,
+        context: DatasetContext,
+        subject_id: int,
+        word_table: pd.DataFrame | None = None,
+    ) -> pd.DataFrame:
+        """Return a word table aligned from movie time to subject neural time."""
+        if word_table is None:
+            word_table = self.load_word_table(data_root, context)
+        metadata = context.subject_metadata.get(subject_id)
+        if metadata is None:
+            metadata = self._select_subject_movie_record(
+                data_root, subject_id, context.stimulus_id
+            )
+        return self._align_word_table_to_subject(word_table, metadata)
+
+    def _align_word_table_to_subject(
+        self, word_table: pd.DataFrame, metadata: dict
+    ) -> pd.DataFrame:
+        timings_path = metadata.get("timings_path")
+        if not timings_path or not os.path.exists(timings_path):
+            raise FileNotFoundError(
+                f"Brain Treebank timing file not found: {timings_path}"
+            )
+
+        timings = pd.read_csv(timings_path)
+        required_cols = {"movie_time", "index"}
+        missing = required_cols - set(timings.columns)
+        if missing:
+            raise ValueError(
+                f"Brain Treebank timing file missing columns {sorted(missing)}: "
+                f"{timings_path}"
+            )
+        timings = timings.copy()
+        timings["movie_time"] = pd.to_numeric(timings["movie_time"], errors="coerce")
+        timings["index"] = pd.to_numeric(timings["index"], errors="coerce")
+        timings = timings.dropna(subset=["movie_time", "index"]).reset_index(drop=True)
+        if timings.empty:
+            raise ValueError(
+                f"Brain Treebank timing file has no valid rows: {timings_path}"
+            )
+
+        df = word_table.copy().reset_index(drop=False)
+        if "word_idx" not in df.columns:
+            idx_col = df.columns[0]
+            if idx_col != "index":
+                df["word_idx"] = df[idx_col]
+            else:
+                df["word_idx"] = np.arange(len(df), dtype=int)
+        df["movie_start"] = pd.to_numeric(df["start"], errors="coerce")
+        df["movie_end"] = pd.to_numeric(df["end"], errors="coerce")
+        df = df.dropna(subset=["movie_start", "movie_end"]).copy()
+
+        trig_times = timings["movie_time"].to_numpy(dtype=float)
+        trig_indices = timings["index"].to_numpy(dtype=float)
+        last_trigger_time = trig_times[-1]
+        df = df[df["movie_start"] <= last_trigger_time].copy()
+        if df.empty:
+            return df
+
+        def estimate_sample(movie_time: float) -> int:
+            nearest = int(np.abs(trig_times - movie_time).argmin())
+            return int(
+                round(
+                    trig_indices[nearest]
+                    + (movie_time - trig_times[nearest]) * self.sfreq
+                )
+            )
+
+        df["est_idx"] = [
+            estimate_sample(t) for t in df["movie_start"].to_numpy(dtype=float)
+        ]
+        df["est_end_idx"] = [
+            estimate_sample(t) for t in df["movie_end"].to_numpy(dtype=float)
+        ]
+        df["est_idx_sfreq"] = self.sfreq
+        df["start"] = df["est_idx"] / self.sfreq
+        df["end"] = df["est_end_idx"] / self.sfreq
+        return df.reset_index(drop=True)
+
     def get_embedding_dir(
         self, data_root: str, context: DatasetContext, model_dir: str
     ) -> str:
@@ -456,6 +538,21 @@ class BrainTreebankDatasetAdapter:
 
     def _apply_high_gamma(self, raw):
         raw = raw.copy()
+        if int(raw.info["sfreq"]) != int(self.preprocessing_sfreq):
+            raw.resample(
+                self.preprocessing_sfreq,
+                npad="auto",
+                method="fft",
+                window="hamming",
+            )
+        raw.set_eeg_reference(ref_channels="average", ch_type="seeg", verbose=False)
+        raw.notch_filter(
+            freqs=[60, 120, 180],
+            notch_widths=2,
+            picks="data",
+            n_jobs=1,
+            verbose=False,
+        )
         raw.filter(
             l_freq=70.0,
             h_freq=200.0,

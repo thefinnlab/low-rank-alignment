@@ -244,13 +244,27 @@ def compute_epoch_cache_indices(
     if tmax <= tmin:
         raise ValueError(f"tmax must be greater than tmin, got {tmin=} {tmax=}.")
 
-    starts = pd.to_numeric(df_word["start"], errors="coerce").to_numpy()
-    finite = np.isfinite(starts)
-    original_indices = np.arange(len(df_word), dtype=int)
+    if "word_idx" in df_word.columns:
+        original_indices = pd.to_numeric(df_word["word_idx"], errors="coerce").to_numpy()
+    else:
+        original_indices = np.arange(len(df_word), dtype=int)
 
     source_sfreq = float(raw.info["sfreq"])
+    if "est_idx" in df_word.columns:
+        est_idx = pd.to_numeric(df_word["est_idx"], errors="coerce").to_numpy()
+        if "est_idx_sfreq" in df_word.columns:
+            est_sfreq = pd.to_numeric(
+                df_word["est_idx_sfreq"], errors="coerce"
+            ).to_numpy()
+        else:
+            est_sfreq = np.full(len(df_word), source_sfreq)
+        starts = est_idx / est_sfreq
+    else:
+        starts = pd.to_numeric(df_word["start"], errors="coerce").to_numpy()
+
+    finite = np.isfinite(starts) & np.isfinite(original_indices)
     source_onsets = np.floor(starts[finite] * source_sfreq).astype(np.int64)
-    finite_indices = original_indices[finite]
+    finite_indices = original_indices[finite].astype(int)
     finite_starts = starts[finite]
 
     _, first_positions = np.unique(source_onsets, return_index=True)
@@ -315,7 +329,15 @@ def load_data_from_cache(
                 f"Cached subjects must share one stimulus. "
                 f"Expected '{ref_stimulus_id}', got '{cache_stimulus_id}' for subject {sub_id}."
             )
-        ref_selection = cache["selection"]
+        selection = cache["selection"]
+        if ref_selection is None:
+            ref_selection = selection
+        elif not np.array_equal(ref_selection, selection):
+            raise ValueError(
+                "Cached subjects must have identical word selections before joint loading. "
+                f"Subject {sub_id} differs from the first loaded subject; regenerate caches "
+                "with the same transcript/alignment policy or train subjects separately."
+            )
         data = epochs_from_cache(
             cache, elec_names=sig_electrodes[sub_id] if sig_electrodes else None
         )
@@ -324,10 +346,10 @@ def load_data_from_cache(
         else:
             elec_names.append(cache["ch_names"])
         X_arr, Y_sub = apply_offset(
-            embeddings[ref_selection],
+            embeddings[selection],
             data,
             offset,
-            valid_rows=valid_rows[ref_selection] if valid_rows is not None else None,
+            valid_rows=valid_rows[selection] if valid_rows is not None else None,
         )
         if X_ref is None:
             X_ref = X_arr
