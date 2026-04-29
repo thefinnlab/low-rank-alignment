@@ -10,12 +10,16 @@ This is a neuroscience encoding analysis pipeline that studies how language-mode
 3. **SVD analysis** (`make svd`) — decomposes model weights to find dominant directions in embedding space
 4. **Partial SVD analysis** (`make partial-svd`) — removes contiguous windows of SVD directions from word embeddings and retrains ridge regression to measure how much each group contributes to encoding performance
 5. **SRRR analysis** (`make srrr`) — finds the minimal subset of SVD directions that explains all significant encoding variance, via stability selection and a statistical sufficiency test
-6. **RRR analysis** (`make rrr`) — raw-input RRR baseline: sweeps over ranks to find the minimal rank that captures full-ridge variance, directly in embedding space (no SVD projection)
+6. **RRR analysis** (`make rrr`) — raw-input RRR baseline: sweeps over ranks to find the minimal rank that captures full-ridge variance, directly in embedding space (no SVD projection); rank sweeps resume from completed `k` outputs by default, with `refresh: true` forcing a full recompute
 6b. **PCA analysis** (`make pca`) — PCA-based subspace baseline: computes PCA on word embeddings to find a low-dimensional input subspace, trains ridge regression from projected embeddings to neural targets, and sweeps over a rank grid; plots optionally overlay corresponding RRR results for comparison
 7. **Partial RRR analysis** (`make partial-rrr`) — partials out RRR-learned subspaces from word embeddings and retrains ridge regression to measure how much each rank-k subspace contributes to encoding performance
 8. **SAE analysis** (`make sae`) — projects embeddings into an RRR-learned k-dimensional subspace and trains a sparse autoencoder (overcomplete hidden layer with ReLU + L1 penalty) followed by regression to predict neural targets; tests whether superposition in the RRR subspace can be decoded with more linear dimensions
 9. **Ablation analysis** (`run_ablation.py`) — loads pre-computed RRR A/B matrices, projects embeddings into the latent space, applies quantile-based masks (tail-only, center-only, random) to the projected activations, trains fresh ridge regressions from masked projections to neural targets, and evaluates reconstruction performance; determines whether encoding information is concentrated in distributional tails or centers; supports cross_subject, per_subject, and per_region modes
 10. **Visualization** (`make plots`) — generates correlation plots with optional significance overlays
+
+The Makefile also provides batch targets for releasing multiple config runs:
+`make generate-embeddings-batch EMBED_CONFIGS="..."`, `make sig-batch
+SIG_CONFIGS="..."`, and `make rrr-batch RRR_CONFIGS="..."`.
 
 ### Generating embeddings for new models
 
@@ -27,7 +31,9 @@ Generic HuggingFace generation tokenizes with `is_split_into_words=True` and
 uses a sliding window of configurable `context_window` and `stride`. Causal
 models (GPT-2, Pythia, GPT-J, Llama) use native causal attention; bidirectional
 models (RoBERTa) use `attention_mode=bidirectional_strict` (stride=1) so each
-target sees only preceding tokens. GPT-2-XL configs default to
+target sees only preceding tokens. Set `random_init_model: true` to use a
+HuggingFace model id only as the tokenizer and architecture source, with fresh
+random weights controlled by `random_init_seed`. GPT-2-XL configs default to
 `attention_mode=podcast_per_token`, which matches the legacy podcast generator:
 each word is tokenized as `tokenizer.tokenize(" " + word)`, each target token
 gets its own left-padded context row of `context_window + 1` tokens, causal LM
@@ -52,7 +58,7 @@ and run with the default `local_files_only: true`.
 
 | File | Purpose |
 |------|---------|
-| `Makefile` | Build targets for all pipeline stages; supports SLURM or local execution |
+| `Makefile` | Build targets for all pipeline stages; supports SLURM or local execution, including config-list batch targets for embeddings, significance, and RRR |
 | `submit.sh` | SLURM job submission script (1 CPU, 1 GPU, 32GB RAM, 2hr); activates `align_env` virtualenv |
 | `pytest.ini` | Pytest config with custom markers and test path |
 
@@ -94,7 +100,7 @@ Main entry points for the pipeline:
 | `run_svd_analysis.py` | SVD decomposition of encoding weights; evaluates truncation at various k values and selects optimal k |
 | `run_srrr.py` | SRRR analysis; reads SVD decompositions and finds minimal direction subset via stability selection and sufficiency testing; supports cross_subject, per_subject, and per_region modes |
 | `run_partial_svd.py` | Partial SVD analysis; removes windows of SVD directions from embeddings, retrains ridge regression, and measures correlation drop; generates cross-subject, per-subject, and per-region sweep plots |
-| `run_rrr.py` | RRR baseline; fits RRR directly from raw embeddings to neural targets (no SVD projection); sweeps over ranks with residual R², CCA, and Procrustes metrics; supports cross_subject, per_subject, and per_region modes |
+| `run_rrr.py` | RRR baseline; fits RRR directly from raw embeddings to neural targets (no SVD projection); sweeps over ranks with residual R², CCA, and Procrustes metrics; resumes completed rank outputs unless `refresh: true`; supports cross_subject, per_subject, and per_region modes |
 | `run_pca.py` | PCA baseline; computes PCA on word embeddings to find low-dimensional input subspace, trains ridge regression from projected embeddings to neural targets; sweeps over ranks with same metrics as RRR; plots overlay corresponding RRR results when available; supports cross_subject, per_subject, and per_region modes |
 | `precompute_epochs.py` | Builds dataset-scoped 32 Hz epoch caches by saving continuous high-gamma/resampled data plus per-word slice indices; Brain Treebank precompute first maps movie-time transcript rows to each subject's neural sample clock using trigger timings; duplicate onset samples are dropped and full MNE Epochs arrays are not materialized during precompute |
 | `run_partial_rrr.py` | Partial RRR analysis; loads RRR-learned A matrices, partials out their subspaces from embeddings, retrains ridge, and measures correlation drop; supports cross_subject, per_subject, and per_region modes |

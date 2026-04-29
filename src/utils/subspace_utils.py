@@ -61,6 +61,7 @@ def evaluate_input_space(
         f"{prefix}corr": float(corr_arr.mean()),
         f"{prefix}r2": float(r2_arr.mean()),
         f"{prefix}corr_per_target": corr_arr,
+        f"{prefix}r2_per_target": r2_arr,
         f"{prefix}Y_hat": Y_hat,
     }
 

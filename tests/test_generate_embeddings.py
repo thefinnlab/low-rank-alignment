@@ -14,12 +14,15 @@ import h5py
 
 torch = pytest.importorskip("torch")
 
+import scripts.utilities.generate_embeddings as generate_embeddings
 from scripts.utilities.generate_embeddings import (
     _build_bidir_batch,
     _build_podcast_context_batch,
     _build_transcript_df,
     _causal_window_plan,
+    _load_model_for_generation,
     _run_podcast_per_token,
+    _select_generation_model_class,
     _tokenize_transcript_podcast,
     _load_generation_words,
     _tokenize_transcript,
@@ -126,6 +129,144 @@ class TestLoadGenerationWords:
         assert words_df["word"].tolist() == ["Hello", "world"]
         assert context.dataset == "brain_treebank"
         assert out_dir == str(tmp_path / "stimuli" / "roberta-base" / "movie-coraline")
+
+
+class TestLoadModelForGeneration:
+    class _FakeModel:
+        def __init__(self, config):
+            self.config = config
+            self.to_device = None
+            self.eval_called = False
+
+        def to(self, device):
+            self.to_device = device
+            return self
+
+        def eval(self):
+            self.eval_called = True
+            return self
+
+    class _FakeModelClass:
+        from_pretrained_calls = []
+        from_config_calls = []
+
+        @classmethod
+        def reset(cls):
+            cls.from_pretrained_calls = []
+            cls.from_config_calls = []
+
+        @classmethod
+        def from_pretrained(cls, *args, **kwargs):
+            cls.from_pretrained_calls.append((args, kwargs))
+            return TestLoadModelForGeneration._FakeModel(type("Config", (), {"model_type": "gpt2"})())
+
+        @classmethod
+        def from_config(cls, *args, **kwargs):
+            cls.from_config_calls.append((args, kwargs))
+            return TestLoadModelForGeneration._FakeModel(args[0])
+
+    class _FakeAutoConfig:
+        calls = []
+
+        @classmethod
+        def reset(cls):
+            cls.calls = []
+
+        @classmethod
+        def from_pretrained(cls, *args, **kwargs):
+            cls.calls.append((args, kwargs))
+            return type("Config", (), {"model_type": "gpt2"})()
+
+    def setup_method(self):
+        self._FakeModelClass.reset()
+        self._FakeAutoConfig.reset()
+
+    def test_pretrained_mode_calls_from_pretrained(self, monkeypatch):
+        monkeypatch.setattr(generate_embeddings, "AutoConfig", self._FakeAutoConfig)
+        cfg = GenerateEmbeddingsConfig(
+            hf_model_id="example/model",
+            device="cpu",
+            dtype="float32",
+            local_files_only=False,
+            hf_cache_dir="/tmp/hf",
+            hf_token="token",
+        )
+
+        model = _load_model_for_generation(cfg, self._FakeModelClass)
+
+        assert len(self._FakeModelClass.from_pretrained_calls) == 1
+        assert self._FakeModelClass.from_config_calls == []
+        assert self._FakeAutoConfig.calls == []
+        args, kwargs = self._FakeModelClass.from_pretrained_calls[0]
+        assert args == ("example/model",)
+        assert kwargs["torch_dtype"] is torch.float32
+        assert kwargs["cache_dir"] == "/tmp/hf"
+        assert kwargs["local_files_only"] is False
+        assert kwargs["token"] == "token"
+        assert model.to_device == "cpu"
+        assert model.eval_called is True
+
+    def test_random_mode_loads_config_and_uses_from_config(self, monkeypatch):
+        monkeypatch.setattr(generate_embeddings, "AutoConfig", self._FakeAutoConfig)
+        cfg = GenerateEmbeddingsConfig(
+            hf_model_id="example/model",
+            device="cpu",
+            dtype="bfloat16",
+            random_init_model=True,
+        )
+
+        model = _load_model_for_generation(cfg, self._FakeModelClass)
+
+        assert self._FakeModelClass.from_pretrained_calls == []
+        assert len(self._FakeAutoConfig.calls) == 1
+        assert len(self._FakeModelClass.from_config_calls) == 1
+        config_args, config_kwargs = self._FakeAutoConfig.calls[0]
+        assert config_args == ("example/model",)
+        assert config_kwargs["local_files_only"] is True
+        from_config_args, from_config_kwargs = self._FakeModelClass.from_config_calls[0]
+        assert from_config_args[0] is model.config
+        assert from_config_kwargs == {"torch_dtype": torch.bfloat16}
+        assert model.to_device == "cpu"
+        assert model.eval_called is True
+
+    def test_causal_and_non_causal_modes_select_expected_auto_class(self):
+        assert _select_generation_model_class("podcast_per_token") is generate_embeddings.AutoModelForCausalLM
+        assert _select_generation_model_class("auto") is generate_embeddings.AutoModel
+        assert _select_generation_model_class("causal_native") is generate_embeddings.AutoModel
+
+    def test_seed_is_applied_before_random_construction(self, monkeypatch):
+        events = []
+
+        class ModelClass(self._FakeModelClass):
+            @classmethod
+            def from_config(cls, *args, **kwargs):
+                events.append("from_config")
+                return super().from_config(*args, **kwargs)
+
+        def fake_manual_seed(seed):
+            events.append(("manual_seed", seed))
+
+        def fake_cuda_available():
+            return True
+
+        def fake_cuda_manual_seed_all(seed):
+            events.append(("cuda_manual_seed_all", seed))
+
+        monkeypatch.setattr(generate_embeddings, "AutoConfig", self._FakeAutoConfig)
+        monkeypatch.setattr(torch, "manual_seed", fake_manual_seed)
+        monkeypatch.setattr(torch.cuda, "is_available", fake_cuda_available)
+        monkeypatch.setattr(torch.cuda, "manual_seed_all", fake_cuda_manual_seed_all)
+
+        cfg = GenerateEmbeddingsConfig(
+            hf_model_id="example/model",
+            device="cpu",
+            random_init_model=True,
+            random_init_seed=123,
+        )
+
+        _load_model_for_generation(cfg, ModelClass)
+
+        assert events == [("manual_seed", 123), ("cuda_manual_seed_all", 123), "from_config"]
 
 
 # ---------------------------------------------------------------------------

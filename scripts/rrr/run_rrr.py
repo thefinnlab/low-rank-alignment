@@ -4,6 +4,8 @@ run_rrr.py — Raw-Input Reduced Rank Regression + optional PCA baseline.
 Performs RRR directly from raw embeddings to neural targets — no SVD projection.
 Sweeps over a configured rank grid. Optionally also runs PCA subspace analysis
 (when RRRConfig.run_pca_baseline=True) using the same rank grid and data splits.
+By default, completed rank outputs in an existing run directory are reused;
+set RRRConfig.refresh=True to recompute the full configured rank grid.
 
 Four modes controlled by RRRConfig.mode:
 
@@ -157,6 +159,106 @@ def _strip_per_target_and_add_sig_nonsig(
         del metrics[pt_key]
 
 
+def _load_existing_grid(unit_dir: str) -> pd.DataFrame:
+    """Load prior grid results if present; otherwise return an empty frame."""
+    path = os.path.join(unit_dir, "grid_results.csv")
+    if not os.path.exists(path):
+        return pd.DataFrame()
+    return pd.read_csv(path)
+
+
+def _metrics_path(unit_dir: str, k: int, fold_f: int) -> str:
+    return os.path.join(unit_dir, f"k{k}", f"fold_{fold_f}", "metrics.npz")
+
+
+def _fold_factors_exist(unit_dir: str, fold_f: int, require_b: bool = True) -> bool:
+    fold_dir = os.path.join(unit_dir, f"fold_{fold_f}")
+    paths = [os.path.join(fold_dir, "A.npy")]
+    if require_b:
+        paths.append(os.path.join(fold_dir, "B.npy"))
+    return all(os.path.exists(path) for path in paths)
+
+
+def _completed_ranks_from_grid(
+    existing_df: pd.DataFrame,
+    unit_dir: str,
+    rank_grid: list[int],
+    n_folds: int,
+    require_factors: bool = False,
+) -> set[int]:
+    """Ranks with one row and one metrics file for every expected fold."""
+    if (
+        existing_df.empty
+        or "k" not in existing_df.columns
+        or "fold" not in existing_df.columns
+    ):
+        return set()
+
+    completed = set()
+    for k in rank_grid:
+        rows = existing_df[existing_df["k"] == k]
+        folds_present = set(rows["fold"].astype(int).tolist())
+        if folds_present != set(range(n_folds)):
+            continue
+        if any(
+            not os.path.exists(_metrics_path(unit_dir, k, fold_f))
+            for fold_f in range(n_folds)
+        ):
+            continue
+        if require_factors and any(
+            not _fold_factors_exist(unit_dir, fold_f, require_b=True)
+            for fold_f in range(n_folds)
+        ):
+            continue
+        completed.add(k)
+    return completed
+
+
+def _rank_grid_to_run(
+    existing_df: pd.DataFrame,
+    unit_dir: str,
+    rank_grid: list[int],
+    n_folds: int,
+    refresh: bool,
+    require_factors: bool = False,
+) -> tuple[list[int], set[int]]:
+    """Return ranks to compute now plus ranks that can be loaded from disk."""
+    if refresh:
+        return list(rank_grid), set()
+    completed = _completed_ranks_from_grid(
+        existing_df,
+        unit_dir,
+        rank_grid,
+        n_folds,
+        require_factors=require_factors,
+    )
+    return [k for k in rank_grid if k not in completed], completed
+
+
+def _merge_grid_rows(
+    existing_df: pd.DataFrame,
+    new_rows: list[dict],
+    completed_ranks: set[int],
+    rank_grid: list[int],
+) -> pd.DataFrame:
+    """Merge trusted prior ranks with rows generated in this invocation."""
+    parts = []
+    if completed_ranks and not existing_df.empty:
+        prior = existing_df[existing_df["k"].isin(completed_ranks)].copy()
+        parts.append(prior)
+    if new_rows:
+        parts.append(pd.DataFrame(new_rows))
+    if not parts:
+        return pd.DataFrame()
+
+    df = pd.concat(parts, ignore_index=True, sort=False)
+    df = df[df["k"].isin(rank_grid)].copy()
+    df["k"] = df["k"].astype(int)
+    df["fold"] = df["fold"].astype(int)
+    df = df.drop_duplicates(subset=["k", "fold"], keep="last")
+    return df.sort_values(["k", "fold"]).reset_index(drop=True)
+
+
 def _run_common_subspace_fold_k(
     A_full: np.ndarray,
     k: int,
@@ -292,7 +394,8 @@ def _compute_and_save_joint_metrics(
     """
     import shutil
 
-    for k in rank_grid:
+    evaluated_ranks = {row["k"] for row in all_rows}
+    for k in [k for k in rank_grid if k in evaluated_ranks]:
         all_primary, all_complement, all_y_test = [], [], []
         all_arbitrary = []
         has_arbitrary = True
@@ -420,7 +523,12 @@ def _build_results(
 
     from src.utils.plotting import plot_rrr_rank_results
 
-    title_base = f"{primary_label.upper()}: perf vs rank ({os.path.basename(unit_dir)})"
+    display_label = (
+        "RRR subspace (NR)"
+        if primary_label == "nr" and "rrr_corr" in df.columns
+        else primary_label.upper()
+    )
+    title_base = f"{display_label}: perf vs rank ({os.path.basename(unit_dir)})"
     plot_rrr_rank_results(
         summary,
         grid_df=df,
@@ -487,6 +595,41 @@ def _run_rrr_for_unit(
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
+    existing_grid = _load_existing_grid(rrr_unit_dir)
+    ranks_to_run, completed_ranks = _rank_grid_to_run(
+        existing_grid,
+        rrr_unit_dir,
+        config.rank_grid,
+        n_folds,
+        refresh=config.refresh,
+        require_factors=True,
+    )
+    if completed_ranks:
+        print(f"  Reusing completed rank(s): {sorted(completed_ranks)}")
+    if not ranks_to_run:
+        print(
+            "  All requested ranks complete; rebuilding summary/plots from existing grid."
+        )
+        df = _merge_grid_rows(existing_grid, [], completed_ranks, config.rank_grid)
+        df.to_csv(os.path.join(rrr_unit_dir, "grid_results.csv"), index=False)
+        _build_results(df, sig_mask_flat, rrr_unit_dir, primary_label="nr")
+        if config.run_pca_baseline:
+            pca_unit_dir = _resolve_pca_sibling_dir(rrr_unit_dir)
+            print(f"\nRunning PCA baseline → {pca_unit_dir}")
+            _run_pca_for_unit(
+                pca_unit_dir=pca_unit_dir,
+                X_raw=X_raw,
+                test_idxs=test_idxs,
+                per_fold_baselines=per_fold_baselines,
+                rank_grid=config.rank_grid,
+                sig_mask_flat=sig_mask_flat,
+                X_arbitrary=X_arbitrary,
+                alphas=alphas,
+                device=device,
+                refresh=config.refresh,
+            )
+        return df
+
     all_rows = []
     oof_spill_dir = os.path.join(rrr_unit_dir, "_oof_spill")
     os.makedirs(oof_spill_dir, exist_ok=True)
@@ -524,10 +667,8 @@ def _run_rrr_for_unit(
         B_full = rrr_result["B_dense"]
         save_rrr_factors(rrr_unit_dir, fold=fold_f, A=A_full, B=B_full)
 
-        print(f"  Running {len(config.rank_grid)} rank(s): {config.rank_grid}")
-        for k in tqdm(
-            config.rank_grid, desc=f"  fold {fold_f}", leave=True, unit="rank"
-        ):
+        print(f"  Running {len(ranks_to_run)} rank(s): {ranks_to_run}")
+        for k in tqdm(ranks_to_run, desc=f"  fold {fold_f}", leave=True, unit="rank"):
             A_k = A_full[:, :k]
             B_k = B_full[:, :k]
 
@@ -562,17 +703,13 @@ def _run_rrr_for_unit(
                 primary_label="nr",
             )
 
-            # Add RRR-specific metrics and update metrics.npz with rrr per-target
-            rrr_metrics = {
-                "rrr_corr": float(rrr_corr_arr.mean()),
-                "rrr_r2": float(rrr_r2_arr.mean()),
-                "rrr_corr_per_target": rrr_corr_arr,
-            }
-            # Load existing metrics.npz and append rrr per-target
+            # Load existing metrics.npz and append RRR per-target metrics.
             metrics_path = os.path.join(
                 rrr_unit_dir, f"k{k}", f"fold_{fold_f}", "metrics.npz"
             )
             existing = dict(np.load(metrics_path, allow_pickle=True))
+            existing["full_corr"] = full_corr
+            existing["full_r2"] = full_r2
             existing["rrr_corr_per_target"] = rrr_corr_arr
             existing["rrr_r2_per_target"] = rrr_r2_arr
             np.savez(metrics_path, **existing)
@@ -607,7 +744,7 @@ def _run_rrr_for_unit(
     print("\nComputing stacked OLS joint correlations...")
     _compute_and_save_joint_metrics(
         oof_spill_dir,
-        config.rank_grid,
+        ranks_to_run,
         n_folds,
         rrr_unit_dir,
         all_rows,
@@ -615,9 +752,9 @@ def _run_rrr_for_unit(
         sig_mask_flat=sig_mask_flat,
     )
 
-    df = pd.DataFrame(all_rows)
+    df = _merge_grid_rows(existing_grid, all_rows, completed_ranks, config.rank_grid)
     df.to_csv(os.path.join(rrr_unit_dir, "grid_results.csv"), index=False)
-    _build_results(df, sig_mask_flat, rrr_unit_dir, primary_label="rrr")
+    _build_results(df, sig_mask_flat, rrr_unit_dir, primary_label="nr")
 
     # Optionally run PCA baseline using the same data splits
     if config.run_pca_baseline:
@@ -633,6 +770,7 @@ def _run_rrr_for_unit(
             X_arbitrary=X_arbitrary,
             alphas=alphas,
             device=device,
+            refresh=config.refresh,
         )
 
     return df
@@ -648,6 +786,7 @@ def _run_pca_for_unit(
     X_arbitrary: "np.ndarray | None" = None,
     alphas: "np.ndarray | None" = None,
     device: str = "cpu",
+    refresh: bool = False,
 ) -> pd.DataFrame:
     """PCA subspace analysis for one unit — structurally parallel to _run_rrr_for_unit.
 
@@ -678,6 +817,26 @@ def _run_pca_for_unit(
     os.makedirs(pca_unit_dir, exist_ok=True)
 
     n_folds = len(test_idxs)
+    existing_grid = _load_existing_grid(pca_unit_dir)
+    ranks_to_run, completed_ranks = _rank_grid_to_run(
+        existing_grid,
+        pca_unit_dir,
+        rank_grid,
+        n_folds,
+        refresh=refresh,
+        require_factors=False,
+    )
+    if completed_ranks:
+        print(f"  Reusing completed PCA rank(s): {sorted(completed_ranks)}")
+    if not ranks_to_run:
+        print(
+            "  All requested PCA ranks complete; rebuilding summary/plots from existing grid."
+        )
+        df = _merge_grid_rows(existing_grid, [], completed_ranks, rank_grid)
+        df.to_csv(os.path.join(pca_unit_dir, "grid_results.csv"), index=False)
+        _build_results(df, sig_mask_flat, pca_unit_dir, primary_label="pca")
+        return df
+
     all_rows = []
     oof_spill_dir = os.path.join(pca_unit_dir, "_oof_spill")
     os.makedirs(oof_spill_dir, exist_ok=True)
@@ -704,9 +863,9 @@ def _run_pca_for_unit(
         A_full = Vt.T  # (n_embed, min(n_train, n_embed))
         max_components = A_full.shape[1]
 
-        valid_ranks = [k for k in rank_grid if k <= max_components]
-        if len(valid_ranks) < len(rank_grid):
-            skipped = [k for k in rank_grid if k > max_components]
+        valid_ranks = [k for k in ranks_to_run if k <= max_components]
+        if len(valid_ranks) < len(ranks_to_run):
+            skipped = [k for k in ranks_to_run if k > max_components]
             print(f"  Skipping ranks {skipped} (> {max_components} PCA components)")
 
         print(f"  Running {len(valid_ranks)} rank(s): {valid_ranks}")
@@ -738,7 +897,7 @@ def _run_pca_for_unit(
     print("\nComputing stacked OLS joint correlations...")
     _compute_and_save_joint_metrics(
         oof_spill_dir,
-        rank_grid,
+        ranks_to_run,
         n_folds,
         pca_unit_dir,
         all_rows,
@@ -746,7 +905,7 @@ def _run_pca_for_unit(
         sig_mask_flat=sig_mask_flat,
     )
 
-    df = pd.DataFrame(all_rows)
+    df = _merge_grid_rows(existing_grid, all_rows, completed_ranks, rank_grid)
     df.to_csv(os.path.join(pca_unit_dir, "grid_results.csv"), index=False)
     _build_results(df, sig_mask_flat, pca_unit_dir, primary_label="pca")
 
@@ -1023,6 +1182,36 @@ def _run_loso_transfer_for_unit(
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
     n_folds = len(test_idxs)
+    existing_grid = _load_existing_grid(transfer_dir)
+    ranks_to_run, completed_ranks = _rank_grid_to_run(
+        existing_grid,
+        transfer_dir,
+        config.rank_grid,
+        n_folds,
+        refresh=config.refresh,
+        require_factors=False,
+    )
+    missing_a = [
+        os.path.join(train_rrr_dir, f"fold_{fold_f}", "A.npy")
+        for fold_f in range(n_folds)
+        if not os.path.exists(os.path.join(train_rrr_dir, f"fold_{fold_f}", "A.npy"))
+    ]
+    if missing_a:
+        raise FileNotFoundError(
+            "Missing train-subject RRR factor(s) needed for transfer: "
+            + ", ".join(missing_a)
+        )
+    if completed_ranks:
+        print(f"  Reusing completed transfer rank(s): {sorted(completed_ranks)}")
+    if not ranks_to_run:
+        print(
+            "  All requested transfer ranks complete; rebuilding summary/plots from existing grid."
+        )
+        df = _merge_grid_rows(existing_grid, [], completed_ranks, config.rank_grid)
+        df.to_csv(os.path.join(transfer_dir, "grid_results.csv"), index=False)
+        _build_results(df, sig_mask_flat, transfer_dir, primary_label="transfer")
+        return df
+
     all_rows = []
     oof_spill_dir = os.path.join(transfer_dir, "_oof_spill")
     os.makedirs(oof_spill_dir, exist_ok=True)
@@ -1044,7 +1233,7 @@ def _run_loso_transfer_for_unit(
         Y_test = baseline["Y_test"]
 
         for k in tqdm(
-            config.rank_grid, desc=f"  transfer fold {fold_f}", leave=True, unit="rank"
+            ranks_to_run, desc=f"  transfer fold {fold_f}", leave=True, unit="rank"
         ):
             A_k = A_full[:, :k]
             X_train_proj = X_train @ A_k
@@ -1128,7 +1317,7 @@ def _run_loso_transfer_for_unit(
     print("\nComputing stacked OLS joint correlations...")
     _compute_and_save_joint_metrics(
         oof_spill_dir,
-        config.rank_grid,
+        ranks_to_run,
         n_folds,
         transfer_dir,
         all_rows,
@@ -1136,7 +1325,7 @@ def _run_loso_transfer_for_unit(
         sig_mask_flat=sig_mask_flat,
     )
 
-    df = pd.DataFrame(all_rows)
+    df = _merge_grid_rows(existing_grid, all_rows, completed_ranks, config.rank_grid)
     df.to_csv(os.path.join(transfer_dir, "grid_results.csv"), index=False)
     _build_results(df, sig_mask_flat, transfer_dir, primary_label="transfer")
     return df

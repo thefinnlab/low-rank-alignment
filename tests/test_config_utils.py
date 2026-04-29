@@ -6,7 +6,7 @@ import os
 import pytest
 import yaml
 
-from src.core.config import EncodingConfig, SignificanceConfig, get_results_dir
+from src.core.config import EncodingConfig, RRRConfig, SignificanceConfig, get_results_dir
 from src.core.registry import DatasetContext
 from src.utils.config_utils import (
     parse_override_args,
@@ -104,6 +104,11 @@ class TestDictToDataclass:
         assert config.offset == 2
         assert not hasattr(config, "unknown_field")
 
+    def test_rrr_refresh_roundtrip(self):
+        config = dict_to_dataclass({"refresh": True, "rank_grid": [1, 2]}, RRRConfig)
+        assert config.refresh is True
+        assert config.rank_grid == [1, 2]
+
 
 # ---------------------------------------------------------------------------
 # apply_overrides
@@ -132,6 +137,12 @@ class TestApplyOverrides:
         result = apply_overrides(config, {"minimal_shift": 250, "fdr_q": 0.05})
         assert result.minimal_shift == 250
         assert result.fdr_q == 0.05
+
+    def test_rrr_refresh_override(self):
+        config = RRRConfig()
+        result = apply_overrides(config, {"refresh": True})
+        assert result.refresh is True
+        assert config.refresh is False
 
 
 # ---------------------------------------------------------------------------

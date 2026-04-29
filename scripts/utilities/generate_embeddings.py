@@ -26,7 +26,7 @@ import numpy as np
 import pandas as pd
 import torch
 from tqdm import tqdm
-from transformers import AutoModel, AutoModelForCausalLM, AutoTokenizer
+from transformers import AutoConfig, AutoModel, AutoModelForCausalLM, AutoTokenizer
 
 from src.core.config import GenerateEmbeddingsConfig
 from src.core.registry import get_dataset_adapter, resolve_dataset_context
@@ -99,6 +99,35 @@ def _resolve_dtype(dtype: str) -> torch.dtype:
 
 def _resolve_np_dtype(dtype: str):
     return {"float32": np.float32, "float16": np.float16, "bfloat16": np.float32}[dtype]
+
+
+def _load_model_for_generation(cfg: GenerateEmbeddingsConfig, model_cls):
+    """Load a pretrained or randomly initialized model for embedding generation."""
+    model_kwargs = dict(
+        torch_dtype=_resolve_dtype(cfg.dtype),
+        cache_dir=cfg.hf_cache_dir,
+        local_files_only=cfg.local_files_only,
+        token=cfg.hf_token,
+    )
+    if not cfg.random_init_model:
+        model = model_cls.from_pretrained(cfg.hf_model_id, **model_kwargs)
+    else:
+        if cfg.random_init_seed is not None:
+            torch.manual_seed(cfg.random_init_seed)
+            if torch.cuda.is_available():
+                torch.cuda.manual_seed_all(cfg.random_init_seed)
+        config = AutoConfig.from_pretrained(
+            cfg.hf_model_id,
+            cache_dir=cfg.hf_cache_dir,
+            local_files_only=cfg.local_files_only,
+            token=cfg.hf_token,
+        )
+        model = model_cls.from_config(config, torch_dtype=_resolve_dtype(cfg.dtype))
+    return model.to(cfg.device).eval()
+
+
+def _select_generation_model_class(attention_mode: str):
+    return AutoModelForCausalLM if attention_mode == "podcast_per_token" else AutoModel
 
 
 def _tokenize_transcript(words: list[str], tokenizer):
@@ -412,16 +441,10 @@ def generate(cfg: GenerateEmbeddingsConfig):
         # Some tokenizers (e.g. SentencePiece/Llama) don't accept add_prefix_space.
         tokenizer = AutoTokenizer.from_pretrained(tokenizer_name_or_path, **tok_kwargs)
 
-    use_causal_lm = cfg.attention_mode == "podcast_per_token"
-    model_cls = AutoModelForCausalLM if use_causal_lm else AutoModel
-    print(f"Loading model: {cfg.hf_model_id} (dtype={cfg.dtype}, device={cfg.device})")
-    model = model_cls.from_pretrained(
-        cfg.hf_model_id,
-        torch_dtype=_resolve_dtype(cfg.dtype),
-        cache_dir=cfg.hf_cache_dir,
-        local_files_only=cfg.local_files_only,
-        token=cfg.hf_token,
-    ).to(cfg.device).eval()
+    model_cls = _select_generation_model_class(cfg.attention_mode)
+    init_mode = "random init" if cfg.random_init_model else "pretrained"
+    print(f"Loading model: {cfg.hf_model_id} ({init_mode}, dtype={cfg.dtype}, device={cfg.device})")
+    model = _load_model_for_generation(cfg, model_cls)
 
     model_type = model.config.model_type
     attention_mode, stride = _resolve_defaults(cfg, model_type)
@@ -492,6 +515,9 @@ def generate(cfg: GenerateEmbeddingsConfig):
         dtype=cfg.dtype,
         output_dtype=cfg.output_dtype,
         add_prefix_space=cfg.add_prefix_space,
+        random_init_model=cfg.random_init_model,
+        random_init_seed=cfg.random_init_seed,
+        architecture_source=cfg.hf_model_id,
         n_tokens=T,
         n_words=len(words),
         transcript_path=cfg.transcript_path,
