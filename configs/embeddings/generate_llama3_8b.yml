@@ -7,7 +7,7 @@ output_name: llama3-8b
 data_root: data/
 context_window: 1024
 stride: 512
-layers: all
+layers: [0, 16, 32]
 pooling: mean
 attention_mode: auto
 dtype: bfloat16

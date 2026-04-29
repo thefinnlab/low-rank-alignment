@@ -4,7 +4,7 @@ output_name: roberta-large
 data_root: data/
 context_window: 512
 stride: 1
-layers: all
+layers: [0, 12, 24]
 pooling: mean
 attention_mode: bidirectional_strict
 dtype: float32

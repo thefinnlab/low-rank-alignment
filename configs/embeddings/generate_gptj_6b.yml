@@ -3,7 +3,7 @@ output_name: gpt-j-6b
 data_root: data/
 context_window: 1024
 stride: 512
-layers: all
+layers: [0, 14, 28]
 pooling: mean
 attention_mode: auto
 dtype: float16
