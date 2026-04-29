@@ -29,6 +29,21 @@ DATA_ROOT       ?= data
 ATLAS_PATH      ?= atlases/destrieux_2009/destrieux2009_rois_lateralized.nii.gz
 OVERRIDES       ?=   # e.g. OVERRIDES="--encoding.layer=48 --n_permutations=100"
 
+# Batch config lists. Override these with whitespace-separated
+# config paths, e.g. SIG_CONFIGS="configs/a.yml configs/b.yml".
+EMBED_CONFIGS   ?= $(EMBED_CONFIG)
+SIG_CONFIGS     ?= $(SIG_CONFIG)
+RRR_CONFIGS     ?= $(RRR_CONFIG)
+
+define run_config_list
+set -e
+mkdir -p logs
+for config in $($(1)); do
+	echo "==> $(2): $$config"
+	$(CMD) $(3) --config $$config $(OVERRIDES)
+done
+endef
+
 # ── Targets ───────────────────────────────────────────────────────────────────
 
 ## Submit (or run) the full significance pipeline
@@ -40,6 +55,13 @@ OVERRIDES       ?=   # e.g. OVERRIDES="--encoding.layer=48 --n_permutations=100"
 sig:
 	mkdir -p logs
 	$(CMD) scripts/sig_lags/run_significance.py --config $(SIG_CONFIG) $(OVERRIDES)
+
+## Release significance runs for a list of configs
+## Usage:
+##   make sig-batch SIG_CONFIGS="configs/significance/a.yml configs/significance/b.yml"
+##   make sig-batch SIG_CONFIGS="configs/significance/a.yml configs/significance/b.yml" CMD=python
+sig-batch:
+	$(call run_config_list,SIG_CONFIGS,significance,scripts/sig_lags/run_significance.py)
 
 ## Train encoding models
 ## Usage:
@@ -83,6 +105,13 @@ generate-embeddings:
 	mkdir -p logs
 	$(CMD) scripts/utilities/generate_embeddings.py $(foreach c,$(EMBED_CONFIG),--config $(c)) $(OVERRIDES)
 
+## Release embedding-generation runs for a list of configs
+## Usage:
+##   make generate-embeddings-batch EMBED_CONFIGS="configs/embeddings/generate_gpt2.yml configs/embeddings/generate_gpt2_xl.yml"
+##   make generate-embeddings-batch EMBED_CONFIGS="configs/embeddings/generate_gpt2.yml configs/embeddings/generate_gpt2_xl.yml" CMD=python
+generate-embeddings-batch:
+	$(call run_config_list,EMBED_CONFIGS,generate embeddings,scripts/utilities/generate_embeddings.py)
+
 ## Generate null distribution for new significance test.
 ## Usage:
 ##   make null-dist                                                 # default config
@@ -121,6 +150,13 @@ rrr:
 	mkdir -p logs
 	$(CMD) scripts/rrr/run_rrr.py --config $(RRR_CONFIG) $(OVERRIDES)
 
+## Release RRR runs for a list of configs
+## Usage:
+##   make rrr-batch RRR_CONFIGS="configs/rrr/rrr_cross_final.yml configs/rrr/rrr_per_subject_final.yml configs/rrr/rrr_per_region_final.yml"
+##   make rrr-batch RRR_CONFIGS="configs/rrr/rrr_cross_final.yml configs/rrr/rrr_per_subject_final.yml" CMD=python
+rrr-batch:
+	$(call run_config_list,RRR_CONFIGS,rrr,scripts/rrr/run_rrr.py)
+
 ## Run PCA analysis (embedding PCA subspace baseline)
 ## Usage:
 ##   make pca                                                          # default config
@@ -158,4 +194,4 @@ sig-test:
 test:
 	python -m pytest tests/ -v
 
-.PHONY: sig train plots svd srrr rrr pca partial-svd partial-rrr sae sig-test test generate-embeddings
+.PHONY: sig sig-batch train plots svd srrr rrr rrr-batch pca partial-svd partial-rrr sae sig-test test generate-embeddings generate-embeddings-batch

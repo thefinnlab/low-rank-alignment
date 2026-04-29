@@ -163,6 +163,7 @@ class RRRConfig:
 
     # Rank sweep
     rank_grid: list[int] = field(default_factory=lambda: [1, 2, 5, 10, 20, 50])
+    refresh: bool = False  # If true, recompute all ranks even when outputs exist.
 
     # Optional metrics (expensive; disabled by default to speed up rank sweeps)
     compute_cca: bool = False
@@ -453,6 +454,8 @@ class GenerateEmbeddingsConfig:
     hf_cache_dir: str | None = None  # None → honor HF_HOME / default
     local_files_only: bool = True  # True for offline GPU hosts; operator must pre-populate cache
     hf_token: str | None = None  # for gated models (e.g. Llama-3); prefer HF_TOKEN env var
+    random_init_model: bool = False  # If true, use hf_model_id only for architecture config
+    random_init_seed: int | None = 42  # None → intentionally unseeded random initialization
 
     # Tokenizer
     tokenizer_name_or_path: str | None = None  # None → use hf_model_id; can point to a local tokenizer dir
