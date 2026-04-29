@@ -2,10 +2,17 @@ data_root: data/brain-treebank
 dataset: brain_treebank
 per_dataset_config:
   movie: cars-2
-model: gpt2xl
+model: transformer
 per_model_config:
-  layer: 24
+  layer:
+  - 0
+  - 24
+  - 48
+  model_dir: gpt2-xl
 offset: 0
-subjects: [3, 7, 10]
+subjects:
+- 3
+- 7
+- 10
 run_name: null
 batch: true

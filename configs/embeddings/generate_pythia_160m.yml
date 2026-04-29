@@ -3,7 +3,10 @@ output_name: pythia-160m
 data_root: data/
 context_window: 1024
 stride: 512
-layers: all
+layers:
+- 0
+- 6
+- 12
 pooling: mean
 attention_mode: auto
 dtype: float32

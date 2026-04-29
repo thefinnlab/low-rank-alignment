@@ -1,11 +1,13 @@
-# hf_model_id: EleutherAI/gpt-j-6b
 hf_model_id: model_cache/models/gpt-j
 tokenizer_name_or_path: model_cache/gpt2-xl
 output_name: gpt-j-6b
 data_root: data/
 context_window: 1024
 stride: 512
-layers: [0, 14, 28]
+layers:
+- 0
+- 14
+- 28
 pooling: mean
 attention_mode: auto
 dtype: float16

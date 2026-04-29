@@ -1,13 +1,12 @@
-# Regenerates GPT-2-XL embeddings into data/stimuli/gpt2-xl/ using the
-# podcast-compatible per-token causal LM path.
 hf_model_id: openai-community/gpt2-xl
-# Optional: point this at a directory produced by download_tokenizer.py.
-# tokenizer_name_or_path: model_cache/tokenizers/gpt2-xl
 output_name: gpt2-xl
 data_root: data/
 context_window: 1024
 stride: null
-layers: all
+layers:
+- 0
+- 24
+- 48
 pooling: mean
 attention_mode: podcast_per_token
 dtype: float32

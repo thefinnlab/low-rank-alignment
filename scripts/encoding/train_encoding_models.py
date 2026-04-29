@@ -37,7 +37,11 @@ from src.utils import (
 )
 from src.core.config import EncodingConfig, get_results_dir
 from src.core.registry import get_dataset_adapter, resolve_dataset_context
-from src.utils.config_utils import parse_args, load_config
+from src.utils.config_utils import (
+    parse_args,
+    load_config,
+    expand_per_model_layer_configs,
+)
 from src.utils.constants import check_alpha_grid_boundaries
 from src.utils.encoding import (
     get_and_offset_arbitrary_embeddings,
@@ -307,10 +311,7 @@ def _run_batch(
 # ---------------------------------------------------------------------------
 
 
-def main():
-    args, overrides = parse_args("Encoding model training")
-    config: EncodingConfig = load_config(args.config, overrides, EncodingConfig)
-
+def run_config(config: EncodingConfig):
     subject_ids = config.subjects or list(range(1, 10))
     offset = config.offset
     dataset_context = resolve_dataset_context(
@@ -398,6 +399,19 @@ def main():
             alpha_grid=alpha_grid,
             word_in_glove=word_in_glove,
         )
+
+
+def main():
+    args, overrides = parse_args("Encoding model training")
+    config: EncodingConfig = load_config(args.config, overrides, EncodingConfig)
+    configs = expand_per_model_layer_configs(config)
+    for layer_config in configs:
+        if len(configs) > 1:
+            print(
+                f"\nRunning encoding training for layer "
+                f"{layer_config.per_model_config['layer']}"
+            )
+        run_config(layer_config)
 
 
 if __name__ == "__main__":

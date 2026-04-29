@@ -1,5 +1,3 @@
-# Generate GPT-2-XL embeddings for one Brain Treebank movie.
-# Override `per_dataset_config.movie` when running for a different stimulus.
 hf_model_id: openai-community/gpt2-xl
 output_name: gpt2-xl
 data_root: data/brain-treebank
@@ -8,7 +6,10 @@ per_dataset_config:
   movie: coraline
 context_window: 1024
 stride: null
-layers: all
+layers:
+- 0
+- 24
+- 48
 pooling: mean
 attention_mode: podcast_per_token
 dtype: float32

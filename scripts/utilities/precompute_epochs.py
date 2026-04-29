@@ -90,13 +90,17 @@ def main():
     print(f"Precomputing epochs for subjects: {subject_ids}")
     print(f"  data_root: {config.data_root}")
 
+    per_model_config = dict(config.per_model_config)
+    if isinstance(per_model_config.get("layer"), list):
+        per_model_config["layer"] = per_model_config["layer"][0]
+
     _, df_word = load_embeddings(
         config.data_root,
         config.model,
         dataset=config.dataset,
         per_dataset_config=config.per_dataset_config,
         dataset_context=dataset_context,
-        **config.per_model_config,
+        **per_model_config,
     )
     dataset_adapter = get_dataset_adapter(config.dataset)
 

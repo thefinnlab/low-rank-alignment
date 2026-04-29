@@ -13,6 +13,7 @@ from src.utils.config_utils import (
     dict_to_dataclass,
     apply_overrides,
     load_config,
+    expand_per_model_layer_configs,
 )
 
 
@@ -186,6 +187,12 @@ class TestGetResultsDir:
         result = get_results_dir("glove", 0, {"dim": 50})
         assert "glove_dim50_offset0" in result
 
+    def test_transformer_model_dir_layer_dir(self):
+        result = get_results_dir(
+            "transformer", 0, {"model_dir": "gpt2-xl", "layer": 24}
+        )
+        assert result == os.path.join("results/", "gpt2-xl_layer24_offset0")
+
     def test_brain_treebank_results_dir_includes_movie(self):
         context = DatasetContext(
             dataset="brain_treebank",
@@ -215,6 +222,54 @@ class TestGetResultsDir:
     def test_unknown_model_raises(self):
         with pytest.raises(ValueError):
             get_results_dir("llama", 0, {})
+
+
+# ---------------------------------------------------------------------------
+# expand_per_model_layer_configs
+# ---------------------------------------------------------------------------
+
+
+class TestExpandPerModelLayerConfigs:
+    def test_scalar_layer_returns_original_config(self):
+        config = SignificanceConfig(
+            encoding=EncodingConfig(
+                model="transformer",
+                per_model_config={"model_dir": "gpt2-xl", "layer": 24},
+            )
+        )
+
+        expanded = expand_per_model_layer_configs(config)
+
+        assert expanded == [config]
+        assert expanded[0].encoding.per_model_config["layer"] == 24
+
+    def test_list_layer_expands_to_scalar_layer_configs(self):
+        config = RRRConfig(
+            encoding=EncodingConfig(
+                model="transformer",
+                per_model_config={"model_dir": "gpt2-xl", "layer": [0, 24, 48]},
+            )
+        )
+
+        expanded = expand_per_model_layer_configs(config)
+
+        assert [c.encoding.per_model_config["layer"] for c in expanded] == [0, 24, 48]
+        assert all(
+            not isinstance(c.encoding.per_model_config["layer"], list)
+            for c in expanded
+        )
+        assert config.encoding.per_model_config["layer"] == [0, 24, 48]
+
+    def test_encoding_config_list_layer_expands_to_scalar_layer_configs(self):
+        config = EncodingConfig(
+            model="transformer",
+            per_model_config={"model_dir": "gpt2-xl", "layer": [0, 24, 48]},
+        )
+
+        expanded = expand_per_model_layer_configs(config)
+
+        assert [c.per_model_config["layer"] for c in expanded] == [0, 24, 48]
+        assert config.per_model_config["layer"] == [0, 24, 48]
 
 
 # ---------------------------------------------------------------------------

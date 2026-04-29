@@ -70,7 +70,11 @@ from src.utils.data_loaders import load_sig_electrodes
 from src.utils.atlas import build_electrode_region_map
 from src.core.config import RRRConfig, ScriptMode, get_results_dir
 from src.core.registry import get_dataset_adapter, resolve_dataset_context
-from src.utils.config_utils import parse_args, load_config
+from src.utils.config_utils import (
+    parse_args,
+    load_config,
+    expand_per_model_layer_configs,
+)
 from src.utils.embeddings import get_glove_embeddings
 from src.utils.encoding import (
     load_encoding_results,
@@ -1449,9 +1453,7 @@ def _run_leave_one_subject_out_rrr(
 # ---------------------------------------------------------------------------
 
 
-def main():
-    args, overrides = parse_args("RRR: raw-input reduced rank regression baseline")
-    config: RRRConfig = load_config(args.config, overrides, RRRConfig)
+def run_config(config: RRRConfig):
     enc = config.encoding
 
     import torch
@@ -1548,6 +1550,19 @@ def main():
         _run_cross_subject_rrr(**branch_kwargs)
 
     print("\nDone.")
+
+
+def main():
+    args, overrides = parse_args("RRR: raw-input reduced rank regression baseline")
+    config: RRRConfig = load_config(args.config, overrides, RRRConfig)
+    configs = expand_per_model_layer_configs(config)
+    for layer_config in configs:
+        if len(configs) > 1:
+            print(
+                f"\nRunning RRR for layer "
+                f"{layer_config.encoding.per_model_config['layer']}"
+            )
+        run_config(layer_config)
 
 
 if __name__ == "__main__":

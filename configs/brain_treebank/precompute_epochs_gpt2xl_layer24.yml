@@ -2,9 +2,13 @@ data_root: data/brain-treebank
 dataset: brain_treebank
 per_dataset_config:
   movie: coraline
-model: gpt2xl
+model: transformer
 per_model_config:
-  layer: 24
+  layer:
+  - 0
+  - 24
+  - 48
+  model_dir: gpt2-xl
 offset: 0
 subjects: null
 run_name: null

@@ -37,16 +37,16 @@ from src.utils import (
 )
 from src.core.config import NewSignificanceConfig, get_results_dir
 from src.core.registry import get_dataset_adapter, resolve_dataset_context
-from src.utils.config_utils import parse_args, load_config
+from src.utils.config_utils import (
+    parse_args,
+    load_config,
+    expand_per_model_layer_configs,
+)
 from src.utils.encoding import get_ridge_model_constructor
 from src.utils.significance import compute_observed_max_per_electrode
 
 
-def main():
-    args, overrides = parse_args("Compute significance from null distribution")
-    config: NewSignificanceConfig = load_config(
-        args.config, overrides, NewSignificanceConfig
-    )
+def run_config(config: NewSignificanceConfig):
     enc = config.encoding
 
     subject_ids = enc.subjects or list(range(1, 10))
@@ -259,6 +259,21 @@ def main():
     sig_path = os.path.join(output_dir, "all_subject_sig.csv")
     df_sig.to_csv(sig_path, index=False)
     print(f"Wrote {sig_path}  ({len(df_sig):,} rows)")
+
+
+def main():
+    args, overrides = parse_args("Compute significance from null distribution")
+    config: NewSignificanceConfig = load_config(
+        args.config, overrides, NewSignificanceConfig
+    )
+    configs = expand_per_model_layer_configs(config)
+    for layer_config in configs:
+        if len(configs) > 1:
+            print(
+                f"\nComputing significance for layer "
+                f"{layer_config.encoding.per_model_config['layer']}"
+            )
+        run_config(layer_config)
 
 
 if __name__ == "__main__":

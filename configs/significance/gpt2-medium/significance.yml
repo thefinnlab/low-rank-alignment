@@ -1,0 +1,18 @@
+encoding:
+  data_root: data/
+  model: transformer
+  offset: 0
+  subjects: null
+  run_name: null
+  batch: false
+  num_folds: 5
+  per_model_config:
+    model_dir: gpt2-medium
+    layer:
+    - 0
+    - 12
+    - 24
+output_dir: null
+minimal_shift: 500
+fdr_q: 0.01
+save_weights: true

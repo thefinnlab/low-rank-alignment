@@ -24,6 +24,7 @@ NULL_CONFIG	    ?= configs/new_sig/null_dist.yml
 NEW_SIG_CONFIG  ?= configs/new_sig/new_sig.yml
 PRECOMPUTE_EPOCHS_CONFIG ?= configs/precompute_epochs/precompute_epochs_default.yml
 EMBED_CONFIG    ?= configs/embeddings/generate_gpt2_xl.yml
+RANDOM_EMBED_CONFIG ?= configs/embeddings/generate_random_gpt2_xl.yml
 RUN_DIR         ?=   # required for plots: RUN_DIR=results/my_run
 DATA_ROOT       ?= data
 ATLAS_PATH      ?= atlases/destrieux_2009/destrieux2009_rois_lateralized.nii.gz
@@ -112,6 +113,14 @@ generate-embeddings:
 generate-embeddings-batch:
 	$(call run_config_list,EMBED_CONFIGS,generate embeddings,scripts/utilities/generate_embeddings.py)
 
+## Generate random-init contextual embeddings using the random embedding wrapper
+## Usage:
+##   make generate-random-embeddings
+##   make generate-random-embeddings RANDOM_EMBED_CONFIG=configs/embeddings/generate_random_gpt2_xl.yml CMD=python
+generate-random-embeddings:
+	mkdir -p logs
+	$(CMD) scripts/utilities/generate_random_embeddings.py --config $(RANDOM_EMBED_CONFIG) $(OVERRIDES)
+
 ## Generate null distribution for new significance test.
 ## Usage:
 ##   make null-dist                                                 # default config
@@ -194,4 +203,4 @@ sig-test:
 test:
 	python -m pytest tests/ -v
 
-.PHONY: sig sig-batch train plots svd srrr rrr rrr-batch pca partial-svd partial-rrr sae sig-test test generate-embeddings generate-embeddings-batch
+.PHONY: sig sig-batch train plots svd srrr rrr rrr-batch pca partial-svd partial-rrr sae sig-test test generate-embeddings generate-embeddings-batch generate-random-embeddings

@@ -19,7 +19,9 @@ This is a neuroscience encoding analysis pipeline that studies how language-mode
 
 The Makefile also provides batch targets for releasing multiple config runs:
 `make generate-embeddings-batch EMBED_CONFIGS="..."`, `make sig-batch
-SIG_CONFIGS="..."`, and `make rrr-batch RRR_CONFIGS="..."`.
+SIG_CONFIGS="..."`, and `make rrr-batch RRR_CONFIGS="..."`. Random-init
+embedding runs can use `make generate-random-embeddings`, which wraps
+`scripts/utilities/generate_random_embeddings.py`.
 
 ### Generating embeddings for new models
 
@@ -46,7 +48,12 @@ Both layouts contain files matching the existing GPT-2-XL layout:
 word/token metadata), and `metadata.json` (generation parameters), with
 `performance.json` present for podcast-compatible causal LM runs. The
 `transformer` embedding getter in `src/utils/embeddings.py` loads any of these
-directories by `dataset`, `model_dir`, and `layer`. Offline GPU hosts should
+directories by `dataset`, `model_dir`, and `layer`. Current transformer
+generation configs save three explicit layers per model: embedding/input,
+middle, and final hidden-state indices. Downstream encoding, significance, and
+RRR configs store these as list-valued `encoding.per_model_config.layer` entries
+and the entrypoints expand them into one scalar-layer run at a time before
+deriving results directories or loading embeddings. Offline GPU hosts should
 pre-populate the HF cache (e.g. `huggingface-cli download meta-llama/Meta-Llama-3-8B`)
 and run with the default `local_files_only: true`.
 
@@ -58,7 +65,7 @@ and run with the default `local_files_only: true`.
 
 | File | Purpose |
 |------|---------|
-| `Makefile` | Build targets for all pipeline stages; supports SLURM or local execution, including config-list batch targets for embeddings, significance, and RRR |
+| `Makefile` | Build targets for all pipeline stages; supports SLURM or local execution, including config-list batch targets for embeddings, significance, and RRR, plus a random-init embedding wrapper target |
 | `submit.sh` | SLURM job submission script (1 CPU, 1 GPU, 32GB RAM, 2hr); activates `align_env` virtualenv |
 | `pytest.ini` | Pytest config with custom markers and test path |
 
@@ -84,6 +91,10 @@ YAML config files passed to scripts via `--config`:
 | `rrr_per_region.yml` | Per-region RRR variant with Destrieux atlas regions |
 | `sae_default.yml` | SAE cross-subject default (k=10, hidden_dim=50, end-to-end, OLS, L1=0.001) |
 | `ablation_default.yml` | Ablation cross-subject default (rank_grid [1,2,5,...,1600], center_pcts [10,30,50,70,90], masks [tail,center,random], 5 random seeds) |
+
+Model-specific transformer releases live under `configs/significance/<model>/`
+and `configs/rrr/<model>/`, with separate significance, cross-subject RRR, and
+leave-one-subject-out RRR configs for each generated embedding directory.
 
 ### `scripts/`
 
@@ -116,7 +127,7 @@ Core library modules:
 
 | `constants.py` | Project-wide constants; `RIDGE_ALPHAS` — default alpha grid for RidgeCV; `refine_alpha_grid()` — builds a refined grid from observed best alphas; `check_alpha_grid_boundaries()` — detects when selected alphas cluster at grid edges |
 | `config.py` | Dataclass definitions for `EncodingConfig`, `SignificanceConfig`, `NullDistConfig`, `NewSignificanceConfig`, `SVDConfig`, `PartialSVDConfig`, `PartialRRRConfig`, `SRRRConfig`, `RRRConfig`, `PCAConfig`, `SAEConfig`, `AblationConfig`; `get_results_dir()` for canonical output paths. `EncodingConfig` now carries additive `dataset` / `per_dataset_config` fields so runs can stay model-specific while also being stimulus-scoped. Most downstream configs support `sig_dir` to override where significance CSVs are read from (defaults to `output_dir`). |
-| `config_utils.py` | Argument parsing and YAML loading with CLI override support (dot-notation, e.g. `--encoding.layer=48`) |
+| `config_utils.py` | Argument parsing and YAML loading with CLI override support (dot-notation, e.g. `--encoding.per_model_config.layer=48`), plus downstream layer-list fanout helpers |
 | `registry.py` | Dual registries for embedding getters and dataset adapters. Dataset adapters resolve dataset-specific transcript tables, raw/cache locations, significance loading, and stimulus context. Built-in adapters cover `podcast` and movie-scoped `brain_treebank`; Brain Treebank HDF5 sEEG recordings are converted from microvolts to MNE `RawArray` objects in volts, subject word tables are aligned from movie time to neural sample indices via `subject_timings`, and optional high-gamma preprocessing now mirrors the podcast path with 512 Hz resampling, average reference, 60 Hz harmonic notch filtering, then 70-200 Hz Butterworth/Hilbert envelope extraction before shared epoching/resampling. |
 | `data_loaders.py` | Loads iEEG data and precomputed epoch caches, now via dataset-dispatched helpers so transcript/cache/significance behavior can vary by dataset while keeping existing utility entrypoints stable. `compute_epoch_cache_indices()` derives cache slice indices without materializing full MNE Epochs arrays, uses Brain Treebank estimated sample indices when available, and drops duplicate onset samples. `build_XY_from_subjects()` still stacks multi-subject neural data, but rejects mixed-stimulus or mismatched word-selection cache combinations. |
 | `embeddings.py` | Loads contextual token embeddings from HDF5 and pools tokens per word. Transcript and HDF5 directory selection are dataset-aware: podcast uses `data/stimuli/{model_dir}/`, while Brain Treebank uses `data/stimuli/{model_dir}/movie-{movie}/` and prefers the generated per-token `transcript.tsv` for contextual pooling. Registered getters: `gpt2xl`, `transformer`, `glove`, `arbitrary` |

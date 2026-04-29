@@ -10,5 +10,13 @@ encoding:
 output_dir: null
 rrr_output_dir: null
 mode: cross_subject
-rank_grid: [1, 2, 5, 7, 10, 20, 40, 50]
+rank_grid:
+- 1
+- 2
+- 4
+- 8
+- 16
+- 32
+- 50
 refresh: false
+run_pca_baseline: true

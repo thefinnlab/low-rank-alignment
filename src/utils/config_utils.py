@@ -119,6 +119,27 @@ def load_config(config_path: str | None, overrides: dict, config_cls):
     return apply_overrides(config, overrides)
 
 
+def expand_per_model_layer_configs(config):
+    """Return one config per ``encoding.per_model_config.layer`` value.
+
+    Existing scalar-layer configs are returned unchanged. List-valued layer configs
+    are deep-copied into scalar-layer configs so downstream code derives output
+    directories and loads embeddings one layer at a time.
+    """
+    encoding = getattr(config, "encoding", config)
+    layer = getattr(encoding, "per_model_config", {}).get("layer")
+    if not isinstance(layer, list):
+        return [config]
+
+    configs = []
+    for scalar_layer in layer:
+        expanded = deepcopy(config)
+        expanded_encoding = getattr(expanded, "encoding", expanded)
+        expanded_encoding.per_model_config["layer"] = scalar_layer
+        configs.append(expanded)
+    return configs
+
+
 def parse_args(description: str = ""):
     """Return (args, overrides_dict) where args.config is the YAML path."""
     parser = argparse.ArgumentParser(description=description)

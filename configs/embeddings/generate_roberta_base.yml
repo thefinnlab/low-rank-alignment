@@ -1,12 +1,12 @@
-# RoBERTa is bidirectional: attention_mode=bidirectional_strict forces stride=1
-# so each target hidden state only sees preceding tokens within its window.
-# batch_size controls GPU parallelism across targets (no information leakage).
 hf_model_id: FacebookAI/roberta-base
 output_name: roberta-base
 data_root: data/
 context_window: 512
 stride: 1
-layers: all
+layers:
+- 0
+- 6
+- 12
 pooling: mean
 attention_mode: bidirectional_strict
 dtype: float32
