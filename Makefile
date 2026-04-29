@@ -30,11 +30,37 @@ DATA_ROOT       ?= data
 ATLAS_PATH      ?= atlases/destrieux_2009/destrieux2009_rois_lateralized.nii.gz
 OVERRIDES       ?=   # e.g. OVERRIDES="--encoding.layer=48 --n_permutations=100"
 
+# For downloading model weights.
+MODELS ?= openai-community/gpt2-xl meta-llama/Meta-Llama-3-8B openai-community/gpt2 EleutherAI/gpt-j-6b FacebookAI/roberta-large
+
 # Batch config lists. Override these with whitespace-separated
 # config paths, e.g. SIG_CONFIGS="configs/a.yml configs/b.yml".
-EMBED_CONFIGS   ?= $(EMBED_CONFIG)
-SIG_CONFIGS     ?= $(SIG_CONFIG)
-RRR_CONFIGS     ?= $(RRR_CONFIG)
+EMBED_CONFIGS   ?= configs/embeddings/generate_gpt2_xl.yml \
+				   configs/embeddings/generate_gptj_6b.yml \
+				   configs/embeddings/generate_random_gpt2_xl.yml \
+				   configs/embeddings/generate_llama3_8b.yml \
+				   configs/embeddings/generate_roberta_large.yml \
+				   configs/embeddings/generate_gpt2.yml
+SIG_CONFIGS     ?= configs/significance/gpt-j-6b/significance.yml \
+				   configs/significance/gpt2-xl/significance.yml \
+				   configs/significance/llama3-8b/significance.yml \
+				   configs/significance/roberta-large/significance.yml \
+				   configs/significance/random-gpt2-xl/significance.yml \
+				   configs/significance/gpt2/significance.yml \
+				   configs/significance/glove/significance.yml
+RRR_CONFIGS     ?= configs/rrr/gpt-j-6b/cross_subject.yml \
+				   configs/rrr/gpt-j-6b/leave_one_subject_out.yml \
+				   configs/rrr/gpt2/cross_subject.yml \
+				   configs/rrr/gpt2/leave_one_subject_out.yml \
+				   configs/rrr/gpt2-xl/cross_subject.yml \
+				   configs/rrr/gpt2-xl/leave_one_subject_out.yml \
+				   configs/rrr/llama3-8b/cross_subject.yml \
+				   configs/rrr/llama3-8b/leave_one_subject_out.yml \
+				   configs/rrr/roberta-large/cross_subject.yml \
+				   configs/rrr/roberta-large/leave_one_subject_out.yml \
+				   configs/rrr/glove/cross_subject.yml \
+				   configs/rrr/glove/leave_one_subject_out.yml
+
 
 define run_config_list
 set -e
@@ -44,6 +70,16 @@ for config in $($(1)); do
 	$(CMD) $(3) --config $$config $(OVERRIDES)
 done
 endef
+
+download-models:
+	@for model in $(MODELS); do \
+		echo "Processing $$model..."; \
+		SHORT_NAME=$$(echo $$model | cut -d'/' -f2); \
+		python scripts/utilities/download_model.py \
+			--model-id=$$model \
+			--output-dir=model_cache/models/$$SHORT_NAME \
+			--include-tokenizer; \
+	done
 
 # ── Targets ───────────────────────────────────────────────────────────────────
 
@@ -203,4 +239,4 @@ sig-test:
 test:
 	python -m pytest tests/ -v
 
-.PHONY: sig sig-batch train plots svd srrr rrr rrr-batch pca partial-svd partial-rrr sae sig-test test generate-embeddings generate-embeddings-batch generate-random-embeddings
+.PHONY: sig sig-batch train plots svd srrr rrr rrr-batch pca partial-svd partial-rrr sae sig-test test generate-embeddings generate-embeddings-batch generate-random-embeddings download-models
