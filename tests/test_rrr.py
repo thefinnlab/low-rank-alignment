@@ -277,7 +277,7 @@ class TestRunRRRForUnit:
         assert os.path.exists(os.path.join(str(tmp_path), "summary.csv"))
         assert os.path.exists(os.path.join(str(tmp_path), "rank_analysis.png"))
 
-    def test_resume_reruns_rank_with_missing_metrics_file(
+    def test_resume_rebuilds_missing_metrics_file_from_saved_factors(
         self, tmp_path, small_data, monkeypatch
     ):
         import run_rrr
@@ -302,7 +302,7 @@ class TestRunRRRForUnit:
         config = self._make_config(rank_grid=[1, 3], refresh=False)
         run_rrr._run_rrr_for_unit(str(tmp_path), X, test_idxs, per_fold_baselines, config)
 
-        assert calls["n"] == len(test_idxs)
+        assert calls["n"] == 0
         assert os.path.exists(os.path.join(str(tmp_path), "k1", "fold_0", "metrics.npz"))
         df = pd.read_csv(os.path.join(str(tmp_path), "grid_results.csv"))
         assert len(df) == 4
