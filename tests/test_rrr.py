@@ -328,6 +328,34 @@ class TestRunRRRForUnit:
         config = self._make_config(rank_grid=[1], refresh=False)
         run_rrr._run_rrr_for_unit(str(tmp_path), X, test_idxs, per_fold_baselines, config)
 
+    def test_resume_rebuilds_grid_from_artifacts_without_grid_csv(
+        self, tmp_path, small_data, monkeypatch
+    ):
+        import run_rrr
+
+        X, Y = small_data
+        n = X.shape[0]
+        test_idxs = [np.arange(0, n // 2), np.arange(n // 2, n)]
+        per_fold_baselines = _make_baselines(X, Y, test_idxs)
+
+        config = self._make_config(rank_grid=[1])
+        run_rrr._run_rrr_for_unit(str(tmp_path), X, test_idxs, per_fold_baselines, config)
+        os.remove(os.path.join(str(tmp_path), "grid_results.csv"))
+
+        def fail_fit(*args, **kwargs):
+            raise AssertionError("fit_dense_rrr should not run when artifacts are complete")
+
+        monkeypatch.setattr(run_rrr, "fit_dense_rrr", fail_fit)
+        config = self._make_config(rank_grid=[1], refresh=False)
+        run_rrr._run_rrr_for_unit(str(tmp_path), X, test_idxs, per_fold_baselines, config)
+
+        df = pd.read_csv(os.path.join(str(tmp_path), "grid_results.csv"))
+        assert len(df) == 2
+        assert set(df["fold"].unique()) == {0, 1}
+        assert set(df["k"].unique()) == {1}
+        assert "rrr_corr" in df.columns
+        assert "nr_complement_joint_corr" in df.columns
+
     def test_refresh_recomputes_all_ranks(self, tmp_path, small_data, monkeypatch):
         import run_rrr
 

@@ -203,8 +203,23 @@ def _oof_paths_exist(
     return all(os.path.exists(path) for path in paths)
 
 
-def _completed_pairs_from_grid(
-    existing_df: pd.DataFrame,
+def _rank_complete_from_artifacts(
+    unit_dir: str,
+    k: int,
+    n_folds: int,
+    require_factors: bool = False,
+) -> bool:
+    if any(not os.path.exists(_metrics_path(unit_dir, k, fold_f)) for fold_f in range(n_folds)):
+        return False
+    if require_factors and any(
+        not _fold_factors_exist(unit_dir, fold_f, require_b=True)
+        for fold_f in range(n_folds)
+    ):
+        return False
+    return True
+
+
+def _completed_pairs_from_artifacts(
     unit_dir: str,
     rank_grid: list[int],
     n_folds: int,
@@ -213,37 +228,19 @@ def _completed_pairs_from_grid(
     primary_label: "str | None" = None,
     require_arbitrary_oof: bool = False,
 ) -> set[tuple[int, int]]:
-    """Completed (k, fold) pairs with a trusted row and metrics file.
+    """Completed (k, fold) pairs based on artifact files, not grid_results.csv.
 
     If a rank is only partially complete, OOF spill files are also required so
     stacked joint metrics can be rebuilt when the missing pairs finish. Fully
-    complete ranks do not need spill files because their existing grid rows can
-    be reused directly.
+    complete ranks do not need spill files to be considered completed, because
+    their per-fold metric files can rebuild grid rows.
     """
-    if (
-        existing_df.empty
-        or "k" not in existing_df.columns
-        or "fold" not in existing_df.columns
-    ):
-        return set()
-
-    expected_folds = set(range(n_folds))
     completed: set[tuple[int, int]] = set()
     for k in rank_grid:
-        rows = existing_df[existing_df["k"] == k]
-        folds_present = set(rows["fold"].astype(int).tolist())
-        candidate_folds = folds_present & expected_folds
-        complete_rank = folds_present == expected_folds and all(
-            os.path.exists(_metrics_path(unit_dir, k, fold_f))
-            for fold_f in expected_folds
+        complete_rank = _rank_complete_from_artifacts(
+            unit_dir, k, n_folds, require_factors=require_factors
         )
-        if complete_rank and require_factors:
-            complete_rank = all(
-                _fold_factors_exist(unit_dir, fold_f, require_b=True)
-                for fold_f in expected_folds
-            )
-
-        for fold_f in candidate_folds:
+        for fold_f in range(n_folds):
             if not os.path.exists(_metrics_path(unit_dir, k, fold_f)):
                 continue
             if require_factors and not _fold_factors_exist(
@@ -268,7 +265,6 @@ def _completed_pairs_from_grid(
 
 
 def _ranks_by_fold_to_run(
-    existing_df: pd.DataFrame,
     unit_dir: str,
     rank_grid: list[int],
     n_folds: int,
@@ -281,8 +277,7 @@ def _ranks_by_fold_to_run(
     """Return per-fold ranks to compute plus (k, fold) pairs reusable from disk."""
     if refresh:
         return {fold_f: list(rank_grid) for fold_f in range(n_folds)}, set()
-    completed = _completed_pairs_from_grid(
-        existing_df,
+    completed = _completed_pairs_from_artifacts(
         unit_dir,
         rank_grid,
         n_folds,
@@ -298,24 +293,117 @@ def _ranks_by_fold_to_run(
     return ranks_by_fold, completed
 
 
+def _scalar_from_metric(metrics: dict, key: str) -> "float | None":
+    if key in metrics:
+        value = metrics[key]
+        arr = np.asarray(value)
+        return float(arr.mean()) if arr.shape else float(arr)
+    per_target_key = f"{key}_per_target"
+    if per_target_key in metrics:
+        return float(np.asarray(metrics[per_target_key]).mean())
+    return None
+
+
+def _row_from_metrics_file(
+    unit_dir: str,
+    k: int,
+    fold_f: int,
+    primary_label: str,
+    sig_mask_flat: "np.ndarray | None",
+    include_effective_rank: bool = False,
+) -> dict:
+    metrics = dict(np.load(_metrics_path(unit_dir, k, fold_f), allow_pickle=True))
+    row = {"fold": fold_f, "k": k}
+
+    if include_effective_rank and _fold_factors_exist(unit_dir, fold_f, require_b=True):
+        A_full = np.load(os.path.join(unit_dir, f"fold_{fold_f}", "A.npy"))
+        A_k = A_full[:, :k]
+        sv = np.linalg.svd(A_k, compute_uv=False)
+        row["effective_rank"] = (
+            int(np.sum(sv > 1e-6 * sv[0])) if len(sv) > 0 and sv[0] > 0 else 0
+        )
+
+    base_keys = [
+        "full_corr",
+        "full_r2",
+        f"{primary_label}_corr",
+        f"{primary_label}_r2",
+        "complement_corr",
+        "complement_r2",
+        f"{primary_label}_complement_joint_corr",
+        f"{primary_label}_complement_joint_r2",
+        f"{primary_label}_arbitrary_joint_corr",
+        f"{primary_label}_arbitrary_joint_r2",
+        "arbitrary_corr",
+        "arbitrary_r2",
+    ]
+    if primary_label == "nr":
+        base_keys.extend(["rrr_corr", "rrr_r2"])
+
+    for key in base_keys:
+        value = _scalar_from_metric(metrics, key)
+        if value is not None:
+            row[key] = value
+
+    if sig_mask_flat is not None:
+        for key in base_keys:
+            per_target_key = f"{key}_per_target"
+            if per_target_key not in metrics:
+                continue
+            arr = np.asarray(metrics[per_target_key])
+            if key.endswith("_corr"):
+                row[f"{key}_sig"] = (
+                    float(arr[sig_mask_flat].mean())
+                    if sig_mask_flat.any()
+                    else float("nan")
+                )
+                row[f"{key}_nonsig"] = (
+                    float(arr[~sig_mask_flat].mean())
+                    if (~sig_mask_flat).any()
+                    else float("nan")
+                )
+    return row
+
+
 def _merge_grid_rows(
     existing_df: pd.DataFrame,
     new_rows: list[dict],
     completed_pairs: set[tuple[int, int]],
     rank_grid: list[int],
+    unit_dir: "str | None" = None,
+    primary_label: "str | None" = None,
+    sig_mask_flat: "np.ndarray | None" = None,
+    include_effective_rank: bool = False,
 ) -> pd.DataFrame:
     """Merge trusted prior (k, fold) rows with rows generated in this invocation."""
     parts = []
-    if completed_pairs and not existing_df.empty:
-        completed_index = pd.MultiIndex.from_tuples(
-            completed_pairs, names=["k", "fold"]
-        )
+    completed_index = pd.MultiIndex.from_tuples(completed_pairs, names=["k", "fold"])
+    grid_pairs = set()
+    if completed_pairs and not existing_df.empty and {"k", "fold"}.issubset(existing_df.columns):
         prior = existing_df.copy()
         prior["k"] = prior["k"].astype(int)
         prior["fold"] = prior["fold"].astype(int)
         prior = prior.set_index(["k", "fold"])
         prior = prior[prior.index.isin(completed_index)].reset_index()
+        grid_pairs = set(zip(prior["k"].astype(int), prior["fold"].astype(int)))
         parts.append(prior)
+    missing_grid_pairs = completed_pairs - grid_pairs
+    if missing_grid_pairs and unit_dir is not None and primary_label is not None:
+        parts.append(
+            pd.DataFrame(
+                [
+                    _row_from_metrics_file(
+                        unit_dir,
+                        k,
+                        fold_f,
+                        primary_label,
+                        sig_mask_flat,
+                        include_effective_rank=include_effective_rank,
+                    )
+                    for k, fold_f in sorted(missing_grid_pairs)
+                ]
+            )
+        )
     if new_rows:
         parts.append(pd.DataFrame(new_rows))
     if not parts:
@@ -756,7 +844,6 @@ def _run_rrr_for_unit(
 
     existing_grid = _load_existing_grid(rrr_unit_dir)
     ranks_by_fold, completed_pairs = _ranks_by_fold_to_run(
-        existing_grid,
         rrr_unit_dir,
         config.rank_grid,
         n_folds,
@@ -771,9 +858,18 @@ def _run_rrr_for_unit(
         print(f"  Reusing {len(completed_pairs)} completed fold/rank pair(s)")
     if total_to_run == 0:
         print(
-            "  All requested fold/rank pairs complete; rebuilding summary/plots from existing grid."
+            "  All requested fold/rank pairs complete; rebuilding summary/plots from existing artifacts."
         )
-        df = _merge_grid_rows(existing_grid, [], completed_pairs, config.rank_grid)
+        df = _merge_grid_rows(
+            existing_grid,
+            [],
+            completed_pairs,
+            config.rank_grid,
+            unit_dir=rrr_unit_dir,
+            primary_label="nr",
+            sig_mask_flat=sig_mask_flat,
+            include_effective_rank=True,
+        )
         joint_ranks = _joint_ranks_ready_to_compute(
             df,
             config.rank_grid,
@@ -964,7 +1060,14 @@ def _run_rrr_for_unit(
     joint_label = "OLS + ridge" if config.compute_joint_ridge else "OLS"
     print(f"\nComputing stacked {joint_label} joint correlations...")
     merged_rows = _merge_grid_rows(
-        existing_grid, all_rows, completed_pairs, config.rank_grid
+        existing_grid,
+        all_rows,
+        completed_pairs,
+        config.rank_grid,
+        unit_dir=rrr_unit_dir,
+        primary_label="nr",
+        sig_mask_flat=sig_mask_flat,
+        include_effective_rank=True,
     ).to_dict("records")
     joint_ranks = set(affected_ranks) | _joint_ranks_ready_to_compute(
         pd.DataFrame(merged_rows),
@@ -1061,7 +1164,6 @@ def _run_pca_for_unit(
 
     existing_grid = _load_existing_grid(pca_unit_dir)
     ranks_by_fold, completed_pairs = _ranks_by_fold_to_run(
-        existing_grid,
         pca_unit_dir,
         rank_grid,
         n_folds,
@@ -1076,9 +1178,17 @@ def _run_pca_for_unit(
         print(f"  Reusing {len(completed_pairs)} completed PCA fold/rank pair(s)")
     if total_to_run == 0:
         print(
-            "  All requested PCA fold/rank pairs complete; rebuilding summary/plots from existing grid."
+            "  All requested PCA fold/rank pairs complete; rebuilding summary/plots from existing artifacts."
         )
-        df = _merge_grid_rows(existing_grid, [], completed_pairs, rank_grid)
+        df = _merge_grid_rows(
+            existing_grid,
+            [],
+            completed_pairs,
+            rank_grid,
+            unit_dir=pca_unit_dir,
+            primary_label="pca",
+            sig_mask_flat=sig_mask_flat,
+        )
         joint_ranks = _joint_ranks_ready_to_compute(
             df,
             rank_grid,
@@ -1175,7 +1285,13 @@ def _run_pca_for_unit(
     joint_label = "OLS + ridge" if compute_joint_ridge else "OLS"
     print(f"\nComputing stacked {joint_label} joint correlations...")
     merged_rows = _merge_grid_rows(
-        existing_grid, all_rows, completed_pairs, rank_grid
+        existing_grid,
+        all_rows,
+        completed_pairs,
+        rank_grid,
+        unit_dir=pca_unit_dir,
+        primary_label="pca",
+        sig_mask_flat=sig_mask_flat,
     ).to_dict("records")
     joint_ranks = set(affected_ranks) | _joint_ranks_ready_to_compute(
         pd.DataFrame(merged_rows),
@@ -1482,7 +1598,6 @@ def _run_loso_transfer_for_unit(
 
     existing_grid = _load_existing_grid(transfer_dir)
     ranks_by_fold, completed_pairs = _ranks_by_fold_to_run(
-        existing_grid,
         transfer_dir,
         config.rank_grid,
         n_folds,
@@ -1506,9 +1621,17 @@ def _run_loso_transfer_for_unit(
         print(f"  Reusing {len(completed_pairs)} completed transfer fold/rank pair(s)")
     if total_to_run == 0:
         print(
-            "  All requested transfer fold/rank pairs complete; rebuilding summary/plots from existing grid."
+            "  All requested transfer fold/rank pairs complete; rebuilding summary/plots from existing artifacts."
         )
-        df = _merge_grid_rows(existing_grid, [], completed_pairs, config.rank_grid)
+        df = _merge_grid_rows(
+            existing_grid,
+            [],
+            completed_pairs,
+            config.rank_grid,
+            unit_dir=transfer_dir,
+            primary_label="transfer",
+            sig_mask_flat=sig_mask_flat,
+        )
         joint_ranks = _joint_ranks_ready_to_compute(
             df,
             config.rank_grid,
@@ -1649,7 +1772,13 @@ def _run_loso_transfer_for_unit(
     joint_label = "OLS + ridge" if config.compute_joint_ridge else "OLS"
     print(f"\nComputing stacked {joint_label} joint correlations...")
     merged_rows = _merge_grid_rows(
-        existing_grid, all_rows, completed_pairs, config.rank_grid
+        existing_grid,
+        all_rows,
+        completed_pairs,
+        config.rank_grid,
+        unit_dir=transfer_dir,
+        primary_label="transfer",
+        sig_mask_flat=sig_mask_flat,
     ).to_dict("records")
     joint_ranks = set(affected_ranks) | _joint_ranks_ready_to_compute(
         pd.DataFrame(merged_rows),
