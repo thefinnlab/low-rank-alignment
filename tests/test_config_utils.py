@@ -120,6 +120,7 @@ class TestDictToDataclass:
     def test_ridge_memory_options_roundtrip(self):
         config = dict_to_dataclass(
             {
+                "ridge_cv_folds": 3,
                 "ridge_solver_params": {
                     "n_alphas_batch": 8,
                     "n_targets_batch": 256,
@@ -129,6 +130,7 @@ class TestDictToDataclass:
             },
             EncodingConfig,
         )
+        assert config.ridge_cv_folds == 3
         assert config.ridge_solver_params == {
             "n_alphas_batch": 8,
             "n_targets_batch": 256,

@@ -716,6 +716,7 @@ def solve_regression(
     device: str,
     standardize: bool = True,
     alphas: np.ndarray | None = None,
+    ridge_cv_folds: int = 5,
     solver_params: dict | None = None,
     y_in_cpu: bool | None = None,
     force_cpu: bool | None = None,
@@ -730,6 +731,8 @@ def solve_regression(
             equalised.
         alphas: Optional array of ridge alpha values for RidgeCV. When
             provided, overrides the default grid from get_ridge_model_constructor.
+        ridge_cv_folds: Number of inner CV folds used by RidgeCV alpha
+            selection.
         solver_params: Optional Himalaya RidgeCV solver_params. Useful memory
             controls include n_alphas_batch, n_targets_batch, and
             n_targets_batch_refit.
@@ -755,6 +758,7 @@ def solve_regression(
         if standardize:
             model = get_ridge_model_constructor(
                 alphas=alphas,
+                ridge_cv_folds=ridge_cv_folds,
                 solver_params=solver_params,
                 y_in_cpu=y_in_cpu,
                 force_cpu=force_cpu,
@@ -782,6 +786,7 @@ def solve_regression(
             # carries signal (e.g. SVD-ordered projections).
             ridge_model = get_ridge_model_constructor(
                 alphas=alphas,
+                ridge_cv_folds=ridge_cv_folds,
                 solver_params=solver_params,
                 y_in_cpu=y_in_cpu,
                 force_cpu=force_cpu,

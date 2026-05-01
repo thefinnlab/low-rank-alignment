@@ -408,6 +408,105 @@ class TestRunRRRForUnit:
 
         assert calls["n"] == len(test_idxs)
 
+    def test_arbitrary_features_match_complement_dimensions_per_rank(
+        self, tmp_path, rng, monkeypatch
+    ):
+        import run_rrr
+
+        n_train, n_test, n_embed, n_targets = 6, 4, 4, 2
+        X_train = rng.standard_normal((n_train, n_embed)).astype(np.float32)
+        X_test = rng.standard_normal((n_test, n_embed)).astype(np.float32)
+        X_arbitrary = rng.standard_normal((n_train + n_test, n_embed)).astype(np.float32)
+        Y_train = rng.standard_normal((n_train, n_targets)).astype(np.float32)
+        Y_test = rng.standard_normal((n_test, n_targets)).astype(np.float32)
+        A_full = np.eye(n_embed, dtype=np.float32)
+        train_idx = np.arange(n_train)
+        test_idx = np.arange(n_train, n_train + n_test)
+        oof_spill_dir = tmp_path / "oof"
+        oof_spill_dir.mkdir()
+
+        arbitrary_shapes = {}
+        arbitrary_values = {}
+
+        def fake_resolve(alphas, X, **kwargs):
+            return np.array([1.0], dtype=np.float32)
+
+        def fake_save_alpha_diagnostics(*args, **kwargs):
+            return None
+
+        def fake_save_rrr_result(*args, **kwargs):
+            return None
+
+        def fake_evaluate_input_space(*args, subspace_name, **kwargs):
+            return {
+                f"{subspace_name}_corr": 0.1,
+                f"{subspace_name}_r2": 0.2,
+                f"{subspace_name}_corr_per_target": np.zeros(n_targets),
+                f"{subspace_name}_best_alphas": np.ones(n_targets),
+                f"{subspace_name}_Y_hat": np.zeros((n_test, n_targets)),
+            }
+
+        def fake_evaluate_complement(*args, **kwargs):
+            return {
+                "complement_corr": 0.1,
+                "complement_r2": 0.2,
+                "complement_corr_per_target": np.zeros(n_targets),
+                "complement_best_alphas": np.ones(n_targets),
+                "complement_Y_hat": np.zeros((n_test, n_targets)),
+            }
+
+        def fake_evaluate_arbitrary(X_arbitrary_train, X_arbitrary_test, *args, **kwargs):
+            key = X_arbitrary_train.shape[1]
+            arbitrary_shapes[key] = (X_arbitrary_train.shape, X_arbitrary_test.shape)
+            arbitrary_values[key] = (X_arbitrary_train.copy(), X_arbitrary_test.copy())
+            return {
+                "arbitrary_corr": 0.1,
+                "arbitrary_r2": 0.2,
+                "arbitrary_corr_per_target": np.zeros(n_targets),
+                "arbitrary_best_alphas": np.ones(n_targets),
+                "arbitrary_Y_hat": np.zeros((n_test, n_targets)),
+            }
+
+        monkeypatch.setattr(run_rrr, "resolve_ridge_alphas", fake_resolve)
+        monkeypatch.setattr(run_rrr, "save_alpha_diagnostics", fake_save_alpha_diagnostics)
+        monkeypatch.setattr(run_rrr, "save_rrr_result", fake_save_rrr_result)
+        monkeypatch.setattr(run_rrr, "evaluate_input_space", fake_evaluate_input_space)
+        monkeypatch.setattr(run_rrr, "evaluate_complement", fake_evaluate_complement)
+        monkeypatch.setattr(run_rrr, "evaluate_arbitrary", fake_evaluate_arbitrary)
+
+        for k in (1, n_embed):
+            run_rrr._run_common_subspace_fold_k(
+                A_full,
+                k,
+                X_train,
+                X_test,
+                Y_train,
+                Y_test,
+                X_arbitrary,
+                train_idx,
+                test_idx,
+                None,
+                0,
+                None,
+                {},
+                True,
+                5,
+                None,
+                None,
+                None,
+                "cpu",
+                str(tmp_path),
+                str(oof_spill_dir),
+                primary_label="nr",
+            )
+
+        assert arbitrary_shapes[3] == ((n_train, 3), (n_test, 3))
+        np.testing.assert_allclose(arbitrary_values[3][0], X_arbitrary[train_idx, 1:])
+        np.testing.assert_allclose(arbitrary_values[3][1], X_arbitrary[test_idx, 1:])
+        assert arbitrary_shapes[1] == ((n_train, 1), (n_test, 1))
+        np.testing.assert_allclose(arbitrary_values[1][0], np.ones((n_train, 1)))
+        np.testing.assert_allclose(arbitrary_values[1][1], np.ones((n_test, 1)))
+
 
 # ---------------------------------------------------------------------------
 # TestBuildXYFromSubjects

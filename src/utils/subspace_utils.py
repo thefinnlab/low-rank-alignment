@@ -22,6 +22,7 @@ def evaluate_input_space(
     Y_test: np.ndarray,
     device: str = "cpu",
     alphas: np.ndarray | None = None,
+    ridge_cv_folds: int = 5,
     standardize: bool = True,
     ridge_solver_params: dict | None = None,
     ridge_y_in_cpu: bool | None = None,
@@ -38,6 +39,8 @@ def evaluate_input_space(
         Y_test: (n_test, n_targets) test neural targets.
         device: Torch device string.
         alphas: Ridge alpha grid; None → solver default.
+        ridge_cv_folds: Number of inner CV folds used by RidgeCV alpha
+            selection.
         standardize: Whether to standardize inputs before ridge. The fitted
             scaler is absorbed into the returned linear prediction.
         ridge_solver_params: Optional Himalaya RidgeCV solver_params.
@@ -61,6 +64,7 @@ def evaluate_input_space(
         device,
         standardize=standardize,
         alphas=alphas,
+        ridge_cv_folds=ridge_cv_folds,
         solver_params=ridge_solver_params,
         y_in_cpu=ridge_y_in_cpu,
         force_cpu=ridge_force_cpu,
@@ -98,6 +102,7 @@ def evaluate_complement(
     Y_train: np.ndarray,
     Y_test: np.ndarray,
     alphas: np.ndarray | None = None,
+    ridge_cv_folds: int = 5,
     standardize: bool = True,
     ridge_solver_params: dict | None = None,
     ridge_y_in_cpu: bool | None = None,
@@ -118,6 +123,8 @@ def evaluate_complement(
         Y_train: (n_train, n_targets) training neural targets.
         Y_test: (n_test, n_targets) test neural targets.
         alphas: Ridge alpha grid; None → solver default.
+        ridge_cv_folds: Number of inner CV folds used by RidgeCV alpha
+            selection.
         standardize: Whether to standardize complement inputs before ridge.
         ridge_solver_params: Optional Himalaya RidgeCV solver_params.
         ridge_y_in_cpu: Optional Himalaya RidgeCV Y_in_cpu override.
@@ -142,6 +149,7 @@ def evaluate_complement(
         Y_train,
         Y_test,
         alphas=alphas,
+        ridge_cv_folds=ridge_cv_folds,
         standardize=standardize,
         ridge_solver_params=ridge_solver_params,
         ridge_y_in_cpu=ridge_y_in_cpu,
@@ -158,6 +166,7 @@ def evaluate_arbitrary(
     Y_train: np.ndarray,
     Y_test: np.ndarray,
     alphas: np.ndarray | None = None,
+    ridge_cv_folds: int = 5,
     standardize: bool = True,
     ridge_solver_params: dict | None = None,
     ridge_y_in_cpu: bool | None = None,
@@ -173,6 +182,8 @@ def evaluate_arbitrary(
         Y_train: (n_train, n_targets) training neural targets.
         Y_test: (n_test, n_targets) test neural targets.
         alphas: Ridge alpha grid; None → solver default.
+        ridge_cv_folds: Number of inner CV folds used by RidgeCV alpha
+            selection.
         device: Torch device string.
 
     Returns:
@@ -185,6 +196,7 @@ def evaluate_arbitrary(
         Y_train,
         Y_test,
         alphas=alphas,
+        ridge_cv_folds=ridge_cv_folds,
         standardize=standardize,
         ridge_solver_params=ridge_solver_params,
         ridge_y_in_cpu=ridge_y_in_cpu,

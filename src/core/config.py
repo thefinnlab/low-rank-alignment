@@ -74,6 +74,7 @@ class EncodingConfig:
     )
     batch: bool = False  # Process subjects one at a time (lower peak RAM)
     ridge_alphas: list[float] | None = None  # None → use RIDGE_ALPHAS from constants.py
+    ridge_cv_folds: int = 5  # Inner CV folds used by RidgeCV alpha selection.
     ridge_solver_params: dict | None = None  # Optional Himalaya RidgeCV solver_params.
     ridge_y_in_cpu: bool | None = None  # Optional Himalaya RidgeCV Y_in_cpu override.
     ridge_force_cpu: bool | None = None  # Optional Himalaya RidgeCV force_cpu override.

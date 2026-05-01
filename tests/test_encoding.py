@@ -189,6 +189,12 @@ class TestGetRidgeModelConstructor:
         ridge = model.named_steps["ridgecv"]
         np.testing.assert_array_equal(ridge.alphas, custom)
 
+    def test_custom_ridge_cv_folds(self):
+        constructor = get_ridge_model_constructor(ridge_cv_folds=3)
+        model = constructor(0)
+        ridge = model.named_steps["ridgecv"]
+        assert ridge.cv.n_splits == 3
+
     def test_himalaya_memory_options_are_forwarded(self):
         constructor = get_ridge_model_constructor(
             solver_params={"n_alphas_batch": 2, "n_targets_batch": 3},

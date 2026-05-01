@@ -83,6 +83,7 @@ def _train_with_arbitrary(
                 X,
                 Y,
                 alphas=alphas,
+                ridge_cv_folds=config.ridge_cv_folds,
                 epochs_shape=(n_elecs, n_lags),
                 solver_params=config.ridge_solver_params,
                 y_in_cpu=config.ridge_y_in_cpu,
@@ -206,6 +207,7 @@ def _run_joint(
     )
     model_constructor = get_ridge_model_constructor(
         alphas=alpha_grid,
+        ridge_cv_folds=config.ridge_cv_folds,
         solver_params=config.ridge_solver_params,
         y_in_cpu=config.ridge_y_in_cpu,
         force_cpu=config.ridge_force_cpu,
@@ -324,6 +326,7 @@ def _run_batch(
         )
         model_constructor = get_ridge_model_constructor(
             alphas=alpha_grid,
+            ridge_cv_folds=config.ridge_cv_folds,
             solver_params=config.ridge_solver_params,
             y_in_cpu=config.ridge_y_in_cpu,
             force_cpu=config.ridge_force_cpu,

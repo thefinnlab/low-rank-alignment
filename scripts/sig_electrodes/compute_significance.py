@@ -91,7 +91,13 @@ def run_config(config: NewSignificanceConfig):
     )
 
     alphas = np.array(enc.ridge_alphas) if enc.ridge_alphas is not None else None
-    model_constructor = get_ridge_model_constructor(alphas=alphas)
+    model_constructor = get_ridge_model_constructor(
+        alphas=alphas,
+        ridge_cv_folds=enc.ridge_cv_folds,
+        solver_params=enc.ridge_solver_params,
+        y_in_cpu=enc.ridge_y_in_cpu,
+        force_cpu=enc.ridge_force_cpu,
+    )
 
     # Collect per-electrode results across all subjects
     all_electrode_records = (

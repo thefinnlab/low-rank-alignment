@@ -589,6 +589,7 @@ def _run_common_subspace_fold_k(
     alphas: "np.ndarray | None",
     alpha_policy: dict | None,
     standardize_subspace_inputs: bool,
+    ridge_cv_folds: int,
     ridge_solver_params: dict | None,
     ridge_y_in_cpu: bool | None,
     ridge_force_cpu: bool | None,
@@ -638,6 +639,7 @@ def _run_common_subspace_fold_k(
         Y_test,
         subspace_name=primary_label,
         alphas=nr_alphas,
+        ridge_cv_folds=ridge_cv_folds,
         standardize=standardize_subspace_inputs,
         ridge_solver_params=ridge_solver_params,
         ridge_y_in_cpu=ridge_y_in_cpu,
@@ -675,6 +677,7 @@ def _run_common_subspace_fold_k(
         Y_train,
         Y_test,
         alphas=comp_alphas,
+        ridge_cv_folds=ridge_cv_folds,
         standardize=standardize_subspace_inputs,
         ridge_solver_params=ridge_solver_params,
         ridge_y_in_cpu=ridge_y_in_cpu,
@@ -686,28 +689,36 @@ def _run_common_subspace_fold_k(
     # Arbitrary evaluation (null baseline)
     arbitrary_result = None
     if X_arbitrary is not None:
+        if k == A_full.shape[1]:
+            X_arbitrary_train = np.ones((X_train.shape[0], 1))
+            X_arbitrary_test = np.ones((X_test.shape[0], 1))
+        else:
+            X_arbitrary_projected = X_arbitrary @ A_full
+            X_arbitrary_train = X_arbitrary_projected[train_idx, k:]
+            X_arbitrary_test = X_arbitrary_projected[test_idx, k:]
         arb_context = {
             "script": "run_rrr",
             "role": "arbitrary",
             "fold": int(fold_f),
             "k": int(k),
-            "n_features": int(X_arbitrary[train_idx].shape[1]),
+            "n_features": int(X_arbitrary_train.shape[1]),
             "standardize": True,
         }
         arbitrary_alphas = resolve_ridge_alphas(
             alphas,
-            X_arbitrary[train_idx],
+            X_arbitrary_train,
             standardize=True,
             context=arb_context,
             cache_dir=os.path.join(rank_dir, "arbitrary_alpha"),
             policy=alpha_policy,
         )
         arbitrary_result = evaluate_arbitrary(
-            X_arbitrary[train_idx],
-            X_arbitrary[test_idx],
+            X_arbitrary_train,
+            X_arbitrary_test,
             Y_train,
             Y_test,
             alphas=arbitrary_alphas,
+            ridge_cv_folds=ridge_cv_folds,
             standardize=True,
             ridge_solver_params=ridge_solver_params,
             ridge_y_in_cpu=ridge_y_in_cpu,
@@ -1118,6 +1129,7 @@ def _run_rrr_for_unit(
                 alphas=alphas,
                 alpha_policy=config.encoding.alpha_grid,
                 standardize_subspace_inputs=config.standardize_subspace_inputs,
+                ridge_cv_folds=config.encoding.ridge_cv_folds,
                 ridge_solver_params=config.encoding.ridge_solver_params,
                 ridge_y_in_cpu=config.encoding.ridge_y_in_cpu,
                 ridge_force_cpu=config.encoding.ridge_force_cpu,
@@ -1227,6 +1239,7 @@ def _run_rrr_for_unit(
                 alphas,
                 config.encoding.alpha_grid,
                 config.standardize_subspace_inputs,
+                config.encoding.ridge_cv_folds,
                 config.encoding.ridge_solver_params,
                 config.encoding.ridge_y_in_cpu,
                 config.encoding.ridge_force_cpu,
@@ -1328,6 +1341,7 @@ def _run_rrr_for_unit(
             alphas=alphas,
             alpha_policy=config.encoding.alpha_grid,
             standardize_subspace_inputs=config.standardize_subspace_inputs,
+            ridge_cv_folds=config.encoding.ridge_cv_folds,
             ridge_solver_params=config.encoding.ridge_solver_params,
             ridge_y_in_cpu=config.encoding.ridge_y_in_cpu,
             ridge_force_cpu=config.encoding.ridge_force_cpu,
@@ -1352,6 +1366,7 @@ def _run_pca_for_unit(
     alphas: "np.ndarray | None" = None,
     alpha_policy: dict | None = None,
     standardize_subspace_inputs: bool = True,
+    ridge_cv_folds: int = 5,
     ridge_solver_params: dict | None = None,
     ridge_y_in_cpu: bool | None = None,
     ridge_force_cpu: bool | None = None,
@@ -1504,6 +1519,7 @@ def _run_pca_for_unit(
                 alphas,
                 alpha_policy,
                 standardize_subspace_inputs,
+                ridge_cv_folds,
                 ridge_solver_params,
                 ridge_y_in_cpu,
                 ridge_force_cpu,
@@ -1609,6 +1625,7 @@ def _get_decomposition_inputs(
             if encoding_config.ridge_alphas is not None
             else None
         ),
+        ridge_cv_folds=encoding_config.ridge_cv_folds,
         ridge_solver_params=encoding_config.ridge_solver_params,
         ridge_y_in_cpu=encoding_config.ridge_y_in_cpu,
         ridge_force_cpu=encoding_config.ridge_force_cpu,
@@ -2007,6 +2024,7 @@ def _run_loso_transfer_for_unit(
                 alphas=alphas,
                 alpha_policy=config.encoding.alpha_grid,
                 standardize_subspace_inputs=config.standardize_subspace_inputs,
+                ridge_cv_folds=config.encoding.ridge_cv_folds,
                 ridge_solver_params=config.encoding.ridge_solver_params,
                 ridge_y_in_cpu=config.encoding.ridge_y_in_cpu,
                 ridge_force_cpu=config.encoding.ridge_force_cpu,
