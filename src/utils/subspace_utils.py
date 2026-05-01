@@ -23,6 +23,9 @@ def evaluate_input_space(
     device: str = "cpu",
     alphas: np.ndarray | None = None,
     standardize: bool = True,
+    ridge_solver_params: dict | None = None,
+    ridge_y_in_cpu: bool | None = None,
+    ridge_force_cpu: bool | None = None,
     return_alphas: bool = False,
     subspace_name: str = "",
 ) -> dict:
@@ -37,6 +40,9 @@ def evaluate_input_space(
         alphas: Ridge alpha grid; None → solver default.
         standardize: Whether to standardize inputs before ridge. The fitted
             scaler is absorbed into the returned linear prediction.
+        ridge_solver_params: Optional Himalaya RidgeCV solver_params.
+        ridge_y_in_cpu: Optional Himalaya RidgeCV Y_in_cpu override.
+        ridge_force_cpu: Optional Himalaya RidgeCV force_cpu override.
         return_alphas: Include per-target selected alphas in the result.
         subspace_name: Prefix for all returned keys (e.g. "nr", "complement", "pca").
 
@@ -55,6 +61,9 @@ def evaluate_input_space(
         device,
         standardize=standardize,
         alphas=alphas,
+        solver_params=ridge_solver_params,
+        y_in_cpu=ridge_y_in_cpu,
+        force_cpu=ridge_force_cpu,
         return_alphas=return_alphas,
     )
     if return_alphas:
@@ -90,6 +99,9 @@ def evaluate_complement(
     Y_test: np.ndarray,
     alphas: np.ndarray | None = None,
     standardize: bool = True,
+    ridge_solver_params: dict | None = None,
+    ridge_y_in_cpu: bool | None = None,
+    ridge_force_cpu: bool | None = None,
     return_alphas: bool = False,
     device: str = "cpu",
 ) -> dict:
@@ -107,6 +119,9 @@ def evaluate_complement(
         Y_test: (n_test, n_targets) test neural targets.
         alphas: Ridge alpha grid; None → solver default.
         standardize: Whether to standardize complement inputs before ridge.
+        ridge_solver_params: Optional Himalaya RidgeCV solver_params.
+        ridge_y_in_cpu: Optional Himalaya RidgeCV Y_in_cpu override.
+        ridge_force_cpu: Optional Himalaya RidgeCV force_cpu override.
         return_alphas: Include per-target selected alphas in the result.
         device: Torch device string.
 
@@ -128,6 +143,9 @@ def evaluate_complement(
         Y_test,
         alphas=alphas,
         standardize=standardize,
+        ridge_solver_params=ridge_solver_params,
+        ridge_y_in_cpu=ridge_y_in_cpu,
+        ridge_force_cpu=ridge_force_cpu,
         return_alphas=return_alphas,
         device=device,
         subspace_name="complement",
@@ -141,6 +159,9 @@ def evaluate_arbitrary(
     Y_test: np.ndarray,
     alphas: np.ndarray | None = None,
     standardize: bool = True,
+    ridge_solver_params: dict | None = None,
+    ridge_y_in_cpu: bool | None = None,
+    ridge_force_cpu: bool | None = None,
     return_alphas: bool = False,
     device: str = "cpu",
 ) -> dict:
@@ -165,6 +186,9 @@ def evaluate_arbitrary(
         Y_test,
         alphas=alphas,
         standardize=standardize,
+        ridge_solver_params=ridge_solver_params,
+        ridge_y_in_cpu=ridge_y_in_cpu,
+        ridge_force_cpu=ridge_force_cpu,
         return_alphas=return_alphas,
         device=device,
         subspace_name="arbitrary",

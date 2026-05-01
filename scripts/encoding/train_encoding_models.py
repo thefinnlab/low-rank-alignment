@@ -79,7 +79,15 @@ def _train_with_arbitrary(
 
     if config is not None and config.refine_alphas:
         (corrs, models, tr_idxs, test_idxs, scalers, coarse_best, refined_grid) = (
-            train_encoding_two_pass(X, Y, alphas=alphas, epochs_shape=(n_elecs, n_lags))
+            train_encoding_two_pass(
+                X,
+                Y,
+                alphas=alphas,
+                epochs_shape=(n_elecs, n_lags),
+                solver_params=config.ridge_solver_params,
+                y_in_cpu=config.ridge_y_in_cpu,
+                force_cpu=config.ridge_force_cpu,
+            )
         )
         print(
             f"  Two-pass refinement: coarse → refined grid "
@@ -196,7 +204,12 @@ def _run_joint(
         cache_dir=joint_dir,
         policy=config.alpha_grid,
     )
-    model_constructor = get_ridge_model_constructor(alphas=alpha_grid)
+    model_constructor = get_ridge_model_constructor(
+        alphas=alpha_grid,
+        solver_params=config.ridge_solver_params,
+        y_in_cpu=config.ridge_y_in_cpu,
+        force_cpu=config.ridge_force_cpu,
+    )
     corrs, corrs_arb, models, tr_idxs, test_idxs, scalers = _train_with_arbitrary(
         X_arr,
         Y,
@@ -309,7 +322,12 @@ def _run_batch(
             cache_dir=sub_dir,
             policy=config.alpha_grid,
         )
-        model_constructor = get_ridge_model_constructor(alphas=alpha_grid)
+        model_constructor = get_ridge_model_constructor(
+            alphas=alpha_grid,
+            solver_params=config.ridge_solver_params,
+            y_in_cpu=config.ridge_y_in_cpu,
+            force_cpu=config.ridge_force_cpu,
+        )
 
         corrs, corrs_arb, models, tr_idxs, test_idxs, scalers = _train_with_arbitrary(
             X_arr,

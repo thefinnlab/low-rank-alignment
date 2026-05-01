@@ -716,6 +716,9 @@ def solve_regression(
     device: str,
     standardize: bool = True,
     alphas: np.ndarray | None = None,
+    solver_params: dict | None = None,
+    y_in_cpu: bool | None = None,
+    force_cpu: bool | None = None,
     return_alphas: bool = False,
 ) -> tuple[torch.Tensor, torch.Tensor] | tuple[torch.Tensor, torch.Tensor, np.ndarray]:
     """Solve regression (OLS or Ridge) and return (W, b) tensors.
@@ -727,6 +730,11 @@ def solve_regression(
             equalised.
         alphas: Optional array of ridge alpha values for RidgeCV. When
             provided, overrides the default grid from get_ridge_model_constructor.
+        solver_params: Optional Himalaya RidgeCV solver_params. Useful memory
+            controls include n_alphas_batch, n_targets_batch, and
+            n_targets_batch_refit.
+        y_in_cpu: Optional Himalaya RidgeCV Y_in_cpu override.
+        force_cpu: Optional Himalaya RidgeCV force_cpu override.
         return_alphas: When True and regression_type is ``"ridge"``, return a
             3-tuple ``(W, b, best_alphas)`` where *best_alphas* is a 1-D
             numpy array of per-target selected alphas. Default False preserves
@@ -745,7 +753,12 @@ def solve_regression(
         from src.utils.encoding import get_ridge_model_constructor
 
         if standardize:
-            model = get_ridge_model_constructor(alphas=alphas)(0)
+            model = get_ridge_model_constructor(
+                alphas=alphas,
+                solver_params=solver_params,
+                y_in_cpu=y_in_cpu,
+                force_cpu=force_cpu,
+            )(0)
             model.fit(H_np, Y_np)
             # Absorb StandardScaler into W, b so that H @ W + b ≈ Y.
             # model.predict(H) = ((H - mean) / scale) @ coef_raw.T + intercept
@@ -767,9 +780,12 @@ def solve_regression(
         else:
             # Ridge without StandardScaler — appropriate when feature variance
             # carries signal (e.g. SVD-ordered projections).
-            ridge_model = get_ridge_model_constructor(alphas=alphas)(0)[
-                -1
-            ]  # RidgeCV only
+            ridge_model = get_ridge_model_constructor(
+                alphas=alphas,
+                solver_params=solver_params,
+                y_in_cpu=y_in_cpu,
+                force_cpu=force_cpu,
+            )(0)[-1]  # RidgeCV only
             ridge_model.fit(H_np, Y_np)
             coef_raw = to_numpy(ridge_model.coef_)
             n_features = H_np.shape[1]

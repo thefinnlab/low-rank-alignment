@@ -224,7 +224,12 @@ def get_all_targets_test_set(test_idxs, Y, num_electrodes, num_lags):
     return all_targets
 
 
-def get_ridge_model_constructor(alphas=None):
+def get_ridge_model_constructor(
+    alphas=None,
+    solver_params: dict | None = None,
+    y_in_cpu: bool | None = None,
+    force_cpu: bool | None = None,
+):
     """
     Return a factory function for StandardScaler + RidgeCV pipelines.
     Compatible with the model_constructor_fn arg of train_encoding().
@@ -233,14 +238,23 @@ def get_ridge_model_constructor(alphas=None):
     Args:
         alphas: Ridge alpha grid for RidgeCV. When None, uses RIDGE_ALPHAS
             from utils.constants.
+        solver_params: Optional Himalaya RidgeCV solver_params. Useful memory
+            controls include n_alphas_batch, n_targets_batch, and
+            n_targets_batch_refit. Ignored by sklearn fallback.
+        y_in_cpu: Optional Himalaya RidgeCV Y_in_cpu override. Ignored by
+            sklearn fallback.
+        force_cpu: Optional Himalaya RidgeCV force_cpu override. Ignored by
+            sklearn fallback.
     """
     from src.utils.constants import RIDGE_ALPHAS
 
+    is_himalaya = False
     try:
         from himalaya.ridge import RidgeCV
         from himalaya.backend import set_backend
         import torch
 
+        is_himalaya = True
         if torch.cuda.is_available():
             set_backend("torch_cuda")
     except ImportError:
@@ -251,9 +265,17 @@ def get_ridge_model_constructor(alphas=None):
     inner_cv = KFold(n_splits=5, shuffle=False)
 
     def create_model(_):
+        ridge_kwargs = {"fit_intercept": True, "cv": inner_cv}
+        if is_himalaya:
+            if solver_params is not None:
+                ridge_kwargs["solver_params"] = solver_params
+            if y_in_cpu is not None:
+                ridge_kwargs["Y_in_cpu"] = y_in_cpu
+            if force_cpu is not None:
+                ridge_kwargs["force_cpu"] = force_cpu
         return make_pipeline(
             StandardScaler(),
-            RidgeCV(alphas, fit_intercept=True, cv=inner_cv),
+            RidgeCV(alphas, **ridge_kwargs),
         )
 
     return create_model
@@ -279,6 +301,9 @@ def train_encoding_two_pass(
     alphas=None,
     n_refined=20,
     margin_decades=1.0,
+    solver_params: dict | None = None,
+    y_in_cpu: bool | None = None,
+    force_cpu: bool | None = None,
     **train_kwargs,
 ):
     """Train encoding with coarse alphas, then re-train with a refined grid.
@@ -293,6 +318,9 @@ def train_encoding_two_pass(
         alphas: Initial coarse alpha grid. None → RIDGE_ALPHAS.
         n_refined: Number of points in the refined grid.
         margin_decades: Extra decades beyond observed range.
+        solver_params: Optional Himalaya RidgeCV solver_params.
+        y_in_cpu: Optional Himalaya RidgeCV Y_in_cpu override.
+        force_cpu: Optional Himalaya RidgeCV force_cpu override.
         **train_kwargs: Forwarded to train_encoding (epochs_shape, etc.).
 
     Returns:
@@ -302,7 +330,12 @@ def train_encoding_two_pass(
     from src.utils.constants import refine_alpha_grid
 
     # Pass 1: coarse sweep
-    model_constructor = get_ridge_model_constructor(alphas=alphas)
+    model_constructor = get_ridge_model_constructor(
+        alphas=alphas,
+        solver_params=solver_params,
+        y_in_cpu=y_in_cpu,
+        force_cpu=force_cpu,
+    )
     corrs, models, tr_idxs, test_idxs, scalers = train_encoding(
         X, Y, model_constructor, **train_kwargs
     )
@@ -314,7 +347,12 @@ def train_encoding_two_pass(
     )
 
     # Pass 2: refined sweep on same folds
-    model_constructor_2 = get_ridge_model_constructor(alphas=refined_grid)
+    model_constructor_2 = get_ridge_model_constructor(
+        alphas=refined_grid,
+        solver_params=solver_params,
+        y_in_cpu=y_in_cpu,
+        force_cpu=force_cpu,
+    )
     corrs, models, _, _, scalers = train_encoding(
         X,
         Y,
@@ -435,6 +473,9 @@ def build_per_fold_baselines(
     Y_full: np.ndarray,
     test_idxs: list,
     alphas: np.ndarray | None = None,
+    ridge_solver_params: dict | None = None,
+    ridge_y_in_cpu: bool | None = None,
+    ridge_force_cpu: bool | None = None,
     alpha_policy: dict | None = None,
     alpha_cache_dir: str | None = None,
     alpha_context: dict | None = None,
@@ -451,6 +492,9 @@ def build_per_fold_baselines(
         Y_full: (n_words, n_targets) assembled neural response matrix.
         test_idxs: List of test index arrays, one per fold.
         alphas: Optional explicit ridge alpha grid for RidgeCV.
+        ridge_solver_params: Optional Himalaya RidgeCV solver_params.
+        ridge_y_in_cpu: Optional Himalaya RidgeCV Y_in_cpu override.
+        ridge_force_cpu: Optional Himalaya RidgeCV force_cpu override.
         alpha_policy: Optional dimension-aware alpha grid policy.
         alpha_cache_dir: Optional root for fold-level alpha caches.
         alpha_context: Optional metadata included in alpha cache keys.
@@ -515,6 +559,9 @@ def build_per_fold_baselines(
             "ridge",
             device,
             alphas=fold_alphas,
+            solver_params=ridge_solver_params,
+            y_in_cpu=ridge_y_in_cpu,
+            force_cpu=ridge_force_cpu,
             return_alphas=True,
         )
         if fold_cache_dir is not None:

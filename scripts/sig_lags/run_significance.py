@@ -132,7 +132,12 @@ def run_config(config: SignificanceConfig):
             cache_dir=alpha_dir,
             policy=enc.alpha_grid,
         )
-        model_constructor = get_ridge_model_constructor(alphas=alphas)
+        model_constructor = get_ridge_model_constructor(
+            alphas=alphas,
+            solver_params=enc.ridge_solver_params,
+            y_in_cpu=enc.ridge_y_in_cpu,
+            force_cpu=enc.ridge_force_cpu,
+        )
 
         # Update lag_sec based on actual n_lags (in case resampling gives different count)
         actual_lag_sec = np.linspace(-2.0, 2.0, n_lags, endpoint=False)

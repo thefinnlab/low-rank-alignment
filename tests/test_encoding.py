@@ -189,6 +189,22 @@ class TestGetRidgeModelConstructor:
         ridge = model.named_steps["ridgecv"]
         np.testing.assert_array_equal(ridge.alphas, custom)
 
+    def test_himalaya_memory_options_are_forwarded(self):
+        constructor = get_ridge_model_constructor(
+            solver_params={"n_alphas_batch": 2, "n_targets_batch": 3},
+            y_in_cpu=True,
+            force_cpu=True,
+        )
+        model = constructor(0)
+        ridge = model.named_steps["ridgecv"]
+        if hasattr(ridge, "solver_params"):
+            assert ridge.solver_params == {
+                "n_alphas_batch": 2,
+                "n_targets_batch": 3,
+            }
+            assert ridge.Y_in_cpu is True
+            assert ridge.force_cpu is True
+
     def test_each_call_returns_new_model(self):
         constructor = get_ridge_model_constructor()
         assert constructor(0) is not constructor(1)

@@ -117,6 +117,25 @@ class TestDictToDataclass:
         )
         assert config.alpha_grid == {"points_per_decade": 5}
 
+    def test_ridge_memory_options_roundtrip(self):
+        config = dict_to_dataclass(
+            {
+                "ridge_solver_params": {
+                    "n_alphas_batch": 8,
+                    "n_targets_batch": 256,
+                },
+                "ridge_y_in_cpu": True,
+                "ridge_force_cpu": False,
+            },
+            EncodingConfig,
+        )
+        assert config.ridge_solver_params == {
+            "n_alphas_batch": 8,
+            "n_targets_batch": 256,
+        }
+        assert config.ridge_y_in_cpu is True
+        assert config.ridge_force_cpu is False
+
     def test_rrr_subspace_standardization_roundtrip(self):
         config = dict_to_dataclass(
             {"standardize_subspace_inputs": False},

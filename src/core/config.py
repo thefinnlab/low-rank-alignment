@@ -74,6 +74,9 @@ class EncodingConfig:
     )
     batch: bool = False  # Process subjects one at a time (lower peak RAM)
     ridge_alphas: list[float] | None = None  # None → use RIDGE_ALPHAS from constants.py
+    ridge_solver_params: dict | None = None  # Optional Himalaya RidgeCV solver_params.
+    ridge_y_in_cpu: bool | None = None  # Optional Himalaya RidgeCV Y_in_cpu override.
+    ridge_force_cpu: bool | None = None  # Optional Himalaya RidgeCV force_cpu override.
     alpha_grid: dict = field(default_factory=dict)  # Dimension-aware alpha policy.
     log_alphas: bool = False  # Save alpha diagnostics (.npz + .png) per subject
     refine_alphas: bool = False  # Two-pass training: coarse sweep → refined grid
