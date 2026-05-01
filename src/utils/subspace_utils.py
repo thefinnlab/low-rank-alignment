@@ -22,6 +22,8 @@ def evaluate_input_space(
     Y_test: np.ndarray,
     device: str = "cpu",
     alphas: np.ndarray | None = None,
+    standardize: bool = True,
+    return_alphas: bool = False,
     subspace_name: str = "",
 ) -> dict:
     """Train ridge on X and evaluate correlation and R² against Y_test.
@@ -33,6 +35,9 @@ def evaluate_input_space(
         Y_test: (n_test, n_targets) test neural targets.
         device: Torch device string.
         alphas: Ridge alpha grid; None → solver default.
+        standardize: Whether to standardize inputs before ridge. The fitted
+            scaler is absorbed into the returned linear prediction.
+        return_alphas: Include per-target selected alphas in the result.
         subspace_name: Prefix for all returned keys (e.g. "nr", "complement", "pca").
 
     Returns:
@@ -43,14 +48,20 @@ def evaluate_input_space(
             r2_per_target    – (n_targets,) per-target R²
             Y_hat            – (n_test, n_targets) predictions
     """
-    W, b = solve_regression(
+    solved = solve_regression(
         torch.as_tensor(X_train, dtype=torch.float32, device=device),
         torch.as_tensor(Y_train, dtype=torch.float32, device=device),
         "ridge",
         device,
-        standardize=False,
+        standardize=standardize,
         alphas=alphas,
+        return_alphas=return_alphas,
     )
+    if return_alphas:
+        W, b, best_alphas = solved
+    else:
+        W, b = solved
+        best_alphas = None
     X_test_t = torch.as_tensor(X_test, dtype=torch.float32, device=device)
     Y_hat = to_numpy(X_test_t @ W + b)
 
@@ -58,13 +69,16 @@ def evaluate_input_space(
     r2_arr = to_numpy(r2_score(Y_test, Y_hat))
 
     prefix = f"{subspace_name}_" if subspace_name else ""
-    return {
+    result = {
         f"{prefix}corr": float(corr_arr.mean()),
         f"{prefix}r2": float(r2_arr.mean()),
         f"{prefix}corr_per_target": corr_arr,
         f"{prefix}r2_per_target": r2_arr,
         f"{prefix}Y_hat": Y_hat,
     }
+    if return_alphas:
+        result[f"{prefix}best_alphas"] = best_alphas
+    return result
 
 
 def evaluate_complement(
@@ -75,6 +89,8 @@ def evaluate_complement(
     Y_train: np.ndarray,
     Y_test: np.ndarray,
     alphas: np.ndarray | None = None,
+    standardize: bool = True,
+    return_alphas: bool = False,
     device: str = "cpu",
 ) -> dict:
     """Evaluate how well the complement of a subspace predicts neural data.
@@ -90,6 +106,8 @@ def evaluate_complement(
         Y_train: (n_train, n_targets) training neural targets.
         Y_test: (n_test, n_targets) test neural targets.
         alphas: Ridge alpha grid; None → solver default.
+        standardize: Whether to standardize complement inputs before ridge.
+        return_alphas: Include per-target selected alphas in the result.
         device: Torch device string.
 
     Returns:
@@ -109,6 +127,8 @@ def evaluate_complement(
         Y_train,
         Y_test,
         alphas=alphas,
+        standardize=standardize,
+        return_alphas=return_alphas,
         device=device,
         subspace_name="complement",
     )
@@ -120,6 +140,8 @@ def evaluate_arbitrary(
     Y_train: np.ndarray,
     Y_test: np.ndarray,
     alphas: np.ndarray | None = None,
+    standardize: bool = True,
+    return_alphas: bool = False,
     device: str = "cpu",
 ) -> dict:
     """Evaluate how well arbitrary (shuffled) embeddings predict neural data.
@@ -142,6 +164,8 @@ def evaluate_arbitrary(
         Y_train,
         Y_test,
         alphas=alphas,
+        standardize=standardize,
+        return_alphas=return_alphas,
         device=device,
         subspace_name="arbitrary",
     )

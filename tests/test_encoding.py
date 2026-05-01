@@ -606,6 +606,13 @@ class TestBuildPerFoldBaselines:
         baselines = build_per_fold_baselines(X, Y, test_idxs)
         assert len(baselines) == len(test_idxs)
 
+    def test_folds_to_build_leaves_other_entries_empty(self, synthetic_data):
+        X, Y, test_idxs, *_ = synthetic_data
+        baselines = build_per_fold_baselines(X, Y, test_idxs, folds_to_build={1})
+        assert len(baselines) == len(test_idxs)
+        assert baselines[0] is None
+        assert baselines[1] is not None
+
     def test_shapes_are_correct(self, synthetic_data):
         X, Y, test_idxs, n_words, n_embed, n_targets = synthetic_data
         baselines = build_per_fold_baselines(X, Y, test_idxs)

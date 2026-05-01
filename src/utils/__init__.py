@@ -6,6 +6,12 @@ from src.utils.constants import (
     refine_alpha_grid,
     check_alpha_grid_boundaries,
 )
+from src.utils.alpha_grids import (
+    build_dimension_aware_alpha_grid,
+    resolve_ridge_alphas,
+    save_alpha_diagnostics,
+    maybe_refine_alpha_grid,
+)
 from src.utils.tensor_utils import to_numpy, to_torch
 from src.core.config import (
     EncodingConfig,
@@ -216,6 +222,10 @@ __all__ = [
     "RIDGE_ALPHAS",
     "refine_alpha_grid",
     "check_alpha_grid_boundaries",
+    "build_dimension_aware_alpha_grid",
+    "resolve_ridge_alphas",
+    "save_alpha_diagnostics",
+    "maybe_refine_alpha_grid",
     # tensor utils
     "to_numpy",
     "to_torch",

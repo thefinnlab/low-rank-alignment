@@ -31,7 +31,6 @@ from src.utils import (
     apply_offset,
     save_subject_results,
     read_electrode_file,
-    RIDGE_ALPHAS,
     load_precomputed_epochs,
     epochs_from_cache,
 )
@@ -43,6 +42,7 @@ from src.utils.config_utils import (
     expand_per_model_layer_configs,
 )
 from src.utils.constants import check_alpha_grid_boundaries
+from src.utils.alpha_grids import resolve_ridge_alphas, save_alpha_diagnostics
 from src.utils.encoding import (
     get_and_offset_arbitrary_embeddings,
     get_ridge_model_constructor,
@@ -111,13 +111,16 @@ def _train_with_arbitrary(
     return corrs, corrs_arb, models, tr_idxs, test_idxs, scalers
 
 
-def _log_alpha_diagnostics(models, alpha_grid, sub_dir, sub_label):
+def _log_alpha_diagnostics(models, alpha_grid, sub_dir, sub_label, context=None, policy=None):
     """Extract best alphas from fitted models and save diagnostics."""
     per_fold_alphas = [extract_best_alphas(m) for m in models]
     os.makedirs(sub_dir, exist_ok=True)
-    np.savez(
-        os.path.join(sub_dir, "alpha_diagnostics.npz"),
-        **{f"fold_{i}": a for i, a in enumerate(per_fold_alphas)},
+    save_alpha_diagnostics(
+        sub_dir,
+        alpha_grid,
+        best_alphas=per_fold_alphas,
+        context=context,
+        policy=policy,
     )
     plot_alpha_diagnostics(
         per_fold_alphas,
@@ -175,6 +178,25 @@ def _run_joint(
     lags = np.linspace(-2.0, 2.0, n_lags, endpoint=False)
 
     print(f"Training joint model: {total_elecs} electrodes, {X_arr.shape[0]} words...")
+    joint_dir = os.path.join(run_name, "joint")
+    alpha_context = {
+        "script": "train_encoding_models",
+        "role": "joint",
+        "model": config.model,
+        "per_model_config": config.per_model_config,
+        "offset": config.offset,
+        "n_features": int(X_arr.shape[1]),
+        "standardize": True,
+    }
+    alpha_grid = resolve_ridge_alphas(
+        alphas,
+        X_arr,
+        standardize=True,
+        context=alpha_context,
+        cache_dir=joint_dir,
+        policy=config.alpha_grid,
+    )
+    model_constructor = get_ridge_model_constructor(alphas=alpha_grid)
     corrs, corrs_arb, models, tr_idxs, test_idxs, scalers = _train_with_arbitrary(
         X_arr,
         Y,
@@ -185,15 +207,21 @@ def _run_joint(
         word_df,
         offset,
         config=config,
-        alphas=alphas,
+        alphas=alpha_grid,
     )
     coefficients, intercepts = get_models_coefficients(
         models, total_elecs, n_lags, scaled_model=False
     )
 
     if config is not None and config.log_alphas and alpha_grid is not None:
-        joint_dir = os.path.join(run_name, "joint")
-        _log_alpha_diagnostics(models, alpha_grid, joint_dir, "Joint")
+        _log_alpha_diagnostics(
+            models,
+            alpha_grid,
+            joint_dir,
+            "Joint",
+            context=alpha_context,
+            policy=config.alpha_grid,
+        )
 
     cursor = 0
     for sub_id, n_elecs in zip(all_subject_ids, elec_counts):
@@ -262,6 +290,26 @@ def _run_batch(
         n_elecs = sum(elec_counts)
         n_lags = Y.shape[1] // n_elecs
         lags = np.linspace(-2.0, 2.0, n_lags, endpoint=False)
+        sub_dir = os.path.join(run_name, "subjects", f"sub_{sub_id}")
+        alpha_context = {
+            "script": "train_encoding_models",
+            "role": "subject",
+            "subject": int(sub_id),
+            "model": config.model,
+            "per_model_config": config.per_model_config,
+            "offset": config.offset,
+            "n_features": int(X_arr.shape[1]),
+            "standardize": True,
+        }
+        alpha_grid = resolve_ridge_alphas(
+            alphas,
+            X_arr,
+            standardize=True,
+            context=alpha_context,
+            cache_dir=sub_dir,
+            policy=config.alpha_grid,
+        )
+        model_constructor = get_ridge_model_constructor(alphas=alpha_grid)
 
         corrs, corrs_arb, models, tr_idxs, test_idxs, scalers = _train_with_arbitrary(
             X_arr,
@@ -273,15 +321,21 @@ def _run_batch(
             word_df,
             offset,
             config=config,
-            alphas=alphas,
+            alphas=alpha_grid,
         )
         coefficients, intercepts = get_models_coefficients(
             models, n_elecs, n_lags, scaled_model=False
         )
 
         if config is not None and config.log_alphas and alpha_grid is not None:
-            sub_dir = os.path.join(run_name, "subjects", f"sub_{sub_id}")
-            _log_alpha_diagnostics(models, alpha_grid, sub_dir, f"Sub {sub_id}")
+            _log_alpha_diagnostics(
+                models,
+                alpha_grid,
+                sub_dir,
+                f"Sub {sub_id}",
+                context=alpha_context,
+                policy=config.alpha_grid,
+            )
 
         save_subject_results(
             run_name,
@@ -360,13 +414,11 @@ def run_config(config: EncodingConfig):
             config.data_root, word_df, **config.per_model_config
         )[1]["in_glove"]
 
-    alphas = (
+    explicit_alphas = (
         np.array(config.ridge_alphas, dtype=float)
         if config.ridge_alphas is not None
         else None
     )
-    alpha_grid = alphas if alphas is not None else RIDGE_ALPHAS
-    model_constructor = get_ridge_model_constructor(alphas=alphas)
 
     if config.batch:
         _run_batch(
@@ -377,11 +429,11 @@ def run_config(config: EncodingConfig):
             config.data_root,
             offset,
             run_name,
-            model_constructor,
+            None,
             config=config,
             dataset_context=dataset_context,
-            alphas=alphas,
-            alpha_grid=alpha_grid,
+            alphas=explicit_alphas,
+            alpha_grid=None,
             word_in_glove=word_in_glove,
         )
     else:
@@ -392,11 +444,11 @@ def run_config(config: EncodingConfig):
             config.data_root,
             offset,
             run_name,
-            model_constructor,
+            None,
             config=config,
             dataset_context=dataset_context,
-            alphas=alphas,
-            alpha_grid=alpha_grid,
+            alphas=explicit_alphas,
+            alpha_grid=None,
             word_in_glove=word_in_glove,
         )
 

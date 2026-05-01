@@ -74,6 +74,7 @@ class EncodingConfig:
     )
     batch: bool = False  # Process subjects one at a time (lower peak RAM)
     ridge_alphas: list[float] | None = None  # None → use RIDGE_ALPHAS from constants.py
+    alpha_grid: dict = field(default_factory=dict)  # Dimension-aware alpha policy.
     log_alphas: bool = False  # Save alpha diagnostics (.npz + .png) per subject
     refine_alphas: bool = False  # Two-pass training: coarse sweep → refined grid
     arbitrary_seed: int = 42  # Seed used for generating arbitrary embedding baseline
@@ -173,6 +174,7 @@ class RRRConfig:
 
     # Alpha diagnostics
     log_alphas: bool = False  # Save per-rank alpha diagnostics in RRR output
+    standardize_subspace_inputs: bool = True  # Standardize RRR/PCA subspace ridge inputs.
 
     # Arbitrary embedding seed for null baseline
     arbitrary_seed: int = 42

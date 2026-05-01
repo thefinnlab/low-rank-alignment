@@ -100,8 +100,8 @@ from src.utils.subspace_utils import (
     compute_stacked_joint_metrics,
     compute_stacked_joint_ridge_means,
 )
+from src.utils.alpha_grids import resolve_ridge_alphas, save_alpha_diagnostics
 from himalaya.scoring import correlation_score, r2_score
-
 
 # ---------------------------------------------------------------------------
 # Shared helpers
@@ -162,8 +162,10 @@ def _strip_per_target_and_add_sig_nonsig(
                 if (~sig_mask_flat).any()
                 else float("nan")
             )
-    for pt_key in per_target_keys:
-        del metrics[pt_key]
+    for array_key in per_target_keys + [
+        k for k in list(metrics) if k.endswith("_best_alphas")
+    ]:
+        del metrics[array_key]
 
 
 def _load_existing_grid(unit_dir: str) -> pd.DataFrame:
@@ -172,6 +174,15 @@ def _load_existing_grid(unit_dir: str) -> pd.DataFrame:
     if not os.path.exists(path):
         return pd.DataFrame()
     return pd.read_csv(path)
+
+
+def _load_reference_test_idxs(output_dir: str, subject_ids) -> list:
+    enc_results = load_encoding_results(
+        os.path.join(
+            output_dir, "subjects", f"sub_{subject_ids[0]}", "encoding_results.joblib"
+        )
+    )
+    return enc_results["test_idxs"]
 
 
 def _metrics_path(unit_dir: str, k: int, fold_f: int) -> str:
@@ -209,7 +220,10 @@ def _rank_complete_from_artifacts(
     n_folds: int,
     require_factors: bool = False,
 ) -> bool:
-    if any(not os.path.exists(_metrics_path(unit_dir, k, fold_f)) for fold_f in range(n_folds)):
+    if any(
+        not os.path.exists(_metrics_path(unit_dir, k, fold_f))
+        for fold_f in range(n_folds)
+    ):
         return False
     if require_factors and any(
         not _fold_factors_exist(unit_dir, fold_f, require_b=True)
@@ -291,6 +305,93 @@ def _ranks_by_fold_to_run(
         for fold_f in range(n_folds)
     }
     return ranks_by_fold, completed
+
+
+def _folds_to_build_from_ranks(ranks_by_fold: dict[int, list[int]]) -> set[int]:
+    return {fold_f for fold_f, ranks in ranks_by_fold.items() if ranks}
+
+
+def _unit_ranks_by_fold_to_run(
+    unit_dir: str,
+    rank_grid: list[int],
+    n_folds: int,
+    refresh: bool,
+    require_factors: bool,
+    primary_label: str,
+    require_arbitrary_oof: bool = True,
+) -> tuple[dict[int, list[int]], set[tuple[int, int]]]:
+    oof_spill_dir = os.path.join(unit_dir, "_oof_spill")
+    return _ranks_by_fold_to_run(
+        unit_dir,
+        rank_grid,
+        n_folds,
+        refresh=refresh,
+        require_factors=require_factors,
+        oof_spill_dir=oof_spill_dir,
+        primary_label=primary_label,
+        require_arbitrary_oof=require_arbitrary_oof,
+    )
+
+
+def _rrr_output_resume_plan(
+    rrr_unit_dir: str,
+    config: RRRConfig,
+    n_folds: int,
+) -> dict:
+    rrr_ranks_by_fold, rrr_completed_pairs = _unit_ranks_by_fold_to_run(
+        rrr_unit_dir,
+        config.rank_grid,
+        n_folds,
+        refresh=config.refresh,
+        require_factors=True,
+        primary_label="nr",
+        require_arbitrary_oof=True,
+    )
+    folds_needed = _folds_to_build_from_ranks(rrr_ranks_by_fold)
+    pca_ranks_by_fold = None
+    pca_completed_pairs = None
+
+    if config.run_pca_baseline:
+        pca_unit_dir = _resolve_pca_sibling_dir(rrr_unit_dir)
+        pca_ranks_by_fold, pca_completed_pairs = _unit_ranks_by_fold_to_run(
+            pca_unit_dir,
+            config.rank_grid,
+            n_folds,
+            refresh=config.refresh,
+            require_factors=False,
+            primary_label="pca",
+            require_arbitrary_oof=True,
+        )
+        folds_needed |= _folds_to_build_from_ranks(pca_ranks_by_fold)
+
+    return {
+        "folds_to_build": folds_needed,
+        "rrr_ranks_by_fold": rrr_ranks_by_fold,
+        "rrr_completed_pairs": rrr_completed_pairs,
+        "pca_ranks_by_fold": pca_ranks_by_fold,
+        "pca_completed_pairs": pca_completed_pairs,
+    }
+
+
+def _transfer_output_resume_plan(
+    transfer_dir: str,
+    config: RRRConfig,
+    n_folds: int,
+) -> dict:
+    ranks_by_fold, completed_pairs = _unit_ranks_by_fold_to_run(
+        transfer_dir,
+        config.rank_grid,
+        n_folds,
+        refresh=config.refresh,
+        require_factors=False,
+        primary_label="transfer",
+        require_arbitrary_oof=False,
+    )
+    return {
+        "folds_to_build": _folds_to_build_from_ranks(ranks_by_fold),
+        "ranks_by_fold": ranks_by_fold,
+        "completed_pairs": completed_pairs,
+    }
 
 
 def _scalar_from_metric(metrics: dict, key: str) -> "float | None":
@@ -379,7 +480,11 @@ def _merge_grid_rows(
     parts = []
     completed_index = pd.MultiIndex.from_tuples(completed_pairs, names=["k", "fold"])
     grid_pairs = set()
-    if completed_pairs and not existing_df.empty and {"k", "fold"}.issubset(existing_df.columns):
+    if (
+        completed_pairs
+        and not existing_df.empty
+        and {"k", "fold"}.issubset(existing_df.columns)
+    ):
         prior = existing_df.copy()
         prior["k"] = prior["k"].astype(int)
         prior["fold"] = prior["fold"].astype(int)
@@ -482,6 +587,8 @@ def _run_common_subspace_fold_k(
     sig_mask_flat: "np.ndarray | None",
     fold_f: int,
     alphas: "np.ndarray | None",
+    alpha_policy: dict | None,
+    standardize_subspace_inputs: bool,
     device: str,
     unit_dir: str,
     oof_spill_dir: str,
@@ -501,10 +608,26 @@ def _run_common_subspace_fold_k(
     """
     A_k = A_full[:, :k]
 
-    # NR: project X into k-dim subspace, train ridge
-    nr_alphas = np.logspace(-2, 10, 13) if k < 50 else np.logspace(1, 10, 13)
+    # NR/PCA: project X into k-dim subspace, train ridge
     X_proj_train = X_train @ A_k
     X_proj_test = X_test @ A_k
+    rank_dir = os.path.join(unit_dir, f"k{k}", f"fold_{fold_f}")
+    nr_context = {
+        "script": "run_rrr",
+        "role": primary_label,
+        "fold": int(fold_f),
+        "k": int(k),
+        "n_features": int(X_proj_train.shape[1]),
+        "standardize": bool(standardize_subspace_inputs),
+    }
+    nr_alphas = resolve_ridge_alphas(
+        alphas,
+        X_proj_train,
+        standardize=standardize_subspace_inputs,
+        context=nr_context,
+        cache_dir=os.path.join(rank_dir, f"{primary_label}_alpha"),
+        policy=alpha_policy,
+    )
     nr_result = evaluate_input_space(
         X_proj_train,
         X_proj_test,
@@ -512,11 +635,32 @@ def _run_common_subspace_fold_k(
         Y_test,
         subspace_name=primary_label,
         alphas=nr_alphas,
+        standardize=standardize_subspace_inputs,
+        return_alphas=True,
         device=device,
     )
 
     # Complement evaluation
-    comp_alphas = np.logspace(1, 10, 13) if k < 50 else np.logspace(-2, 10, 13)
+    if k == A_full.shape[1]:
+        X_comp_train = np.ones((X_train.shape[0], 1))
+    else:
+        X_comp_train = (X_train @ A_full)[:, k:]
+    comp_context = {
+        "script": "run_rrr",
+        "role": "complement",
+        "fold": int(fold_f),
+        "k": int(k),
+        "n_features": int(X_comp_train.shape[1]),
+        "standardize": bool(standardize_subspace_inputs),
+    }
+    comp_alphas = resolve_ridge_alphas(
+        alphas,
+        X_comp_train,
+        standardize=standardize_subspace_inputs,
+        context=comp_context,
+        cache_dir=os.path.join(rank_dir, "complement_alpha"),
+        policy=alpha_policy,
+    )
     complement_result = evaluate_complement(
         A_full,
         k,
@@ -525,19 +669,61 @@ def _run_common_subspace_fold_k(
         Y_train,
         Y_test,
         alphas=comp_alphas,
+        standardize=standardize_subspace_inputs,
+        return_alphas=True,
         device=device,
     )
 
     # Arbitrary evaluation (null baseline)
     arbitrary_result = None
     if X_arbitrary is not None:
+        arb_context = {
+            "script": "run_rrr",
+            "role": "arbitrary",
+            "fold": int(fold_f),
+            "k": int(k),
+            "n_features": int(X_arbitrary[train_idx].shape[1]),
+            "standardize": True,
+        }
+        arbitrary_alphas = resolve_ridge_alphas(
+            alphas,
+            X_arbitrary[train_idx],
+            standardize=True,
+            context=arb_context,
+            cache_dir=os.path.join(rank_dir, "arbitrary_alpha"),
+            policy=alpha_policy,
+        )
         arbitrary_result = evaluate_arbitrary(
             X_arbitrary[train_idx],
             X_arbitrary[test_idx],
             Y_train,
             Y_test,
-            alphas=alphas,
+            alphas=arbitrary_alphas,
+            standardize=True,
+            return_alphas=True,
             device=device,
+        )
+    save_alpha_diagnostics(
+        os.path.join(rank_dir, f"{primary_label}_alpha"),
+        nr_alphas,
+        best_alphas=nr_result[f"{primary_label}_best_alphas"],
+        context=nr_context,
+        policy=alpha_policy,
+    )
+    save_alpha_diagnostics(
+        os.path.join(rank_dir, "complement_alpha"),
+        comp_alphas,
+        best_alphas=complement_result["complement_best_alphas"],
+        context=comp_context,
+        policy=alpha_policy,
+    )
+    if arbitrary_result is not None:
+        save_alpha_diagnostics(
+            os.path.join(rank_dir, "arbitrary_alpha"),
+            arbitrary_alphas,
+            best_alphas=arbitrary_result["arbitrary_best_alphas"],
+            context=arb_context,
+            policy=alpha_policy,
         )
 
     # Build metrics dict (with per-target arrays for metrics.npz save)
@@ -547,9 +733,11 @@ def _run_common_subspace_fold_k(
         f"{primary_label}_corr_per_target": nr_result[
             f"{primary_label}_corr_per_target"
         ],
+        f"{primary_label}_best_alphas": nr_result[f"{primary_label}_best_alphas"],
         "complement_corr": complement_result["complement_corr"],
         "complement_r2": complement_result["complement_r2"],
         "complement_corr_per_target": complement_result["complement_corr_per_target"],
+        "complement_best_alphas": complement_result["complement_best_alphas"],
     }
     if arbitrary_result is not None:
         metrics["arbitrary_corr"] = arbitrary_result["arbitrary_corr"]
@@ -557,6 +745,7 @@ def _run_common_subspace_fold_k(
         metrics["arbitrary_corr_per_target"] = arbitrary_result[
             "arbitrary_corr_per_target"
         ]
+        metrics["arbitrary_best_alphas"] = arbitrary_result["arbitrary_best_alphas"]
 
     # Save to metrics.npz (includes per-target)
     save_rrr_result(unit_dir, k=k, fold=fold_f, metrics=metrics)
@@ -804,6 +993,10 @@ def _run_rrr_for_unit(
     config: RRRConfig,
     sig_mask_flat: "np.ndarray | None" = None,
     X_arbitrary: "np.ndarray | None" = None,
+    ranks_by_fold: "dict[int, list[int]] | None" = None,
+    completed_pairs: "set[tuple[int, int]] | None" = None,
+    pca_ranks_by_fold: "dict[int, list[int]] | None" = None,
+    pca_completed_pairs: "set[tuple[int, int]] | None" = None,
 ) -> pd.DataFrame:
     """Core RRR loop for one analysis unit (cross-subject, per-subject, or per-region).
 
@@ -843,16 +1036,16 @@ def _run_rrr_for_unit(
     os.makedirs(oof_spill_dir, exist_ok=True)
 
     existing_grid = _load_existing_grid(rrr_unit_dir)
-    ranks_by_fold, completed_pairs = _ranks_by_fold_to_run(
-        rrr_unit_dir,
-        config.rank_grid,
-        n_folds,
-        refresh=config.refresh,
-        require_factors=True,
-        oof_spill_dir=oof_spill_dir,
-        primary_label="nr",
-        require_arbitrary_oof=X_arbitrary is not None,
-    )
+    if ranks_by_fold is None or completed_pairs is None:
+        ranks_by_fold, completed_pairs = _unit_ranks_by_fold_to_run(
+            rrr_unit_dir,
+            config.rank_grid,
+            n_folds,
+            refresh=config.refresh,
+            require_factors=True,
+            primary_label="nr",
+            require_arbitrary_oof=X_arbitrary is not None,
+        )
     total_to_run = sum(len(ranks) for ranks in ranks_by_fold.values())
     if completed_pairs:
         print(f"  Reusing {len(completed_pairs)} completed fold/rank pair(s)")
@@ -911,9 +1104,13 @@ def _run_rrr_for_unit(
                 sig_mask_flat=sig_mask_flat,
                 X_arbitrary=X_arbitrary,
                 alphas=alphas,
+                alpha_policy=config.encoding.alpha_grid,
+                standardize_subspace_inputs=config.standardize_subspace_inputs,
                 device=device,
                 refresh=config.refresh,
                 compute_joint_ridge=config.compute_joint_ridge,
+                ranks_by_fold=pca_ranks_by_fold,
+                completed_pairs=pca_completed_pairs,
             )
         return df
 
@@ -1013,6 +1210,8 @@ def _run_rrr_for_unit(
                 sig_mask_flat,
                 fold_f,
                 alphas,
+                config.encoding.alpha_grid,
+                config.standardize_subspace_inputs,
                 device,
                 rrr_unit_dir,
                 oof_spill_dir,
@@ -1109,9 +1308,13 @@ def _run_rrr_for_unit(
             sig_mask_flat=sig_mask_flat,
             X_arbitrary=X_arbitrary,
             alphas=alphas,
+            alpha_policy=config.encoding.alpha_grid,
+            standardize_subspace_inputs=config.standardize_subspace_inputs,
             device=device,
             refresh=config.refresh,
             compute_joint_ridge=config.compute_joint_ridge,
+            ranks_by_fold=pca_ranks_by_fold,
+            completed_pairs=pca_completed_pairs,
         )
 
     return df
@@ -1126,9 +1329,13 @@ def _run_pca_for_unit(
     sig_mask_flat: "np.ndarray | None" = None,
     X_arbitrary: "np.ndarray | None" = None,
     alphas: "np.ndarray | None" = None,
+    alpha_policy: dict | None = None,
+    standardize_subspace_inputs: bool = True,
     device: str = "cpu",
     refresh: bool = False,
     compute_joint_ridge: bool = False,
+    ranks_by_fold: "dict[int, list[int]] | None" = None,
+    completed_pairs: "set[tuple[int, int]] | None" = None,
 ) -> pd.DataFrame:
     """PCA subspace analysis for one unit — structurally parallel to _run_rrr_for_unit.
 
@@ -1163,16 +1370,16 @@ def _run_pca_for_unit(
     os.makedirs(oof_spill_dir, exist_ok=True)
 
     existing_grid = _load_existing_grid(pca_unit_dir)
-    ranks_by_fold, completed_pairs = _ranks_by_fold_to_run(
-        pca_unit_dir,
-        rank_grid,
-        n_folds,
-        refresh=refresh,
-        require_factors=False,
-        oof_spill_dir=oof_spill_dir,
-        primary_label="pca",
-        require_arbitrary_oof=X_arbitrary is not None,
-    )
+    if ranks_by_fold is None or completed_pairs is None:
+        ranks_by_fold, completed_pairs = _unit_ranks_by_fold_to_run(
+            pca_unit_dir,
+            rank_grid,
+            n_folds,
+            refresh=refresh,
+            require_factors=False,
+            primary_label="pca",
+            require_arbitrary_oof=X_arbitrary is not None,
+        )
     total_to_run = sum(len(ranks) for ranks in ranks_by_fold.values())
     if completed_pairs:
         print(f"  Reusing {len(completed_pairs)} completed PCA fold/rank pair(s)")
@@ -1271,6 +1478,8 @@ def _run_pca_for_unit(
                 sig_mask_flat,
                 fold_f,
                 alphas,
+                alpha_policy,
+                standardize_subspace_inputs,
                 device,
                 pca_unit_dir,
                 oof_spill_dir,
@@ -1338,6 +1547,8 @@ def _get_decomposition_inputs(
     compute_sig_nonsig=False,
     sig_dir=None,
     word_in_glove=None,
+    folds_to_build: "set[int] | None" = None,
+    alpha_cache_dir: str | None = None,
 ):
     enc_results = load_encoding_results(
         os.path.join(
@@ -1362,7 +1573,25 @@ def _get_decomposition_inputs(
     )
     print(f"  X: {X_raw.shape}, Y: {Y_full.shape}")
 
-    per_fold_baselines = build_per_fold_baselines(X_raw, Y_full, test_idxs)
+    per_fold_baselines = build_per_fold_baselines(
+        X_raw,
+        Y_full,
+        test_idxs,
+        alphas=(
+            np.array(encoding_config.ridge_alphas, dtype=float)
+            if encoding_config.ridge_alphas is not None
+            else None
+        ),
+        alpha_policy=encoding_config.alpha_grid,
+        alpha_cache_dir=alpha_cache_dir,
+        alpha_context={
+            "script": "run_rrr",
+            "model": encoding_config.model,
+            "per_model_config": encoding_config.per_model_config,
+            "offset": encoding_config.offset,
+        },
+        folds_to_build=folds_to_build,
+    )
 
     X_arbitrary = get_and_offset_arbitrary_embeddings(
         embeddings,
@@ -1403,6 +1632,15 @@ def _run_cross_subject_rrr(
     word_in_glove=None,
 ):
     """RRR on raw embeddings using all subjects' significant electrodes."""
+    n_folds = len(_load_reference_test_idxs(output_dir, subject_ids))
+    resume_plan = _rrr_output_resume_plan(rrr_dir, config, n_folds)
+    folds_to_build = resume_plan["folds_to_build"]
+    if not folds_to_build:
+        print(
+            "  Cross-subject RRR/PCA outputs complete; skipping data/regression setup."
+        )
+        return
+
     results = _get_decomposition_inputs(
         subject_ids,
         output_dir,
@@ -1413,6 +1651,8 @@ def _run_cross_subject_rrr(
         compute_sig_nonsig=config.compute_sig_nonsig,
         sig_dir=sig_dir,
         word_in_glove=word_in_glove,
+        folds_to_build=folds_to_build,
+        alpha_cache_dir=rrr_dir,
     )
     if results is None:
         return
@@ -1425,6 +1665,10 @@ def _run_cross_subject_rrr(
         config=config,
         sig_mask_flat=sig_mask_flat,
         X_arbitrary=X_arbitrary,
+        ranks_by_fold=resume_plan["rrr_ranks_by_fold"],
+        completed_pairs=resume_plan["rrr_completed_pairs"],
+        pca_ranks_by_fold=resume_plan["pca_ranks_by_fold"],
+        pca_completed_pairs=resume_plan["pca_completed_pairs"],
     )
 
 
@@ -1455,6 +1699,13 @@ def _run_per_subject_rrr(
             print("  No significant electrodes; skipping.")
             continue
 
+        n_folds = len(_load_reference_test_idxs(output_dir, [sub_id]))
+        resume_plan = _rrr_output_resume_plan(rrr_sub_dir, config, n_folds)
+        folds_to_build = resume_plan["folds_to_build"]
+        if not folds_to_build:
+            print("  Subject RRR/PCA outputs complete; skipping data/regression setup.")
+            continue
+
         results = _get_decomposition_inputs(
             [sub_id],
             output_dir,
@@ -1465,6 +1716,8 @@ def _run_per_subject_rrr(
             compute_sig_nonsig=config.compute_sig_nonsig,
             sig_dir=sig_dir,
             word_in_glove=word_in_glove,
+            folds_to_build=folds_to_build,
+            alpha_cache_dir=rrr_sub_dir,
         )
         if results is None:
             continue
@@ -1477,6 +1730,10 @@ def _run_per_subject_rrr(
             config=config,
             sig_mask_flat=sig_mask_flat,
             X_arbitrary=X_arbitrary,
+            ranks_by_fold=resume_plan["rrr_ranks_by_fold"],
+            completed_pairs=resume_plan["rrr_completed_pairs"],
+            pca_ranks_by_fold=resume_plan["pca_ranks_by_fold"],
+            pca_completed_pairs=resume_plan["pca_completed_pairs"],
         )
 
 
@@ -1525,6 +1782,13 @@ def _run_per_region_rrr(
             continue
 
         subs_in_region = list(per_subject_region_elecs.keys())
+        n_folds = len(_load_reference_test_idxs(output_dir, subs_in_region))
+        resume_plan = _rrr_output_resume_plan(rrr_region_dir, config, n_folds)
+        folds_to_build = resume_plan["folds_to_build"]
+        if not folds_to_build:
+            print("  Region RRR/PCA outputs complete; skipping data/regression setup.")
+            continue
+
         results = _get_decomposition_inputs(
             subs_in_region,
             output_dir,
@@ -1535,6 +1799,8 @@ def _run_per_region_rrr(
             compute_sig_nonsig=config.compute_sig_nonsig,
             sig_dir=sig_dir,
             word_in_glove=word_in_glove,
+            folds_to_build=folds_to_build,
+            alpha_cache_dir=rrr_region_dir,
         )
         if results is None:
             continue
@@ -1547,6 +1813,10 @@ def _run_per_region_rrr(
             config=config,
             sig_mask_flat=sig_mask_flat,
             X_arbitrary=X_arbitrary,
+            ranks_by_fold=resume_plan["rrr_ranks_by_fold"],
+            completed_pairs=resume_plan["rrr_completed_pairs"],
+            pca_ranks_by_fold=resume_plan["pca_ranks_by_fold"],
+            pca_completed_pairs=resume_plan["pca_completed_pairs"],
         )
 
 
@@ -1563,6 +1833,8 @@ def _run_loso_transfer_for_unit(
     train_rrr_dir: str,
     config: "RRRConfig",
     sig_mask_flat: "np.ndarray | None" = None,
+    ranks_by_fold: "dict[int, list[int]] | None" = None,
+    completed_pairs: "set[tuple[int, int]] | None" = None,
 ) -> pd.DataFrame:
     """Evaluate transfer of the A matrix learned on n-1 subjects to the held-out subject.
 
@@ -1597,15 +1869,15 @@ def _run_loso_transfer_for_unit(
     os.makedirs(oof_spill_dir, exist_ok=True)
 
     existing_grid = _load_existing_grid(transfer_dir)
-    ranks_by_fold, completed_pairs = _ranks_by_fold_to_run(
-        transfer_dir,
-        config.rank_grid,
-        n_folds,
-        refresh=config.refresh,
-        require_factors=False,
-        oof_spill_dir=oof_spill_dir,
-        primary_label="transfer",
-    )
+    if ranks_by_fold is None or completed_pairs is None:
+        ranks_by_fold, completed_pairs = _unit_ranks_by_fold_to_run(
+            transfer_dir,
+            config.rank_grid,
+            n_folds,
+            refresh=config.refresh,
+            require_factors=False,
+            primary_label="transfer",
+        )
     missing_a = [
         os.path.join(train_rrr_dir, f"fold_{fold_f}", "A.npy")
         for fold_f in range(n_folds)
@@ -1690,81 +1962,32 @@ def _run_loso_transfer_for_unit(
             ranks_to_run, desc=f"  transfer fold {fold_f}", leave=True, unit="rank"
         ):
             affected_ranks.add(k)
-            A_k = A_full[:, :k]
-            X_train_proj = X_train @ A_k
-            X_test_proj = X_test @ A_k
-
-            result = evaluate_input_space(
-                X_train_proj,
-                X_test_proj,
-                Y_train,
-                Y_test,
-                device=device,
-                alphas=alphas,
-                subspace_name="transfer",
-            )
-            complement_result = evaluate_complement(
+            common = _run_common_subspace_fold_k(
                 A_full,
                 k,
                 X_train,
                 X_test,
                 Y_train,
                 Y_test,
+                None,
+                train_idx,
+                test_idx,
+                sig_mask_flat,
+                fold_f,
                 alphas=alphas,
+                alpha_policy=config.encoding.alpha_grid,
+                standardize_subspace_inputs=config.standardize_subspace_inputs,
                 device=device,
+                unit_dir=transfer_dir,
+                oof_spill_dir=oof_spill_dir,
+                primary_label="transfer",
             )
-
-            transfer_corr_arr = result["transfer_corr_per_target"]
-            complement_corr_arr = complement_result["complement_corr_per_target"]
-            metrics = {
-                "transfer_corr": result["transfer_corr"],
-                "transfer_r2": result["transfer_r2"],
-                "transfer_corr_per_target": transfer_corr_arr,
-                "complement_corr": complement_result["complement_corr"],
-                "complement_r2": complement_result["complement_r2"],
-                "complement_corr_per_target": complement_corr_arr,
-            }
-            save_rrr_result(transfer_dir, k=k, fold=fold_f, metrics=metrics)
-
-            np.save(
-                os.path.join(oof_spill_dir, f"{k}_{fold_f}_transfer.npy"),
-                result["transfer_Y_hat"],
-            )
-            np.save(
-                os.path.join(oof_spill_dir, f"{k}_{fold_f}_complement.npy"),
-                complement_result["complement_Y_hat"],
-            )
-            np.save(os.path.join(oof_spill_dir, f"{k}_{fold_f}_Y_test.npy"), Y_test)
 
             row = {
                 "fold": fold_f,
                 "k": k,
-                "transfer_corr": result["transfer_corr"],
-                "transfer_r2": result["transfer_r2"],
-                "complement_corr": complement_result["complement_corr"],
-                "complement_r2": complement_result["complement_r2"],
+                **common,
             }
-            if sig_mask_flat is not None:
-                row["transfer_corr_sig"] = (
-                    float(transfer_corr_arr[sig_mask_flat].mean())
-                    if sig_mask_flat.any()
-                    else float("nan")
-                )
-                row["transfer_corr_nonsig"] = (
-                    float(transfer_corr_arr[~sig_mask_flat].mean())
-                    if (~sig_mask_flat).any()
-                    else float("nan")
-                )
-                row["complement_corr_sig"] = (
-                    float(complement_corr_arr[sig_mask_flat].mean())
-                    if sig_mask_flat.any()
-                    else float("nan")
-                )
-                row["complement_corr_nonsig"] = (
-                    float(complement_corr_arr[~sig_mask_flat].mean())
-                    if (~sig_mask_flat).any()
-                    else float("nan")
-                )
             all_rows.append(row)
 
         print(f"  Transfer fold {fold_f} done in {time.time() - fold_start:.1f}s")
@@ -1835,37 +2058,50 @@ def _run_leave_one_subject_out_rrr(
         # --- Step A: train RRR on n-1 subjects ---
         train_subs = [s for s in subject_ids if s != held_out_sub]
         train_sig_elecs = {s: sig_electrodes.get(s, []) for s in train_subs}
+        test_idxs = _load_reference_test_idxs(output_dir, train_subs)
+        n_folds = len(test_idxs)
+        train_dir = os.path.join(loso_sub_dir, "train_subjects")
 
         print(f"  Training subjects: {train_subs}")
-        results_train = _get_decomposition_inputs(
-            train_subs,
-            output_dir,
-            train_sig_elecs,
-            enc,
-            aligned_embeddings,
-            word_df,
-            compute_sig_nonsig=config.compute_sig_nonsig,
-            sig_dir=sig_dir,
-            word_in_glove=word_in_glove,
-        )
-        if results_train is None:
-            print("  No training data; skipping this held-out subject.")
-            continue
-        X_raw, X_arbitrary, per_fold_baselines_train, test_idxs, sig_mask_train = (
-            results_train
-        )
+        train_resume_plan = _rrr_output_resume_plan(train_dir, config, n_folds)
+        train_folds_to_build = train_resume_plan["folds_to_build"]
+        if train_folds_to_build:
+            results_train = _get_decomposition_inputs(
+                train_subs,
+                output_dir,
+                train_sig_elecs,
+                enc,
+                aligned_embeddings,
+                word_df,
+                compute_sig_nonsig=config.compute_sig_nonsig,
+                sig_dir=sig_dir,
+                word_in_glove=word_in_glove,
+                folds_to_build=train_folds_to_build,
+                alpha_cache_dir=train_dir,
+            )
+            if results_train is None:
+                print("  No training data; skipping this held-out subject.")
+                continue
+            X_raw, X_arbitrary, per_fold_baselines_train, test_idxs, sig_mask_train = (
+                results_train
+            )
 
-        train_dir = os.path.join(loso_sub_dir, "train_subjects")
-        print(f"  Running train-subjects RRR → {train_dir}")
-        _run_rrr_for_unit(
-            rrr_unit_dir=train_dir,
-            X_raw=X_raw,
-            test_idxs=test_idxs,
-            per_fold_baselines=per_fold_baselines_train,
-            config=config,
-            sig_mask_flat=sig_mask_train,
-            X_arbitrary=X_arbitrary,
-        )
+            print(f"  Running train-subjects RRR → {train_dir}")
+            _run_rrr_for_unit(
+                rrr_unit_dir=train_dir,
+                X_raw=X_raw,
+                test_idxs=test_idxs,
+                per_fold_baselines=per_fold_baselines_train,
+                config=config,
+                sig_mask_flat=sig_mask_train,
+                X_arbitrary=X_arbitrary,
+                ranks_by_fold=train_resume_plan["rrr_ranks_by_fold"],
+                completed_pairs=train_resume_plan["rrr_completed_pairs"],
+                pca_ranks_by_fold=train_resume_plan["pca_ranks_by_fold"],
+                pca_completed_pairs=train_resume_plan["pca_completed_pairs"],
+            )
+        else:
+            print("  Train-subject RRR/PCA outputs complete; skipping setup.")
 
         # --- Step B: build held-out subject data ---
         held_sig_elecs = sig_electrodes.get(held_out_sub, [])
@@ -1873,6 +2109,20 @@ def _run_leave_one_subject_out_rrr(
             print(
                 f"  Subject {held_out_sub} has no significant electrodes; skipping transfer/baseline."
             )
+            continue
+
+        transfer_dir = os.path.join(loso_sub_dir, "transfer")
+        baseline_dir = os.path.join(loso_sub_dir, "baseline")
+        transfer_resume_plan = _transfer_output_resume_plan(
+            transfer_dir, config, n_folds
+        )
+        baseline_resume_plan = _rrr_output_resume_plan(baseline_dir, config, n_folds)
+        held_folds_to_build = (
+            transfer_resume_plan["folds_to_build"]
+            | baseline_resume_plan["folds_to_build"]
+        )
+        if not held_folds_to_build:
+            print("  Transfer/baseline outputs complete; skipping held-out setup.")
             continue
 
         print(f"  Building held-out subject data...")
@@ -1886,6 +2136,8 @@ def _run_leave_one_subject_out_rrr(
             compute_sig_nonsig=config.compute_sig_nonsig,
             sig_dir=sig_dir,
             word_in_glove=word_in_glove,
+            folds_to_build=held_folds_to_build,
+            alpha_cache_dir=os.path.join(loso_sub_dir, "held_out_alpha"),
         )
         if results_held is None:
             print(f"  No held-out subject data; skipping transfer/baseline.")
@@ -1895,7 +2147,6 @@ def _run_leave_one_subject_out_rrr(
         )
 
         # --- Step C: transfer A from train subjects to held-out subject ---
-        transfer_dir = os.path.join(loso_sub_dir, "transfer")
         print(f"  Running transfer evaluation → {transfer_dir}")
         _run_loso_transfer_for_unit(
             transfer_dir=transfer_dir,
@@ -1905,10 +2156,11 @@ def _run_leave_one_subject_out_rrr(
             train_rrr_dir=train_dir,
             config=config,
             sig_mask_flat=sig_mask_held,
+            ranks_by_fold=transfer_resume_plan["ranks_by_fold"],
+            completed_pairs=transfer_resume_plan["completed_pairs"],
         )
 
         # --- Step D: within-subject baseline RRR on held-out subject alone ---
-        baseline_dir = os.path.join(loso_sub_dir, "baseline")
         print(f"  Running within-subject baseline RRR → {baseline_dir}")
         _run_rrr_for_unit(
             rrr_unit_dir=baseline_dir,
@@ -1918,6 +2170,10 @@ def _run_leave_one_subject_out_rrr(
             config=config,
             sig_mask_flat=sig_mask_held,
             X_arbitrary=X_arbitrary_held,
+            ranks_by_fold=baseline_resume_plan["rrr_ranks_by_fold"],
+            completed_pairs=baseline_resume_plan["rrr_completed_pairs"],
+            pca_ranks_by_fold=baseline_resume_plan["pca_ranks_by_fold"],
+            pca_completed_pairs=baseline_resume_plan["pca_completed_pairs"],
         )
 
 

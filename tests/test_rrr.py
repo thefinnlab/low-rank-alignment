@@ -356,6 +356,34 @@ class TestRunRRRForUnit:
         assert "rrr_corr" in df.columns
         assert "nr_complement_joint_corr" in df.columns
 
+    def test_uses_supplied_resume_schedule_without_recomputing_it(
+        self, tmp_path, small_data, monkeypatch
+    ):
+        import run_rrr
+
+        X, Y = small_data
+        n = X.shape[0]
+        test_idxs = [np.arange(0, n // 2), np.arange(n // 2, n)]
+        per_fold_baselines = _make_baselines(X, Y, test_idxs)
+        config = self._make_config(rank_grid=[1])
+
+        def fail_schedule(*args, **kwargs):
+            raise AssertionError("_run_rrr_for_unit should use the supplied schedule")
+
+        monkeypatch.setattr(run_rrr, "_ranks_by_fold_to_run", fail_schedule)
+        run_rrr._run_rrr_for_unit(
+            str(tmp_path),
+            X,
+            test_idxs,
+            per_fold_baselines,
+            config,
+            ranks_by_fold={0: [1], 1: [1]},
+            completed_pairs=set(),
+        )
+
+        df = pd.read_csv(os.path.join(str(tmp_path), "grid_results.csv"))
+        assert len(df) == 2
+
     def test_refresh_recomputes_all_ranks(self, tmp_path, small_data, monkeypatch):
         import run_rrr
 

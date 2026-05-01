@@ -435,6 +435,10 @@ def build_per_fold_baselines(
     Y_full: np.ndarray,
     test_idxs: list,
     alphas: np.ndarray | None = None,
+    alpha_policy: dict | None = None,
+    alpha_cache_dir: str | None = None,
+    alpha_context: dict | None = None,
+    folds_to_build: set[int] | None = None,
 ) -> list:
     """Train a fresh ridge encoding model per fold and pre-compute baselines.
 
@@ -446,7 +450,12 @@ def build_per_fold_baselines(
         X_raw: (n_words, n_embed) raw embedding matrix.
         Y_full: (n_words, n_targets) assembled neural response matrix.
         test_idxs: List of test index arrays, one per fold.
-        alphas: Optional ridge alpha grid for RidgeCV.
+        alphas: Optional explicit ridge alpha grid for RidgeCV.
+        alpha_policy: Optional dimension-aware alpha grid policy.
+        alpha_cache_dir: Optional root for fold-level alpha caches.
+        alpha_context: Optional metadata included in alpha cache keys.
+        folds_to_build: Optional set of fold indices to train. Other entries
+            are returned as None so callers can skip already-complete folds.
 
     Returns:
         List of dicts, one per fold, each containing:
@@ -459,6 +468,7 @@ def build_per_fold_baselines(
             beta_full_raw:   (n_embed, n_targets) coefficients mapping raw X → scaled Y
     """
     from sklearn.preprocessing import StandardScaler
+    from src.utils.alpha_grids import resolve_ridge_alphas, save_alpha_diagnostics
     from src.utils.sae import solve_regression
     import torch
 
@@ -467,6 +477,10 @@ def build_per_fold_baselines(
     baselines = []
 
     for fold_f, test_idx in enumerate(test_idxs):
+        if folds_to_build is not None and fold_f not in folds_to_build:
+            baselines.append(None)
+            continue
+
         train_mask = np.ones(n_words, dtype=bool)
         train_mask[test_idx] = False
         train_idx = np.where(train_mask)[0]
@@ -475,9 +489,42 @@ def build_per_fold_baselines(
         Y_train = y_scaler.fit_transform(Y_full[train_idx]).astype(np.float32)
         Y_test = y_scaler.transform(Y_full[test_idx]).astype(np.float32)
 
-        W, b = solve_regression(
-            X_raw[train_idx], Y_train, "ridge", device, alphas=alphas
+        fold_context = {
+            "role": "full_baseline",
+            "fold": int(fold_f),
+            "n_features": int(n_embed),
+            "standardize": True,
+            **(alpha_context or {}),
+        }
+        fold_cache_dir = (
+            os.path.join(alpha_cache_dir, f"fold_{fold_f}", "full_baseline_alpha")
+            if alpha_cache_dir is not None
+            else None
         )
+        fold_alphas = resolve_ridge_alphas(
+            alphas,
+            X_raw[train_idx],
+            standardize=True,
+            context=fold_context,
+            cache_dir=fold_cache_dir,
+            policy=alpha_policy,
+        )
+        W, b, best_alphas = solve_regression(
+            X_raw[train_idx],
+            Y_train,
+            "ridge",
+            device,
+            alphas=fold_alphas,
+            return_alphas=True,
+        )
+        if fold_cache_dir is not None:
+            save_alpha_diagnostics(
+                fold_cache_dir,
+                fold_alphas,
+                best_alphas=best_alphas,
+                context=fold_context,
+                policy=alpha_policy,
+            )
         W = to_numpy(W)
         b = to_numpy(b)
 

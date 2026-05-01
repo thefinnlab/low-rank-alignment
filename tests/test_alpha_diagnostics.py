@@ -9,6 +9,11 @@ from src.utils.constants import (
     refine_alpha_grid,
     check_alpha_grid_boundaries,
 )
+from src.utils.alpha_grids import (
+    build_dimension_aware_alpha_grid,
+    resolve_ridge_alphas,
+    save_alpha_diagnostics,
+)
 from src.utils.encoding import extract_best_alphas, get_ridge_model_constructor
 from src.utils.sae import solve_regression
 
@@ -157,3 +162,74 @@ class TestSolveRegressionReturnAlphas:
         result = solve_regression(H, Y, "ols", "cpu", return_alphas=True)
         # OLS always returns 2-tuple
         assert len(result) == 2
+
+
+# ---------------------------------------------------------------------------
+# dimension-aware alpha grids
+# ---------------------------------------------------------------------------
+
+
+class TestDimensionAwareAlphaGrid:
+    def test_high_dimensional_standardized_grid_avoids_tiny_absolute_alphas(self):
+        rng = np.random.default_rng(123)
+        X = rng.standard_normal((2000, 1000)).astype(np.float32)
+
+        grid = build_dimension_aware_alpha_grid(X, standardize=True)
+
+        assert len(grid) >= 21
+        assert len(grid) <= 49
+        assert grid[0] > 1e-2
+        assert grid[-1] > grid[0]
+
+    def test_low_dimensional_grid_keeps_light_regularization(self):
+        rng = np.random.default_rng(456)
+        X = rng.standard_normal((200, 5)).astype(np.float32)
+
+        grid = build_dimension_aware_alpha_grid(X, standardize=True)
+
+        assert grid[0] <= 1e-2
+        assert len(grid) >= 21
+
+    def test_explicit_alphas_override_auto_and_cache(self, tmp_path):
+        rng = np.random.default_rng(789)
+        X = rng.standard_normal((100, 20)).astype(np.float32)
+        explicit = np.array([3.0, 7.0])
+
+        result = resolve_ridge_alphas(
+            explicit,
+            X,
+            standardize=True,
+            context={"role": "test"},
+            cache_dir=tmp_path,
+        )
+
+        np.testing.assert_array_equal(result, explicit)
+
+    def test_refined_grid_is_cached_and_reused(self, tmp_path):
+        rng = np.random.default_rng(10)
+        X = rng.standard_normal((100, 10)).astype(np.float32)
+        context = {"role": "cache-test", "n_features": 10}
+        first_grid = resolve_ridge_alphas(
+            None,
+            X,
+            standardize=True,
+            context=context,
+            cache_dir=tmp_path,
+        )
+        save_alpha_diagnostics(
+            tmp_path,
+            first_grid,
+            best_alphas=np.repeat(first_grid[-1], 8),
+            context=context,
+        )
+
+        second_grid = resolve_ridge_alphas(
+            None,
+            X,
+            standardize=True,
+            context=context,
+            cache_dir=tmp_path,
+        )
+
+        assert len(second_grid) == 31
+        assert second_grid[-1] >= first_grid[-1]

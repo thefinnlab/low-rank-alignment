@@ -31,7 +31,8 @@ from src.utils.config_utils import (
     load_config,
     expand_per_model_layer_configs,
 )
-from src.utils.encoding import get_ridge_model_constructor
+from src.utils.encoding import extract_best_alphas, get_ridge_model_constructor
+from src.utils.alpha_grids import resolve_ridge_alphas, save_alpha_diagnostics
 from src.utils.data_loaders import load_data_from_cache
 
 
@@ -86,8 +87,9 @@ def run_config(config: SignificanceConfig):
             enc.data_root, transcript_df, **enc.per_model_config
         )[1]["in_glove"]
 
-    alphas = np.array(enc.ridge_alphas) if enc.ridge_alphas is not None else None
-    model_constructor = get_ridge_model_constructor(alphas=alphas)
+    explicit_alphas = (
+        np.array(enc.ridge_alphas, dtype=float) if enc.ridge_alphas is not None else None
+    )
 
     all_rows = []
 
@@ -111,6 +113,26 @@ def run_config(config: SignificanceConfig):
         n_lags = n_targets // sum(elec_counts)
         n_elec = sum(elec_counts)
         X = [X_arr] * enc.num_folds
+        alpha_context = {
+            "script": "run_significance",
+            "role": "subject",
+            "subject": int(bids_sub_id),
+            "model": enc.model,
+            "per_model_config": enc.per_model_config,
+            "offset": enc.offset,
+            "n_features": int(X_arr.shape[1]),
+            "standardize": True,
+        }
+        alpha_dir = os.path.join(output_dir, "subjects", f"sub_{bids_sub_id}")
+        alphas = resolve_ridge_alphas(
+            explicit_alphas,
+            X_arr,
+            standardize=True,
+            context=alpha_context,
+            cache_dir=alpha_dir,
+            policy=enc.alpha_grid,
+        )
+        model_constructor = get_ridge_model_constructor(alphas=alphas)
 
         # Update lag_sec based on actual n_lags (in case resampling gives different count)
         actual_lag_sec = np.linspace(-2.0, 2.0, n_lags, endpoint=False)
@@ -126,6 +148,14 @@ def run_config(config: SignificanceConfig):
             epochs_shape=(n_elec, n_lags),
             num_folds=enc.num_folds,
         )
+        if enc.log_alphas:
+            save_alpha_diagnostics(
+                alpha_dir,
+                alphas,
+                best_alphas=[extract_best_alphas(m) for m in models],
+                context=alpha_context,
+                policy=enc.alpha_grid,
+            )
 
         # ------------------------------------------------------------------
         # f. Get predictions

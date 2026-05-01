@@ -110,6 +110,20 @@ class TestDictToDataclass:
         assert config.refresh is True
         assert config.rank_grid == [1, 2]
 
+    def test_alpha_grid_policy_roundtrip(self):
+        config = dict_to_dataclass(
+            {"alpha_grid": {"points_per_decade": 5}},
+            EncodingConfig,
+        )
+        assert config.alpha_grid == {"points_per_decade": 5}
+
+    def test_rrr_subspace_standardization_roundtrip(self):
+        config = dict_to_dataclass(
+            {"standardize_subspace_inputs": False},
+            RRRConfig,
+        )
+        assert config.standardize_subspace_inputs is False
+
 
 # ---------------------------------------------------------------------------
 # apply_overrides
