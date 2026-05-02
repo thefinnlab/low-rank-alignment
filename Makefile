@@ -31,7 +31,8 @@ ATLAS_PATH      ?= atlases/destrieux_2009/destrieux2009_rois_lateralized.nii.gz
 OVERRIDES       ?=   # e.g. OVERRIDES="--encoding.layer=48 --n_permutations=100"
 
 # For downloading model weights.
-MODELS ?= openai-community/gpt2-xl meta-llama/Meta-Llama-3-8B openai-community/gpt2 EleutherAI/gpt-j-6b FacebookAI/roberta-large
+# MODELS ?= openai-community/gpt2-xl meta-llama/Meta-Llama-3-8B openai-community/gpt2 EleutherAI/gpt-j-6b FacebookAI/roberta-large
+# MODELS ?= meta-llama/Llama-3.1-8B
 
 # Batch config lists. Override these with whitespace-separated
 # config paths, e.g. SIG_CONFIGS="configs/a.yml configs/b.yml".
@@ -78,6 +79,7 @@ download-models:
 		python scripts/utilities/download_model.py \
 			--model-id=$$model \
 			--output-dir=model_cache/models/$$SHORT_NAME \
+			--token $(TOKEN) \
 			--include-tokenizer; \
 	done
 

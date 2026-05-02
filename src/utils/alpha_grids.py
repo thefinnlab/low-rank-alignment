@@ -60,7 +60,9 @@ def _cache_path(cache_dir: str | None) -> str | None:
     return os.path.join(cache_dir, "alpha_grid_cache.npz")
 
 
-def _standardized_design_for_scale(X_train: np.ndarray, standardize: bool) -> np.ndarray:
+def _standardized_design_for_scale(
+    X_train: np.ndarray, standardize: bool
+) -> np.ndarray:
     X = np.asarray(X_train, dtype=np.float64)
     X = X - X.mean(axis=0, keepdims=True)
     if standardize:
@@ -148,9 +150,12 @@ def resolve_ridge_alphas(
 
     cfg = _policy_dict(policy)
     if cfg.get("strategy", "auto") == "legacy":
-        from src.utils.constants import RIDGE_ALPHAS
+        from src.utils.constants import RIDGE_ALPHAS, LARGE_RIDGE_ALPHAS
 
-        return np.asarray(RIDGE_ALPHAS, dtype=float)
+        if X_train.shape[1] < int(cfg["low_dim_threshold"]):
+            return np.asarray(RIDGE_ALPHAS, dtype=float)
+        else:
+            return np.asarray(LARGE_RIDGE_ALPHAS, dtype=float)
 
     cached = load_cached_alpha_grid(cache_dir, context, cfg)
     if cached is not None:
@@ -202,7 +207,9 @@ def save_alpha_diagnostics(
         if isinstance(best_alphas, list):
             for i, arr in enumerate(best_alphas):
                 arrays[f"fold_{i}"] = np.asarray(arr, dtype=float)
-            flat_best = np.concatenate([np.asarray(a, dtype=float) for a in best_alphas])
+            flat_best = np.concatenate(
+                [np.asarray(a, dtype=float) for a in best_alphas]
+            )
         else:
             flat_best = np.asarray(best_alphas, dtype=float)
             arrays["best_alphas"] = flat_best

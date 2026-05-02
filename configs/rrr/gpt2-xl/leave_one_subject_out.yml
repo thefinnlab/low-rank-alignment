@@ -6,7 +6,7 @@ encoding:
   run_name: null
   batch: false
   per_model_config:
-    model_dir: gpt2-xl
+    model_dir: gpt2-xl-batch
     layer:
     - 0
     - 24

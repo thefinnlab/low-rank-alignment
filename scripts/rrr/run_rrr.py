@@ -759,15 +759,15 @@ def _run_common_subspace_fold_k(
         f"{primary_label}_best_alphas": nr_result[f"{primary_label}_best_alphas"],
         "complement_corr": complement_result["complement_corr"],
         "complement_r2": complement_result["complement_r2"],
-        "complement_corr_per_target": complement_result["complement_corr_per_target"],
+        # "complement_corr_per_target": complement_result["complement_corr_per_target"],
         "complement_best_alphas": complement_result["complement_best_alphas"],
     }
     if arbitrary_result is not None:
         metrics["arbitrary_corr"] = arbitrary_result["arbitrary_corr"]
         metrics["arbitrary_r2"] = arbitrary_result["arbitrary_r2"]
-        metrics["arbitrary_corr_per_target"] = arbitrary_result[
-            "arbitrary_corr_per_target"
-        ]
+        # metrics["arbitrary_corr_per_target"] = arbitrary_result[
+        # "arbitrary_corr_per_target"
+        # ]
         metrics["arbitrary_best_alphas"] = arbitrary_result["arbitrary_best_alphas"]
 
     # Save to metrics.npz (includes per-target)

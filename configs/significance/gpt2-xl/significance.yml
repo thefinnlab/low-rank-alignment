@@ -7,7 +7,7 @@ encoding:
   batch: false
   num_folds: 5
   per_model_config:
-    model_dir: gpt2-xl
+    model_dir: gpt2-xl-batch
     layer:
     - 0
     - 24
