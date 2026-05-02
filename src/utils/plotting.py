@@ -345,8 +345,22 @@ def plot_rrr_rank_results(
 
     has_folds = grid_df is not None
     has_effective_rank = "effective_rank" in summary_df.columns
+    pred_corr_cols = [
+        (
+            f"{primary_label}_complement_pred_corr",
+            f"{primary_label} vs complement",
+            "#7c3aed",
+        ),
+        (
+            f"{primary_label}_arbitrary_pred_corr",
+            f"{primary_label} vs arbitrary",
+            "#d97706",
+        ),
+        ("complement_arbitrary_pred_corr", "complement vs arbitrary", "#0f766e"),
+    ]
+    has_pred_corr = any(col in summary_df.columns for col, _, _ in pred_corr_cols)
 
-    n_rows = 2 + int(has_effective_rank)
+    n_rows = 2 + int(has_pred_corr) + int(has_effective_rank)
     n_cols = 3
     fig, axes = plt.subplots(n_rows, n_cols, figsize=(7 * n_cols, 4.5 * n_rows))
 
@@ -354,15 +368,15 @@ def plot_rrr_rank_results(
 
     # Colour scheme
     _colors = {
-        "full": "#9ca3af",       # light gray — ceiling
-        "rrr": "#1e40af",        # dark blue — raw RRR
-        "nr": "#3b82f6",         # blue — NR ridge (primary in RRR run)
-        "pca": "#3b82f6",        # blue — PCA (primary in PCA run)
-        "complement": "#8b5cf6", # purple
+        "full": "#9ca3af",  # light gray — ceiling
+        "rrr": "#1e40af",  # dark blue — raw RRR
+        "nr": "#3b82f6",  # blue — NR ridge (primary in RRR run)
+        "pca": "#3b82f6",  # blue — PCA (primary in PCA run)
+        "complement": "#8b5cf6",  # purple
         "arbitrary": "#78716c",  # gray
-        "comp_joint": "#10b981", # green — NR+complement joint
+        "comp_joint": "#10b981",  # green — NR+complement joint
         "arb_joint": "#f59e0b",  # amber — NR+arbitrary joint
-        "comp_joint_ridge": "#047857", # dark green — ridge-stacked joint
+        "comp_joint_ridge": "#047857",  # dark green — ridge-stacked joint
         "arb_joint_ridge": "#b45309",  # dark amber — ridge-stacked joint
     }
 
@@ -382,8 +396,14 @@ def plot_rrr_rank_results(
     def _mean_line(ax, col, df, color, label, ls="-", mk="o", ms=4):
         if col in df.columns:
             ax.semilogx(
-                df["k"], df[col], color=color, linestyle=ls,
-                marker=mk, markersize=ms, label=label, linewidth=1.5,
+                df["k"],
+                df[col],
+                color=color,
+                linestyle=ls,
+                marker=mk,
+                markersize=ms,
+                label=label,
+                linewidth=1.5,
             )
 
     def _panel_finish(ax, xlabel, ylabel, ptitle, hline=None):
@@ -420,21 +440,77 @@ def plot_rrr_rank_results(
     ax_corr = axes[0, 0]
     primary_corr_col = f"{primary_label}_corr"
     _fold_traces(ax_corr, primary_corr_col, primary_color)
-    _mean_line(ax_corr, "full_corr", summary_df, _colors["full"], "full (ceiling)", ls="--")
+    _mean_line(
+        ax_corr, "full_corr", summary_df, _colors["full"], "full (ceiling)", ls="--"
+    )
     _mean_line(ax_corr, "rrr_corr", summary_df, _colors["rrr"], "rrr (raw)", mk="^")
     _mean_line(ax_corr, primary_corr_col, summary_df, primary_color, primary_label)
-    _mean_line(ax_corr, "complement_corr", summary_df, _colors["complement"], "complement", ls="--")
-    _mean_line(ax_corr, comp_joint_col, summary_df, _colors["comp_joint"], f"{primary_label}+complement joint", ls="-.", mk="s")
-    _mean_line(ax_corr, comp_joint_ridge_col, summary_df, _colors["comp_joint_ridge"], f"{primary_label}+complement ridge joint", ls=":", mk="s", ms=3)
-    _mean_line(ax_corr, "arbitrary_corr", summary_df, _colors["arbitrary"], "arbitrary", ls=":")
-    _mean_line(ax_corr, arb_joint_col, summary_df, _colors["arb_joint"], f"{primary_label}+arbitrary joint", ls="-.", mk="D", ms=3)
-    _mean_line(ax_corr, arb_joint_ridge_col, summary_df, _colors["arb_joint_ridge"], f"{primary_label}+arbitrary ridge joint", ls=":", mk="D", ms=3)
-    _panel_finish(ax_corr, "Rank k", "Correlation", f"{title}\n(correlation vs rank)", hline=0)
+    _mean_line(
+        ax_corr,
+        "complement_corr",
+        summary_df,
+        _colors["complement"],
+        "complement",
+        ls="--",
+    )
+    _mean_line(
+        ax_corr,
+        comp_joint_col,
+        summary_df,
+        _colors["comp_joint"],
+        f"{primary_label}+complement joint",
+        ls="-.",
+        mk="s",
+    )
+    _mean_line(
+        ax_corr,
+        comp_joint_ridge_col,
+        summary_df,
+        _colors["comp_joint_ridge"],
+        f"{primary_label}+complement ridge joint",
+        ls=":",
+        mk="s",
+        ms=3,
+    )
+    _mean_line(
+        ax_corr, "arbitrary_corr", summary_df, _colors["arbitrary"], "arbitrary", ls=":"
+    )
+    _mean_line(
+        ax_corr,
+        arb_joint_col,
+        summary_df,
+        _colors["arb_joint"],
+        f"{primary_label}+arbitrary joint",
+        ls="-.",
+        mk="D",
+        ms=3,
+    )
+    _mean_line(
+        ax_corr,
+        arb_joint_ridge_col,
+        summary_df,
+        _colors["arb_joint_ridge"],
+        f"{primary_label}+arbitrary ridge joint",
+        ls=":",
+        mk="D",
+        ms=3,
+    )
+    _panel_finish(
+        ax_corr, "Rank k", "Correlation", f"{title}\n(correlation vs rank)", hline=0
+    )
 
     ax_corr_folds = axes[0, 1]
     _fold_traces(ax_corr_folds, primary_corr_col, primary_color)
-    _mean_line(ax_corr_folds, primary_corr_col, summary_df, primary_color, primary_label)
-    _panel_finish(ax_corr_folds, "Rank k", "Correlation", f"{title}\n(per-fold: {primary_label}_corr)", hline=0)
+    _mean_line(
+        ax_corr_folds, primary_corr_col, summary_df, primary_color, primary_label
+    )
+    _panel_finish(
+        ax_corr_folds,
+        "Rank k",
+        "Correlation",
+        f"{title}\n(per-fold: {primary_label}_corr)",
+        hline=0,
+    )
 
     _heatmap(axes[0, 2], primary_corr_col, "Blues", f"{primary_label}_corr")
 
@@ -451,39 +527,142 @@ def plot_rrr_rank_results(
     _mean_line(ax_r2, "full_r2", summary_df, _colors["full"], "full (ceiling)", ls="--")
     _mean_line(ax_r2, "rrr_r2", summary_df, _colors["rrr"], "rrr (raw)", mk="^")
     _mean_line(ax_r2, primary_r2_col, summary_df, primary_color, primary_label)
-    _mean_line(ax_r2, "complement_r2", summary_df, _colors["complement"], "complement", ls="--")
-    _mean_line(ax_r2, comp_joint_r2_col, summary_df, _colors["comp_joint"], f"{primary_label}+complement joint", ls="-.", mk="s")
-    _mean_line(ax_r2, comp_joint_ridge_r2_col, summary_df, _colors["comp_joint_ridge"], f"{primary_label}+complement ridge joint", ls=":", mk="s", ms=3)
-    _mean_line(ax_r2, "arbitrary_r2", summary_df, _colors["arbitrary"], "arbitrary", ls=":")
-    _mean_line(ax_r2, arb_joint_r2_col, summary_df, _colors["arb_joint"], f"{primary_label}+arbitrary joint", ls="-.", mk="D", ms=3)
-    _mean_line(ax_r2, arb_joint_ridge_r2_col, summary_df, _colors["arb_joint_ridge"], f"{primary_label}+arbitrary ridge joint", ls=":", mk="D", ms=3)
+    _mean_line(
+        ax_r2, "complement_r2", summary_df, _colors["complement"], "complement", ls="--"
+    )
+    _mean_line(
+        ax_r2,
+        comp_joint_r2_col,
+        summary_df,
+        _colors["comp_joint"],
+        f"{primary_label}+complement joint",
+        ls="-.",
+        mk="s",
+    )
+    _mean_line(
+        ax_r2,
+        comp_joint_ridge_r2_col,
+        summary_df,
+        _colors["comp_joint_ridge"],
+        f"{primary_label}+complement ridge joint",
+        ls=":",
+        mk="s",
+        ms=3,
+    )
+    _mean_line(
+        ax_r2, "arbitrary_r2", summary_df, _colors["arbitrary"], "arbitrary", ls=":"
+    )
+    _mean_line(
+        ax_r2,
+        arb_joint_r2_col,
+        summary_df,
+        _colors["arb_joint"],
+        f"{primary_label}+arbitrary joint",
+        ls="-.",
+        mk="D",
+        ms=3,
+    )
+    _mean_line(
+        ax_r2,
+        arb_joint_ridge_r2_col,
+        summary_df,
+        _colors["arb_joint_ridge"],
+        f"{primary_label}+arbitrary ridge joint",
+        ls=":",
+        mk="D",
+        ms=3,
+    )
     _panel_finish(ax_r2, "Rank k", "R²", f"{title}\n(R² vs rank)", hline=0)
 
     ax_r2_folds = axes[1, 1]
     _fold_traces(ax_r2_folds, primary_r2_col, primary_color)
     _mean_line(ax_r2_folds, primary_r2_col, summary_df, primary_color, primary_label)
-    _panel_finish(ax_r2_folds, "Rank k", "R²", f"{title}\n(per-fold: {primary_label}_r2)", hline=0)
+    _panel_finish(
+        ax_r2_folds, "Rank k", "R²", f"{title}\n(per-fold: {primary_label}_r2)", hline=0
+    )
 
     _heatmap(axes[1, 2], primary_r2_col, "Blues", f"{primary_label}_r2")
 
-    # ===== Row 2: Effective rank (optional) =====
+    next_row = 2
+
+    # ===== Row 2: Prediction correlations (optional) =====
+
+    if has_pred_corr:
+        ax_pred = axes[next_row, 0]
+        for col, label, color in pred_corr_cols:
+            if col not in summary_df.columns:
+                continue
+            lower_col = f"{col}_sem_lower"
+            upper_col = f"{col}_sem_upper"
+            sem_col = f"{col}_sem"
+            yerr = None
+            if lower_col in summary_df.columns and upper_col in summary_df.columns:
+                yerr = np.vstack(
+                    [
+                        summary_df[lower_col].to_numpy(),
+                        summary_df[upper_col].to_numpy(),
+                    ]
+                )
+            elif sem_col in summary_df.columns:
+                yerr = summary_df[sem_col].to_numpy()
+            ax_pred.errorbar(
+                ks,
+                summary_df[col].to_numpy(),
+                yerr=yerr,
+                color=color,
+                marker="o",
+                markersize=4,
+                linewidth=1.5,
+                capsize=3,
+                label=label,
+            )
+        ax_pred.set_xscale("log")
+        _panel_finish(
+            ax_pred,
+            "Rank k",
+            "Prediction correlation",
+            f"{title}\n(pairwise prediction correlations)",
+            hline=0,
+        )
+        for ci in range(1, n_cols):
+            axes[next_row, ci].set_visible(False)
+        next_row += 1
+
+    # ===== Effective rank (optional) =====
 
     if has_effective_rank:
-        ax_rank = axes[2, 0]
+        ax_rank = axes[next_row, 0]
         if has_folds and "effective_rank" in grid_df.columns:
             for _, fd in grid_df.groupby("fold"):
-                ax_rank.plot(fd["k"], fd["effective_rank"], color="#6366f1",
-                             alpha=0.25, linewidth=0.8, marker=".", markersize=3)
-        ax_rank.plot(ks, summary_df["effective_rank"], color="#6366f1",
-                     linestyle="-", marker="o", markersize=4, label="effective rank", linewidth=1.5)
+                ax_rank.plot(
+                    fd["k"],
+                    fd["effective_rank"],
+                    color="#6366f1",
+                    alpha=0.25,
+                    linewidth=0.8,
+                    marker=".",
+                    markersize=3,
+                )
+        ax_rank.plot(
+            ks,
+            summary_df["effective_rank"],
+            color="#6366f1",
+            linestyle="-",
+            marker="o",
+            markersize=4,
+            label="effective rank",
+            linewidth=1.5,
+        )
         k_range = np.array([ks.min(), ks.max()])
-        ax_rank.plot(k_range, k_range, color="black", linewidth=0.8, linestyle=":", label="y = k")
+        ax_rank.plot(
+            k_range, k_range, color="black", linewidth=0.8, linestyle=":", label="y = k"
+        )
         ax_rank.set_xlabel("Configured rank k")
         ax_rank.set_ylabel("Effective rank")
         ax_rank.set_title(f"{title}\n(effective rank of A)")
         ax_rank.legend(fontsize=8)
         for ci in range(1, n_cols):
-            axes[2, ci].set_visible(False)
+            axes[next_row, ci].set_visible(False)
 
     fig.tight_layout()
 

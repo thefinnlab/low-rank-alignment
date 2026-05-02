@@ -62,8 +62,8 @@ from src.utils.rrr_utils import (
 )
 from src.utils.sae import solve_regression
 from src.utils.tensor_utils import to_numpy
+from src.utils.correlation import fisher_z_mean
 from himalaya.scoring import correlation_score, r2_score
-
 
 # ---------------------------------------------------------------------------
 # Masking functions
@@ -188,15 +188,23 @@ def _eval_ablated(
     full_r2_arr = to_numpy(r2_score(Y_test, Y_hat_full))
 
     metrics = {
-        "full_corr": float(full_corr_arr.mean()),
+        "full_corr": float(fisher_z_mean(full_corr_arr)),
         "full_r2": float(full_r2_arr.mean()),
-        "nr_corr": float(nr_corr_arr.mean()),
+        "nr_corr": float(fisher_z_mean(nr_corr_arr)),
         "nr_r2": float(nr_r2_arr.mean()),
     }
     if sig_mask_flat is not None:
         for col, arr in [("full_corr", full_corr_arr), ("nr_corr", nr_corr_arr)]:
-            metrics[f"{col}_sig"] = float(arr[sig_mask_flat].mean()) if sig_mask_flat.any() else float("nan")
-            metrics[f"{col}_nonsig"] = float(arr[~sig_mask_flat].mean()) if (~sig_mask_flat).any() else float("nan")
+            metrics[f"{col}_sig"] = (
+                float(fisher_z_mean(arr[sig_mask_flat]))
+                if sig_mask_flat.any()
+                else float("nan")
+            )
+            metrics[f"{col}_nonsig"] = (
+                float(fisher_z_mean(arr[~sig_mask_flat]))
+                if (~sig_mask_flat).any()
+                else float("nan")
+            )
     return metrics
 
 

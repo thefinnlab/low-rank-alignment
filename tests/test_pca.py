@@ -13,7 +13,6 @@ from src.utils.subspace_utils import (
     evaluate_arbitrary,
 )
 
-
 # ---------------------------------------------------------------------------
 # Shared fixtures
 # ---------------------------------------------------------------------------
@@ -60,7 +59,9 @@ class TestEvaluateInputSpace:
 
     def test_returns_expected_keys_with_prefix(self, rng):
         X_train, X_test, Y_train, Y_test = self._make_inputs(rng)
-        result = evaluate_input_space(X_train, X_test, Y_train, Y_test, subspace_name="pca")
+        result = evaluate_input_space(
+            X_train, X_test, Y_train, Y_test, subspace_name="pca"
+        )
         assert "pca_corr" in result
         assert "pca_r2" in result
         assert "pca_corr_per_target" in result
@@ -69,14 +70,20 @@ class TestEvaluateInputSpace:
 
     def test_corr_is_float(self, rng):
         X_train, X_test, Y_train, Y_test = self._make_inputs(rng)
-        result = evaluate_input_space(X_train, X_test, Y_train, Y_test, subspace_name="pca")
+        result = evaluate_input_space(
+            X_train, X_test, Y_train, Y_test, subspace_name="pca"
+        )
         assert isinstance(result["pca_corr"], float)
         assert isinstance(result["pca_r2"], float)
 
     def test_predictions_shape(self, rng):
         n, n_targets = 80, 5
-        X_train, X_test, Y_train, Y_test = self._make_inputs(rng, n=n, n_targets=n_targets)
-        result = evaluate_input_space(X_train, X_test, Y_train, Y_test, subspace_name="pca")
+        X_train, X_test, Y_train, Y_test = self._make_inputs(
+            rng, n=n, n_targets=n_targets
+        )
+        result = evaluate_input_space(
+            X_train, X_test, Y_train, Y_test, subspace_name="pca"
+        )
         assert result["pca_Y_hat"].shape == Y_test.shape
         assert len(result["pca_corr_per_target"]) == n_targets
 
@@ -92,7 +99,9 @@ class TestEvaluateInputSpace:
 
         X_proj_train = X_train @ A
         X_proj_test = X_test @ A
-        result = evaluate_input_space(X_proj_train, X_proj_test, Y_train, Y_test, subspace_name="pca")
+        result = evaluate_input_space(
+            X_proj_train, X_proj_test, Y_train, Y_test, subspace_name="pca"
+        )
         assert "pca_corr" in result
         assert "pca_r2" in result
         assert "pca_corr_per_target" in result
@@ -135,7 +144,9 @@ class TestEvaluateComplement:
 
     def test_per_target_shape(self, rng):
         n_targets = 5
-        A, k, X_train, X_test, Y_train, Y_test = self._make_inputs(rng, n_targets=n_targets)
+        A, k, X_train, X_test, Y_train, Y_test = self._make_inputs(
+            rng, n_targets=n_targets
+        )
         result = evaluate_complement(A, k, X_train, X_test, Y_train, Y_test)
         assert len(result["complement_corr_per_target"]) == n_targets
 
@@ -146,7 +157,9 @@ class TestEvaluateComplement:
         Y = rng.standard_normal((n, n_targets)).astype(np.float32)
         A = np.eye(n_embed, dtype=np.float32)
         n_train = n // 2
-        result = evaluate_complement(A, n_embed, X[:n_train], X[n_train:], Y[:n_train], Y[n_train:])
+        result = evaluate_complement(
+            A, n_embed, X[:n_train], X[n_train:], Y[:n_train], Y[n_train:]
+        )
         # With only a constant feature, complement_corr should be ~0
         assert abs(result["complement_corr"]) < 0.5
 
@@ -319,6 +332,32 @@ class TestRunPCAForUnit:
         _run_pca_for_unit(str(tmp_path), X, test_idxs, per_fold_baselines, rank_grid)
 
         assert os.path.exists(os.path.join(str(tmp_path), "rank_analysis.png"))
+
+    def test_prediction_pair_correlation_columns_written_with_arbitrary(
+        self, tmp_path, small_data, rng
+    ):
+        from run_rrr import _run_pca_for_unit
+
+        X, Y = small_data
+        n = X.shape[0]
+        X_arbitrary = rng.standard_normal(X.shape).astype(np.float32)
+        test_idxs = [np.arange(0, n // 2), np.arange(n // 2, n)]
+        rank_grid = [2]
+        per_fold_baselines = _make_baselines(X, Y, test_idxs)
+
+        _run_pca_for_unit(
+            str(tmp_path),
+            X,
+            test_idxs,
+            per_fold_baselines,
+            rank_grid,
+            X_arbitrary=X_arbitrary,
+        )
+
+        summary_df = pd.read_csv(os.path.join(str(tmp_path), "summary.csv"))
+        assert "pca_complement_pred_corr" in summary_df.columns
+        assert "pca_arbitrary_pred_corr" in summary_df.columns
+        assert "complement_arbitrary_pred_corr" in summary_df.columns
 
     def test_rank_clamped_to_available_components(self, tmp_path, rng):
         """Ranks exceeding min(n_train, n_embed) should be silently skipped."""

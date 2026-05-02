@@ -9,6 +9,7 @@ import numpy as np
 import torch
 
 from src.utils.analysis import partial_out_subspace
+from src.utils.correlation import fisher_z_mean
 from src.utils.sae import solve_regression
 from src.utils.tensor_utils import to_numpy
 from himalaya.scoring import r2_score
@@ -83,7 +84,7 @@ def evaluate_input_space(
 
     prefix = f"{subspace_name}_" if subspace_name else ""
     result = {
-        f"{prefix}corr": float(corr_arr.mean()),
+        f"{prefix}corr": float(fisher_z_mean(corr_arr)),
         f"{prefix}r2": float(r2_arr.mean()),
         f"{prefix}corr_per_target": corr_arr,
         f"{prefix}r2_per_target": r2_arr,
@@ -239,7 +240,10 @@ def compute_stacked_joint_metrics(
 
     n_targets = Y.shape[1]
     if n_splits < 2:
-        return {"corr_per_target": np.zeros(n_targets), "r2_per_target": np.zeros(n_targets)}
+        return {
+            "corr_per_target": np.zeros(n_targets),
+            "r2_per_target": np.zeros(n_targets),
+        }
 
     kf = KFold(n_splits=n_splits, shuffle=False)
     eye3 = np.eye(3) * 1e-8
@@ -282,7 +286,7 @@ def compute_stacked_joint_metrics(
         fold_r2s.append(to_numpy(r2_score(Y_te, Y_pred)))
 
     return {
-        "corr_per_target": np.mean(fold_corrs, axis=0),
+        "corr_per_target": fisher_z_mean(fold_corrs, axis=0),
         "r2_per_target": np.mean(fold_r2s, axis=0),
     }
 
@@ -454,6 +458,6 @@ def compute_stacked_joint_ridge_means(
         fold_r2s.append(to_numpy(r2_score(Y[test_idx], Y_pred)))
 
     return {
-        "corr": float(np.mean(fold_corrs)),
+        "corr": float(fisher_z_mean(fold_corrs)),
         "r2": float(np.mean(fold_r2s)),
     }

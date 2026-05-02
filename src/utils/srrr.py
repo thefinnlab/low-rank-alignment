@@ -14,6 +14,7 @@ from tqdm import tqdm
 from himalaya.scoring import correlation_score, r2_score
 
 from src.utils.tensor_utils import to_numpy, to_torch
+from src.utils.correlation import fisher_z_mean
 
 # ---------------------------------------------------------------------------
 # Tensor contract
@@ -463,8 +464,6 @@ def predict_from_factors(
     return X_use @ A @ B.T
 
 
-
-
 # ---------------------------------------------------------------------------
 # E. Sufficiency test
 # ---------------------------------------------------------------------------
@@ -535,8 +534,8 @@ def run_sufficiency_test(
 
     full_corr_arr = to_numpy(correlation_score(Y_test, Y_hat_full))
     minimal_corr_arr = to_numpy(correlation_score(Y_test, Y_hat_min))
-    full_corr = float(full_corr_arr.mean())
-    minimal_corr = float(minimal_corr_arr.mean())
+    full_corr = float(fisher_z_mean(full_corr_arr))
+    minimal_corr = float(fisher_z_mean(minimal_corr_arr))
 
     Y_resid_test = Y_test - Y_hat_min
 
@@ -553,7 +552,7 @@ def run_sufficiency_test(
 
     recovery_r2 = float(to_numpy(r2_score(Y_resid_test, Y_resid_hat)).mean())
     recovery_corr_arr = to_numpy(correlation_score(Y_resid_test, Y_resid_hat))
-    recovery_corr = float(recovery_corr_arr.mean())
+    recovery_corr = float(fisher_z_mean(recovery_corr_arr))
 
     if null_r2 is not None:
         noise_floor = float(np.percentile(null_r2, 100.0 * (1.0 - p_value_threshold)))
@@ -618,7 +617,7 @@ def compute_cca_similarity(
         corrs = [
             float(np.corrcoef(X_c[:, i], Y_c[:, i])[0, 1]) for i in range(n_components)
         ]
-        return float(np.mean(corrs))
+        return float(fisher_z_mean(corrs))
     except Exception:
         return 0.0
 

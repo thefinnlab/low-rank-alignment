@@ -9,7 +9,6 @@ import pytest
 
 from src.utils.srrr import save_rrr_factors, save_rrr_result, load_rrr_result
 
-
 # ---------------------------------------------------------------------------
 # Shared fixtures
 # ---------------------------------------------------------------------------
@@ -192,6 +191,47 @@ class TestRunRRRForUnit:
         assert "nr_complement_joint_corr_per_target" in metrics.files
         assert "nr_complement_joint_ridge_corr_per_target" not in metrics.files
 
+    def test_prediction_pair_correlation_columns_written_with_arbitrary(
+        self, tmp_path, small_data, rng
+    ):
+        from run_rrr import _run_rrr_for_unit
+
+        X, Y = small_data
+        n = X.shape[0]
+        X_arbitrary = rng.standard_normal(X.shape).astype(np.float32)
+        test_idxs = [np.arange(0, n // 2), np.arange(n // 2, n)]
+        config = self._make_config(rank_grid=[2])
+        per_fold_baselines = _make_baselines(X, Y, test_idxs)
+
+        _run_rrr_for_unit(
+            str(tmp_path),
+            X,
+            test_idxs,
+            per_fold_baselines,
+            config,
+            X_arbitrary=X_arbitrary,
+        )
+
+        expected = [
+            "nr_complement_pred_corr",
+            "nr_complement_pred_corr_sem",
+            "nr_arbitrary_pred_corr",
+            "nr_arbitrary_pred_corr_sem",
+            "complement_arbitrary_pred_corr",
+            "complement_arbitrary_pred_corr_sem",
+        ]
+        grid_df = pd.read_csv(os.path.join(str(tmp_path), "grid_results.csv"))
+        summary_df = pd.read_csv(os.path.join(str(tmp_path), "summary.csv"))
+        for col in expected:
+            assert col in grid_df.columns
+            assert col in summary_df.columns
+
+        metrics = np.load(os.path.join(str(tmp_path), "k2", "fold_0", "metrics.npz"))
+        assert "nr_complement_pred_corr_per_target" in metrics.files
+        assert "nr_arbitrary_pred_corr_per_target" in metrics.files
+        assert "complement_arbitrary_pred_corr_per_target" in metrics.files
+        assert os.path.exists(os.path.join(str(tmp_path), "rank_analysis.png"))
+
     def test_nr_r2_increases_with_rank(self, tmp_path, rng):
         """For low-rank ground truth data, NR R² should increase monotonically with rank."""
         from run_rrr import _run_rrr_for_unit
@@ -254,9 +294,13 @@ class TestRunRRRForUnit:
         per_fold_baselines = _make_baselines(X, Y, test_idxs)
 
         config = self._make_config(rank_grid=[1])
-        run_rrr._run_rrr_for_unit(str(tmp_path), X, test_idxs, per_fold_baselines, config)
+        run_rrr._run_rrr_for_unit(
+            str(tmp_path), X, test_idxs, per_fold_baselines, config
+        )
         first_df = pd.read_csv(os.path.join(str(tmp_path), "grid_results.csv"))
-        rank1_before = first_df[first_df["k"] == 1].sort_values("fold").reset_index(drop=True)
+        rank1_before = (
+            first_df[first_df["k"] == 1].sort_values("fold").reset_index(drop=True)
+        )
 
         calls = {"n": 0}
         original_fit = run_rrr.fit_dense_rrr
@@ -267,7 +311,9 @@ class TestRunRRRForUnit:
 
         monkeypatch.setattr(run_rrr, "fit_dense_rrr", counting_fit)
         config = self._make_config(rank_grid=[1, 3], refresh=False)
-        run_rrr._run_rrr_for_unit(str(tmp_path), X, test_idxs, per_fold_baselines, config)
+        run_rrr._run_rrr_for_unit(
+            str(tmp_path), X, test_idxs, per_fold_baselines, config
+        )
 
         assert calls["n"] == len(test_idxs)
         df = pd.read_csv(os.path.join(str(tmp_path), "grid_results.csv"))
@@ -288,7 +334,9 @@ class TestRunRRRForUnit:
         per_fold_baselines = _make_baselines(X, Y, test_idxs)
 
         config = self._make_config(rank_grid=[1, 3])
-        run_rrr._run_rrr_for_unit(str(tmp_path), X, test_idxs, per_fold_baselines, config)
+        run_rrr._run_rrr_for_unit(
+            str(tmp_path), X, test_idxs, per_fold_baselines, config
+        )
         os.remove(os.path.join(str(tmp_path), "k1", "fold_0", "metrics.npz"))
 
         calls = {"n": 0}
@@ -300,10 +348,14 @@ class TestRunRRRForUnit:
 
         monkeypatch.setattr(run_rrr, "fit_dense_rrr", counting_fit)
         config = self._make_config(rank_grid=[1, 3], refresh=False)
-        run_rrr._run_rrr_for_unit(str(tmp_path), X, test_idxs, per_fold_baselines, config)
+        run_rrr._run_rrr_for_unit(
+            str(tmp_path), X, test_idxs, per_fold_baselines, config
+        )
 
         assert calls["n"] == 0
-        assert os.path.exists(os.path.join(str(tmp_path), "k1", "fold_0", "metrics.npz"))
+        assert os.path.exists(
+            os.path.join(str(tmp_path), "k1", "fold_0", "metrics.npz")
+        )
         df = pd.read_csv(os.path.join(str(tmp_path), "grid_results.csv"))
         assert len(df) == 4
         assert set(df["k"].unique()) == {1, 3}
@@ -319,14 +371,20 @@ class TestRunRRRForUnit:
         per_fold_baselines = _make_baselines(X, Y, test_idxs)
 
         config = self._make_config(rank_grid=[1])
-        run_rrr._run_rrr_for_unit(str(tmp_path), X, test_idxs, per_fold_baselines, config)
+        run_rrr._run_rrr_for_unit(
+            str(tmp_path), X, test_idxs, per_fold_baselines, config
+        )
 
         def fail_fit(*args, **kwargs):
-            raise AssertionError("fit_dense_rrr should not run when all ranks are complete")
+            raise AssertionError(
+                "fit_dense_rrr should not run when all ranks are complete"
+            )
 
         monkeypatch.setattr(run_rrr, "fit_dense_rrr", fail_fit)
         config = self._make_config(rank_grid=[1], refresh=False)
-        run_rrr._run_rrr_for_unit(str(tmp_path), X, test_idxs, per_fold_baselines, config)
+        run_rrr._run_rrr_for_unit(
+            str(tmp_path), X, test_idxs, per_fold_baselines, config
+        )
 
     def test_resume_rebuilds_grid_from_artifacts_without_grid_csv(
         self, tmp_path, small_data, monkeypatch
@@ -339,15 +397,21 @@ class TestRunRRRForUnit:
         per_fold_baselines = _make_baselines(X, Y, test_idxs)
 
         config = self._make_config(rank_grid=[1])
-        run_rrr._run_rrr_for_unit(str(tmp_path), X, test_idxs, per_fold_baselines, config)
+        run_rrr._run_rrr_for_unit(
+            str(tmp_path), X, test_idxs, per_fold_baselines, config
+        )
         os.remove(os.path.join(str(tmp_path), "grid_results.csv"))
 
         def fail_fit(*args, **kwargs):
-            raise AssertionError("fit_dense_rrr should not run when artifacts are complete")
+            raise AssertionError(
+                "fit_dense_rrr should not run when artifacts are complete"
+            )
 
         monkeypatch.setattr(run_rrr, "fit_dense_rrr", fail_fit)
         config = self._make_config(rank_grid=[1], refresh=False)
-        run_rrr._run_rrr_for_unit(str(tmp_path), X, test_idxs, per_fold_baselines, config)
+        run_rrr._run_rrr_for_unit(
+            str(tmp_path), X, test_idxs, per_fold_baselines, config
+        )
 
         df = pd.read_csv(os.path.join(str(tmp_path), "grid_results.csv"))
         assert len(df) == 2
@@ -393,7 +457,9 @@ class TestRunRRRForUnit:
         per_fold_baselines = _make_baselines(X, Y, test_idxs)
 
         config = self._make_config(rank_grid=[1])
-        run_rrr._run_rrr_for_unit(str(tmp_path), X, test_idxs, per_fold_baselines, config)
+        run_rrr._run_rrr_for_unit(
+            str(tmp_path), X, test_idxs, per_fold_baselines, config
+        )
 
         calls = {"n": 0}
         original_fit = run_rrr.fit_dense_rrr
@@ -404,7 +470,9 @@ class TestRunRRRForUnit:
 
         monkeypatch.setattr(run_rrr, "fit_dense_rrr", counting_fit)
         config = self._make_config(rank_grid=[1], refresh=True)
-        run_rrr._run_rrr_for_unit(str(tmp_path), X, test_idxs, per_fold_baselines, config)
+        run_rrr._run_rrr_for_unit(
+            str(tmp_path), X, test_idxs, per_fold_baselines, config
+        )
 
         assert calls["n"] == len(test_idxs)
 
@@ -416,7 +484,9 @@ class TestRunRRRForUnit:
         n_train, n_test, n_embed, n_targets = 6, 4, 4, 2
         X_train = rng.standard_normal((n_train, n_embed)).astype(np.float32)
         X_test = rng.standard_normal((n_test, n_embed)).astype(np.float32)
-        X_arbitrary = rng.standard_normal((n_train + n_test, n_embed)).astype(np.float32)
+        X_arbitrary = rng.standard_normal((n_train + n_test, n_embed)).astype(
+            np.float32
+        )
         Y_train = rng.standard_normal((n_train, n_targets)).astype(np.float32)
         Y_test = rng.standard_normal((n_test, n_targets)).astype(np.float32)
         A_full = np.eye(n_embed, dtype=np.float32)
@@ -455,7 +525,9 @@ class TestRunRRRForUnit:
                 "complement_Y_hat": np.zeros((n_test, n_targets)),
             }
 
-        def fake_evaluate_arbitrary(X_arbitrary_train, X_arbitrary_test, *args, **kwargs):
+        def fake_evaluate_arbitrary(
+            X_arbitrary_train, X_arbitrary_test, *args, **kwargs
+        ):
             key = X_arbitrary_train.shape[1]
             arbitrary_shapes[key] = (X_arbitrary_train.shape, X_arbitrary_test.shape)
             arbitrary_values[key] = (X_arbitrary_train.copy(), X_arbitrary_test.copy())
@@ -468,7 +540,9 @@ class TestRunRRRForUnit:
             }
 
         monkeypatch.setattr(run_rrr, "resolve_ridge_alphas", fake_resolve)
-        monkeypatch.setattr(run_rrr, "save_alpha_diagnostics", fake_save_alpha_diagnostics)
+        monkeypatch.setattr(
+            run_rrr, "save_alpha_diagnostics", fake_save_alpha_diagnostics
+        )
         monkeypatch.setattr(run_rrr, "save_rrr_result", fake_save_rrr_result)
         monkeypatch.setattr(run_rrr, "evaluate_input_space", fake_evaluate_input_space)
         monkeypatch.setattr(run_rrr, "evaluate_complement", fake_evaluate_complement)

@@ -2,6 +2,8 @@ import os
 
 import joblib
 import numpy as np
+
+from src.utils.correlation import fisher_z_mean
 import pandas as pd
 import torch
 
@@ -194,8 +196,8 @@ def compute_truncated_correlations(
 
     return {
         "k_values": np.array(k_values),
-        "full_corrs": full_corrs.mean(axis=0),
-        "truncated_corrs": truncated_corrs.mean(axis=1),
+        "full_corrs": fisher_z_mean(full_corrs, axis=0),
+        "truncated_corrs": fisher_z_mean(truncated_corrs, axis=1),
         "sig_mask": sig_mask,
         "full_corrs_per_fold": full_corrs,
         "truncated_corrs_per_fold": truncated_corrs,
@@ -213,8 +215,10 @@ def find_best_k(results, threshold=0.95):
         int: smallest k meeting the threshold, or the largest k if threshold is never met.
     """
     sig_mask = results["sig_mask"]
-    full_sig = results["full_corrs"][sig_mask].mean()
-    trunc_sig = np.array([t[sig_mask].mean() for t in results["truncated_corrs"]])
+    full_sig = fisher_z_mean(results["full_corrs"][sig_mask])
+    trunc_sig = np.array(
+        [fisher_z_mean(t[sig_mask]) for t in results["truncated_corrs"]]
+    )
     ratios = trunc_sig / full_sig
     passing = np.where(ratios >= threshold)[0]
     if len(passing) == 0:

@@ -45,6 +45,8 @@ Metrics (per k, per fold in grid_results.csv):
     Joint (NR + complement)  : nr_complement_joint_corr, nr_complement_joint_r2
     Ridge joint check        : nr_complement_joint_ridge_corr, nr_complement_joint_ridge_r2  [if enabled]
     Joint (NR + arbitrary)   : nr_arbitrary_joint_corr, nr_arbitrary_joint_r2  [if arbitrary]
+    Prediction-stream corr   : nr_complement_pred_corr, nr_arbitrary_pred_corr,
+                               complement_arbitrary_pred_corr  [Fisher-z mean + SEM]
     Effective rank: effective_rank
 
 Full model (saved once per fold, not duplicated across k):
@@ -68,6 +70,11 @@ from src.utils import (
     build_XY_from_subjects,
 )
 from src.utils.tensor_utils import to_numpy
+from src.utils.correlation import (
+    fisher_z_mean,
+    fisher_z_mean_sem,
+    targetwise_correlation,
+)
 from src.utils.data_loaders import load_sig_electrodes
 from src.utils.atlas import build_electrode_region_map
 from src.core.config import RRRConfig, ScriptMode, get_results_dir
@@ -124,7 +131,7 @@ def _save_full_model_metrics_once(
     r2_arr = to_numpy(r2_score(Y_test, Y_hat_full))
     np.savez(
         path,
-        full_corr=float(corr_arr.mean()),
+        full_corr=float(fisher_z_mean(corr_arr)),
         full_r2=float(r2_arr.mean()),
         full_corr_per_target=corr_arr,
     )
@@ -152,13 +159,14 @@ def _strip_per_target_and_add_sig_nonsig(
         for pt_key in per_target_keys:
             base = pt_key[: -len("_per_target")]
             arr = metrics[pt_key]
+            reducer = fisher_z_mean if base.endswith("_corr") else np.nanmean
             metrics[f"{base}_sig"] = (
-                float(arr[sig_mask_flat].mean())
+                float(reducer(arr[sig_mask_flat]))
                 if sig_mask_flat.any()
                 else float("nan")
             )
             metrics[f"{base}_nonsig"] = (
-                float(arr[~sig_mask_flat].mean())
+                float(reducer(arr[~sig_mask_flat]))
                 if (~sig_mask_flat).any()
                 else float("nan")
             )
@@ -398,10 +406,13 @@ def _scalar_from_metric(metrics: dict, key: str) -> "float | None":
     if key in metrics:
         value = metrics[key]
         arr = np.asarray(value)
-        return float(arr.mean()) if arr.shape else float(arr)
+        if not arr.shape:
+            return float(arr)
+        return float(fisher_z_mean(arr) if key.endswith("_corr") else np.nanmean(arr))
     per_target_key = f"{key}_per_target"
     if per_target_key in metrics:
-        return float(np.asarray(metrics[per_target_key]).mean())
+        arr = np.asarray(metrics[per_target_key])
+        return float(fisher_z_mean(arr) if key.endswith("_corr") else np.nanmean(arr))
     return None
 
 
@@ -435,6 +446,18 @@ def _row_from_metrics_file(
         f"{primary_label}_complement_joint_r2",
         f"{primary_label}_arbitrary_joint_corr",
         f"{primary_label}_arbitrary_joint_r2",
+        f"{primary_label}_complement_pred_corr",
+        f"{primary_label}_complement_pred_corr_sem",
+        f"{primary_label}_complement_pred_corr_sem_lower",
+        f"{primary_label}_complement_pred_corr_sem_upper",
+        f"{primary_label}_arbitrary_pred_corr",
+        f"{primary_label}_arbitrary_pred_corr_sem",
+        f"{primary_label}_arbitrary_pred_corr_sem_lower",
+        f"{primary_label}_arbitrary_pred_corr_sem_upper",
+        "complement_arbitrary_pred_corr",
+        "complement_arbitrary_pred_corr_sem",
+        "complement_arbitrary_pred_corr_sem_lower",
+        "complement_arbitrary_pred_corr_sem_upper",
         "arbitrary_corr",
         "arbitrary_r2",
     ]
@@ -454,12 +477,12 @@ def _row_from_metrics_file(
             arr = np.asarray(metrics[per_target_key])
             if key.endswith("_corr"):
                 row[f"{key}_sig"] = (
-                    float(arr[sig_mask_flat].mean())
+                    float(fisher_z_mean(arr[sig_mask_flat]))
                     if sig_mask_flat.any()
                     else float("nan")
                 )
                 row[f"{key}_nonsig"] = (
-                    float(arr[~sig_mask_flat].mean())
+                    float(fisher_z_mean(arr[~sig_mask_flat]))
                     if (~sig_mask_flat).any()
                     else float("nan")
                 )
@@ -795,6 +818,25 @@ def _run_common_subspace_fold_k(
     return metrics
 
 
+def _prediction_pair_corr_summary(
+    per_fold_a: list[np.ndarray],
+    per_fold_b: list[np.ndarray],
+) -> dict:
+    """Fisher-z summary of targetwise prediction correlations across folds."""
+    corr_by_fold = np.stack(
+        [targetwise_correlation(a, b) for a, b in zip(per_fold_a, per_fold_b)],
+        axis=0,
+    )
+    mean_r, lower_sem, upper_sem = fisher_z_mean_sem(corr_by_fold, axis=None)
+    return {
+        "mean": float(mean_r),
+        "sem": float(max(lower_sem, upper_sem)),
+        "sem_lower": float(lower_sem),
+        "sem_upper": float(upper_sem),
+        "per_fold_target": corr_by_fold,
+    }
+
+
 def _compute_and_save_joint_metrics(
     oof_spill_dir: str,
     rank_grid: list,
@@ -878,21 +920,36 @@ def _compute_and_save_joint_metrics(
                     device=device,
                 )
 
+        pred_corrs = {
+            f"{primary_label}_complement_pred_corr": _prediction_pair_corr_summary(
+                all_primary, all_complement
+            )
+        }
+        if has_arbitrary and all_arbitrary:
+            pred_corrs[f"{primary_label}_arbitrary_pred_corr"] = (
+                _prediction_pair_corr_summary(all_primary, all_arbitrary)
+            )
+            pred_corrs["complement_arbitrary_pred_corr"] = (
+                _prediction_pair_corr_summary(all_complement, all_arbitrary)
+            )
+
         # Update in-memory rows
         for row in all_rows:
             if row["k"] != k:
                 continue
-            row[f"{comp_joint_key}_corr"] = float(jm_comp["corr_per_target"].mean())
+            row[f"{comp_joint_key}_corr"] = float(
+                fisher_z_mean(jm_comp["corr_per_target"])
+            )
             row[f"{comp_joint_key}_r2"] = float(jm_comp["r2_per_target"].mean())
             if sig_mask_flat is not None:
                 arr = jm_comp["corr_per_target"]
                 row[f"{comp_joint_key}_corr_sig"] = (
-                    float(arr[sig_mask_flat].mean())
+                    float(fisher_z_mean(arr[sig_mask_flat]))
                     if sig_mask_flat.any()
                     else float("nan")
                 )
                 row[f"{comp_joint_key}_corr_nonsig"] = (
-                    float(arr[~sig_mask_flat].mean())
+                    float(fisher_z_mean(arr[~sig_mask_flat]))
                     if (~sig_mask_flat).any()
                     else float("nan")
                 )
@@ -900,23 +957,30 @@ def _compute_and_save_joint_metrics(
                 row[f"{comp_ridge_key}_corr"] = float(jm_comp_ridge["corr"])
                 row[f"{comp_ridge_key}_r2"] = float(jm_comp_ridge["r2"])
             if jm_arb is not None:
-                row[f"{arb_joint_key}_corr"] = float(jm_arb["corr_per_target"].mean())
+                row[f"{arb_joint_key}_corr"] = float(
+                    fisher_z_mean(jm_arb["corr_per_target"])
+                )
                 row[f"{arb_joint_key}_r2"] = float(jm_arb["r2_per_target"].mean())
                 if sig_mask_flat is not None:
                     arr = jm_arb["corr_per_target"]
                     row[f"{arb_joint_key}_corr_sig"] = (
-                        float(arr[sig_mask_flat].mean())
+                        float(fisher_z_mean(arr[sig_mask_flat]))
                         if sig_mask_flat.any()
                         else float("nan")
                     )
                     row[f"{arb_joint_key}_corr_nonsig"] = (
-                        float(arr[~sig_mask_flat].mean())
+                        float(fisher_z_mean(arr[~sig_mask_flat]))
                         if (~sig_mask_flat).any()
                         else float("nan")
                     )
             if jm_arb_ridge is not None:
                 row[f"{arb_ridge_key}_corr"] = float(jm_arb_ridge["corr"])
                 row[f"{arb_ridge_key}_r2"] = float(jm_arb_ridge["r2"])
+            for pred_key, summary in pred_corrs.items():
+                row[pred_key] = summary["mean"]
+                row[f"{pred_key}_sem"] = summary["sem"]
+                row[f"{pred_key}_sem_lower"] = summary["sem_lower"]
+                row[f"{pred_key}_sem_upper"] = summary["sem_upper"]
 
         # Append per-target arrays to each fold's metrics.npz
         for fold_f in range(n_folds):
@@ -931,6 +995,12 @@ def _compute_and_save_joint_metrics(
             if jm_arb is not None:
                 existing[f"{arb_joint_key}_corr_per_target"] = jm_arb["corr_per_target"]
                 existing[f"{arb_joint_key}_r2_per_target"] = jm_arb["r2_per_target"]
+            for pred_key, summary in pred_corrs.items():
+                existing[pred_key] = summary["mean"]
+                existing[f"{pred_key}_sem"] = summary["sem"]
+                existing[f"{pred_key}_sem_lower"] = summary["sem_lower"]
+                existing[f"{pred_key}_sem_upper"] = summary["sem_upper"]
+                existing[f"{pred_key}_per_target"] = summary["per_fold_target"][fold_f]
             np.savez(metrics_path, **existing)
 
     shutil.rmtree(oof_spill_dir, ignore_errors=True)
@@ -943,6 +1013,14 @@ def _build_results(
     primary_label: str,
 ) -> None:
     """Build summary CSV and rank analysis plots from grid results DataFrame."""
+
+    def _is_corr_mean_col(col: str) -> bool:
+        return (
+            col.endswith("_corr")
+            or col.endswith("_corr_sig")
+            or col.endswith("_corr_nonsig")
+        )
+
     # Core agg columns (filter to what's actually present)
     candidate_cols = [
         "full_corr",
@@ -959,6 +1037,18 @@ def _build_results(
         f"{primary_label}_arbitrary_joint_r2",
         f"{primary_label}_arbitrary_joint_ridge_corr",
         f"{primary_label}_arbitrary_joint_ridge_r2",
+        f"{primary_label}_complement_pred_corr",
+        f"{primary_label}_complement_pred_corr_sem",
+        f"{primary_label}_complement_pred_corr_sem_lower",
+        f"{primary_label}_complement_pred_corr_sem_upper",
+        f"{primary_label}_arbitrary_pred_corr",
+        f"{primary_label}_arbitrary_pred_corr_sem",
+        f"{primary_label}_arbitrary_pred_corr_sem_lower",
+        f"{primary_label}_arbitrary_pred_corr_sem_upper",
+        "complement_arbitrary_pred_corr",
+        "complement_arbitrary_pred_corr_sem",
+        "complement_arbitrary_pred_corr_sem_lower",
+        "complement_arbitrary_pred_corr_sem_upper",
         "arbitrary_corr",
         "arbitrary_r2",
         "effective_rank",
@@ -974,7 +1064,22 @@ def _build_results(
         candidate_cols.extend(sig_candidates)
 
     agg_cols = [c for c in candidate_cols if c in df.columns]
-    summary = df.groupby("k")[agg_cols].mean().reset_index()
+    summary_rows = []
+    for k, group in df.groupby("k", sort=True):
+        row = {"k": k}
+        for col in agg_cols:
+            values = group[col].to_numpy()
+            row[col] = (
+                float(fisher_z_mean(values))
+                if _is_corr_mean_col(col)
+                else (
+                    float(np.nanmean(values))
+                    if np.isfinite(values).any()
+                    else float("nan")
+                )
+            )
+        summary_rows.append(row)
+    summary = pd.DataFrame(summary_rows)
     summary.to_csv(os.path.join(unit_dir, "summary.csv"), index=False)
 
     from src.utils.plotting import plot_rrr_rank_results
@@ -1165,7 +1270,9 @@ def _run_rrr_for_unit(
 
         # Save full model metrics once per fold (not per-k)
         _save_full_model_metrics_once(rrr_unit_dir, fold_f, Y_test, Y_hat_full)
-        full_corr = float(to_numpy(correlation_score(Y_test, Y_hat_full)).mean())
+        full_corr = float(
+            fisher_z_mean(to_numpy(correlation_score(Y_test, Y_hat_full)))
+        )
         full_r2 = float(to_numpy(r2_score(Y_test, Y_hat_full)).mean())
 
         # Fit or load RRR once per fold; truncate to each k below.
@@ -1267,18 +1374,18 @@ def _run_rrr_for_unit(
                 "effective_rank": effective_rank,
                 "full_corr": full_corr,
                 "full_r2": full_r2,
-                "rrr_corr": float(rrr_corr_arr.mean()),
+                "rrr_corr": float(fisher_z_mean(rrr_corr_arr)),
                 "rrr_r2": float(rrr_r2_arr.mean()),
                 **common,
             }
             if sig_mask_flat is not None:
                 row["rrr_corr_sig"] = (
-                    float(rrr_corr_arr[sig_mask_flat].mean())
+                    float(fisher_z_mean(rrr_corr_arr[sig_mask_flat]))
                     if sig_mask_flat.any()
                     else float("nan")
                 )
                 row["rrr_corr_nonsig"] = (
-                    float(rrr_corr_arr[~sig_mask_flat].mean())
+                    float(fisher_z_mean(rrr_corr_arr[~sig_mask_flat]))
                     if (~sig_mask_flat).any()
                     else float("nan")
                 )
