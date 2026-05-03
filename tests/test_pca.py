@@ -277,7 +277,7 @@ class TestRunPCAForUnit:
         assert len(df) == 2
         assert set(df["k"].unique()) == {2, 5}
 
-    def test_pca_and_complement_columns_in_output(self, tmp_path, small_data):
+    def test_pca_columns_in_output(self, tmp_path, small_data):
         from run_rrr import _run_pca_for_unit
 
         X, Y = small_data
@@ -289,10 +289,19 @@ class TestRunPCAForUnit:
         _run_pca_for_unit(str(tmp_path), X, test_idxs, per_fold_baselines, rank_grid)
 
         df = pd.read_csv(os.path.join(str(tmp_path), "grid_results.csv"))
-        assert "pca_corr" in df.columns
-        assert "pca_r2" in df.columns
-        assert "complement_corr" in df.columns
-        assert "complement_r2" in df.columns
+        for col in ["full_corr", "full_r2", "pca_corr", "pca_r2"]:
+            assert col in df.columns
+        for col in [
+            "complement_corr",
+            "complement_r2",
+            "pca_complement_joint_corr",
+            "pca_arbitrary_joint_corr",
+            "pca_complement_pred_corr",
+            "pca_arbitrary_pred_corr",
+            "arbitrary_corr",
+            "arbitrary_r2",
+        ]:
+            assert col not in df.columns
 
     def test_pca_r2_increases_with_rank(self, tmp_path, rng):
         """For low-rank ground truth data, R2 should increase monotonically with rank."""
@@ -332,32 +341,6 @@ class TestRunPCAForUnit:
         _run_pca_for_unit(str(tmp_path), X, test_idxs, per_fold_baselines, rank_grid)
 
         assert os.path.exists(os.path.join(str(tmp_path), "rank_analysis.png"))
-
-    def test_prediction_pair_correlation_columns_written_with_arbitrary(
-        self, tmp_path, small_data, rng
-    ):
-        from run_rrr import _run_pca_for_unit
-
-        X, Y = small_data
-        n = X.shape[0]
-        X_arbitrary = rng.standard_normal(X.shape).astype(np.float32)
-        test_idxs = [np.arange(0, n // 2), np.arange(n // 2, n)]
-        rank_grid = [2]
-        per_fold_baselines = _make_baselines(X, Y, test_idxs)
-
-        _run_pca_for_unit(
-            str(tmp_path),
-            X,
-            test_idxs,
-            per_fold_baselines,
-            rank_grid,
-            X_arbitrary=X_arbitrary,
-        )
-
-        summary_df = pd.read_csv(os.path.join(str(tmp_path), "summary.csv"))
-        assert "pca_complement_pred_corr" in summary_df.columns
-        assert "pca_arbitrary_pred_corr" in summary_df.columns
-        assert "complement_arbitrary_pred_corr" in summary_df.columns
 
     def test_rank_clamped_to_available_components(self, tmp_path, rng):
         """Ranks exceeding min(n_train, n_embed) should be silently skipped."""

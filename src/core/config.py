@@ -174,7 +174,7 @@ class RRRConfig:
     compute_cca: bool = False
     compute_procrustes: bool = False
     compute_sig_nonsig: bool = True
-    compute_joint_ridge: bool = False  # Also compute ridge-stacked joint means.
+    compute_joint_ridge: bool = False  # Deprecated; ignored by RRR/PCA rank sweeps.
 
     # Alpha diagnostics
     log_alphas: bool = False  # Save per-rank alpha diagnostics in RRR output

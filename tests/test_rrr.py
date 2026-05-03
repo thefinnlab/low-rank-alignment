@@ -165,72 +165,38 @@ class TestRunRRRForUnit:
         # One row per rank
         assert len(df) == 2
         assert set(df["k"].unique()) == {2, 5}
-        assert "nr_corr" in df.columns
-        assert "nr_complement_joint_corr" in df.columns
-        assert "rrr_corr" in df.columns
-
-    def test_optional_joint_ridge_columns_written(self, tmp_path, small_data):
-        from run_rrr import _run_rrr_for_unit
-
-        X, Y = small_data
-        n = X.shape[0]
-        test_idxs = [np.arange(0, n // 2), np.arange(n // 2, n)]
-        config = self._make_config(rank_grid=[2])
-        config.compute_joint_ridge = True
-        per_fold_baselines = _make_baselines(X, Y, test_idxs)
-
-        _run_rrr_for_unit(str(tmp_path), X, test_idxs, per_fold_baselines, config)
-
-        grid_df = pd.read_csv(os.path.join(str(tmp_path), "grid_results.csv"))
-        summary_df = pd.read_csv(os.path.join(str(tmp_path), "summary.csv"))
-        assert "nr_complement_joint_ridge_corr" in grid_df.columns
-        assert "nr_complement_joint_ridge_r2" in grid_df.columns
-        assert "nr_complement_joint_ridge_corr" in summary_df.columns
-
-        metrics = np.load(os.path.join(str(tmp_path), "k2", "fold_0", "metrics.npz"))
-        assert "nr_complement_joint_corr_per_target" in metrics.files
-        assert "nr_complement_joint_ridge_corr_per_target" not in metrics.files
-
-    def test_prediction_pair_correlation_columns_written_with_arbitrary(
-        self, tmp_path, small_data, rng
-    ):
-        from run_rrr import _run_rrr_for_unit
-
-        X, Y = small_data
-        n = X.shape[0]
-        X_arbitrary = rng.standard_normal(X.shape).astype(np.float32)
-        test_idxs = [np.arange(0, n // 2), np.arange(n // 2, n)]
-        config = self._make_config(rank_grid=[2])
-        per_fold_baselines = _make_baselines(X, Y, test_idxs)
-
-        _run_rrr_for_unit(
-            str(tmp_path),
-            X,
-            test_idxs,
-            per_fold_baselines,
-            config,
-            X_arbitrary=X_arbitrary,
-        )
-
         expected = [
-            "nr_complement_pred_corr",
-            "nr_complement_pred_corr_sem",
-            "nr_arbitrary_pred_corr",
-            "nr_arbitrary_pred_corr_sem",
-            "complement_arbitrary_pred_corr",
-            "complement_arbitrary_pred_corr_sem",
+            "full_corr",
+            "full_r2",
+            "rrr_corr",
+            "rrr_r2",
+            "nr_corr",
+            "nr_r2",
+            "effective_rank",
         ]
+        for col in expected:
+            assert col in df.columns
         grid_df = pd.read_csv(os.path.join(str(tmp_path), "grid_results.csv"))
-        summary_df = pd.read_csv(os.path.join(str(tmp_path), "summary.csv"))
         for col in expected:
             assert col in grid_df.columns
-            assert col in summary_df.columns
+        removed = [
+            "complement_corr",
+            "complement_r2",
+            "nr_complement_joint_corr",
+            "nr_arbitrary_joint_corr",
+            "nr_complement_pred_corr",
+            "nr_arbitrary_pred_corr",
+            "arbitrary_corr",
+            "arbitrary_r2",
+        ]
+        for col in removed:
+            assert col not in grid_df.columns
+            assert col not in df.columns
 
         metrics = np.load(os.path.join(str(tmp_path), "k2", "fold_0", "metrics.npz"))
-        assert "nr_complement_pred_corr_per_target" in metrics.files
-        assert "nr_arbitrary_pred_corr_per_target" in metrics.files
-        assert "complement_arbitrary_pred_corr_per_target" in metrics.files
-        assert os.path.exists(os.path.join(str(tmp_path), "rank_analysis.png"))
+        assert "nr_corr_per_target" in metrics.files
+        assert "nr_best_alphas" in metrics.files
+        assert "complement_corr" not in metrics.files
 
     def test_nr_r2_increases_with_rank(self, tmp_path, rng):
         """For low-rank ground truth data, NR R² should increase monotonically with rank."""
@@ -418,7 +384,8 @@ class TestRunRRRForUnit:
         assert set(df["fold"].unique()) == {0, 1}
         assert set(df["k"].unique()) == {1}
         assert "rrr_corr" in df.columns
-        assert "nr_complement_joint_corr" in df.columns
+        assert "nr_corr" in df.columns
+        assert "nr_complement_joint_corr" not in df.columns
 
     def test_uses_supplied_resume_schedule_without_recomputing_it(
         self, tmp_path, small_data, monkeypatch
@@ -475,112 +442,6 @@ class TestRunRRRForUnit:
         )
 
         assert calls["n"] == len(test_idxs)
-
-    def test_arbitrary_features_match_complement_dimensions_per_rank(
-        self, tmp_path, rng, monkeypatch
-    ):
-        import run_rrr
-
-        n_train, n_test, n_embed, n_targets = 6, 4, 4, 2
-        X_train = rng.standard_normal((n_train, n_embed)).astype(np.float32)
-        X_test = rng.standard_normal((n_test, n_embed)).astype(np.float32)
-        X_arbitrary = rng.standard_normal((n_train + n_test, n_embed)).astype(
-            np.float32
-        )
-        Y_train = rng.standard_normal((n_train, n_targets)).astype(np.float32)
-        Y_test = rng.standard_normal((n_test, n_targets)).astype(np.float32)
-        A_full = np.eye(n_embed, dtype=np.float32)
-        train_idx = np.arange(n_train)
-        test_idx = np.arange(n_train, n_train + n_test)
-        oof_spill_dir = tmp_path / "oof"
-        oof_spill_dir.mkdir()
-
-        arbitrary_shapes = {}
-        arbitrary_values = {}
-
-        def fake_resolve(alphas, X, **kwargs):
-            return np.array([1.0], dtype=np.float32)
-
-        def fake_save_alpha_diagnostics(*args, **kwargs):
-            return None
-
-        def fake_save_rrr_result(*args, **kwargs):
-            return None
-
-        def fake_evaluate_input_space(*args, subspace_name, **kwargs):
-            return {
-                f"{subspace_name}_corr": 0.1,
-                f"{subspace_name}_r2": 0.2,
-                f"{subspace_name}_corr_per_target": np.zeros(n_targets),
-                f"{subspace_name}_best_alphas": np.ones(n_targets),
-                f"{subspace_name}_Y_hat": np.zeros((n_test, n_targets)),
-            }
-
-        def fake_evaluate_complement(*args, **kwargs):
-            return {
-                "complement_corr": 0.1,
-                "complement_r2": 0.2,
-                "complement_corr_per_target": np.zeros(n_targets),
-                "complement_best_alphas": np.ones(n_targets),
-                "complement_Y_hat": np.zeros((n_test, n_targets)),
-            }
-
-        def fake_evaluate_arbitrary(
-            X_arbitrary_train, X_arbitrary_test, *args, **kwargs
-        ):
-            key = X_arbitrary_train.shape[1]
-            arbitrary_shapes[key] = (X_arbitrary_train.shape, X_arbitrary_test.shape)
-            arbitrary_values[key] = (X_arbitrary_train.copy(), X_arbitrary_test.copy())
-            return {
-                "arbitrary_corr": 0.1,
-                "arbitrary_r2": 0.2,
-                "arbitrary_corr_per_target": np.zeros(n_targets),
-                "arbitrary_best_alphas": np.ones(n_targets),
-                "arbitrary_Y_hat": np.zeros((n_test, n_targets)),
-            }
-
-        monkeypatch.setattr(run_rrr, "resolve_ridge_alphas", fake_resolve)
-        monkeypatch.setattr(
-            run_rrr, "save_alpha_diagnostics", fake_save_alpha_diagnostics
-        )
-        monkeypatch.setattr(run_rrr, "save_rrr_result", fake_save_rrr_result)
-        monkeypatch.setattr(run_rrr, "evaluate_input_space", fake_evaluate_input_space)
-        monkeypatch.setattr(run_rrr, "evaluate_complement", fake_evaluate_complement)
-        monkeypatch.setattr(run_rrr, "evaluate_arbitrary", fake_evaluate_arbitrary)
-
-        for k in (1, n_embed):
-            run_rrr._run_common_subspace_fold_k(
-                A_full,
-                k,
-                X_train,
-                X_test,
-                Y_train,
-                Y_test,
-                X_arbitrary,
-                train_idx,
-                test_idx,
-                None,
-                0,
-                None,
-                {},
-                True,
-                5,
-                None,
-                None,
-                None,
-                "cpu",
-                str(tmp_path),
-                str(oof_spill_dir),
-                primary_label="nr",
-            )
-
-        assert arbitrary_shapes[3] == ((n_train, 3), (n_test, 3))
-        np.testing.assert_allclose(arbitrary_values[3][0], X_arbitrary[train_idx, 1:])
-        np.testing.assert_allclose(arbitrary_values[3][1], X_arbitrary[test_idx, 1:])
-        assert arbitrary_shapes[1] == ((n_train, 1), (n_test, 1))
-        np.testing.assert_allclose(arbitrary_values[1][0], np.ones((n_train, 1)))
-        np.testing.assert_allclose(arbitrary_values[1][1], np.ones((n_test, 1)))
-
 
 # ---------------------------------------------------------------------------
 # TestBuildXYFromSubjects

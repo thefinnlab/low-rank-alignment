@@ -41,23 +41,15 @@ Output layout per unit:
 Metrics (per k, per fold in grid_results.csv):
     RRR model  : rrr_corr, rrr_r2
     NR ridge   : nr_corr, nr_r2
-    Complement : complement_corr, complement_r2
-    Joint (NR + complement)  : nr_complement_joint_corr, nr_complement_joint_r2
-    Ridge joint check        : nr_complement_joint_ridge_corr, nr_complement_joint_ridge_r2  [if enabled]
-    Joint (NR + arbitrary)   : nr_arbitrary_joint_corr, nr_arbitrary_joint_r2  [if arbitrary]
-    Prediction-stream corr   : nr_complement_pred_corr, nr_arbitrary_pred_corr,
-                               complement_arbitrary_pred_corr  [Fisher-z mean + SEM]
     Effective rank: effective_rank
 
 Full model (saved once per fold, not duplicated across k):
     full_corr, full_r2, full_corr_per_target  → fold_{f}/full_model_metrics.npz
 
 Per-target arrays (only in metrics.npz, not in grid_results.csv):
-    rrr_corr_per_target, nr_corr_per_target, complement_corr_per_target,
-    nr_complement_joint_corr_per_target, nr_arbitrary_joint_corr_per_target
+    rrr_corr_per_target, nr_corr_per_target
 """
 
-import gc
 import os
 import time
 
@@ -72,8 +64,6 @@ from src.utils import (
 from src.utils.tensor_utils import to_numpy
 from src.utils.correlation import (
     fisher_z_mean,
-    fisher_z_mean_sem,
-    targetwise_correlation,
 )
 from src.utils.data_loaders import load_sig_electrodes
 from src.utils.atlas import build_electrode_region_map
@@ -88,7 +78,6 @@ from src.utils.embeddings import get_glove_embeddings
 from src.utils.encoding import (
     load_encoding_results,
     build_per_fold_baselines,
-    get_and_offset_arbitrary_embeddings,
 )
 from src.utils.srrr import (
     fit_dense_rrr,
@@ -102,10 +91,6 @@ from src.utils.rrr_utils import (
 )
 from src.utils.subspace_utils import (
     evaluate_input_space,
-    evaluate_complement,
-    evaluate_arbitrary,
-    compute_stacked_joint_metrics,
-    compute_stacked_joint_ridge_means,
 )
 from src.utils.alpha_grids import resolve_ridge_alphas, save_alpha_diagnostics
 from himalaya.scoring import correlation_score, r2_score
@@ -205,81 +190,20 @@ def _fold_factors_exist(unit_dir: str, fold_f: int, require_b: bool = True) -> b
     return all(os.path.exists(path) for path in paths)
 
 
-def _oof_paths_exist(
-    oof_spill_dir: str,
-    k: int,
-    fold_f: int,
-    primary_label: str,
-    require_arbitrary: bool = False,
-) -> bool:
-    paths = [
-        os.path.join(oof_spill_dir, f"{k}_{fold_f}_{primary_label}.npy"),
-        os.path.join(oof_spill_dir, f"{k}_{fold_f}_complement.npy"),
-        os.path.join(oof_spill_dir, f"{k}_{fold_f}_Y_test.npy"),
-    ]
-    if require_arbitrary:
-        paths.append(os.path.join(oof_spill_dir, f"{k}_{fold_f}_arbitrary.npy"))
-    return all(os.path.exists(path) for path in paths)
-
-
-def _rank_complete_from_artifacts(
-    unit_dir: str,
-    k: int,
-    n_folds: int,
-    require_factors: bool = False,
-) -> bool:
-    if any(
-        not os.path.exists(_metrics_path(unit_dir, k, fold_f))
-        for fold_f in range(n_folds)
-    ):
-        return False
-    if require_factors and any(
-        not _fold_factors_exist(unit_dir, fold_f, require_b=True)
-        for fold_f in range(n_folds)
-    ):
-        return False
-    return True
-
-
 def _completed_pairs_from_artifacts(
     unit_dir: str,
     rank_grid: list[int],
     n_folds: int,
     require_factors: bool = False,
-    oof_spill_dir: "str | None" = None,
-    primary_label: "str | None" = None,
-    require_arbitrary_oof: bool = False,
 ) -> set[tuple[int, int]]:
-    """Completed (k, fold) pairs based on artifact files, not grid_results.csv.
-
-    If a rank is only partially complete, OOF spill files are also required so
-    stacked joint metrics can be rebuilt when the missing pairs finish. Fully
-    complete ranks do not need spill files to be considered completed, because
-    their per-fold metric files can rebuild grid rows.
-    """
+    """Completed (k, fold) pairs based on artifact files, not grid_results.csv."""
     completed: set[tuple[int, int]] = set()
     for k in rank_grid:
-        complete_rank = _rank_complete_from_artifacts(
-            unit_dir, k, n_folds, require_factors=require_factors
-        )
         for fold_f in range(n_folds):
             if not os.path.exists(_metrics_path(unit_dir, k, fold_f)):
                 continue
             if require_factors and not _fold_factors_exist(
                 unit_dir, fold_f, require_b=True
-            ):
-                continue
-            if (
-                not complete_rank
-                and oof_spill_dir is not None
-                and primary_label is not None
-                and not _oof_paths_exist(
-                    oof_spill_dir,
-                    k,
-                    fold_f,
-                    primary_label,
-                    require_arbitrary=require_arbitrary_oof,
-                )
             ):
                 continue
             completed.add((k, fold_f))
@@ -292,9 +216,6 @@ def _ranks_by_fold_to_run(
     n_folds: int,
     refresh: bool,
     require_factors: bool = False,
-    oof_spill_dir: "str | None" = None,
-    primary_label: "str | None" = None,
-    require_arbitrary_oof: bool = False,
 ) -> tuple[dict[int, list[int]], set[tuple[int, int]]]:
     """Return per-fold ranks to compute plus (k, fold) pairs reusable from disk."""
     if refresh:
@@ -304,9 +225,6 @@ def _ranks_by_fold_to_run(
         rank_grid,
         n_folds,
         require_factors=require_factors,
-        oof_spill_dir=oof_spill_dir,
-        primary_label=primary_label,
-        require_arbitrary_oof=require_arbitrary_oof,
     )
     ranks_by_fold = {
         fold_f: [k for k in rank_grid if (k, fold_f) not in completed]
@@ -325,19 +243,13 @@ def _unit_ranks_by_fold_to_run(
     n_folds: int,
     refresh: bool,
     require_factors: bool,
-    primary_label: str,
-    require_arbitrary_oof: bool = True,
 ) -> tuple[dict[int, list[int]], set[tuple[int, int]]]:
-    oof_spill_dir = os.path.join(unit_dir, "_oof_spill")
     return _ranks_by_fold_to_run(
         unit_dir,
         rank_grid,
         n_folds,
         refresh=refresh,
         require_factors=require_factors,
-        oof_spill_dir=oof_spill_dir,
-        primary_label=primary_label,
-        require_arbitrary_oof=require_arbitrary_oof,
     )
 
 
@@ -352,8 +264,6 @@ def _rrr_output_resume_plan(
         n_folds,
         refresh=config.refresh,
         require_factors=True,
-        primary_label="nr",
-        require_arbitrary_oof=True,
     )
     folds_needed = _folds_to_build_from_ranks(rrr_ranks_by_fold)
     pca_ranks_by_fold = None
@@ -367,8 +277,6 @@ def _rrr_output_resume_plan(
             n_folds,
             refresh=config.refresh,
             require_factors=False,
-            primary_label="pca",
-            require_arbitrary_oof=True,
         )
         folds_needed |= _folds_to_build_from_ranks(pca_ranks_by_fold)
 
@@ -392,8 +300,6 @@ def _transfer_output_resume_plan(
         n_folds,
         refresh=config.refresh,
         require_factors=False,
-        primary_label="transfer",
-        require_arbitrary_oof=False,
     )
     return {
         "folds_to_build": _folds_to_build_from_ranks(ranks_by_fold),
@@ -440,26 +346,6 @@ def _row_from_metrics_file(
         "full_r2",
         f"{primary_label}_corr",
         f"{primary_label}_r2",
-        "complement_corr",
-        "complement_r2",
-        f"{primary_label}_complement_joint_corr",
-        f"{primary_label}_complement_joint_r2",
-        f"{primary_label}_arbitrary_joint_corr",
-        f"{primary_label}_arbitrary_joint_r2",
-        f"{primary_label}_complement_pred_corr",
-        f"{primary_label}_complement_pred_corr_sem",
-        f"{primary_label}_complement_pred_corr_sem_lower",
-        f"{primary_label}_complement_pred_corr_sem_upper",
-        f"{primary_label}_arbitrary_pred_corr",
-        f"{primary_label}_arbitrary_pred_corr_sem",
-        f"{primary_label}_arbitrary_pred_corr_sem_lower",
-        f"{primary_label}_arbitrary_pred_corr_sem_upper",
-        "complement_arbitrary_pred_corr",
-        "complement_arbitrary_pred_corr_sem",
-        "complement_arbitrary_pred_corr_sem_lower",
-        "complement_arbitrary_pred_corr_sem_upper",
-        "arbitrary_corr",
-        "arbitrary_r2",
     ]
     if primary_label == "nr":
         base_keys.extend(["rrr_corr", "rrr_r2"])
@@ -547,56 +433,6 @@ def _merge_grid_rows(
     return df.sort_values(["k", "fold"]).reset_index(drop=True)
 
 
-def _joint_ranks_ready_to_compute(
-    df: pd.DataFrame,
-    rank_grid: list[int],
-    n_folds: int,
-    oof_spill_dir: str,
-    primary_label: str,
-    require_arbitrary_oof: bool = False,
-    compute_joint_ridge: bool = False,
-) -> set[int]:
-    """Ranks with complete rows/spills but missing joint scalar columns."""
-    if df.empty or "k" not in df.columns or "fold" not in df.columns:
-        return set()
-
-    required_cols = [
-        f"{primary_label}_complement_joint_corr",
-        f"{primary_label}_complement_joint_r2",
-    ]
-    if compute_joint_ridge:
-        required_cols.extend(
-            [
-                f"{primary_label}_complement_joint_ridge_corr",
-                f"{primary_label}_complement_joint_ridge_r2",
-            ]
-        )
-
-    ready = set()
-    expected_folds = set(range(n_folds))
-    for k in rank_grid:
-        rows = df[df["k"].astype(int) == k]
-        if set(rows["fold"].astype(int).tolist()) != expected_folds:
-            continue
-        missing_joint = any(
-            col not in rows.columns or rows[col].isna().any() for col in required_cols
-        )
-        if not missing_joint:
-            continue
-        if all(
-            _oof_paths_exist(
-                oof_spill_dir,
-                k,
-                fold_f,
-                primary_label,
-                require_arbitrary=require_arbitrary_oof,
-            )
-            for fold_f in expected_folds
-        ):
-            ready.add(k)
-    return ready
-
-
 def _run_common_subspace_fold_k(
     A_full: np.ndarray,
     k: int,
@@ -604,9 +440,6 @@ def _run_common_subspace_fold_k(
     X_test: np.ndarray,
     Y_train: np.ndarray,
     Y_test: np.ndarray,
-    X_arbitrary: "np.ndarray | None",
-    train_idx: np.ndarray,
-    test_idx: np.ndarray,
     sig_mask_flat: "np.ndarray | None",
     fold_f: int,
     alphas: "np.ndarray | None",
@@ -618,10 +451,9 @@ def _run_common_subspace_fold_k(
     ridge_force_cpu: bool | None,
     device: str,
     unit_dir: str,
-    oof_spill_dir: str,
     primary_label: str,
 ) -> dict:
-    """Shared evaluation for one (fold, k): NR + complement + optional arbitrary.
+    """Shared evaluation for one (fold, k) projected subspace.
 
     Called by both _run_rrr_for_unit (primary_label='nr') and _run_pca_for_unit
     (primary_label='pca') after the reduction matrix A_full is known.
@@ -629,17 +461,14 @@ def _run_common_subspace_fold_k(
     Saves per-rank metrics (including *_per_target arrays) to
     {unit_dir}/k{k}/fold_{fold_f}/metrics.npz.
 
-    Spills OOF predictions to {oof_spill_dir} for post-loop joint computation.
-
     Returns a metrics dict with per-target arrays stripped (for grid_results.csv).
     """
     A_k = A_full[:, :k]
 
-    # NR/PCA: project X into k-dim subspace, train ridge
     X_proj_train = X_train @ A_k
     X_proj_test = X_test @ A_k
     rank_dir = os.path.join(unit_dir, f"k{k}", f"fold_{fold_f}")
-    nr_context = {
+    context = {
         "script": "run_rrr",
         "role": primary_label,
         "fold": int(fold_f),
@@ -647,21 +476,21 @@ def _run_common_subspace_fold_k(
         "n_features": int(X_proj_train.shape[1]),
         "standardize": bool(standardize_subspace_inputs),
     }
-    nr_alphas = resolve_ridge_alphas(
+    resolved_alphas = resolve_ridge_alphas(
         alphas,
         X_proj_train,
         standardize=standardize_subspace_inputs,
-        context=nr_context,
+        context=context,
         cache_dir=os.path.join(rank_dir, f"{primary_label}_alpha"),
         policy=alpha_policy,
     )
-    nr_result = evaluate_input_space(
+    result = evaluate_input_space(
         X_proj_train,
         X_proj_test,
         Y_train,
         Y_test,
         subspace_name=primary_label,
-        alphas=nr_alphas,
+        alphas=resolved_alphas,
         ridge_cv_folds=ridge_cv_folds,
         standardize=standardize_subspace_inputs,
         ridge_solver_params=ridge_solver_params,
@@ -670,340 +499,25 @@ def _run_common_subspace_fold_k(
         return_alphas=True,
         device=device,
     )
-
-    # Complement evaluation
-    if k == A_full.shape[1]:
-        X_comp_train = np.ones((X_train.shape[0], 1))
-    else:
-        X_comp_train = (X_train @ A_full)[:, k:]
-    comp_context = {
-        "script": "run_rrr",
-        "role": "complement",
-        "fold": int(fold_f),
-        "k": int(k),
-        "n_features": int(X_comp_train.shape[1]),
-        "standardize": bool(standardize_subspace_inputs),
-    }
-    comp_alphas = resolve_ridge_alphas(
-        alphas,
-        X_comp_train,
-        standardize=standardize_subspace_inputs,
-        context=comp_context,
-        cache_dir=os.path.join(rank_dir, "complement_alpha"),
-        policy=alpha_policy,
-    )
-    complement_result = evaluate_complement(
-        A_full,
-        k,
-        X_train,
-        X_test,
-        Y_train,
-        Y_test,
-        alphas=comp_alphas,
-        ridge_cv_folds=ridge_cv_folds,
-        standardize=standardize_subspace_inputs,
-        ridge_solver_params=ridge_solver_params,
-        ridge_y_in_cpu=ridge_y_in_cpu,
-        ridge_force_cpu=ridge_force_cpu,
-        return_alphas=True,
-        device=device,
-    )
-
-    # Arbitrary evaluation (null baseline)
-    arbitrary_result = None
-    if X_arbitrary is not None:
-        if k == A_full.shape[1]:
-            X_arbitrary_train = np.ones((X_train.shape[0], 1))
-            X_arbitrary_test = np.ones((X_test.shape[0], 1))
-        else:
-            X_arbitrary_projected = X_arbitrary @ A_full
-            X_arbitrary_train = X_arbitrary_projected[train_idx, k:]
-            X_arbitrary_test = X_arbitrary_projected[test_idx, k:]
-        arb_context = {
-            "script": "run_rrr",
-            "role": "arbitrary",
-            "fold": int(fold_f),
-            "k": int(k),
-            "n_features": int(X_arbitrary_train.shape[1]),
-            "standardize": True,
-        }
-        arbitrary_alphas = resolve_ridge_alphas(
-            alphas,
-            X_arbitrary_train,
-            standardize=True,
-            context=arb_context,
-            cache_dir=os.path.join(rank_dir, "arbitrary_alpha"),
-            policy=alpha_policy,
-        )
-        arbitrary_result = evaluate_arbitrary(
-            X_arbitrary_train,
-            X_arbitrary_test,
-            Y_train,
-            Y_test,
-            alphas=arbitrary_alphas,
-            ridge_cv_folds=ridge_cv_folds,
-            standardize=True,
-            ridge_solver_params=ridge_solver_params,
-            ridge_y_in_cpu=ridge_y_in_cpu,
-            ridge_force_cpu=ridge_force_cpu,
-            return_alphas=True,
-            device=device,
-        )
     save_alpha_diagnostics(
         os.path.join(rank_dir, f"{primary_label}_alpha"),
-        nr_alphas,
-        best_alphas=nr_result[f"{primary_label}_best_alphas"],
-        context=nr_context,
+        resolved_alphas,
+        best_alphas=result[f"{primary_label}_best_alphas"],
+        context=context,
         policy=alpha_policy,
     )
-    save_alpha_diagnostics(
-        os.path.join(rank_dir, "complement_alpha"),
-        comp_alphas,
-        best_alphas=complement_result["complement_best_alphas"],
-        context=comp_context,
-        policy=alpha_policy,
-    )
-    if arbitrary_result is not None:
-        save_alpha_diagnostics(
-            os.path.join(rank_dir, "arbitrary_alpha"),
-            arbitrary_alphas,
-            best_alphas=arbitrary_result["arbitrary_best_alphas"],
-            context=arb_context,
-            policy=alpha_policy,
-        )
 
-    # Build metrics dict (with per-target arrays for metrics.npz save)
     metrics = {
-        f"{primary_label}_corr": nr_result[f"{primary_label}_corr"],
-        f"{primary_label}_r2": nr_result[f"{primary_label}_r2"],
-        f"{primary_label}_corr_per_target": nr_result[
-            f"{primary_label}_corr_per_target"
-        ],
-        f"{primary_label}_best_alphas": nr_result[f"{primary_label}_best_alphas"],
-        "complement_corr": complement_result["complement_corr"],
-        "complement_r2": complement_result["complement_r2"],
-        # "complement_corr_per_target": complement_result["complement_corr_per_target"],
-        "complement_best_alphas": complement_result["complement_best_alphas"],
+        f"{primary_label}_corr": result[f"{primary_label}_corr"],
+        f"{primary_label}_r2": result[f"{primary_label}_r2"],
+        f"{primary_label}_corr_per_target": result[f"{primary_label}_corr_per_target"],
+        f"{primary_label}_r2_per_target": result[f"{primary_label}_r2_per_target"],
+        f"{primary_label}_best_alphas": result[f"{primary_label}_best_alphas"],
     }
-    if arbitrary_result is not None:
-        metrics["arbitrary_corr"] = arbitrary_result["arbitrary_corr"]
-        metrics["arbitrary_r2"] = arbitrary_result["arbitrary_r2"]
-        # metrics["arbitrary_corr_per_target"] = arbitrary_result[
-        # "arbitrary_corr_per_target"
-        # ]
-        metrics["arbitrary_best_alphas"] = arbitrary_result["arbitrary_best_alphas"]
 
-    # Save to metrics.npz (includes per-target)
     save_rrr_result(unit_dir, k=k, fold=fold_f, metrics=metrics)
-
-    # Spill OOF predictions to disk for post-loop joint computation
-    np.save(
-        os.path.join(oof_spill_dir, f"{k}_{fold_f}_{primary_label}.npy"),
-        nr_result[f"{primary_label}_Y_hat"],
-    )
-    np.save(
-        os.path.join(oof_spill_dir, f"{k}_{fold_f}_complement.npy"),
-        complement_result["complement_Y_hat"],
-    )
-    np.save(os.path.join(oof_spill_dir, f"{k}_{fold_f}_Y_test.npy"), Y_test)
-    if arbitrary_result is not None:
-        np.save(
-            os.path.join(oof_spill_dir, f"{k}_{fold_f}_arbitrary.npy"),
-            arbitrary_result["arbitrary_Y_hat"],
-        )
-
-    # Add sig/nonsig splits and strip per-target arrays (for grid_results.csv row)
     _strip_per_target_and_add_sig_nonsig(metrics, sig_mask_flat)
-
     return metrics
-
-
-def _prediction_pair_corr_summary(
-    per_fold_a: list[np.ndarray],
-    per_fold_b: list[np.ndarray],
-) -> dict:
-    """Fisher-z summary of targetwise prediction correlations across folds."""
-    corr_by_fold = np.stack(
-        [targetwise_correlation(a, b) for a, b in zip(per_fold_a, per_fold_b)],
-        axis=0,
-    )
-    mean_r, lower_sem, upper_sem = fisher_z_mean_sem(corr_by_fold, axis=None)
-    return {
-        "mean": float(mean_r),
-        "sem": float(max(lower_sem, upper_sem)),
-        "sem_lower": float(lower_sem),
-        "sem_upper": float(upper_sem),
-        "per_fold_target": corr_by_fold,
-    }
-
-
-def _compute_and_save_joint_metrics(
-    oof_spill_dir: str,
-    rank_grid: list,
-    n_folds: int,
-    unit_dir: str,
-    all_rows: list,
-    primary_label: str,
-    sig_mask_flat: "np.ndarray | None",
-    compute_joint_ridge: bool = False,
-    device: str = "cpu",
-) -> None:
-    """Post-loop: compute stacked joint metrics, update rows and metrics.npz files.
-
-    Computes joint metrics for:
-        - {primary_label} + complement
-        - {primary_label} + arbitrary  (if arbitrary OOF files exist)
-
-    Updates all_rows in-place with joint scalar metrics.
-    Appends OLS joint *_per_target arrays to each k/fold metrics.npz.
-    When compute_joint_ridge=True, also stores ridge-stacked scalar means in
-    grid_results.csv/summary.csv only.
-    Cleans up the OOF spill directory when done.
-    """
-    import shutil
-
-    evaluated_ranks = {row["k"] for row in all_rows}
-    for k in [k for k in rank_grid if k in evaluated_ranks]:
-        all_primary, all_complement, all_y_test = [], [], []
-        all_arbitrary = []
-        has_arbitrary = True
-
-        for fold_f in range(n_folds):
-            all_primary.append(
-                np.load(
-                    os.path.join(oof_spill_dir, f"{k}_{fold_f}_{primary_label}.npy")
-                )
-            )
-            all_complement.append(
-                np.load(os.path.join(oof_spill_dir, f"{k}_{fold_f}_complement.npy"))
-            )
-            all_y_test.append(
-                np.load(os.path.join(oof_spill_dir, f"{k}_{fold_f}_Y_test.npy"))
-            )
-            arb_path = os.path.join(oof_spill_dir, f"{k}_{fold_f}_arbitrary.npy")
-            if has_arbitrary and os.path.exists(arb_path):
-                all_arbitrary.append(np.load(arb_path))
-            else:
-                has_arbitrary = False
-
-        # Joint: primary + complement
-        jm_comp = compute_stacked_joint_metrics(
-            all_primary, all_complement, all_y_test, n_splits=n_folds
-        )
-        comp_joint_key = f"{primary_label}_complement_joint"
-        jm_comp_ridge = None
-        comp_ridge_key = f"{primary_label}_complement_joint_ridge"
-        if compute_joint_ridge:
-            jm_comp_ridge = compute_stacked_joint_ridge_means(
-                all_primary,
-                all_complement,
-                all_y_test,
-                n_splits=n_folds,
-                device=device,
-            )
-
-        # Joint: primary + arbitrary
-        jm_arb = None
-        arb_joint_key = f"{primary_label}_arbitrary_joint"
-        jm_arb_ridge = None
-        arb_ridge_key = f"{primary_label}_arbitrary_joint_ridge"
-        if has_arbitrary and all_arbitrary:
-            jm_arb = compute_stacked_joint_metrics(
-                all_primary, all_arbitrary, all_y_test, n_splits=n_folds
-            )
-            if compute_joint_ridge:
-                jm_arb_ridge = compute_stacked_joint_ridge_means(
-                    all_primary,
-                    all_arbitrary,
-                    all_y_test,
-                    n_splits=n_folds,
-                    device=device,
-                )
-
-        pred_corrs = {
-            f"{primary_label}_complement_pred_corr": _prediction_pair_corr_summary(
-                all_primary, all_complement
-            )
-        }
-        if has_arbitrary and all_arbitrary:
-            pred_corrs[f"{primary_label}_arbitrary_pred_corr"] = (
-                _prediction_pair_corr_summary(all_primary, all_arbitrary)
-            )
-            pred_corrs["complement_arbitrary_pred_corr"] = (
-                _prediction_pair_corr_summary(all_complement, all_arbitrary)
-            )
-
-        # Update in-memory rows
-        for row in all_rows:
-            if row["k"] != k:
-                continue
-            row[f"{comp_joint_key}_corr"] = float(
-                fisher_z_mean(jm_comp["corr_per_target"])
-            )
-            row[f"{comp_joint_key}_r2"] = float(jm_comp["r2_per_target"].mean())
-            if sig_mask_flat is not None:
-                arr = jm_comp["corr_per_target"]
-                row[f"{comp_joint_key}_corr_sig"] = (
-                    float(fisher_z_mean(arr[sig_mask_flat]))
-                    if sig_mask_flat.any()
-                    else float("nan")
-                )
-                row[f"{comp_joint_key}_corr_nonsig"] = (
-                    float(fisher_z_mean(arr[~sig_mask_flat]))
-                    if (~sig_mask_flat).any()
-                    else float("nan")
-                )
-            if jm_comp_ridge is not None:
-                row[f"{comp_ridge_key}_corr"] = float(jm_comp_ridge["corr"])
-                row[f"{comp_ridge_key}_r2"] = float(jm_comp_ridge["r2"])
-            if jm_arb is not None:
-                row[f"{arb_joint_key}_corr"] = float(
-                    fisher_z_mean(jm_arb["corr_per_target"])
-                )
-                row[f"{arb_joint_key}_r2"] = float(jm_arb["r2_per_target"].mean())
-                if sig_mask_flat is not None:
-                    arr = jm_arb["corr_per_target"]
-                    row[f"{arb_joint_key}_corr_sig"] = (
-                        float(fisher_z_mean(arr[sig_mask_flat]))
-                        if sig_mask_flat.any()
-                        else float("nan")
-                    )
-                    row[f"{arb_joint_key}_corr_nonsig"] = (
-                        float(fisher_z_mean(arr[~sig_mask_flat]))
-                        if (~sig_mask_flat).any()
-                        else float("nan")
-                    )
-            if jm_arb_ridge is not None:
-                row[f"{arb_ridge_key}_corr"] = float(jm_arb_ridge["corr"])
-                row[f"{arb_ridge_key}_r2"] = float(jm_arb_ridge["r2"])
-            for pred_key, summary in pred_corrs.items():
-                row[pred_key] = summary["mean"]
-                row[f"{pred_key}_sem"] = summary["sem"]
-                row[f"{pred_key}_sem_lower"] = summary["sem_lower"]
-                row[f"{pred_key}_sem_upper"] = summary["sem_upper"]
-
-        # Append per-target arrays to each fold's metrics.npz
-        for fold_f in range(n_folds):
-            metrics_path = os.path.join(
-                unit_dir, f"k{k}", f"fold_{fold_f}", "metrics.npz"
-            )
-            if not os.path.exists(metrics_path):
-                continue
-            existing = dict(np.load(metrics_path, allow_pickle=True))
-            existing[f"{comp_joint_key}_corr_per_target"] = jm_comp["corr_per_target"]
-            existing[f"{comp_joint_key}_r2_per_target"] = jm_comp["r2_per_target"]
-            if jm_arb is not None:
-                existing[f"{arb_joint_key}_corr_per_target"] = jm_arb["corr_per_target"]
-                existing[f"{arb_joint_key}_r2_per_target"] = jm_arb["r2_per_target"]
-            for pred_key, summary in pred_corrs.items():
-                existing[pred_key] = summary["mean"]
-                existing[f"{pred_key}_sem"] = summary["sem"]
-                existing[f"{pred_key}_sem_lower"] = summary["sem_lower"]
-                existing[f"{pred_key}_sem_upper"] = summary["sem_upper"]
-                existing[f"{pred_key}_per_target"] = summary["per_fold_target"][fold_f]
-            np.savez(metrics_path, **existing)
-
-    shutil.rmtree(oof_spill_dir, ignore_errors=True)
 
 
 def _build_results(
@@ -1027,30 +541,6 @@ def _build_results(
         "full_r2",
         f"{primary_label}_corr",
         f"{primary_label}_r2",
-        "complement_corr",
-        "complement_r2",
-        f"{primary_label}_complement_joint_corr",
-        f"{primary_label}_complement_joint_r2",
-        f"{primary_label}_complement_joint_ridge_corr",
-        f"{primary_label}_complement_joint_ridge_r2",
-        f"{primary_label}_arbitrary_joint_corr",
-        f"{primary_label}_arbitrary_joint_r2",
-        f"{primary_label}_arbitrary_joint_ridge_corr",
-        f"{primary_label}_arbitrary_joint_ridge_r2",
-        f"{primary_label}_complement_pred_corr",
-        f"{primary_label}_complement_pred_corr_sem",
-        f"{primary_label}_complement_pred_corr_sem_lower",
-        f"{primary_label}_complement_pred_corr_sem_upper",
-        f"{primary_label}_arbitrary_pred_corr",
-        f"{primary_label}_arbitrary_pred_corr_sem",
-        f"{primary_label}_arbitrary_pred_corr_sem_lower",
-        f"{primary_label}_arbitrary_pred_corr_sem_upper",
-        "complement_arbitrary_pred_corr",
-        "complement_arbitrary_pred_corr_sem",
-        "complement_arbitrary_pred_corr_sem_lower",
-        "complement_arbitrary_pred_corr_sem_upper",
-        "arbitrary_corr",
-        "arbitrary_r2",
         "effective_rank",
         # RRR-specific (only in RRR runs)
         "rrr_corr",
@@ -1120,7 +610,6 @@ def _run_rrr_for_unit(
     per_fold_baselines: list,
     config: RRRConfig,
     sig_mask_flat: "np.ndarray | None" = None,
-    X_arbitrary: "np.ndarray | None" = None,
     ranks_by_fold: "dict[int, list[int]] | None" = None,
     completed_pairs: "set[tuple[int, int]] | None" = None,
     pca_ranks_by_fold: "dict[int, list[int]] | None" = None,
@@ -1131,9 +620,6 @@ def _run_rrr_for_unit(
     Fits RRR once at max rank per fold, sweeps the rank grid, and evaluates:
         - Raw RRR predictions (via B matrix projection)
         - NR ridge from k-dim RRR subspace (via A matrix projection)
-        - Complement of the RRR subspace
-        - Arbitrary embeddings baseline
-        - Joint models (NR + complement, NR + arbitrary)
 
     Args:
         rrr_unit_dir: Root output directory for this unit.
@@ -1142,7 +628,6 @@ def _run_rrr_for_unit(
         per_fold_baselines: Output of build_per_fold_baselines.
         config: RRRConfig.
         sig_mask_flat: Boolean mask over targets (True = significant).
-        X_arbitrary: (n_words, n_embed) arbitrary embeddings for null baseline.
 
     Returns:
         DataFrame of per-(fold, k) metrics for grid_results.csv.
@@ -1160,9 +645,6 @@ def _run_rrr_for_unit(
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
-    oof_spill_dir = os.path.join(rrr_unit_dir, "_oof_spill")
-    os.makedirs(oof_spill_dir, exist_ok=True)
-
     existing_grid = _load_existing_grid(rrr_unit_dir)
     if ranks_by_fold is None or completed_pairs is None:
         ranks_by_fold, completed_pairs = _unit_ranks_by_fold_to_run(
@@ -1171,8 +653,6 @@ def _run_rrr_for_unit(
             n_folds,
             refresh=config.refresh,
             require_factors=True,
-            primary_label="nr",
-            require_arbitrary_oof=X_arbitrary is not None,
         )
     total_to_run = sum(len(ranks) for ranks in ranks_by_fold.values())
     if completed_pairs:
@@ -1191,33 +671,6 @@ def _run_rrr_for_unit(
             sig_mask_flat=sig_mask_flat,
             include_effective_rank=True,
         )
-        joint_ranks = _joint_ranks_ready_to_compute(
-            df,
-            config.rank_grid,
-            n_folds,
-            oof_spill_dir,
-            primary_label="nr",
-            require_arbitrary_oof=X_arbitrary is not None,
-            compute_joint_ridge=config.compute_joint_ridge,
-        )
-        if joint_ranks:
-            joint_label = "OLS + ridge" if config.compute_joint_ridge else "OLS"
-            print(f"  Completing stacked {joint_label} joint metrics")
-            merged_rows = df.to_dict("records")
-            _compute_and_save_joint_metrics(
-                oof_spill_dir,
-                sorted(joint_ranks),
-                n_folds,
-                rrr_unit_dir,
-                merged_rows,
-                primary_label="nr",
-                sig_mask_flat=sig_mask_flat,
-                compute_joint_ridge=config.compute_joint_ridge,
-                device=device,
-            )
-            df = pd.DataFrame(merged_rows)
-            if not df.empty:
-                df = df.sort_values(["k", "fold"]).reset_index(drop=True)
         df.to_csv(os.path.join(rrr_unit_dir, "grid_results.csv"), index=False)
         _build_results(df, sig_mask_flat, rrr_unit_dir, primary_label="nr")
         if config.run_pca_baseline:
@@ -1230,7 +683,6 @@ def _run_rrr_for_unit(
                 per_fold_baselines=per_fold_baselines,
                 rank_grid=config.rank_grid,
                 sig_mask_flat=sig_mask_flat,
-                X_arbitrary=X_arbitrary,
                 alphas=alphas,
                 alpha_policy=config.encoding.alpha_grid,
                 standardize_subspace_inputs=config.standardize_subspace_inputs,
@@ -1240,15 +692,12 @@ def _run_rrr_for_unit(
                 ridge_force_cpu=config.encoding.ridge_force_cpu,
                 device=device,
                 refresh=config.refresh,
-                compute_joint_ridge=config.compute_joint_ridge,
                 ranks_by_fold=pca_ranks_by_fold,
                 completed_pairs=pca_completed_pairs,
             )
         return df
 
     all_rows = []
-    affected_ranks = set()
-
     for fold_f in range(n_folds):
         ranks_to_run = ranks_by_fold[fold_f]
         if not ranks_to_run:
@@ -1315,7 +764,6 @@ def _run_rrr_for_unit(
 
         print(f"  Running {len(ranks_to_run)} rank(s): {ranks_to_run}")
         for k in tqdm(ranks_to_run, desc=f"  fold {fold_f}", leave=True, unit="rank"):
-            affected_ranks.add(k)
             A_k = A_full[:, :k]
             B_k = B_full[:, :k]
 
@@ -1330,7 +778,6 @@ def _run_rrr_for_unit(
             rrr_corr_arr = to_numpy(correlation_score(Y_test, Y_hat_rrr))
             rrr_r2_arr = to_numpy(r2_score(Y_test, Y_hat_rrr))
 
-            # Shared NR + complement + arbitrary evaluation
             common = _run_common_subspace_fold_k(
                 A_full,
                 k,
@@ -1338,9 +785,6 @@ def _run_rrr_for_unit(
                 X_test,
                 Y_train,
                 Y_test,
-                X_arbitrary,
-                train_idx,
-                test_idx,
                 sig_mask_flat,
                 fold_f,
                 alphas,
@@ -1352,7 +796,6 @@ def _run_rrr_for_unit(
                 config.encoding.ridge_force_cpu,
                 device,
                 rrr_unit_dir,
-                oof_spill_dir,
                 primary_label="nr",
             )
 
@@ -1393,10 +836,7 @@ def _run_rrr_for_unit(
 
         print(f"  Fold {fold_f} done in {time.time() - fold_start:.1f}s")
 
-    # Compute stacked joint correlations (requires held-out OOF predictions)
-    joint_label = "OLS + ridge" if config.compute_joint_ridge else "OLS"
-    print(f"\nComputing stacked {joint_label} joint correlations...")
-    merged_rows = _merge_grid_rows(
+    df = _merge_grid_rows(
         existing_grid,
         all_rows,
         completed_pairs,
@@ -1405,31 +845,7 @@ def _run_rrr_for_unit(
         primary_label="nr",
         sig_mask_flat=sig_mask_flat,
         include_effective_rank=True,
-    ).to_dict("records")
-    joint_ranks = set(affected_ranks) | _joint_ranks_ready_to_compute(
-        pd.DataFrame(merged_rows),
-        config.rank_grid,
-        n_folds,
-        oof_spill_dir,
-        primary_label="nr",
-        require_arbitrary_oof=X_arbitrary is not None,
-        compute_joint_ridge=config.compute_joint_ridge,
     )
-    _compute_and_save_joint_metrics(
-        oof_spill_dir,
-        sorted(joint_ranks),
-        n_folds,
-        rrr_unit_dir,
-        merged_rows,
-        primary_label="nr",
-        sig_mask_flat=sig_mask_flat,
-        compute_joint_ridge=config.compute_joint_ridge,
-        device=device,
-    )
-
-    df = pd.DataFrame(merged_rows)
-    if not df.empty:
-        df = df.sort_values(["k", "fold"]).reset_index(drop=True)
     df.to_csv(os.path.join(rrr_unit_dir, "grid_results.csv"), index=False)
     _build_results(df, sig_mask_flat, rrr_unit_dir, primary_label="nr")
 
@@ -1444,7 +860,6 @@ def _run_rrr_for_unit(
             per_fold_baselines=per_fold_baselines,
             rank_grid=config.rank_grid,
             sig_mask_flat=sig_mask_flat,
-            X_arbitrary=X_arbitrary,
             alphas=alphas,
             alpha_policy=config.encoding.alpha_grid,
             standardize_subspace_inputs=config.standardize_subspace_inputs,
@@ -1454,7 +869,6 @@ def _run_rrr_for_unit(
             ridge_force_cpu=config.encoding.ridge_force_cpu,
             device=device,
             refresh=config.refresh,
-            compute_joint_ridge=config.compute_joint_ridge,
             ranks_by_fold=pca_ranks_by_fold,
             completed_pairs=pca_completed_pairs,
         )
@@ -1469,7 +883,6 @@ def _run_pca_for_unit(
     per_fold_baselines: list,
     rank_grid: list,
     sig_mask_flat: "np.ndarray | None" = None,
-    X_arbitrary: "np.ndarray | None" = None,
     alphas: "np.ndarray | None" = None,
     alpha_policy: dict | None = None,
     standardize_subspace_inputs: bool = True,
@@ -1479,7 +892,6 @@ def _run_pca_for_unit(
     ridge_force_cpu: bool | None = None,
     device: str = "cpu",
     refresh: bool = False,
-    compute_joint_ridge: bool = False,
     ranks_by_fold: "dict[int, list[int]] | None" = None,
     completed_pairs: "set[tuple[int, int]] | None" = None,
 ) -> pd.DataFrame:
@@ -1487,9 +899,6 @@ def _run_pca_for_unit(
 
     Computes PCA on training embeddings (per fold, proper CV), then evaluates:
         - Ridge from k-dim PCA subspace (primary model)
-        - Complement of the PCA subspace
-        - Arbitrary embeddings baseline
-        - Joint models (PCA + complement, PCA + arbitrary)
 
     The only difference from _run_rrr_for_unit is how A_full is computed: here it
     comes from SVD of X_train rather than from RRR. All downstream evaluation is
@@ -1502,8 +911,7 @@ def _run_pca_for_unit(
         per_fold_baselines: Output of build_per_fold_baselines.
         rank_grid: List of rank values to evaluate.
         sig_mask_flat: Boolean mask over targets (True = significant).
-        X_arbitrary: (n_words, n_embed) arbitrary embeddings for null baseline.
-        alphas: Ridge alpha grid (passed to arbitrary evaluation); None → solver default.
+        alphas: Ridge alpha grid; None means solver default.
         device: Torch device string.
 
     Returns:
@@ -1512,9 +920,6 @@ def _run_pca_for_unit(
     os.makedirs(pca_unit_dir, exist_ok=True)
 
     n_folds = len(test_idxs)
-    oof_spill_dir = os.path.join(pca_unit_dir, "_oof_spill")
-    os.makedirs(oof_spill_dir, exist_ok=True)
-
     existing_grid = _load_existing_grid(pca_unit_dir)
     if ranks_by_fold is None or completed_pairs is None:
         ranks_by_fold, completed_pairs = _unit_ranks_by_fold_to_run(
@@ -1523,8 +928,6 @@ def _run_pca_for_unit(
             n_folds,
             refresh=refresh,
             require_factors=False,
-            primary_label="pca",
-            require_arbitrary_oof=X_arbitrary is not None,
         )
     total_to_run = sum(len(ranks) for ranks in ranks_by_fold.values())
     if completed_pairs:
@@ -1542,40 +945,11 @@ def _run_pca_for_unit(
             primary_label="pca",
             sig_mask_flat=sig_mask_flat,
         )
-        joint_ranks = _joint_ranks_ready_to_compute(
-            df,
-            rank_grid,
-            n_folds,
-            oof_spill_dir,
-            primary_label="pca",
-            require_arbitrary_oof=X_arbitrary is not None,
-            compute_joint_ridge=compute_joint_ridge,
-        )
-        if joint_ranks:
-            joint_label = "OLS + ridge" if compute_joint_ridge else "OLS"
-            print(f"  Completing stacked {joint_label} joint metrics")
-            merged_rows = df.to_dict("records")
-            _compute_and_save_joint_metrics(
-                oof_spill_dir,
-                sorted(joint_ranks),
-                n_folds,
-                pca_unit_dir,
-                merged_rows,
-                primary_label="pca",
-                sig_mask_flat=sig_mask_flat,
-                compute_joint_ridge=compute_joint_ridge,
-                device=device,
-            )
-            df = pd.DataFrame(merged_rows)
-            if not df.empty:
-                df = df.sort_values(["k", "fold"]).reset_index(drop=True)
         df.to_csv(os.path.join(pca_unit_dir, "grid_results.csv"), index=False)
         _build_results(df, sig_mask_flat, pca_unit_dir, primary_label="pca")
         return df
 
     all_rows = []
-    affected_ranks = set()
-
     for fold_f in range(n_folds):
         ranks_to_run = ranks_by_fold[fold_f]
         if not ranks_to_run:
@@ -1596,6 +970,10 @@ def _run_pca_for_unit(
 
         # Save full model metrics once per fold (not per-k)
         _save_full_model_metrics_once(pca_unit_dir, fold_f, Y_test, Y_hat_full)
+        full_corr = float(
+            fisher_z_mean(to_numpy(correlation_score(Y_test, Y_hat_full)))
+        )
+        full_r2 = float(to_numpy(r2_score(Y_test, Y_hat_full)).mean())
 
         # Compute PCA on training data only (proper CV)
         X_mean = X_train.mean(axis=0)
@@ -1610,7 +988,6 @@ def _run_pca_for_unit(
 
         print(f"  Running {len(valid_ranks)} rank(s): {valid_ranks}")
         for k in tqdm(valid_ranks, desc=f"  fold {fold_f}", leave=True, unit="rank"):
-            affected_ranks.add(k)
             common = _run_common_subspace_fold_k(
                 A_full,
                 k,
@@ -1618,9 +995,6 @@ def _run_pca_for_unit(
                 X_test,
                 Y_train,
                 Y_test,
-                X_arbitrary,
-                train_idx,
-                test_idx,
                 sig_mask_flat,
                 fold_f,
                 alphas,
@@ -1632,18 +1006,28 @@ def _run_pca_for_unit(
                 ridge_force_cpu,
                 device,
                 pca_unit_dir,
-                oof_spill_dir,
                 primary_label="pca",
             )
-            row = {"fold": fold_f, "k": k, **common}
+            metrics_path = os.path.join(
+                pca_unit_dir, f"k{k}", f"fold_{fold_f}", "metrics.npz"
+            )
+            existing = dict(np.load(metrics_path, allow_pickle=True))
+            existing["full_corr"] = full_corr
+            existing["full_r2"] = full_r2
+            np.savez(metrics_path, **existing)
+
+            row = {
+                "fold": fold_f,
+                "k": k,
+                "full_corr": full_corr,
+                "full_r2": full_r2,
+                **common,
+            }
             all_rows.append(row)
 
         print(f"  Fold {fold_f} done in {time.time() - fold_start:.1f}s")
 
-    # Compute stacked joint correlations
-    joint_label = "OLS + ridge" if compute_joint_ridge else "OLS"
-    print(f"\nComputing stacked {joint_label} joint correlations...")
-    merged_rows = _merge_grid_rows(
+    df = _merge_grid_rows(
         existing_grid,
         all_rows,
         completed_pairs,
@@ -1651,31 +1035,7 @@ def _run_pca_for_unit(
         unit_dir=pca_unit_dir,
         primary_label="pca",
         sig_mask_flat=sig_mask_flat,
-    ).to_dict("records")
-    joint_ranks = set(affected_ranks) | _joint_ranks_ready_to_compute(
-        pd.DataFrame(merged_rows),
-        rank_grid,
-        n_folds,
-        oof_spill_dir,
-        primary_label="pca",
-        require_arbitrary_oof=X_arbitrary is not None,
-        compute_joint_ridge=compute_joint_ridge,
     )
-    _compute_and_save_joint_metrics(
-        oof_spill_dir,
-        sorted(joint_ranks),
-        n_folds,
-        pca_unit_dir,
-        merged_rows,
-        primary_label="pca",
-        sig_mask_flat=sig_mask_flat,
-        compute_joint_ridge=compute_joint_ridge,
-        device=device,
-    )
-
-    df = pd.DataFrame(merged_rows)
-    if not df.empty:
-        df = df.sort_values(["k", "fold"]).reset_index(drop=True)
     df.to_csv(os.path.join(pca_unit_dir, "grid_results.csv"), index=False)
     _build_results(df, sig_mask_flat, pca_unit_dir, primary_label="pca")
 
@@ -1714,7 +1074,7 @@ def _get_decomposition_inputs(
         print("  No significant electrodes found; skipping.")
         return None
 
-    X_raw, Y_full, selection, _ = build_XY_from_subjects(
+    X_raw, Y_full, _, _ = build_XY_from_subjects(
         subject_ids,
         encoding_config,
         sig_electrodes,
@@ -1747,15 +1107,6 @@ def _get_decomposition_inputs(
         folds_to_build=folds_to_build,
     )
 
-    X_arbitrary = get_and_offset_arbitrary_embeddings(
-        embeddings,
-        selection,
-        word_df,
-        encoding_config.offset,
-        encoding_config.arbitrary_seed,
-        valid_rows=word_in_glove,
-    )
-
     sig_mask_flat = None
     if compute_sig_nonsig:
         sig_mask_flat = build_sig_mask_flat_for_elecs(
@@ -1765,7 +1116,7 @@ def _get_decomposition_inputs(
             sig_dir=sig_dir,
         )
 
-    return X_raw, X_arbitrary, per_fold_baselines, test_idxs, sig_mask_flat
+    return X_raw, per_fold_baselines, test_idxs, sig_mask_flat
 
 
 # ---------------------------------------------------------------------------
@@ -1810,7 +1161,7 @@ def _run_cross_subject_rrr(
     )
     if results is None:
         return
-    X_raw, X_arbitrary, per_fold_baselines, test_idxs, sig_mask_flat = results
+    X_raw, per_fold_baselines, test_idxs, sig_mask_flat = results
     _run_rrr_for_unit(
         rrr_unit_dir=rrr_dir,
         X_raw=X_raw,
@@ -1818,7 +1169,6 @@ def _run_cross_subject_rrr(
         per_fold_baselines=per_fold_baselines,
         config=config,
         sig_mask_flat=sig_mask_flat,
-        X_arbitrary=X_arbitrary,
         ranks_by_fold=resume_plan["rrr_ranks_by_fold"],
         completed_pairs=resume_plan["rrr_completed_pairs"],
         pca_ranks_by_fold=resume_plan["pca_ranks_by_fold"],
@@ -1875,7 +1225,7 @@ def _run_per_subject_rrr(
         )
         if results is None:
             continue
-        X_raw, X_arbitrary, per_fold_baselines, test_idxs, sig_mask_flat = results
+        X_raw, per_fold_baselines, test_idxs, sig_mask_flat = results
         _run_rrr_for_unit(
             rrr_unit_dir=rrr_sub_dir,
             X_raw=X_raw,
@@ -1883,7 +1233,6 @@ def _run_per_subject_rrr(
             per_fold_baselines=per_fold_baselines,
             config=config,
             sig_mask_flat=sig_mask_flat,
-            X_arbitrary=X_arbitrary,
             ranks_by_fold=resume_plan["rrr_ranks_by_fold"],
             completed_pairs=resume_plan["rrr_completed_pairs"],
             pca_ranks_by_fold=resume_plan["pca_ranks_by_fold"],
@@ -1958,7 +1307,7 @@ def _run_per_region_rrr(
         )
         if results is None:
             continue
-        X_raw, X_arbitrary, per_fold_baselines, test_idxs, sig_mask_flat = results
+        X_raw, per_fold_baselines, test_idxs, sig_mask_flat = results
         _run_rrr_for_unit(
             rrr_unit_dir=rrr_region_dir,
             X_raw=X_raw,
@@ -1966,7 +1315,6 @@ def _run_per_region_rrr(
             per_fold_baselines=per_fold_baselines,
             config=config,
             sig_mask_flat=sig_mask_flat,
-            X_arbitrary=X_arbitrary,
             ranks_by_fold=resume_plan["rrr_ranks_by_fold"],
             completed_pairs=resume_plan["rrr_completed_pairs"],
             pca_ranks_by_fold=resume_plan["pca_ranks_by_fold"],
@@ -1994,9 +1342,7 @@ def _run_loso_transfer_for_unit(
 
     For each fold and rank k, loads the A matrix saved by _run_rrr_for_unit on the
     training subjects, projects X through A_k, trains a fresh ridge on the held-out
-    subject's training data, and evaluates on the held-out fold. Also evaluates the
-    complement of the transferred subspace and computes stacked joint metrics for
-    transfer + complement across folds.
+    subject's training data, and evaluates on the held-out fold.
 
     Args:
         transfer_dir: Output directory for transfer metrics.
@@ -2019,8 +1365,6 @@ def _run_loso_transfer_for_unit(
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
     n_folds = len(test_idxs)
-    oof_spill_dir = os.path.join(transfer_dir, "_oof_spill")
-    os.makedirs(oof_spill_dir, exist_ok=True)
 
     existing_grid = _load_existing_grid(transfer_dir)
     if ranks_by_fold is None or completed_pairs is None:
@@ -2030,7 +1374,6 @@ def _run_loso_transfer_for_unit(
             n_folds,
             refresh=config.refresh,
             require_factors=False,
-            primary_label="transfer",
         )
     missing_a = [
         os.path.join(train_rrr_dir, f"fold_{fold_f}", "A.npy")
@@ -2058,39 +1401,11 @@ def _run_loso_transfer_for_unit(
             primary_label="transfer",
             sig_mask_flat=sig_mask_flat,
         )
-        joint_ranks = _joint_ranks_ready_to_compute(
-            df,
-            config.rank_grid,
-            n_folds,
-            oof_spill_dir,
-            primary_label="transfer",
-            compute_joint_ridge=config.compute_joint_ridge,
-        )
-        if joint_ranks:
-            joint_label = "OLS + ridge" if config.compute_joint_ridge else "OLS"
-            print(f"  Completing stacked {joint_label} joint metrics")
-            merged_rows = df.to_dict("records")
-            _compute_and_save_joint_metrics(
-                oof_spill_dir,
-                sorted(joint_ranks),
-                n_folds,
-                transfer_dir,
-                merged_rows,
-                primary_label="transfer",
-                sig_mask_flat=sig_mask_flat,
-                compute_joint_ridge=config.compute_joint_ridge,
-                device=device,
-            )
-            df = pd.DataFrame(merged_rows)
-            if not df.empty:
-                df = df.sort_values(["k", "fold"]).reset_index(drop=True)
         df.to_csv(os.path.join(transfer_dir, "grid_results.csv"), index=False)
         _build_results(df, sig_mask_flat, transfer_dir, primary_label="transfer")
         return df
 
     all_rows = []
-    affected_ranks = set()
-
     for fold_f in range(n_folds):
         ranks_to_run = ranks_by_fold[fold_f]
         if not ranks_to_run:
@@ -2115,7 +1430,6 @@ def _run_loso_transfer_for_unit(
         for k in tqdm(
             ranks_to_run, desc=f"  transfer fold {fold_f}", leave=True, unit="rank"
         ):
-            affected_ranks.add(k)
             common = _run_common_subspace_fold_k(
                 A_full,
                 k,
@@ -2123,9 +1437,6 @@ def _run_loso_transfer_for_unit(
                 X_test,
                 Y_train,
                 Y_test,
-                None,
-                train_idx,
-                test_idx,
                 sig_mask_flat,
                 fold_f,
                 alphas=alphas,
@@ -2137,7 +1448,6 @@ def _run_loso_transfer_for_unit(
                 ridge_force_cpu=config.encoding.ridge_force_cpu,
                 device=device,
                 unit_dir=transfer_dir,
-                oof_spill_dir=oof_spill_dir,
                 primary_label="transfer",
             )
 
@@ -2150,9 +1460,7 @@ def _run_loso_transfer_for_unit(
 
         print(f"  Transfer fold {fold_f} done in {time.time() - fold_start:.1f}s")
 
-    joint_label = "OLS + ridge" if config.compute_joint_ridge else "OLS"
-    print(f"\nComputing stacked {joint_label} joint correlations...")
-    merged_rows = _merge_grid_rows(
+    df = _merge_grid_rows(
         existing_grid,
         all_rows,
         completed_pairs,
@@ -2160,30 +1468,7 @@ def _run_loso_transfer_for_unit(
         unit_dir=transfer_dir,
         primary_label="transfer",
         sig_mask_flat=sig_mask_flat,
-    ).to_dict("records")
-    joint_ranks = set(affected_ranks) | _joint_ranks_ready_to_compute(
-        pd.DataFrame(merged_rows),
-        config.rank_grid,
-        n_folds,
-        oof_spill_dir,
-        primary_label="transfer",
-        compute_joint_ridge=config.compute_joint_ridge,
     )
-    _compute_and_save_joint_metrics(
-        oof_spill_dir,
-        sorted(joint_ranks),
-        n_folds,
-        transfer_dir,
-        merged_rows,
-        primary_label="transfer",
-        sig_mask_flat=sig_mask_flat,
-        compute_joint_ridge=config.compute_joint_ridge,
-        device=device,
-    )
-
-    df = pd.DataFrame(merged_rows)
-    if not df.empty:
-        df = df.sort_values(["k", "fold"]).reset_index(drop=True)
     df.to_csv(os.path.join(transfer_dir, "grid_results.csv"), index=False)
     _build_results(df, sig_mask_flat, transfer_dir, primary_label="transfer")
     return df
@@ -2240,9 +1525,7 @@ def _run_leave_one_subject_out_rrr(
             if results_train is None:
                 print("  No training data; skipping this held-out subject.")
                 continue
-            X_raw, X_arbitrary, per_fold_baselines_train, test_idxs, sig_mask_train = (
-                results_train
-            )
+            X_raw, per_fold_baselines_train, test_idxs, sig_mask_train = results_train
 
             print(f"  Running train-subjects RRR → {train_dir}")
             _run_rrr_for_unit(
@@ -2252,7 +1535,6 @@ def _run_leave_one_subject_out_rrr(
                 per_fold_baselines=per_fold_baselines_train,
                 config=config,
                 sig_mask_flat=sig_mask_train,
-                X_arbitrary=X_arbitrary,
                 ranks_by_fold=train_resume_plan["rrr_ranks_by_fold"],
                 completed_pairs=train_resume_plan["rrr_completed_pairs"],
                 pca_ranks_by_fold=train_resume_plan["pca_ranks_by_fold"],
@@ -2300,9 +1582,7 @@ def _run_leave_one_subject_out_rrr(
         if results_held is None:
             print(f"  No held-out subject data; skipping transfer/baseline.")
             continue
-        X_raw_held, X_arbitrary_held, per_fold_baselines_held, _, sig_mask_held = (
-            results_held
-        )
+        X_raw_held, per_fold_baselines_held, _, sig_mask_held = results_held
 
         # --- Step C: transfer A from train subjects to held-out subject ---
         print(f"  Running transfer evaluation → {transfer_dir}")
@@ -2327,7 +1607,6 @@ def _run_leave_one_subject_out_rrr(
             per_fold_baselines=per_fold_baselines_held,
             config=config,
             sig_mask_flat=sig_mask_held,
-            X_arbitrary=X_arbitrary_held,
             ranks_by_fold=baseline_resume_plan["rrr_ranks_by_fold"],
             completed_pairs=baseline_resume_plan["rrr_completed_pairs"],
             pca_ranks_by_fold=baseline_resume_plan["pca_ranks_by_fold"],
