@@ -87,6 +87,23 @@ def _validate_subspace_types(subspace_types: list[str] | str) -> list[str]:
     return normalized
 
 
+def _resolve_held_out_subjects(
+    config: RRRSufficiencyConfig, subject_ids: list[int]
+) -> list[int]:
+    if config.held_out_subjects is None:
+        return list(subject_ids)
+
+    held_out_subjects = [int(subject) for subject in config.held_out_subjects]
+    unknown = [subject for subject in held_out_subjects if subject not in subject_ids]
+    if unknown:
+        raise ValueError(
+            "held_out_subjects must be a subset of encoding.subjects/default "
+            f"subjects. Unknown held-out subject(s): {unknown}; "
+            f"available subjects: {subject_ids}"
+        )
+    return held_out_subjects
+
+
 def _check_fold_bases(rrr_source_dir: str, n_folds: int) -> None:
     missing = [
         os.path.join(rrr_source_dir, f"fold_{fold_f}", "A.npy")
@@ -118,6 +135,54 @@ def _load_or_compute_basis(
 
 def _empty_oof_like(Y: np.ndarray) -> np.ndarray:
     return np.full(Y.shape, np.nan, dtype=np.float32)
+
+
+def _oof_predictions_path(suff_dir: str) -> str:
+    return os.path.join(suff_dir, "oof_predictions.npz")
+
+
+def _load_oof_predictions(
+    suff_dir: str,
+) -> tuple[np.ndarray, np.ndarray, dict[int, np.ndarray]]:
+    path = _oof_predictions_path(suff_dir)
+    with np.load(path) as payload:
+        Y_oof = payload["Y_oof"]
+        Yhat_full_oof = payload["Yhat_full_oof"]
+        Yhat_rank_oof = {}
+        for key in payload.files:
+            if key.startswith("Yhat_rank_k"):
+                k = int(key.replace("Yhat_rank_k", ""))
+                Yhat_rank_oof[k] = payload[key]
+    return Y_oof, Yhat_full_oof, Yhat_rank_oof
+
+
+def _write_oof_predictions(
+    suff_dir: str,
+    Y_oof: np.ndarray,
+    Yhat_full_oof: np.ndarray,
+    Yhat_rank_oof: dict[int, np.ndarray],
+) -> str:
+    os.makedirs(suff_dir, exist_ok=True)
+    path = _oof_predictions_path(suff_dir)
+    payload = {
+        "Y_oof": Y_oof,
+        "Yhat_full_oof": Yhat_full_oof,
+        **{f"Yhat_rank_k{int(k)}": value for k, value in Yhat_rank_oof.items()},
+    }
+    np.savez(path, **payload)
+    return path
+
+
+def _should_load_cached_oof(output_unit_dir: str, config: RRRSufficiencyConfig) -> bool:
+    return (
+        config.cache_oof_predictions
+        and not config.refresh_oof_predictions
+        and os.path.exists(
+            _oof_predictions_path(
+                os.path.join(output_unit_dir, "sufficiency_bootstrap")
+            )
+        )
+    )
 
 
 def build_oof_predictions(
@@ -330,8 +395,8 @@ def _write_bootstrap_outputs(
 
 def _run_sufficiency_unit(
     unit_label: str,
-    X_raw: np.ndarray,
-    Y_full: np.ndarray,
+    X_raw: np.ndarray | None,
+    Y_full: np.ndarray | None,
     test_idxs: list[np.ndarray],
     subspace_type: str,
     basis_source_dir: str | None,
@@ -341,16 +406,37 @@ def _run_sufficiency_unit(
 ) -> None:
     print(f"\n{'=' * 60}\nSufficiency unit: {unit_label} [{subspace_type.upper()}]")
     suff_dir = os.path.join(output_unit_dir, "sufficiency_bootstrap")
-    Y_oof, Yhat_full_oof, Yhat_rank_oof = build_oof_predictions(
-        X_raw,
-        Y_full,
-        test_idxs,
-        basis_source_dir,
-        config.rank_grid,
-        config,
-        out_dir=suff_dir,
-        subspace_type=subspace_type,
+    oof_path = _oof_predictions_path(suff_dir)
+    loaded_from_cache = (
+        config.cache_oof_predictions
+        and not config.refresh_oof_predictions
+        and os.path.exists(oof_path)
     )
+    if loaded_from_cache:
+        print(f"Loading cached OOF predictions from {oof_path}")
+        Y_oof, Yhat_full_oof, Yhat_rank_oof = _load_oof_predictions(suff_dir)
+    else:
+        if X_raw is None or Y_full is None:
+            raise ValueError(
+                f"OOF prediction cache is unavailable for {unit_label}; "
+                "X_raw and Y_full are required to build predictions."
+            )
+        Y_oof, Yhat_full_oof, Yhat_rank_oof = build_oof_predictions(
+            X_raw,
+            Y_full,
+            test_idxs,
+            basis_source_dir,
+            config.rank_grid,
+            config,
+            out_dir=suff_dir,
+            subspace_type=subspace_type,
+        )
+        if config.cache_oof_predictions:
+            oof_path = _write_oof_predictions(
+                suff_dir, Y_oof, Yhat_full_oof, Yhat_rank_oof
+            )
+            print(f"Cached OOF predictions to {oof_path}")
+
     summary, target_payload, boot_payload = run_bootstrap(
         Y_oof, Yhat_full_oof, Yhat_rank_oof, config
     )
@@ -366,6 +452,10 @@ def _run_sufficiency_unit(
             "basis_source_dir": basis_source_dir,
             "output_unit_dir": output_unit_dir,
             "sufficiency_dir": suff_dir,
+            "oof_predictions_path": oof_path if config.cache_oof_predictions else None,
+            "cache_oof_predictions": bool(config.cache_oof_predictions),
+            "refresh_oof_predictions": bool(config.refresh_oof_predictions),
+            "loaded_oof_predictions_from_cache": bool(loaded_from_cache),
             "n_words": int(Y_oof.shape[0]),
             "n_targets": int(Y_oof.shape[1]),
             "n_folds": int(len(test_idxs)),
@@ -403,12 +493,7 @@ def _run_cross_subject_sufficiency(
     metadata_base: dict,
 ) -> None:
     test_idxs = _reference_test_idxs(output_dir, subject_ids)
-    xy = _build_xy(subject_ids, enc, sig_electrodes, aligned_embeddings, word_in_glove)
-    if xy is None:
-        print("No significant electrodes found for cross-subject sufficiency.")
-        return
-    X_raw, Y_full = xy
-    print(f"Cross-subject X: {X_raw.shape}, Y: {Y_full.shape}")
+    xy = None
 
     for subspace_type in subspace_types:
         if subspace_type == "rrr":
@@ -417,10 +502,18 @@ def _run_cross_subject_sufficiency(
         else:
             basis_source_dir = None
             output_unit_dir = _resolve_pca_sibling_dir(rrr_source_dir)
+        if xy is None and not _should_load_cached_oof(output_unit_dir, config):
+            xy = _build_xy(
+                subject_ids, enc, sig_electrodes, aligned_embeddings, word_in_glove
+            )
+            if xy is None:
+                print("No significant electrodes found for cross-subject sufficiency.")
+                return
+            print(f"Cross-subject X: {xy[0].shape}, Y: {xy[1].shape}")
         _run_sufficiency_unit(
             "cross_subject",
-            X_raw,
-            Y_full,
+            xy[0] if xy is not None else None,
+            xy[1] if xy is not None else None,
             test_idxs,
             subspace_type,
             basis_source_dir,
@@ -443,21 +536,11 @@ def _run_loso_sufficiency(
     metadata_base: dict,
 ) -> None:
     pca_root_dir = _resolve_pca_sibling_dir(rrr_source_dir)
-    for held_out_sub in subject_ids:
+    held_out_subjects = _resolve_held_out_subjects(config, subject_ids)
+    for held_out_sub in held_out_subjects:
         print(f"\n{'#' * 60}\nHeld-out subject: {held_out_sub}")
         train_subs = [s for s in subject_ids if s != held_out_sub]
         test_idxs = _reference_test_idxs(output_dir, train_subs)
-
-        train_xy = _build_xy(
-            train_subs, enc, sig_electrodes, aligned_embeddings, word_in_glove
-        )
-        held_xy = _build_xy(
-            [held_out_sub], enc, sig_electrodes, aligned_embeddings, word_in_glove
-        )
-        if train_xy is None:
-            print("  No training-subject significant electrodes; skipping train unit.")
-        if held_xy is None:
-            print("  Held-out subject has no significant electrodes; skipping held-out units.")
 
         loso_rrr_sub_dir = os.path.join(rrr_source_dir, f"held_out_sub_{held_out_sub}")
         loso_pca_sub_dir = os.path.join(pca_root_dir, f"held_out_sub_{held_out_sub}")
@@ -478,6 +561,11 @@ def _run_loso_sufficiency(
                 baseline_basis_dir = None
                 baseline_output_dir = os.path.join(loso_pca_sub_dir, "baseline")
 
+            train_xy = None
+            if not _should_load_cached_oof(train_output_dir, config):
+                train_xy = _build_xy(
+                    train_subs, enc, sig_electrodes, aligned_embeddings, word_in_glove
+                )
             if train_xy is not None:
                 _run_sufficiency_unit(
                     f"held_out_sub_{held_out_sub}/train_subjects",
@@ -494,7 +582,37 @@ def _run_loso_sufficiency(
                         "subjects_in_unit": train_subs,
                     },
                 )
+                del train_xy
+            elif _should_load_cached_oof(train_output_dir, config):
+                _run_sufficiency_unit(
+                    f"held_out_sub_{held_out_sub}/train_subjects",
+                    None,
+                    None,
+                    test_idxs,
+                    subspace_type,
+                    train_basis_dir,
+                    train_output_dir,
+                    config,
+                    {
+                        **metadata_base,
+                        "held_out_subject": int(held_out_sub),
+                        "subjects_in_unit": train_subs,
+                    },
+                )
+            else:
+                print("  No training-subject significant electrodes; skipping train unit.")
 
+            transfer_cached = _should_load_cached_oof(transfer_output_dir, config)
+            baseline_cached = _should_load_cached_oof(baseline_output_dir, config)
+            held_xy = None
+            if not (transfer_cached and baseline_cached):
+                held_xy = _build_xy(
+                    [held_out_sub],
+                    enc,
+                    sig_electrodes,
+                    aligned_embeddings,
+                    word_in_glove,
+                )
             if held_xy is not None:
                 _run_sufficiency_unit(
                     f"held_out_sub_{held_out_sub}/transfer",
@@ -527,6 +645,41 @@ def _run_loso_sufficiency(
                         "subjects_in_unit": [held_out_sub],
                     },
                 )
+                del held_xy
+            elif transfer_cached and baseline_cached:
+                _run_sufficiency_unit(
+                    f"held_out_sub_{held_out_sub}/transfer",
+                    None,
+                    None,
+                    test_idxs,
+                    subspace_type,
+                    transfer_basis_dir,
+                    transfer_output_dir,
+                    config,
+                    {
+                        **metadata_base,
+                        "held_out_subject": int(held_out_sub),
+                        "subjects_in_unit": [held_out_sub],
+                        "transfer_basis_subjects": train_subs,
+                    },
+                )
+                _run_sufficiency_unit(
+                    f"held_out_sub_{held_out_sub}/baseline",
+                    None,
+                    None,
+                    test_idxs,
+                    subspace_type,
+                    baseline_basis_dir,
+                    baseline_output_dir,
+                    config,
+                    {
+                        **metadata_base,
+                        "held_out_subject": int(held_out_sub),
+                        "subjects_in_unit": [held_out_sub],
+                    },
+                )
+            else:
+                print("  Held-out subject has no significant electrodes; skipping held-out units.")
 
 
 def run_config(config: RRRSufficiencyConfig) -> None:
@@ -534,6 +687,11 @@ def run_config(config: RRRSufficiencyConfig) -> None:
     enc = config.encoding
     subspace_types = _validate_subspace_types(config.subspace_types)
     subject_ids = enc.subjects or list(range(1, 10))
+    held_out_subjects = (
+        _resolve_held_out_subjects(config, subject_ids)
+        if config.mode == ScriptMode.LEAVE_ONE_SUBJECT_OUT
+        else None
+    )
     dataset_context = resolve_dataset_context(
         dataset=enc.dataset,
         subject_ids=subject_ids,
@@ -556,6 +714,8 @@ def run_config(config: RRRSufficiencyConfig) -> None:
     print(f"RRR source dir:   {rrr_source_dir}")
     print(f"Mode:             {config.mode.value}")
     print(f"Subspace types:   {subspace_types}")
+    if held_out_subjects is not None:
+        print(f"Held-out subjects:{held_out_subjects}")
 
     sig_electrodes, _ = load_sig_electrodes(
         output_dir,
@@ -588,6 +748,8 @@ def run_config(config: RRRSufficiencyConfig) -> None:
         "rrr_source_dir": rrr_source_dir,
         "mode": config.mode.value,
         "subject_ids": subject_ids,
+        "held_out_subjects_requested": config.held_out_subjects,
+        "held_out_subjects_run": held_out_subjects,
     }
 
     if config.mode == ScriptMode.LEAVE_ONE_SUBJECT_OUT:

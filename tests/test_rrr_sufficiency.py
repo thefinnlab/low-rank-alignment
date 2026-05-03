@@ -1,9 +1,11 @@
 """Tests for RRR sufficiency bootstrap utilities and synthetic script path."""
 
+import json
 import os
 import sys
 
 import numpy as np
+import pytest
 
 from src.core.config import RRRSufficiencyConfig
 from src.utils.config_utils import dict_to_dataclass
@@ -66,6 +68,9 @@ def test_rrr_sufficiency_config_roundtrip():
             "epsilon_values": [0.02],
             "mode": "leave_one_subject_out",
             "subspace_types": ["rrr", "pca"],
+            "held_out_subjects": [2],
+            "cache_oof_predictions": True,
+            "refresh_oof_predictions": True,
             "encoding": {"model": "glove", "per_model_config": {"dim": 50}},
         },
         RRRSufficiencyConfig,
@@ -76,6 +81,9 @@ def test_rrr_sufficiency_config_roundtrip():
     assert config.epsilon_values == [0.02]
     assert config.mode.value == "leave_one_subject_out"
     assert config.subspace_types == ["rrr", "pca"]
+    assert config.held_out_subjects == [2]
+    assert config.cache_oof_predictions
+    assert config.refresh_oof_predictions
     assert config.encoding.model == "glove"
     assert config.encoding.per_model_config == {"dim": 50}
 
@@ -89,6 +97,22 @@ def test_validate_subspace_types_accepts_single_string():
     from run_rrr_sufficiency import _validate_subspace_types
 
     assert _validate_subspace_types("pca") == ["pca"]
+
+
+def test_resolve_held_out_subjects_validates_subset():
+    scripts_dir = os.path.abspath(
+        os.path.join(os.path.dirname(__file__), "..", "scripts", "rrr")
+    )
+    if scripts_dir not in sys.path:
+        sys.path.insert(0, scripts_dir)
+    from run_rrr_sufficiency import _resolve_held_out_subjects
+
+    config = RRRSufficiencyConfig(held_out_subjects=[2, 4])
+    assert _resolve_held_out_subjects(config, [1, 2, 3, 4]) == [2, 4]
+
+    bad_config = RRRSufficiencyConfig(held_out_subjects=[5])
+    with pytest.raises(ValueError, match="held_out_subjects must be a subset"):
+        _resolve_held_out_subjects(bad_config, [1, 2, 3, 4])
 
 
 def test_paired_corr_delta_bootstrap_detects_rank_gap():
@@ -220,6 +244,7 @@ def test_loso_sufficiency_writes_rrr_and_pca_units(tmp_path, monkeypatch):
         n_bootstrap=4,
         block_size=3,
         subspace_types=["rrr", "pca"],
+        held_out_subjects=[2],
         random_seed=11,
     )
     config.encoding.ridge_cv_folds = 2
@@ -262,15 +287,92 @@ def test_loso_sufficiency_writes_rrr_and_pca_units(tmp_path, monkeypatch):
     )
 
     expected = [
-        rrr_root / "held_out_sub_1" / "train_subjects" / "sufficiency_bootstrap",
-        rrr_root / "held_out_sub_1" / "transfer" / "sufficiency_bootstrap",
-        rrr_root / "held_out_sub_1" / "baseline" / "sufficiency_bootstrap",
-        tmp_path / "loso_pca" / "held_out_sub_1" / "train_subjects" / "sufficiency_bootstrap",
-        tmp_path / "loso_pca" / "held_out_sub_1" / "transfer" / "sufficiency_bootstrap",
-        tmp_path / "loso_pca" / "held_out_sub_1" / "baseline" / "sufficiency_bootstrap",
+        rrr_root / "held_out_sub_2" / "train_subjects" / "sufficiency_bootstrap",
+        rrr_root / "held_out_sub_2" / "transfer" / "sufficiency_bootstrap",
+        rrr_root / "held_out_sub_2" / "baseline" / "sufficiency_bootstrap",
+        tmp_path / "loso_pca" / "held_out_sub_2" / "train_subjects" / "sufficiency_bootstrap",
+        tmp_path / "loso_pca" / "held_out_sub_2" / "transfer" / "sufficiency_bootstrap",
+        tmp_path / "loso_pca" / "held_out_sub_2" / "baseline" / "sufficiency_bootstrap",
     ]
     for suff_dir in expected:
         assert (suff_dir / "sufficiency_summary.csv").exists()
         assert (suff_dir / "target_deltas.npz").exists()
         assert (suff_dir / "bootstrap_distribution.npz").exists()
         assert (suff_dir / "metadata.json").exists()
+
+    skipped = rrr_root / "held_out_sub_1" / "train_subjects" / "sufficiency_bootstrap"
+    assert not skipped.exists()
+
+
+def test_oof_prediction_cache_reused(tmp_path, monkeypatch):
+    scripts_dir = os.path.abspath(
+        os.path.join(os.path.dirname(__file__), "..", "scripts", "rrr")
+    )
+    if scripts_dir not in sys.path:
+        sys.path.insert(0, scripts_dir)
+    import run_rrr_sufficiency
+
+    rng = np.random.default_rng(9)
+    n, n_embed, n_targets = 24, 5, 2
+    X = rng.standard_normal((n, n_embed)).astype(np.float32)
+    A = rng.standard_normal((n_embed, 1)).astype(np.float32)
+    Y = (X @ A @ rng.standard_normal((1, n_targets))).astype(np.float32)
+    test_idxs = [np.arange(0, 12), np.arange(12, 24)]
+
+    basis_dir = tmp_path / "rrr"
+    for fold in range(2):
+        fold_dir = basis_dir / f"fold_{fold}"
+        fold_dir.mkdir(parents=True)
+        np.save(fold_dir / "A.npy", A)
+
+    config = RRRSufficiencyConfig(
+        rank_grid=[1],
+        n_bootstrap=4,
+        block_size=3,
+        cache_oof_predictions=True,
+        random_seed=13,
+    )
+    config.encoding.ridge_cv_folds = 2
+    config.encoding.ridge_alphas = [0.1, 1.0]
+
+    output_unit_dir = tmp_path / "rrr_unit"
+    run_rrr_sufficiency._run_sufficiency_unit(
+        "cache_test",
+        X,
+        Y,
+        test_idxs,
+        "rrr",
+        str(basis_dir),
+        str(output_unit_dir),
+        config,
+        {"config": {}},
+    )
+
+    suff_dir = output_unit_dir / "sufficiency_bootstrap"
+    assert (suff_dir / "oof_predictions.npz").exists()
+
+    def fail_build_oof_predictions(*_args, **_kwargs):
+        raise AssertionError("cache should avoid rebuilding OOF predictions")
+
+    monkeypatch.setattr(
+        run_rrr_sufficiency,
+        "build_oof_predictions",
+        fail_build_oof_predictions,
+    )
+
+    run_rrr_sufficiency._run_sufficiency_unit(
+        "cache_test",
+        X,
+        Y,
+        test_idxs,
+        "rrr",
+        str(basis_dir),
+        str(output_unit_dir),
+        config,
+        {"config": {}},
+    )
+
+    with open(suff_dir / "metadata.json") as f:
+        metadata = json.load(f)
+    assert metadata["loaded_oof_predictions_from_cache"]
+    assert metadata["oof_predictions_path"] == str(suff_dir / "oof_predictions.npz")

@@ -208,6 +208,7 @@ class RRRSufficiencyConfig:
     rrr_source_dir: str | None = None
     mode: ScriptMode = ScriptMode.CROSS_SUBJECT
     subspace_types: list[str] = field(default_factory=lambda: ["rrr"])
+    held_out_subjects: list[int] | None = None
     rank_grid: list[int] = field(default_factory=lambda: [1, 2, 5, 10, 20, 50])
     n_bootstrap: int = 5000
     block_size: int = 50
@@ -216,6 +217,8 @@ class RRRSufficiencyConfig:
     epsilon_fraction_of_full: float = 0.05
     random_seed: int = 42
     standardize_subspace_inputs: bool = True
+    cache_oof_predictions: bool = False
+    refresh_oof_predictions: bool = False
 
 
 @dataclass
