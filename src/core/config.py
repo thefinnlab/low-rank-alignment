@@ -194,6 +194,31 @@ class RRRConfig:
 
 
 @dataclass
+class RRRSufficiencyConfig:
+    """Parameters for RRR/PCA rank sufficiency bootstrap.
+
+    Reuses saved real RRR fold bases from ``rrr_source_dir``, trains full and
+    rank-k ridge prediction models once, then estimates uncertainty in the
+    paired full-vs-rank correlation delta by block bootstrap over words.
+    """
+
+    encoding: EncodingConfig = field(default_factory=EncodingConfig)
+    output_dir: str | None = None
+    sig_dir: str | None = None
+    rrr_source_dir: str | None = None
+    mode: ScriptMode = ScriptMode.CROSS_SUBJECT
+    subspace_types: list[str] = field(default_factory=lambda: ["rrr"])
+    rank_grid: list[int] = field(default_factory=lambda: [1, 2, 5, 10, 20, 50])
+    n_bootstrap: int = 5000
+    block_size: int = 50
+    ci: float = 0.95
+    epsilon_values: list[float] = field(default_factory=lambda: [0.005, 0.01])
+    epsilon_fraction_of_full: float = 0.05
+    random_seed: int = 42
+    standardize_subspace_inputs: bool = True
+
+
+@dataclass
 class PCAConfig:
     """Parameters for PCA-based subspace analysis (run_pca.py).
 
