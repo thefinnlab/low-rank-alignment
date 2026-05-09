@@ -69,6 +69,7 @@ def test_rrr_sufficiency_config_roundtrip():
             "mode": "leave_one_subject_out",
             "subspace_types": ["rrr", "pca"],
             "held_out_subjects": [2],
+            "track_per_target_sufficiency": True,
             "cache_oof_predictions": True,
             "refresh_oof_predictions": True,
             "encoding": {"model": "glove", "per_model_config": {"dim": 50}},
@@ -82,6 +83,7 @@ def test_rrr_sufficiency_config_roundtrip():
     assert config.mode.value == "leave_one_subject_out"
     assert config.subspace_types == ["rrr", "pca"]
     assert config.held_out_subjects == [2]
+    assert config.track_per_target_sufficiency
     assert config.cache_oof_predictions
     assert config.refresh_oof_predictions
     assert config.encoding.model == "glove"
@@ -179,13 +181,47 @@ def test_build_oof_predictions_synthetic(tmp_path):
     assert np.isfinite(Yhat_rank[1]).all()
     assert np.isfinite(Yhat_rank[2]).all()
 
-    summary, target_payload, boot_payload = run_bootstrap(
+    summary, per_target_summary, target_payload, boot_payload = run_bootstrap(
         Y_oof, Yhat_full, Yhat_rank, config
     )
+    assert per_target_summary is None
     assert set(summary["k"]) == {1, 2}
     assert "sufficient_epsilon_0p005" in summary.columns
     assert "delta_k1" in target_payload
     assert "max_delta_k1" in boot_payload
+
+
+def test_run_bootstrap_tracks_per_target_sufficiency():
+    scripts_dir = os.path.abspath(
+        os.path.join(os.path.dirname(__file__), "..", "scripts", "rrr")
+    )
+    if scripts_dir not in sys.path:
+        sys.path.insert(0, scripts_dir)
+    from run_rrr_sufficiency import run_bootstrap
+
+    rng = np.random.default_rng(22)
+    Y = rng.standard_normal((40, 3)).astype(np.float32)
+    Yhat_full = Y + 0.02 * rng.standard_normal(Y.shape).astype(np.float32)
+    Yhat_rank = Yhat_full + 0.05 * rng.standard_normal(Y.shape).astype(np.float32)
+    config = RRRSufficiencyConfig(
+        rank_grid=[2],
+        n_bootstrap=6,
+        block_size=4,
+        track_per_target_sufficiency=True,
+        random_seed=3,
+    )
+
+    summary, per_target_summary, _target_payload, _boot_payload = run_bootstrap(
+        Y,
+        Yhat_full,
+        {2: Yhat_rank},
+        config,
+    )
+
+    assert per_target_summary is not None
+    assert len(per_target_summary) == 3
+    assert "delta_ci_upper" in per_target_summary.columns
+    assert "fraction_targets_sufficient_epsilon_0p005" in summary.columns
 
 
 def test_build_oof_predictions_pca_synthetic(tmp_path):
@@ -290,7 +326,11 @@ def test_loso_sufficiency_writes_rrr_and_pca_units(tmp_path, monkeypatch):
         rrr_root / "held_out_sub_2" / "train_subjects" / "sufficiency_bootstrap",
         rrr_root / "held_out_sub_2" / "transfer" / "sufficiency_bootstrap",
         rrr_root / "held_out_sub_2" / "baseline" / "sufficiency_bootstrap",
-        tmp_path / "loso_pca" / "held_out_sub_2" / "train_subjects" / "sufficiency_bootstrap",
+        tmp_path
+        / "loso_pca"
+        / "held_out_sub_2"
+        / "train_subjects"
+        / "sufficiency_bootstrap",
         tmp_path / "loso_pca" / "held_out_sub_2" / "transfer" / "sufficiency_bootstrap",
         tmp_path / "loso_pca" / "held_out_sub_2" / "baseline" / "sufficiency_bootstrap",
     ]

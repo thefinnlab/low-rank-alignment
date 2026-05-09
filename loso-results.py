@@ -1,6 +1,6 @@
 import marimo
 
-__generated_with = "0.17.8"
+__generated_with = "0.23.4"
 app = marimo.App(width="medium")
 
 
@@ -21,6 +21,7 @@ def _():
         plot_lag_panel,
     )
     from src.utils import load_precomputed_epochs
+
     return (
         apply_publication_style,
         make_viridis_cmap,
@@ -71,6 +72,7 @@ def _(np, os, re):
                 As = np.zeros((len(folds), *A.shape))
             As[i] = A
         return {"folds": folds, "As": As}
+
     return load_As, load_fold_data
 
 
@@ -261,8 +263,8 @@ def _(
         saturation_k=20,
         cmap=_CMAP,
         fig=_fig,
-        y_min=-0.01,
-        y_max=0.1,
+        # y_min=-0.01,
+        # y_max=0.1,
         base_label="Baseline (within-subject)",
     )
     _ax_b.set_ylim(-0.01, 0.1)
@@ -364,8 +366,8 @@ def _(
         saturation_k=20,
         cmap=_CMAP,
         fig=_fig,
-        y_min=-0.01,
-        y_max=0.1,
+        # y_min=-0.01,
+        # y_max=0.1,
         base_label="Baseline (within-subject)",
     )
     _ax_b.set_ylim(-0.01, 0.1)
@@ -456,6 +458,7 @@ def _(np, plt):
             - **Mean Principal Angle:** {np.degrees(results['angles']).mean():.2f}°
             """
         )
+
     return display_metrics, orthonormalize, plot_results, run_analysis
 
 

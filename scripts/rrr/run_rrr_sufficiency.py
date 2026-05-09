@@ -10,6 +10,10 @@ words to estimate uncertainty in:
 
 Rank k is sufficient when the upper confidence bound for T_k is below an
 epsilon margin.
+
+Here "full" is the full transformed basis space for the current fold
+(`X @ A_full`), so RRR sufficiency compares the full RRR-space embedding
+representation against its first-k subspace.
 """
 
 from __future__ import annotations
@@ -41,6 +45,8 @@ from src.utils.rrr_sufficiency import (
     paired_corr_delta_bootstrap,
 )
 from src.utils.subspace_utils import evaluate_input_space
+
+OOF_PREDICTION_VERSION = 2
 
 
 def _reference_test_idxs(output_dir: str, subject_ids: list[int]) -> list[np.ndarray]:
@@ -141,11 +147,30 @@ def _oof_predictions_path(suff_dir: str) -> str:
     return os.path.join(suff_dir, "oof_predictions.npz")
 
 
+def _oof_cache_version_ok(suff_dir: str) -> bool:
+    path = _oof_predictions_path(suff_dir)
+    if not os.path.exists(path):
+        return False
+    try:
+        with np.load(path) as payload:
+            version = int(payload["oof_prediction_version"])
+    except (KeyError, OSError, ValueError):
+        return False
+    return version == OOF_PREDICTION_VERSION
+
+
 def _load_oof_predictions(
     suff_dir: str,
 ) -> tuple[np.ndarray, np.ndarray, dict[int, np.ndarray]]:
     path = _oof_predictions_path(suff_dir)
     with np.load(path) as payload:
+        version = int(payload["oof_prediction_version"])
+        if version != OOF_PREDICTION_VERSION:
+            raise ValueError(
+                f"Cached OOF predictions at {path} are version {version}; "
+                f"expected {OOF_PREDICTION_VERSION}. Rebuild with "
+                "refresh_oof_predictions=true."
+            )
         Y_oof = payload["Y_oof"]
         Yhat_full_oof = payload["Yhat_full_oof"]
         Yhat_rank_oof = {}
@@ -165,6 +190,7 @@ def _write_oof_predictions(
     os.makedirs(suff_dir, exist_ok=True)
     path = _oof_predictions_path(suff_dir)
     payload = {
+        "oof_prediction_version": np.array(OOF_PREDICTION_VERSION, dtype=np.int64),
         "Y_oof": Y_oof,
         "Yhat_full_oof": Yhat_full_oof,
         **{f"Yhat_rank_k{int(k)}": value for k, value in Yhat_rank_oof.items()},
@@ -177,10 +203,8 @@ def _should_load_cached_oof(output_unit_dir: str, config: RRRSufficiencyConfig) 
     return (
         config.cache_oof_predictions
         and not config.refresh_oof_predictions
-        and os.path.exists(
-            _oof_predictions_path(
-                os.path.join(output_unit_dir, "sufficiency_bootstrap")
-            )
+        and _oof_cache_version_ok(
+            os.path.join(output_unit_dir, "sufficiency_bootstrap")
         )
     )
 
@@ -237,11 +261,29 @@ def build_oof_predictions(
         X_test = X_raw[test_idx]
         Y_train = baseline["Y_train"]
         Y_test = baseline["Y_test"]
-        Y_oof[test_idx] = Y_test
-        Yhat_full_oof[test_idx] = baseline["Y_hat_full_test"]
-
-        A_full = _load_or_compute_basis(subspace_type, basis_source_dir, fold_f, X_train)
+        A_full = _load_or_compute_basis(
+            subspace_type, basis_source_dir, fold_f, X_train
+        )
         max_rank = A_full.shape[1]
+        X_full_train = X_train @ A_full
+        X_full_test = X_test @ A_full
+        full_result = evaluate_input_space(
+            X_full_train,
+            X_full_test,
+            Y_train,
+            Y_test,
+            device=device,
+            alphas=alphas,
+            ridge_cv_folds=enc.ridge_cv_folds,
+            standardize=config.standardize_subspace_inputs,
+            ridge_solver_params=enc.ridge_solver_params,
+            ridge_y_in_cpu=enc.ridge_y_in_cpu,
+            ridge_force_cpu=enc.ridge_force_cpu,
+            subspace_name="full_basis",
+        )
+        Y_oof[test_idx] = Y_test
+        Yhat_full_oof[test_idx] = full_result["full_basis_Y_hat"].astype(np.float32)
+
         valid_ranks = [int(k) for k in rank_grid if int(k) <= max_rank]
         skipped = [int(k) for k in rank_grid if int(k) > max_rank]
         if skipped:
@@ -277,7 +319,7 @@ def run_bootstrap(
     Yhat_full_oof: np.ndarray,
     Yhat_rank_oof: dict[int, np.ndarray],
     config: RRRSufficiencyConfig,
-) -> tuple[pd.DataFrame, dict, dict]:
+) -> tuple[pd.DataFrame, pd.DataFrame | None, dict, dict]:
     rng = np.random.default_rng(config.random_seed)
     full_uncertainty = bootstrap_full_model_ci_widths(
         Y_oof,
@@ -295,6 +337,7 @@ def run_bootstrap(
     }
 
     rows = []
+    per_target_rows = []
     target_payload = {}
     boot_payload = {}
     for k in sorted(Yhat_rank_oof):
@@ -326,9 +369,18 @@ def run_bootstrap(
             boot_fraction = boot["target_delta"] / denom[np.newaxis, :]
             boot_max_fraction = np.nanmax(boot_fraction, axis=1)
             _, fraction_hi = ci_bounds(boot_max_fraction, config.ci)
+            alpha = (1.0 - config.ci) / 2.0
+            target_delta_lo = np.nanquantile(boot["target_delta"], alpha, axis=0)
+            target_delta_hi = np.nanquantile(boot["target_delta"], 1.0 - alpha, axis=0)
+            target_fraction_lo = np.nanquantile(boot_fraction, alpha, axis=0)
+            target_fraction_hi = np.nanquantile(boot_fraction, 1.0 - alpha, axis=0)
         else:
             boot_max_fraction = np.full(config.n_bootstrap, np.nan)
             fraction_hi = float("nan")
+            target_delta_lo = np.full_like(obs["delta"], np.nan, dtype=float)
+            target_delta_hi = np.full_like(obs["delta"], np.nan, dtype=float)
+            target_fraction_lo = np.full_like(obs["delta"], np.nan, dtype=float)
+            target_fraction_hi = np.full_like(obs["delta"], np.nan, dtype=float)
 
         row = {
             "k": int(k),
@@ -349,13 +401,56 @@ def run_bootstrap(
                 fraction_hi, config.epsilon_fraction_of_full
             ),
         }
+        if config.track_per_target_sufficiency:
+            row["median_target_ci_upper_delta"] = float(np.nanmedian(target_delta_hi))
+            row["mean_target_ci_upper_delta"] = float(np.nanmean(target_delta_hi))
+            row["median_target_ci_upper_fraction_of_full"] = float(
+                np.nanmedian(target_fraction_hi)
+            )
+            row["mean_target_ci_upper_fraction_of_full"] = float(
+                np.nanmean(target_fraction_hi)
+            )
+            row["fraction_targets_sufficient_fraction_of_full"] = float(
+                np.nanmean(target_fraction_hi < config.epsilon_fraction_of_full)
+            )
         for eps in config.epsilon_values:
             suffix = str(eps).replace(".", "p")
             row[f"p_max_delta_ge_epsilon_{suffix}"] = float(
                 np.nanmean(boot["max_delta"] >= eps)
             )
             row[f"sufficient_epsilon_{suffix}"] = is_sufficient(hi, eps)
+            if config.track_per_target_sufficiency:
+                row[f"fraction_targets_sufficient_epsilon_{suffix}"] = float(
+                    np.nanmean(target_delta_hi < eps)
+                )
         rows.append(row)
+
+        if config.track_per_target_sufficiency:
+            for target_idx in range(obs["delta"].shape[0]):
+                target_row = {
+                    "k": int(k),
+                    "target_idx": int(target_idx),
+                    "r_full": obs["r_full"][target_idx],
+                    "r_rank": obs["r_rank"][target_idx],
+                    "z_full": obs["z_full"][target_idx],
+                    "z_rank": obs["z_rank"][target_idx],
+                    "delta": obs["delta"][target_idx],
+                    "delta_ci_lower": target_delta_lo[target_idx],
+                    "delta_ci_upper": target_delta_hi[target_idx],
+                    "delta_fraction_of_full": normalized_delta[target_idx],
+                    "delta_fraction_ci_lower": target_fraction_lo[target_idx],
+                    "delta_fraction_ci_upper": target_fraction_hi[target_idx],
+                    "sufficient_fraction_of_full": is_sufficient(
+                        target_fraction_hi[target_idx],
+                        config.epsilon_fraction_of_full,
+                    ),
+                }
+                for eps in config.epsilon_values:
+                    suffix = str(eps).replace(".", "p")
+                    target_row[f"sufficient_epsilon_{suffix}"] = is_sufficient(
+                        target_delta_hi[target_idx], eps
+                    )
+                per_target_rows.append(target_row)
 
         target_payload[f"r_full_k{k}"] = obs["r_full"]
         target_payload[f"r_rank_k{k}"] = obs["r_rank"]
@@ -369,23 +464,35 @@ def run_bootstrap(
             boot_payload[f"max_delta_fraction_of_full_k{k}"] = boot_max_fraction
 
     summary = pd.DataFrame(rows).sort_values("k").reset_index(drop=True)
+    per_target_summary = (
+        pd.DataFrame(per_target_rows)
+        .sort_values(["k", "target_idx"])
+        .reset_index(drop=True)
+        if config.track_per_target_sufficiency
+        else None
+    )
     boot_payload = {
         **boot_payload,
         "full_model_z_boot": full_uncertainty["z_boot"],
         "full_model_ci_width": full_uncertainty["ci_width"],
     }
-    return summary, target_payload, boot_payload
+    return summary, per_target_summary, target_payload, boot_payload
 
 
 def _write_bootstrap_outputs(
     suff_dir: str,
     summary: pd.DataFrame,
+    per_target_summary: pd.DataFrame | None,
     target_payload: dict,
     boot_payload: dict,
     metadata: dict,
 ) -> None:
     os.makedirs(suff_dir, exist_ok=True)
     summary.to_csv(os.path.join(suff_dir, "sufficiency_summary.csv"), index=False)
+    if per_target_summary is not None:
+        per_target_summary.to_csv(
+            os.path.join(suff_dir, "per_target_sufficiency.csv"), index=False
+        )
     np.savez(os.path.join(suff_dir, "target_deltas.npz"), **target_payload)
     np.savez(os.path.join(suff_dir, "bootstrap_distribution.npz"), **boot_payload)
     with open(os.path.join(suff_dir, "metadata.json"), "w") as f:
@@ -410,7 +517,7 @@ def _run_sufficiency_unit(
     loaded_from_cache = (
         config.cache_oof_predictions
         and not config.refresh_oof_predictions
-        and os.path.exists(oof_path)
+        and _oof_cache_version_ok(suff_dir)
     )
     if loaded_from_cache:
         print(f"Loading cached OOF predictions from {oof_path}")
@@ -437,12 +544,13 @@ def _run_sufficiency_unit(
             )
             print(f"Cached OOF predictions to {oof_path}")
 
-    summary, target_payload, boot_payload = run_bootstrap(
+    summary, per_target_summary, target_payload, boot_payload = run_bootstrap(
         Y_oof, Yhat_full_oof, Yhat_rank_oof, config
     )
     _write_bootstrap_outputs(
         suff_dir,
         summary,
+        per_target_summary,
         target_payload,
         boot_payload,
         {
@@ -453,6 +561,7 @@ def _run_sufficiency_unit(
             "output_unit_dir": output_unit_dir,
             "sufficiency_dir": suff_dir,
             "oof_predictions_path": oof_path if config.cache_oof_predictions else None,
+            "oof_prediction_version": OOF_PREDICTION_VERSION,
             "cache_oof_predictions": bool(config.cache_oof_predictions),
             "refresh_oof_predictions": bool(config.refresh_oof_predictions),
             "loaded_oof_predictions_from_cache": bool(loaded_from_cache),
@@ -600,7 +709,9 @@ def _run_loso_sufficiency(
                     },
                 )
             else:
-                print("  No training-subject significant electrodes; skipping train unit.")
+                print(
+                    "  No training-subject significant electrodes; skipping train unit."
+                )
 
             transfer_cached = _should_load_cached_oof(transfer_output_dir, config)
             baseline_cached = _should_load_cached_oof(baseline_output_dir, config)
@@ -679,7 +790,9 @@ def _run_loso_sufficiency(
                     },
                 )
             else:
-                print("  Held-out subject has no significant electrodes; skipping held-out units.")
+                print(
+                    "  Held-out subject has no significant electrodes; skipping held-out units."
+                )
 
 
 def run_config(config: RRRSufficiencyConfig) -> None:

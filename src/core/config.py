@@ -217,6 +217,7 @@ class RRRSufficiencyConfig:
     epsilon_fraction_of_full: float = 0.05
     random_seed: int = 42
     standardize_subspace_inputs: bool = True
+    track_per_target_sufficiency: bool = False
     cache_oof_predictions: bool = False
     refresh_oof_predictions: bool = False
 
