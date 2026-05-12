@@ -4,7 +4,7 @@ This is a neuroscience encoding analysis pipeline that studies how language-mode
 
 ## Pipeline Stages
 
-1. **Significance testing** (`make sig`) — identifies electrode-lag pairs with statistically significant encoding (legacy approach: word-order shuffling permutation test)
+1. **Fold-correlation diagnostics** (`make sig`) — trains per-subject encoding models and exports a fold/electrode/lag correlation tensor plus electrode metadata for exploratory target-filtering analysis
 1b. **Phase-randomization significance** — more robust electrode-level significance via phase randomization of continuous neural signal: `generate_null_distribution.py` (batchable, run in parallel) followed by `compute_significance.py` (reads null distribution shards, FDR correction). See details below.
 2. **Encoding model training** (`make train`) — trains ridge regression models on significant electrodes; when explicit `ridge_alphas` are omitted, ridge fits use a shared dimension-aware alpha grid that adapts to the current training design matrix and can cache refined grids after diagnostics
 3. **SVD analysis** (`make svd`) — decomposes model weights to find dominant directions in embedding space
@@ -103,7 +103,7 @@ Main entry points for the pipeline:
 
 | File | Purpose |
 |------|---------|
-| `run_significance.py` | Legacy permutation-test significance per electrode-lag pair; outputs `significance_detailed.csv` and `all_subject_sig.csv` |
+| `run_significance.py` | Per-subject encoding fold-correlation exporter; writes `correlation_diagnostics/fold_correlations.npy` with shape `(n_folds, n_electrodes, n_lags)` and `correlation_diagnostics/electrodes.csv` mapping the electrode axis to subject/electrode names |
 | `generate_null_distribution.py` | Batchable phase-randomization null distribution generator; each invocation runs N iterations per subject and writes a uniquely-named `.npy` shard to `{null_dir}/sub_{id}/`; multiple jobs can run in parallel |
 | `compute_significance.py` | Reads null distribution shards, re-runs encoding on real data, computes per-electrode p-values via max-statistic procedure, applies FDR correction, outputs `all_subject_sig.csv` and `significance_detailed.csv` |
 | `train_encoding_models.py` | Trains ridge regression models on significant electrodes; outputs coefficients, correlations, and plots. Uses the shared dimension-aware ridge alpha policy unless `ridge_alphas` is explicit. When `log_alphas=True`, saves alpha diagnostic plots, metadata, and reusable refined grids. When `refine_alphas=True`, uses a two-pass coarse→refined alpha sweep |

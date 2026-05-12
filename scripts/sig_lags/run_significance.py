@@ -1,10 +1,8 @@
 """
-run_significance.py — Batched per-subject encoding + permutation significance test.
+run_significance.py — Batched per-subject encoding fold-correlation export.
 
-Processes one subject at a time to avoid OOM from concatenating all subjects.
-Writes:
-  {output_dir}/significance_detailed.csv   — one row per (subject, electrode, lag)
-  {output_dir}/all_subject_sig.csv         — electrodes with ≥1 significant lag
+Processes one subject at a time to avoid OOM while training, then writes one
+correlation tensor and a parallel electrode metadata CSV.
 """
 
 import gc
@@ -18,11 +16,7 @@ import torch
 
 from src.utils import (
     train_encoding,
-    get_all_predictions_and_targets_test_set,
-    significant_lags_all_electrodes_gpu,
     load_embeddings,
-    get_models_coefficients,
-    save_subject_results,
 )
 from src.core.config import SignificanceConfig, get_results_dir
 from src.core.registry import get_dataset_adapter, resolve_dataset_context
@@ -91,7 +85,12 @@ def run_config(config: SignificanceConfig):
         np.array(enc.ridge_alphas, dtype=float) if enc.ridge_alphas is not None else None
     )
 
-    all_rows = []
+    diagnostics_dir = os.path.join(output_dir, "correlation_diagnostics")
+    os.makedirs(diagnostics_dir, exist_ok=True)
+    all_corrs = []
+    electrode_rows = []
+    expected_shape = None
+    electrode_offset = 0
 
     for bids_sub_id in subject_ids:
         print(f"\n{'='*60}")
@@ -164,118 +163,71 @@ def run_config(config: SignificanceConfig):
             )
 
         # ------------------------------------------------------------------
-        # f. Get predictions
+        # f. Collect fold-level target correlations and electrode metadata
         # ------------------------------------------------------------------
-        print("  Computing predictions...")
-        all_predictions, all_targets = get_all_predictions_and_targets_test_set(
-            models, test_idxs, X, Y, n_elec, n_lags
-        )
+        if expected_shape is None:
+            expected_shape = (corrs.shape[0], corrs.shape[2])
+        elif expected_shape != (corrs.shape[0], corrs.shape[2]):
+            raise ValueError(
+                "All subjects must have the same fold and lag dimensions to "
+                "write one correlation tensor. "
+                f"Expected {expected_shape}, got {(corrs.shape[0], corrs.shape[2])} "
+                f"for subject {bids_sub_id}."
+            )
 
-        # ------------------------------------------------------------------
-        # g. Significance test
-        # ------------------------------------------------------------------
-        print(f"  Running significance test...")
-        sig, p_values, q_values, obs_corrs = significant_lags_all_electrodes_gpu(
-            all_predictions.transpose(1, 2, 0),
-            all_targets.transpose(1, 2, 0),
-            minimal_shift=config.minimal_shift,
-            fdr_q=config.fdr_q,
-        )
-        # shapes: (n_elec, n_lags)
-
-        # ------------------------------------------------------------------
-        # h. Optionally save weights for significant electrodes
-        # ------------------------------------------------------------------
-        if config.save_weights:
-            sig_elec_indices = np.where(sig.any(axis=1))[0]
-            if len(sig_elec_indices) > 0:
-                coefficients, intercepts = get_models_coefficients(
-                    models, n_elec, n_lags, scaled_model=False
-                )
-                sig_coefs = [c[sig_elec_indices] for c in coefficients]
-                sig_ints = [
-                    i.reshape(n_elec, n_lags)[sig_elec_indices].ravel()
-                    for i in intercepts
-                ]
-                sig_corrs = corrs[:, sig_elec_indices, :]
-                sig_names = [elec_names[0][i] for i in sig_elec_indices]
-                save_subject_results(
-                    output_dir,
-                    bids_sub_id,
-                    sig_corrs,
-                    sig_coefs,
-                    sig_ints,
-                    models,
-                    tr_idxs,
-                    test_idxs,
-                    scalers,
-                    sig_names,
-                    enc.offset,
-                    actual_lag_sec,
-                    per_model_config=enc.per_model_config,
-                )
-                del coefficients, intercepts
-
-        # ------------------------------------------------------------------
-        # i. Collect rows
-        # ------------------------------------------------------------------
+        all_corrs.append(corrs.astype(np.float32, copy=False))
         for elec_idx, elec_name in enumerate(elec_names[0]):
-            for lag_idx in range(n_lags):
-                all_rows.append(
-                    {
-                        "subject": bids_sub_id,
-                        "electrode": elec_name,
-                        "lag_idx": lag_idx,
-                        "lag_sec": float(actual_lag_sec[lag_idx]),
-                        "sig": bool(sig[elec_idx, lag_idx]),
-                        "p_value": float(p_values[elec_idx, lag_idx]),
-                        "q_value": float(q_values[elec_idx, lag_idx]),
-                        "obs_corr": float(obs_corrs[elec_idx, lag_idx]),
-                    }
-                )
+            electrode_rows.append(
+                {
+                    "electrode_index": electrode_offset + elec_idx,
+                    "subject": bids_sub_id,
+                    "subject_electrode_index": elec_idx,
+                    "electrode": elec_name,
+                    "n_lags": n_lags,
+                    "lag_start_sec": float(actual_lag_sec[0]),
+                    "lag_step_sec": float(actual_lag_sec[1] - actual_lag_sec[0])
+                    if n_lags > 1
+                    else np.nan,
+                }
+            )
+        electrode_offset += n_elec
+        print(
+            f"  Collected {n_elec:,} electrodes "
+            f"(tensor shape {corrs.shape})"
+        )
 
         # ------------------------------------------------------------------
-        # j. Free memory
+        # g. Free memory
         # ------------------------------------------------------------------
         del X_arr, X, Y, models, scalers
-        del all_predictions, all_targets, sig, p_values, q_values, obs_corrs, corrs
+        del corrs
         gc.collect()
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
 
     # ------------------------------------------------------------------
-    # 4. Build DataFrames
+    # 4. Write combined diagnostics
     # ------------------------------------------------------------------
-    df_detailed = pd.DataFrame(all_rows)
+    if not all_corrs:
+        raise ValueError("No subject correlations were computed.")
 
-    # ------------------------------------------------------------------
-    # 5. Write output files
-    # ------------------------------------------------------------------
-    detailed_path = os.path.join(output_dir, "significance_detailed.csv")
-    df_detailed.to_csv(detailed_path, index=False)
-    print(f"\nWrote {detailed_path}  ({len(df_detailed):,} rows)")
-
-    # all_subject_sig.csv — one row per (subject, electrode) that has ≥1 sig lag
-    df_any_sig = (
-        df_detailed.groupby(["subject", "electrode"])["sig"]
-        .any()
-        .reset_index()
-        .query("sig == True")[["subject", "electrode"]]
-        .rename(columns={"electrode": "elec"})
-    )
-    sig_path = os.path.join(output_dir, "all_subject_sig.csv")
-    df_any_sig.to_csv(sig_path, index=False)
-    print(f"Wrote {sig_path}  ({len(df_any_sig):,} rows)")
+    corr_data = np.concatenate(all_corrs, axis=1)
+    corr_path = os.path.join(diagnostics_dir, "fold_correlations.npy")
+    metadata_path = os.path.join(diagnostics_dir, "electrodes.csv")
+    np.save(corr_path, corr_data)
+    pd.DataFrame(electrode_rows).to_csv(metadata_path, index=False)
+    print(f"\nWrote {corr_path}  shape={corr_data.shape}")
+    print(f"Wrote {metadata_path}  ({len(electrode_rows):,} electrodes)")
 
 
 def main():
-    args, overrides = parse_args("Per-subject encoding + significance testing")
+    args, overrides = parse_args("Per-subject encoding fold-correlation export")
     config: SignificanceConfig = load_config(args.config, overrides, SignificanceConfig)
     configs = expand_per_model_layer_configs(config)
     for layer_config in configs:
         if len(configs) > 1:
             print(
-                f"\nRunning significance for layer "
+                f"\nExporting fold correlations for layer "
                 f"{layer_config.encoding.per_model_config['layer']}"
             )
         run_config(layer_config)
