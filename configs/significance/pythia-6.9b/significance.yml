@@ -13,6 +13,13 @@ encoding:
     - 16
     - 32
 output_dir: null
+blocks_per_fold: 5
+max_matching_distance: 3
+positive_fraction: 0.8
+mean_corr_threshold: 0.0
 minimal_shift: 500
+shift_step: 1
+null_batch_size: 16
+device: null
 fdr_q: 0.01
 save_weights: true
