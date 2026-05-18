@@ -16,16 +16,20 @@ def _fisher_z(values) -> np.ndarray:
     return np.arctanh(np.clip(arr, -1.0 + _FISHER_EPS, 1.0 - _FISHER_EPS))
 
 
-def fisher_z_mean(corrs, axis=None):
+def fisher_z_mean(corrs, axis=None, return_z=False):
     """Average Pearson correlations in Fisher-z space and return r-space values."""
     z = _fisher_z(corrs)
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", category=RuntimeWarning)
         mean_z = np.nanmean(z, axis=axis)
+    if return_z:
+        return mean_z
     return np.tanh(mean_z)
 
 
-def fisher_z_mean_sem(corrs, axis=None) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+def fisher_z_mean_sem(
+    corrs, axis=None, return_z=False
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Return Fisher-z mean r and asymmetric SEM distances in r space.
 
     SEM is computed in Fisher-z space over the requested axis, then transformed
@@ -38,6 +42,8 @@ def fisher_z_mean_sem(corrs, axis=None) -> tuple[np.ndarray, np.ndarray, np.ndar
         n = np.sum(np.isfinite(z), axis=axis)
         std_z = np.nanstd(z, axis=axis, ddof=1)
         sem_z = np.where(n > 1, std_z / np.sqrt(n), 0.0)
+    if return_z:
+        return mean_z, sem_z
     mean_r = np.tanh(mean_z)
     lower_r = np.tanh(mean_z - sem_z)
     upper_r = np.tanh(mean_z + sem_z)

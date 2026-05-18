@@ -1,8 +1,9 @@
 """
-run_significance.py — Batched per-subject encoding fold-correlation export.
+run_significance.py — Cluster-based lag significance with fold-local nulls.
 
-Processes one subject at a time to avoid OOM while training, then writes one
-correlation tensor and a parallel electrode metadata CSV.
+Processes one subject at a time to avoid OOM while training, builds reliable
+electrode-lag clusters from out-of-fold predictions, scores a fold-local
+circular-shift null, and writes downstream-compatible significance CSVs.
 """
 
 import gc
@@ -13,6 +14,7 @@ import pandas as pd
 from himalaya.backend import set_backend
 from src.utils.embeddings import get_glove_embeddings
 import torch
+from statsmodels.stats.multitest import multipletests
 
 from src.utils import (
     train_encoding,
@@ -28,7 +30,12 @@ from src.utils.config_utils import (
 from src.utils.encoding import extract_best_alphas, get_ridge_model_constructor
 from src.utils.alpha_grids import resolve_ridge_alphas, save_alpha_diagnostics
 from src.utils.data_loaders import load_data_from_cache
-
+from src.utils.significance import (
+    aggregate_global_null,
+    fold_local_circular_shift_null_scores,
+    reshape_fold_predictions_and_targets,
+    score_fold_lag_clusters,
+)
 
 # ---------------------------------------------------------------------------
 # Main
@@ -37,6 +44,11 @@ from src.utils.data_loaders import load_data_from_cache
 
 def run_config(config: SignificanceConfig):
     enc = config.encoding
+    mean_corr_threshold = (
+        float(np.tanh(config.mean_z_threshold))
+        if config.mean_z_threshold is not None
+        else float(config.mean_corr_threshold)
+    )
 
     subject_ids = enc.subjects or list(range(1, 10))
     dataset_context = resolve_dataset_context(
@@ -82,15 +94,16 @@ def run_config(config: SignificanceConfig):
         )[1]["in_glove"]
 
     explicit_alphas = (
-        np.array(enc.ridge_alphas, dtype=float) if enc.ridge_alphas is not None else None
+        np.array(enc.ridge_alphas, dtype=float)
+        if enc.ridge_alphas is not None
+        else None
     )
 
-    diagnostics_dir = os.path.join(output_dir, "correlation_diagnostics")
-    os.makedirs(diagnostics_dir, exist_ok=True)
-    all_corrs = []
+    all_cluster_records = []
+    all_lag_records = []
+    subject_nulls = []
     electrode_rows = []
-    expected_shape = None
-    electrode_offset = 0
+    subject_shift_metadata = {}
 
     for bids_sub_id in subject_ids:
         print(f"\n{'='*60}")
@@ -146,12 +159,13 @@ def run_config(config: SignificanceConfig):
         # e. Train encoding model
         # ------------------------------------------------------------------
         print("  Training encoding model...")
-        corrs, models, tr_idxs, test_idxs, scalers = train_encoding(
+        corrs, models, tr_idxs, test_idxs, scalers, fold_predictions = train_encoding(
             X,
             Y,
             model_constructor,
             epochs_shape=(n_elec, n_lags),
             num_folds=enc.num_folds,
+            return_preds=True,
         )
         if enc.log_alphas:
             save_alpha_diagnostics(
@@ -163,71 +177,212 @@ def run_config(config: SignificanceConfig):
             )
 
         # ------------------------------------------------------------------
-        # f. Collect fold-level target correlations and electrode metadata
+        # f. Build observed clusters from out-of-fold predictions
         # ------------------------------------------------------------------
-        if expected_shape is None:
-            expected_shape = (corrs.shape[0], corrs.shape[2])
-        elif expected_shape != (corrs.shape[0], corrs.shape[2]):
-            raise ValueError(
-                "All subjects must have the same fold and lag dimensions to "
-                "write one correlation tensor. "
-                f"Expected {expected_shape}, got {(corrs.shape[0], corrs.shape[2])} "
-                f"for subject {bids_sub_id}."
+        fold_predictions_3d, fold_targets_3d = reshape_fold_predictions_and_targets(
+            fold_predictions, test_idxs, Y, n_elec, n_lags
+        )
+        print("  Computing observed block correlations and lag clusters...")
+        cluster_result = score_fold_lag_clusters(
+            fold_predictions_3d,
+            fold_targets_3d,
+            config.blocks_per_fold,
+            max_matching_distance=config.max_matching_distance,
+            positive_fraction=config.positive_fraction,
+            mean_corr_threshold=mean_corr_threshold,
+            device=config.device,
+        )
+        block_rows = cluster_result["block_rows"]
+        obs_corrs = cluster_result["corr"]
+        positive_frac = cluster_result["positive_fraction"]
+        mean_corr = cluster_result["mean_corr"]
+        cluster_labels = cluster_result["cluster_labels"]
+        scored_clusters = cluster_result["scored_clusters"]
+
+        for cluster in scored_clusters:
+            elec_idx = int(cluster["electrode_idx"])
+            all_cluster_records.append(
+                {
+                    "subject": bids_sub_id,
+                    "electrode": elec_names[0][elec_idx],
+                    "subject_electrode_index": elec_idx,
+                    "cluster_id": int(cluster["cluster_id"]),
+                    "lag_indices": cluster["lag_indices"],
+                    "cluster_score": float(cluster["cluster_score"]),
+                    "cluster_size": int(cluster["cluster_size"]),
+                    "peak_corr": float(cluster["peak_corr"]),
+                }
             )
 
-        all_corrs.append(corrs.astype(np.float32, copy=False))
+        # ------------------------------------------------------------------
+        # g. Score fold-local circular-shift null for this subject
+        # ------------------------------------------------------------------
+        print("  Scoring fold-local circular-shift null...")
+        max_per_electrode, shift_meta = fold_local_circular_shift_null_scores(
+            fold_predictions_3d,
+            fold_targets_3d,
+            blocks_per_fold=config.blocks_per_fold,
+            max_matching_distance=config.max_matching_distance,
+            positive_fraction=config.positive_fraction,
+            mean_corr_threshold=mean_corr_threshold,
+            minimal_shift=config.minimal_shift,
+            shift_step=config.shift_step,
+            device=config.device,
+            null_batch_size=config.null_batch_size,
+        )
+        subject_nulls.append(max_per_electrode)
+        subject_shift_metadata[int(bids_sub_id)] = {
+            **shift_meta,
+            "block_rows": block_rows,
+        }
+
+        # ------------------------------------------------------------------
+        # h. Collect per-lag rows and electrode metadata
+        # ------------------------------------------------------------------
         for elec_idx, elec_name in enumerate(elec_names[0]):
             electrode_rows.append(
                 {
-                    "electrode_index": electrode_offset + elec_idx,
+                    "electrode_index": len(electrode_rows),
                     "subject": bids_sub_id,
                     "subject_electrode_index": elec_idx,
                     "electrode": elec_name,
                     "n_lags": n_lags,
                     "lag_start_sec": float(actual_lag_sec[0]),
-                    "lag_step_sec": float(actual_lag_sec[1] - actual_lag_sec[0])
-                    if n_lags > 1
-                    else np.nan,
+                    "lag_step_sec": (
+                        float(actual_lag_sec[1] - actual_lag_sec[0])
+                        if n_lags > 1
+                        else np.nan
+                    ),
                 }
             )
-        electrode_offset += n_elec
+            for lag_idx in range(n_lags):
+                label = int(cluster_labels[elec_idx, lag_idx])
+                all_lag_records.append(
+                    {
+                        "subject": bids_sub_id,
+                        "electrode": elec_name,
+                        "lag_idx": lag_idx,
+                        "lag_sec": float(actual_lag_sec[lag_idx]),
+                        "sig": False,
+                        "p_value": 1.0,
+                        "q_value": 1.0,
+                        "obs_corr": float(obs_corrs[elec_idx, lag_idx]),
+                        "cluster_id": label,
+                        "cluster_score": np.nan,
+                        "cluster_p_value": 1.0,
+                        "cluster_q_value": 1.0,
+                        "positive_fraction": float(positive_frac[elec_idx, lag_idx]),
+                        "mean_corr": float(mean_corr[elec_idx, lag_idx]),
+                    }
+                )
         print(
-            f"  Collected {n_elec:,} electrodes "
-            f"(tensor shape {corrs.shape})"
+            f"  Found {len(scored_clusters):,} candidate clusters across "
+            f"{n_elec:,} electrodes"
         )
 
         # ------------------------------------------------------------------
-        # g. Free memory
+        # i. Free memory
         # ------------------------------------------------------------------
         del X_arr, X, Y, models, scalers
-        del corrs
+        del corrs, fold_predictions, fold_predictions_3d, fold_targets_3d
+        del cluster_result, obs_corrs
+        del positive_frac, mean_corr, cluster_labels
         gc.collect()
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
 
     # ------------------------------------------------------------------
-    # 4. Write combined diagnostics
+    # 4. Compute global max-statistic p-values and write outputs
     # ------------------------------------------------------------------
-    if not all_corrs:
-        raise ValueError("No subject correlations were computed.")
+    if not subject_nulls:
+        raise ValueError("No subject null distributions were computed.")
 
-    corr_data = np.concatenate(all_corrs, axis=1)
-    corr_path = os.path.join(diagnostics_dir, "fold_correlations.npy")
-    metadata_path = os.path.join(diagnostics_dir, "electrodes.csv")
-    np.save(corr_path, corr_data)
-    pd.DataFrame(electrode_rows).to_csv(metadata_path, index=False)
-    print(f"\nWrote {corr_path}  shape={corr_data.shape}")
-    print(f"Wrote {metadata_path}  ({len(electrode_rows):,} electrodes)")
+    # Compare nulls to actual data.
+    global_max = aggregate_global_null(subject_nulls)
+    if all_cluster_records:
+        cluster_p = np.array(
+            [
+                (np.sum(global_max >= rec["cluster_score"]) + 1) / (len(global_max) + 1)
+                for rec in all_cluster_records
+            ],
+            dtype=float,
+        )
+        reject, cluster_q, _, _ = multipletests(
+            cluster_p, alpha=config.fdr_q, method="fdr_bh"
+        )
+    else:
+        cluster_p = np.array([], dtype=float)
+        cluster_q = np.array([], dtype=float)
+        reject = np.array([], dtype=bool)
+
+    # Write data to CSVs and NPZ, merging cluster-level results back to lag-level records for convenience.
+    cluster_lookup = {}
+    for rec, p_value, q_value, is_sig in zip(
+        all_cluster_records, cluster_p, cluster_q, reject
+    ):
+        rec["cluster_p_value"] = float(p_value)
+        rec["cluster_q_value"] = float(q_value)
+        rec["sig"] = bool(is_sig)
+        key = (rec["subject"], rec["electrode"], rec["cluster_id"])
+        cluster_lookup[key] = rec
+
+    for row in all_lag_records:
+        key = (row["subject"], row["electrode"], row["cluster_id"])
+        rec = cluster_lookup.get(key)
+        if rec is None:
+            continue
+        row["cluster_score"] = rec["cluster_score"]
+        row["cluster_p_value"] = rec["cluster_p_value"]
+        row["cluster_q_value"] = rec["cluster_q_value"]
+        row["p_value"] = rec["cluster_p_value"]
+        row["q_value"] = rec["cluster_q_value"]
+        row["sig"] = rec["sig"]
+
+    detailed_path = os.path.join(output_dir, "significance_detailed.csv")
+    df_detailed = pd.DataFrame(all_lag_records)
+    df_detailed.to_csv(detailed_path, index=False)
+
+    sig_pairs = (
+        df_detailed[df_detailed["sig"]][["subject", "electrode"]]
+        .drop_duplicates()
+        .rename(columns={"electrode": "elec"})
+    )
+    sig_path = os.path.join(output_dir, "all_subject_sig.csv")
+    sig_pairs.to_csv(sig_path, index=False, columns=["subject", "elec"])
+
+    max_per_electrode = np.concatenate(subject_nulls, axis=1)
+    null_path = os.path.join(output_dir, "cluster_null_distribution.npz")
+    np.savez(
+        null_path,
+        max_per_electrode=max_per_electrode,
+        global_max=global_max,
+        subjects=np.array([row["subject"] for row in electrode_rows], dtype=int),
+        electrodes=np.array([row["electrode"] for row in electrode_rows], dtype=object),
+        subject_electrode_index=np.array(
+            [row["subject_electrode_index"] for row in electrode_rows], dtype=int
+        ),
+        blocks_per_fold=int(config.blocks_per_fold),
+        max_matching_distance=int(config.max_matching_distance),
+        positive_fraction=float(config.positive_fraction),
+        mean_corr_threshold=float(mean_corr_threshold),
+        minimal_shift=int(config.minimal_shift),
+        shift_step=int(config.shift_step),
+        subject_shift_metadata=np.array(subject_shift_metadata, dtype=object),
+    )
+
+    print(f"\nWrote {detailed_path}  ({len(df_detailed):,} rows)")
+    print(f"Wrote {sig_path}  ({len(sig_pairs):,} electrodes)")
+    print(f"Wrote {null_path}  shape={max_per_electrode.shape}")
 
 
 def main():
-    args, overrides = parse_args("Per-subject encoding fold-correlation export")
+    args, overrides = parse_args("Cluster-based lag significance")
     config: SignificanceConfig = load_config(args.config, overrides, SignificanceConfig)
     configs = expand_per_model_layer_configs(config)
     for layer_config in configs:
         if len(configs) > 1:
             print(
-                f"\nExporting fold correlations for layer "
+                f"\nComputing cluster significance for layer "
                 f"{layer_config.encoding.per_model_config['layer']}"
             )
         run_config(layer_config)

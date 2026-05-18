@@ -83,6 +83,8 @@ from src.utils.plotting import (
     plot_alpha_diagnostics,
     plot_alpha_vs_rank,
 )
+
+
 def _missing_optional_dependency(dependency_name, utility_name):
     def _missing(*args, **kwargs):
         raise ModuleNotFoundError(
@@ -102,6 +104,17 @@ try:
         phase_randomize_raw,
         phase_randomize_data,
         compute_observed_max_per_electrode,
+        split_fold_into_blocks,
+        reshape_fold_predictions_and_targets,
+        compute_fold_block_correlations,
+        compute_fold_correlations,
+        build_cluster_filter,
+        label_lag_clusters,
+        score_lag_clusters,
+        score_fold_lag_clusters,
+        valid_fold_shifts,
+        fold_local_circular_shift_null_scores,
+        aggregate_global_null,
     )
 except ModuleNotFoundError as exc:
     if exc.name != "statsmodels":
@@ -123,6 +136,27 @@ except ModuleNotFoundError as exc:
     compute_observed_max_per_electrode = _missing_optional_dependency(
         "statsmodels", "significance"
     )
+    split_fold_into_blocks = _missing_optional_dependency("statsmodels", "significance")
+    reshape_fold_predictions_and_targets = _missing_optional_dependency(
+        "statsmodels", "significance"
+    )
+    compute_fold_block_correlations = _missing_optional_dependency(
+        "statsmodels", "significance"
+    )
+    compute_fold_correlations = _missing_optional_dependency(
+        "statsmodels", "significance"
+    )
+    build_cluster_filter = _missing_optional_dependency("statsmodels", "significance")
+    label_lag_clusters = _missing_optional_dependency("statsmodels", "significance")
+    score_lag_clusters = _missing_optional_dependency("statsmodels", "significance")
+    score_fold_lag_clusters = _missing_optional_dependency(
+        "statsmodels", "significance"
+    )
+    valid_fold_shifts = _missing_optional_dependency("statsmodels", "significance")
+    fold_local_circular_shift_null_scores = _missing_optional_dependency(
+        "statsmodels", "significance"
+    )
+    aggregate_global_null = _missing_optional_dependency("statsmodels", "significance")
 from src.utils.analysis import (
     build_global_sig_mask,
     get_correlation_gpu,
@@ -142,6 +176,7 @@ from src.utils.atlas import (
     group_electrodes_by_region,
     build_electrode_region_map,
 )
+
 try:
     from src.utils.srrr import (
         load_svd_decomposition,
@@ -303,6 +338,17 @@ __all__ = [
     "phase_randomize_raw",
     "phase_randomize_data",
     "compute_observed_max_per_electrode",
+    "split_fold_into_blocks",
+    "reshape_fold_predictions_and_targets",
+    "compute_fold_block_correlations",
+    "compute_fold_correlations",
+    "build_cluster_filter",
+    "label_lag_clusters",
+    "score_lag_clusters",
+    "score_fold_lag_clusters",
+    "valid_fold_shifts",
+    "fold_local_circular_shift_null_scores",
+    "aggregate_global_null",
     # analysis
     "build_global_sig_mask",
     "get_correlation_gpu",

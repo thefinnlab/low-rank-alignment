@@ -23,6 +23,7 @@ def train_encoding(
     provided_idxs=None,
     provided_scalers=None,
     num_folds=2,
+    return_preds=False,
 ):
     """
     Train an encoding model using k-fold cross-validation.
@@ -56,6 +57,7 @@ def train_encoding(
 
     models = []
     corrs = []
+    all_Y_preds = []
     scalers = []
     tr_idxs, test_idxs = [], []
     if provided_idxs is None:
@@ -91,6 +93,7 @@ def train_encoding(
         if not fix_model:
             model.fit(X1_train, Y_train)
         Y_preds = model.predict(X1_test)
+        all_Y_preds.append(Y_preds)
         corr = to_numpy(correlation_score(Y_test, Y_preds))
         if epochs_shape:
             corr = corr.reshape(epochs_shape)
@@ -99,6 +102,8 @@ def train_encoding(
         models.append(model)
         tr_idxs.append(train_index)
         test_idxs.append(test_index)
+    if return_preds:
+        return np.stack(corrs), models, tr_idxs, test_idxs, scalers, all_Y_preds
     return np.stack(corrs), models, tr_idxs, test_idxs, scalers
 
 

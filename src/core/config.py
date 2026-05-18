@@ -47,7 +47,10 @@ def get_results_dir(
         root = transformer_results_dir(base_dir, offset, **per_model_config)
     else:
         raise ValueError(f"Model: {model} not implemented yet.")
-    if dataset_context is None or getattr(dataset_context, "dataset", "podcast") == "podcast":
+    if (
+        dataset_context is None
+        or getattr(dataset_context, "dataset", "podcast") == "podcast"
+    ):
         return root
     stimulus_id = getattr(dataset_context, "stimulus_id", None)
     if not stimulus_id:
@@ -99,7 +102,15 @@ class SignificanceConfig:
     output_dir: str | None = (
         None  # Results dir; auto-generated from model/layer/offset if None
     )
+    blocks_per_fold: int = 5
+    max_matching_distance: int = 1
+    positive_fraction: float = 0.8
+    mean_corr_threshold: float = 0.0
+    mean_z_threshold: float | None = None  # Deprecated: converted to r-space if set.
     minimal_shift: int = 500
+    shift_step: int = 1
+    null_batch_size: int = 16
+    device: str | None = None
     fdr_q: float = 0.01
     save_weights: bool = False
 
@@ -178,7 +189,9 @@ class RRRConfig:
 
     # Alpha diagnostics
     log_alphas: bool = False  # Save per-rank alpha diagnostics in RRR output
-    standardize_subspace_inputs: bool = True  # Standardize RRR/PCA subspace ridge inputs.
+    standardize_subspace_inputs: bool = (
+        True  # Standardize RRR/PCA subspace ridge inputs.
+    )
 
     # Arbitrary embedding seed for null baseline
     arbitrary_seed: int = 42
@@ -464,7 +477,9 @@ class GenerateEmbeddingsConfig:
 
     # Sliding window
     context_window: int = 1024
-    stride: int | None = None  # None → auto (1 if bidirectional_strict, else context_window // 2)
+    stride: int | None = (
+        None  # None → auto (1 if bidirectional_strict, else context_window // 2)
+    )
 
     # Layer selection
     layers: list[int] | str = "all"  # "all" or explicit list of hidden-state indices
@@ -488,11 +503,23 @@ class GenerateEmbeddingsConfig:
 
     # HuggingFace cache / offline
     hf_cache_dir: str | None = None  # None → honor HF_HOME / default
-    local_files_only: bool = True  # True for offline GPU hosts; operator must pre-populate cache
-    hf_token: str | None = None  # for gated models (e.g. Llama-3); prefer HF_TOKEN env var
-    random_init_model: bool = False  # If true, use hf_model_id only for architecture config
-    random_init_seed: int | None = 42  # None → intentionally unseeded random initialization
+    local_files_only: bool = (
+        True  # True for offline GPU hosts; operator must pre-populate cache
+    )
+    hf_token: str | None = (
+        None  # for gated models (e.g. Llama-3); prefer HF_TOKEN env var
+    )
+    random_init_model: bool = (
+        False  # If true, use hf_model_id only for architecture config
+    )
+    random_init_seed: int | None = (
+        42  # None → intentionally unseeded random initialization
+    )
 
     # Tokenizer
-    tokenizer_name_or_path: str | None = None  # None → use hf_model_id; can point to a local tokenizer dir
-    add_prefix_space: bool = True  # required for GPT-2 / RoBERTa BPE with is_split_into_words
+    tokenizer_name_or_path: str | None = (
+        None  # None → use hf_model_id; can point to a local tokenizer dir
+    )
+    add_prefix_space: bool = (
+        True  # required for GPT-2 / RoBERTa BPE with is_split_into_words
+    )

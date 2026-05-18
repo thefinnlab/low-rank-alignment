@@ -3,6 +3,8 @@ data
 results/
 **.DS_STORE*
 __marimo__/
+correlation_diagnostics/
+cluster_sig_playground.py
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
