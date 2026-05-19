@@ -1,5 +1,6 @@
 import os
 from pathlib import Path
+import warnings
 
 import numpy as np
 import torch
@@ -256,22 +257,39 @@ def label_lag_clusters(cluster_mask, max_matching_distance=1):
     return labels, clusters
 
 
-def score_lag_clusters(obs_corrs, clusters):
-    """Score clusters by summed Fisher-z correlation mass."""
-    obs_corrs = np.asarray(obs_corrs, dtype=np.float64)
+def compute_sem_normalized_target_scores(block_corrs):
+    """Return per-target Fisher-z mean divided by Fisher-z SEM across blocks."""
+    block_corrs = np.asarray(block_corrs, dtype=np.float64)
+    if block_corrs.ndim != 3:
+        raise ValueError(
+            f"block_corrs must have shape (n_blocks, n_electrodes, n_lags), got {block_corrs.shape}"
+        )
+    z = fisher_z(block_corrs)
+    with warnings.catch_warnings(), np.errstate(invalid="ignore", divide="ignore"):
+        warnings.simplefilter("ignore", category=RuntimeWarning)
+        mean_z = np.nanmean(z, axis=0)
+        n = np.sum(np.isfinite(z), axis=0)
+        std_z = np.nanstd(z, axis=0, ddof=1)
+        sem_z = np.where(n > 1, std_z / np.sqrt(n), 0.0)
+        target_scores = mean_z / sem_z
+    return target_scores, mean_z, sem_z
+
+
+def score_lag_clusters(target_scores, clusters):
+    """Score clusters by summed SEM-normalized blockwise Fisher-z mass."""
+    target_scores = np.asarray(target_scores, dtype=np.float64)
     scored = []
-    z = fisher_z(obs_corrs)
     for cluster in clusters:
         elec_idx = int(cluster["electrode_idx"])
         lag_indices = np.asarray(cluster["lag_indices"], dtype=int)
-        lag_z = z[elec_idx, lag_indices]
-        score = float(np.nansum(lag_z))
+        lag_scores = target_scores[elec_idx, lag_indices]
+        score = float(np.nansum(lag_scores))
         scored.append(
             {
                 **cluster,
                 "cluster_score": score,
                 "cluster_size": int(len(lag_indices)),
-                "peak_corr": float(np.nanmax(obs_corrs[elec_idx, lag_indices])),
+                "peak_target_score": float(np.nanmax(lag_scores)),
             }
         )
     return scored
@@ -303,10 +321,18 @@ def score_fold_lag_clusters(
     cluster_labels, clusters = label_lag_clusters(
         cluster_mask, max_matching_distance=max_matching_distance
     )
-    scored_clusters = score_lag_clusters(corr, clusters)
+    target_scores, mean_z, sem_z = compute_sem_normalized_target_scores(block_corrs)
+    scored_clusters = score_lag_clusters(target_scores, clusters)
+    for cluster in scored_clusters:
+        elec_idx = int(cluster["electrode_idx"])
+        lag_indices = np.asarray(cluster["lag_indices"], dtype=int)
+        cluster["peak_corr"] = float(np.nanmax(corr[elec_idx, lag_indices]))
     return {
         "corr": corr,
         "block_corrs": block_corrs,
+        "target_scores": target_scores,
+        "mean_z": mean_z,
+        "sem_z": sem_z,
         "block_rows": block_rows,
         "cluster_mask": cluster_mask,
         "cluster_labels": cluster_labels,

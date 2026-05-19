@@ -11,6 +11,7 @@ from src.utils.significance import (
     build_cluster_filter,
     compute_fold_block_correlations,
     compute_fold_correlations,
+    compute_sem_normalized_target_scores,
     fold_local_circular_shift_null_scores,
     label_lag_clusters,
     reshape_fold_predictions_and_targets,
@@ -155,6 +156,10 @@ class TestClusterLagHelpers:
         assert result["cluster_labels"].shape == (2, 3)
         assert len(result["block_rows"]) == 4
         assert len(result["scored_clusters"]) == 2
+        assert all("peak_corr" in cluster for cluster in result["scored_clusters"])
+        assert all(
+            "peak_target_score" in cluster for cluster in result["scored_clusters"]
+        )
 
     def test_cluster_creation_with_max_matching_distance(self):
         mask = np.array(
@@ -178,16 +183,30 @@ class TestClusterLagHelpers:
         assert labels[0, 1] == labels[0, 3]
         assert labels[0, 6] != labels[0, 1]
 
-    def test_cluster_score_uses_summed_fisher_z(self):
+    def test_cluster_score_uses_sem_normalized_fisher_z(self):
         clusters = [
             {"cluster_id": 0, "electrode_idx": 0, "lag_indices": np.array([0, 1])},
             {"cluster_id": 1, "electrode_idx": 1, "lag_indices": np.array([0])},
         ]
-        obs = np.array([[0.5, 0.25], [-0.8, 0.1]])
-        scored = score_lag_clusters(obs, clusters)
-        expected = np.arctanh(0.5) + np.arctanh(0.25)
+        block_corrs = np.array(
+            [
+                [[0.50, 0.20], [0.10, 0.05]],
+                [[0.40, 0.30], [0.20, 0.10]],
+                [[0.60, 0.25], [0.15, 0.00]],
+            ]
+        )
+        target_scores, mean_z, sem_z = compute_sem_normalized_target_scores(
+            block_corrs
+        )
+        scored = score_lag_clusters(target_scores, clusters)
+        expected = target_scores[0, 0] + target_scores[0, 1]
         assert scored[0]["cluster_score"] == pytest.approx(expected)
-        assert scored[1]["cluster_score"] == pytest.approx(np.arctanh(-0.8))
+        assert "peak_corr" not in scored[0]
+        assert scored[0]["peak_target_score"] == pytest.approx(
+            target_scores[0, :2].max()
+        )
+        assert scored[1]["cluster_score"] == pytest.approx(target_scores[1, 0])
+        np.testing.assert_allclose(target_scores, mean_z / sem_z)
 
     def test_build_cluster_filter_positive_fraction_and_mean_corr(self):
         block_corrs = np.array(

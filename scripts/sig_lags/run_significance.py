@@ -211,6 +211,7 @@ def run_config(config: SignificanceConfig):
                     "cluster_score": float(cluster["cluster_score"]),
                     "cluster_size": int(cluster["cluster_size"]),
                     "peak_corr": float(cluster["peak_corr"]),
+                    "peak_score": float(cluster["peak_target_score"]),
                 }
             )
 

@@ -4,7 +4,7 @@ This is a neuroscience encoding analysis pipeline that studies how language-mode
 
 ## Pipeline Stages
 
-1. **Cluster-based lag significance** (`make sig`) — trains per-subject encoding models, builds reliable electrode-lag clusters from out-of-fold predictions, scores a fold-local circular-shift null distribution, applies a global max-statistic null across subjects/electrodes with FDR correction, and writes downstream-compatible significance CSVs
+1. **Cluster-based lag significance** (`make sig`) — trains per-subject encoding models, builds reliable electrode-lag clusters from out-of-fold predictions, scores clusters by summed Fisher-z mean/SEM across fold-local blocks, scores a fold-local circular-shift null distribution, applies a global max-statistic null across subjects/electrodes with FDR correction, and writes downstream-compatible significance CSVs
 1b. **Phase-randomization significance** — more robust electrode-level significance via phase randomization of continuous neural signal: `generate_null_distribution.py` (batchable, run in parallel) followed by `compute_significance.py` (reads null distribution shards, FDR correction). See details below.
 2. **Encoding model training** (`make train`) — trains ridge regression models on significant electrodes; when explicit `ridge_alphas` are omitted, ridge fits use a shared dimension-aware alpha grid that adapts to the current training design matrix and can cache refined grids after diagnostics
 3. **SVD analysis** (`make svd`) — decomposes model weights to find dominant directions in embedding space
