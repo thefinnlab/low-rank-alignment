@@ -15,6 +15,7 @@ export PYTHONPATH := $(CURDIR)
 # ── Config defaults (override on the command line) ────────────────────────────
 ENCODING_CONFIG ?= configs/encoding/encoding_mid.yml
 SIG_CONFIG      ?= configs/significance/significance_default.yml
+HEURISTIC_SIG_CONFIG ?= configs/significance/gpt2-xl/significance.yml
 SVD_CONFIG      ?= configs/svd/svd_default.yml
 SRRR_CONFIG     ?= configs/srrr/srrr_default.yml
 RRR_CONFIG      ?= configs/rrr/rrr_default.yml
@@ -94,6 +95,16 @@ download-models:
 sig:
 	mkdir -p logs
 	$(CMD) scripts/sig_lags/run_significance.py --config $(SIG_CONFIG) $(OVERRIDES)
+
+## Run heuristic lag-cluster significance without null scoring or FDR
+## Usage:
+##   make heuristic-sig
+##   make heuristic-sig HEURISTIC_SIG_CONFIG=configs/significance/gpt2-xl/significance.yml
+##   make heuristic-sig OVERRIDES="--min_cluster_size=3"
+##   make heuristic-sig CMD=python
+heuristic-sig:
+	mkdir -p logs
+	$(CMD) scripts/sig_lags/run_heuristic_significance.py --config $(HEURISTIC_SIG_CONFIG) $(OVERRIDES)
 
 ## Release significance runs for a list of configs
 ## Usage:

@@ -14,11 +14,13 @@ from src.utils.significance import (
     compute_sem_normalized_target_scores,
     fold_local_circular_shift_null_scores,
     label_lag_clusters,
+    mark_clusters_by_min_size,
     reshape_fold_predictions_and_targets,
     score_fold_lag_clusters,
     score_lag_clusters,
     significant_lags_all_electrodes_gpu,
     split_fold_into_blocks,
+    validate_min_cluster_size,
     valid_fold_shifts,
 )
 
@@ -269,6 +271,67 @@ class TestClusterLagHelpers:
         sub_b = np.array([[0.0, 5.0, 1.0], [2.0, 1.0, 0.0]])
         with pytest.raises(ValueError, match="same number of samples"):
             aggregate_global_null([sub_a, sub_b])
+
+    def test_mark_clusters_by_min_size_filters_small_clusters(self):
+        clusters = [
+            {
+                "cluster_id": 0,
+                "electrode_idx": 0,
+                "lag_indices": np.array([0, 1]),
+                "cluster_size": 2,
+            },
+            {
+                "cluster_id": 1,
+                "electrode_idx": 0,
+                "lag_indices": np.array([3]),
+                "cluster_size": 1,
+            },
+        ]
+        marked = mark_clusters_by_min_size(clusters, min_cluster_size=2)
+        assert marked[0]["sig"] is True
+        assert marked[1]["sig"] is False
+
+    def test_mark_clusters_by_min_size_includes_equal_threshold(self):
+        clusters = [
+            {
+                "cluster_id": 2,
+                "electrode_idx": 1,
+                "lag_indices": np.array([2, 3, 4]),
+                "cluster_size": 3,
+            }
+        ]
+        marked = mark_clusters_by_min_size(clusters, min_cluster_size=3)
+        assert marked[0]["sig"] is True
+
+    def test_mark_clusters_by_min_size_handles_clusters_independently(self):
+        clusters = [
+            {
+                "cluster_id": 0,
+                "electrode_idx": 0,
+                "lag_indices": np.array([0, 1, 2]),
+                "cluster_size": 3,
+            },
+            {
+                "cluster_id": 1,
+                "electrode_idx": 0,
+                "lag_indices": np.array([5]),
+                "cluster_size": 1,
+            },
+            {
+                "cluster_id": 2,
+                "electrode_idx": 1,
+                "lag_indices": np.array([1, 2]),
+                "cluster_size": 2,
+            },
+        ]
+        marked = mark_clusters_by_min_size(clusters, min_cluster_size=2)
+        assert [cluster["sig"] for cluster in marked] == [True, False, True]
+
+    def test_min_cluster_size_requires_positive_integer(self):
+        with pytest.raises(ValueError, match="positive integer"):
+            validate_min_cluster_size(0)
+        with pytest.raises(ValueError, match="positive integer"):
+            validate_min_cluster_size(1.5)
 
     def test_detailed_csv_cluster_fields_and_legacy_sig_csv(self, tmp_path):
         detailed = pd.DataFrame(

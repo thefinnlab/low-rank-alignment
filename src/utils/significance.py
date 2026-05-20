@@ -295,6 +295,40 @@ def score_lag_clusters(target_scores, clusters):
     return scored
 
 
+def validate_min_cluster_size(min_cluster_size):
+    """Return a validated positive integer minimum cluster size."""
+    if isinstance(min_cluster_size, bool) or not isinstance(
+        min_cluster_size, (int, np.integer)
+    ):
+        raise ValueError(
+            f"min_cluster_size must be a positive integer, got {min_cluster_size!r}"
+        )
+    min_cluster_size = int(min_cluster_size)
+    if min_cluster_size < 1:
+        raise ValueError(
+            f"min_cluster_size must be a positive integer, got {min_cluster_size}"
+        )
+    return min_cluster_size
+
+
+def mark_clusters_by_min_size(scored_clusters, min_cluster_size=1):
+    """Mark scored lag clusters significant when their size reaches a threshold."""
+    min_cluster_size = validate_min_cluster_size(min_cluster_size)
+    marked = []
+    for cluster in scored_clusters:
+        cluster_size = int(
+            cluster.get("cluster_size", len(np.asarray(cluster["lag_indices"])))
+        )
+        marked.append(
+            {
+                **cluster,
+                "cluster_size": cluster_size,
+                "sig": cluster_size >= min_cluster_size,
+            }
+        )
+    return marked
+
+
 def score_fold_lag_clusters(
     fold_predictions,
     fold_targets,

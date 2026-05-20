@@ -113,6 +113,9 @@ class SignificanceConfig:
     device: str | None = None
     fdr_q: float = 0.01
     save_weights: bool = False
+    min_cluster_size: int = (
+        1  # Heuristic significance: minimum generated cluster size.
+    )
 
 
 @dataclass
