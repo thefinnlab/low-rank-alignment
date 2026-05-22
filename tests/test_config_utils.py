@@ -6,7 +6,13 @@ import os
 import pytest
 import yaml
 
-from src.core.config import EncodingConfig, RRRConfig, SignificanceConfig, get_results_dir
+from src.core.config import (
+    EncodingConfig,
+    RRRConfig,
+    RRRSufficiencyConfig,
+    SignificanceConfig,
+    get_results_dir,
+)
 from src.core.registry import DatasetContext
 from src.utils.config_utils import (
     parse_override_args,
@@ -144,6 +150,10 @@ class TestDictToDataclass:
             RRRConfig,
         )
         assert config.standardize_subspace_inputs is False
+
+    def test_rrr_subspace_standardization_defaults_false(self):
+        assert RRRConfig().standardize_subspace_inputs is False
+        assert RRRSufficiencyConfig().standardize_subspace_inputs is False
 
 
 # ---------------------------------------------------------------------------

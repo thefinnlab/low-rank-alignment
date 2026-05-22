@@ -885,7 +885,7 @@ def _run_pca_for_unit(
     sig_mask_flat: "np.ndarray | None" = None,
     alphas: "np.ndarray | None" = None,
     alpha_policy: dict | None = None,
-    standardize_subspace_inputs: bool = True,
+    standardize_subspace_inputs: bool = False,
     ridge_cv_folds: int = 5,
     ridge_solver_params: dict | None = None,
     ridge_y_in_cpu: bool | None = None,

@@ -193,7 +193,7 @@ class RRRConfig:
     # Alpha diagnostics
     log_alphas: bool = False  # Save per-rank alpha diagnostics in RRR output
     standardize_subspace_inputs: bool = (
-        True  # Standardize RRR/PCA subspace ridge inputs.
+        False  # Preserve RRR/PCA subspace coordinate scales by default.
     )
 
     # Arbitrary embedding seed for null baseline
@@ -232,7 +232,7 @@ class RRRSufficiencyConfig:
     epsilon_values: list[float] = field(default_factory=lambda: [0.005, 0.01])
     epsilon_fraction_of_full: float = 0.05
     random_seed: int = 42
-    standardize_subspace_inputs: bool = True
+    standardize_subspace_inputs: bool = False
     track_per_target_sufficiency: bool = False
     cache_oof_predictions: bool = False
     refresh_oof_predictions: bool = False
