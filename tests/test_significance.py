@@ -11,6 +11,7 @@ from src.utils.significance import (
     build_cluster_filter,
     compute_fold_block_correlations,
     compute_fold_correlations,
+    compute_per_electrode_cluster_p_values,
     compute_sem_normalized_target_scores,
     fold_local_circular_shift_null_scores,
     label_lag_clusters,
@@ -271,6 +272,43 @@ class TestClusterLagHelpers:
         sub_b = np.array([[0.0, 5.0, 1.0], [2.0, 1.0, 0.0]])
         with pytest.raises(ValueError, match="same number of samples"):
             aggregate_global_null([sub_a, sub_b])
+
+    def test_per_electrode_cluster_p_values_use_matching_electrode_null_columns(self):
+        max_per_electrode = np.array(
+            [
+                [0.0, 10.0, 3.0],
+                [1.0, 20.0, 4.0],
+                [2.0, 30.0, 5.0],
+            ]
+        )
+        records = [
+            {"subject": 1, "subject_electrode_index": 0, "cluster_score": 1.5},
+            {"subject": 1, "subject_electrode_index": 2, "cluster_score": 4.5},
+        ]
+
+        p_values = compute_per_electrode_cluster_p_values(records, max_per_electrode)
+
+        np.testing.assert_allclose(p_values, np.array([2 / 4, 2 / 4]))
+
+    def test_per_electrode_cluster_p_values_plus_one_correction(self):
+        max_per_electrode = np.array([[0.1], [0.2], [0.3]])
+        records = [
+            {"subject": 1, "subject_electrode_index": 0, "cluster_score": 10.0}
+        ]
+
+        p_values = compute_per_electrode_cluster_p_values(records, max_per_electrode)
+
+        np.testing.assert_allclose(p_values, np.array([1 / 4]))
+
+    def test_per_electrode_cluster_p_values_missing_null_error(self):
+        records = [
+            {"subject": 1, "subject_electrode_index": 7, "cluster_score": 1.0}
+        ]
+        with pytest.raises(
+            ValueError,
+            match="Missing null distribution for subject=1, subject_electrode_index=7",
+        ):
+            compute_per_electrode_cluster_p_values(records, np.array([[1.0]]))
 
     def test_mark_clusters_by_min_size_filters_small_clusters(self):
         clusters = [

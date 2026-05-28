@@ -31,7 +31,7 @@ from src.utils.encoding import extract_best_alphas, get_ridge_model_constructor
 from src.utils.alpha_grids import resolve_ridge_alphas, save_alpha_diagnostics
 from src.utils.data_loaders import load_data_from_cache
 from src.utils.significance import (
-    aggregate_global_null,
+    compute_per_electrode_cluster_p_values,
     fold_local_circular_shift_null_scores,
     reshape_fold_predictions_and_targets,
     score_fold_lag_clusters,
@@ -214,6 +214,7 @@ def run_config(config: SignificanceConfig):
                     "peak_score": float(cluster["peak_target_score"]),
                 }
             )
+        subject_cluster_start = len(all_cluster_records) - len(scored_clusters)
 
         # ------------------------------------------------------------------
         # g. Score fold-local circular-shift null for this subject
@@ -236,6 +237,12 @@ def run_config(config: SignificanceConfig):
             **shift_meta,
             "block_rows": block_rows,
         }
+        subject_cluster_records = all_cluster_records[subject_cluster_start:]
+        subject_cluster_p = compute_per_electrode_cluster_p_values(
+            subject_cluster_records, max_per_electrode
+        )
+        for rec, p_value in zip(subject_cluster_records, subject_cluster_p):
+            rec["cluster_p_value"] = float(p_value)
 
         # ------------------------------------------------------------------
         # h. Collect per-lag rows and electrode metadata
@@ -293,20 +300,14 @@ def run_config(config: SignificanceConfig):
             torch.cuda.empty_cache()
 
     # ------------------------------------------------------------------
-    # 4. Compute global max-statistic p-values and write outputs
+    # 4. Compute per-electrode max-cluster p-values and write outputs
     # ------------------------------------------------------------------
     if not subject_nulls:
         raise ValueError("No subject null distributions were computed.")
 
-    # Compare nulls to actual data.
-    global_max = aggregate_global_null(subject_nulls)
     if all_cluster_records:
         cluster_p = np.array(
-            [
-                (np.sum(global_max >= rec["cluster_score"]) + 1) / (len(global_max) + 1)
-                for rec in all_cluster_records
-            ],
-            dtype=float,
+            [rec["cluster_p_value"] for rec in all_cluster_records], dtype=float
         )
         reject, cluster_q, _, _ = multipletests(
             cluster_p, alpha=config.fdr_q, method="fdr_bh"
@@ -351,12 +352,23 @@ def run_config(config: SignificanceConfig):
     sig_path = os.path.join(output_dir, "all_subject_sig.csv")
     sig_pairs.to_csv(sig_path, index=False, columns=["subject", "elec"])
 
-    max_per_electrode = np.concatenate(subject_nulls, axis=1)
+    n_null_max = max(null.shape[0] for null in subject_nulls)
+    n_total_electrodes = sum(null.shape[1] for null in subject_nulls)
+    max_per_electrode = np.full(
+        (n_null_max, n_total_electrodes), np.nan, dtype=np.float32
+    )
+    null_sample_counts = np.empty(n_total_electrodes, dtype=int)
+    col_start = 0
+    for null in subject_nulls:
+        col_stop = col_start + null.shape[1]
+        max_per_electrode[: null.shape[0], col_start:col_stop] = null
+        null_sample_counts[col_start:col_stop] = null.shape[0]
+        col_start = col_stop
     null_path = os.path.join(output_dir, "cluster_null_distribution.npz")
     np.savez(
         null_path,
         max_per_electrode=max_per_electrode,
-        global_max=global_max,
+        null_sample_counts=null_sample_counts,
         subjects=np.array([row["subject"] for row in electrode_rows], dtype=int),
         electrodes=np.array([row["electrode"] for row in electrode_rows], dtype=object),
         subject_electrode_index=np.array(

@@ -472,6 +472,30 @@ def aggregate_global_null(max_per_electrode_by_subject):
     return np.nanmax(np.concatenate(arrays, axis=1), axis=1)
 
 
+def compute_per_electrode_cluster_p_values(cluster_records, max_per_electrode):
+    """Compute plus-one corrected p-values from subject-local electrode nulls."""
+    max_per_electrode = np.asarray(max_per_electrode, dtype=np.float64)
+    if max_per_electrode.ndim != 2:
+        raise ValueError(
+            "max_per_electrode must have shape (n_null, n_electrodes), got "
+            f"{max_per_electrode.shape}"
+        )
+    if max_per_electrode.shape[0] == 0:
+        raise ValueError("max_per_electrode must contain at least one null sample.")
+    p_values = []
+    for rec in cluster_records:
+        elec_idx = int(rec["subject_electrode_index"])
+        if elec_idx < 0 or elec_idx >= max_per_electrode.shape[1]:
+            raise ValueError(
+                "Missing null distribution for "
+                f"subject={rec.get('subject')}, subject_electrode_index={elec_idx}."
+            )
+        null = max_per_electrode[:, elec_idx]
+        score = float(rec["cluster_score"])
+        p_values.append((np.sum(null >= score) + 1) / (len(null) + 1))
+    return np.asarray(p_values, dtype=float)
+
+
 def significant_lags_all_electrodes_gpu(
     predicted,
     actual,
