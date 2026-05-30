@@ -9,7 +9,7 @@ from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import StandardScaler
 
 from src.utils.data_loaders import get_arbitrary_embeddings
-from src.utils.tensor_utils import to_numpy, to_torch
+from src.utils.tensor_utils import to_numpy
 
 
 def train_encoding(
@@ -105,104 +105,6 @@ def train_encoding(
     if return_preds:
         return np.stack(corrs), models, tr_idxs, test_idxs, scalers, all_Y_preds
     return np.stack(corrs), models, tr_idxs, test_idxs, scalers
-
-
-def get_scaled_model_coefficients(encoding_model, num_electrodes, num_lags):
-    """
-    Extract ridge coefficients reshaped to (num_electrodes, num_lags, n_features).
-
-    Args:
-        encoding_model: Fitted sklearn Pipeline with 'ridgecv' step.
-        num_electrodes: Number of electrodes.
-        num_lags: Number of time lags.
-
-    Returns:
-        Tuple of (ridge_coefficients, ridge_intercept).
-    """
-    ridge_coefficients = encoding_model.named_steps["ridgecv"].coef_
-    ridge_coefficients = ridge_coefficients.view(
-        ridge_coefficients.shape[0], num_electrodes, num_lags
-    ).permute(1, 2, 0)
-    ridge_intercept = encoding_model.named_steps["ridgecv"].intercept_
-    return ridge_coefficients, ridge_intercept
-
-
-def absorb_scaler(encoding_model, num_electrodes, num_lags):
-    """
-    Convert Ridge coefficients from standardized space back to raw input space.
-
-    In standardized space: y = coef @ x_scaled + intercept
-    where x_scaled = (x - mean) / scale.
-    So in raw space: y = (coef / scale) @ x + (intercept - coef @ mean / scale).
-
-    Works with both the himalaya numpy backend and torch backend.
-    Note: himalaya RidgeCV does not fit an intercept (fit_intercept=False), so
-    raw_intercept captures only the de-standardization offset: -(mean / scale) @ coef.
-
-    Args:
-        encoding_model: Fitted sklearn Pipeline with 'standardscaler' and 'ridgecv' steps.
-        num_electrodes: Number of electrodes.
-        num_lags: Number of time lags.
-
-    Returns:
-        Tuple of (raw_coefs, raw_intercept) as numpy arrays.
-        raw_coefs shape: (num_electrodes, num_lags, n_features).
-        raw_intercept shape: (num_electrodes * num_lags,).
-    """
-    scaler = encoding_model.named_steps["standardscaler"]
-    ridge = encoding_model.named_steps["ridgecv"]
-
-    # coef_ may be a torch tensor (torch backend) or numpy array (numpy backend).
-    coef_np = to_numpy(ridge.coef_)
-
-    # coef_ shape from himalaya: (n_features, n_targets)
-    raw_coefs_np = coef_np / scaler.scale_[:, np.newaxis]  # (n_features, n_targets)
-
-    # himalaya Ridge does not fit an intercept; the de-standardization offset is:
-    # intercept_raw = -(mean / scale) @ coef = -mean @ raw_coefs
-    if hasattr(ridge, "intercept_"):
-        intercept_np = to_numpy(ridge.intercept_)
-        raw_intercept = intercept_np - (scaler.mean_ @ raw_coefs_np)
-    else:
-        raw_intercept = -(scaler.mean_ @ raw_coefs_np)  # (n_targets,)
-
-    # Reshape: (n_features, n_targets) -> (n_electrodes, n_lags, n_features)
-    raw_coefs_np = np.transpose(
-        raw_coefs_np.reshape(raw_coefs_np.shape[0], num_electrodes, num_lags),
-        axes=(1, 2, 0),
-    )
-
-    return raw_coefs_np, np.asarray(raw_intercept)
-
-
-def get_models_coefficients(
-    encoding_models, num_electrodes, num_lags, scaled_model=False
-):
-    """
-    Extract coefficients from a list of encoding models.
-
-    Args:
-        encoding_models: List of fitted sklearn Pipelines.
-        num_electrodes: Number of electrodes.
-        num_lags: Number of time lags.
-        scaled_model: If True, use get_scaled_model_coefficients; else use absorb_scaler.
-
-    Returns:
-        Tuple of (coefficients list, intercepts list).
-    """
-    coefficients, intercepts = [], []
-    for encoding_model in encoding_models:
-        if scaled_model:
-            coefs = get_scaled_model_coefficients(
-                encoding_model, num_electrodes, num_lags
-            )
-        else:
-            coefs = absorb_scaler(encoding_model, num_electrodes, num_lags)
-
-        coefficients.append(coefs[0])
-        intercepts.append(coefs[1])
-
-    return coefficients, intercepts
 
 
 def get_all_targets_test_set(test_idxs, Y, num_electrodes, num_lags):
@@ -433,54 +335,6 @@ def _make_col_idxs(enc_results: dict, target_elec_names: list) -> np.ndarray:
     return np.array(col_idxs, dtype=int)
 
 
-def build_enc_subjects_info(
-    output_dir: str,
-    subs_in_unit: list,
-    target_elecs_per_sub: dict,
-    location=None,
-) -> list:
-    """Load per-subject encoding results and build info dicts for baseline computation.
-
-    Args:
-        output_dir: Root results directory containing subjects/sub_{id}/.
-        subs_in_unit: Ordered list of subject IDs contributing to the analysis unit.
-        target_elecs_per_sub: Dict mapping sub_id → list of target electrode names.
-
-    Returns:
-        List of dicts, one per subject, each containing:
-            models:      list of fitted Pipeline per fold
-            scalers:     list of StandardScaler per fold (fitted on all-electrode Y)
-            col_idxs:    int array of column indices into the saved model's output
-            y_col_start: start column in the assembled Y_full
-            y_col_end:   end column (exclusive) in the assembled Y_full
-    """
-    import os
-
-    info_list = []
-    y_cursor = 0
-    for sub_id in subs_in_unit:
-        enc_results = load_encoding_results(
-            os.path.join(
-                output_dir, "subjects", f"sub_{sub_id}", "encoding_results.joblib"
-            ),
-            location=location,
-        )
-        target_elecs = target_elecs_per_sub[sub_id]
-        col_idxs = _make_col_idxs(enc_results, target_elecs)
-        n_target_cols = len(target_elecs) * len(enc_results["lags"])
-        info_list.append(
-            {
-                "models": enc_results["models"],
-                "scalers": enc_results["scalers"],
-                "col_idxs": col_idxs,
-                "y_col_start": y_cursor,
-                "y_col_end": y_cursor + n_target_cols,
-            }
-        )
-        y_cursor += n_target_cols
-    return info_list
-
-
 def build_per_fold_baselines(
     X_raw: np.ndarray,
     Y_full: np.ndarray,
@@ -498,8 +352,8 @@ def build_per_fold_baselines(
     """Train a fresh ridge encoding model per fold and pre-compute baselines.
 
     For each fold, fits a StandardScaler on Y_train, then trains a ridge model
-    via solve_regression (which absorbs the X-scaler into W, b).  Returns the
-    same dict structure consumed by _run_rrr_for_unit / _run_ablation_for_unit.
+    via solve_regression (which absorbs the X-scaler into W, b). Returns the
+    dict structure consumed by RRR evaluation.
 
     Args:
         X_raw: (n_words, n_embed) raw embedding matrix.
@@ -610,103 +464,6 @@ def build_per_fold_baselines(
     return baselines
 
 
-def build_per_fold_baselines_from_saved(
-    X_raw: np.ndarray,
-    Y_full: np.ndarray,
-    test_idxs: list,
-    enc_subjects_info: list,
-) -> list:
-    """Pre-compute per-fold scaled Y arrays, baseline predictions, and raw coefficients.
-
-    Legacy version that reuses saved encoding models and scalers.  Prefer
-    build_per_fold_baselines() which trains fresh models per fold.
-
-    Args:
-        X_raw: (n_words, n_embed) raw embedding matrix.
-        Y_full: (n_words, n_targets) assembled neural response matrix.
-        test_idxs: List of test index arrays, one per fold.
-        enc_subjects_info: Output of build_enc_subjects_info.
-
-    Returns:
-        List of dicts, one per fold, each containing:
-            train_idx:       training index array
-            test_idx:        test index array
-            Y_train:         (n_train, n_targets) scaled neural responses
-            Y_test:          (n_test, n_targets) scaled neural responses
-            Y_hat_full_train:(n_train, n_targets) baseline model predictions on train
-            Y_hat_full_test: (n_test, n_targets) baseline model predictions on test
-            beta_full_raw:   (n_embed, n_targets) unscaled coefficients in raw embed space
-    """
-    n_words, n_embed = X_raw.shape
-    n_targets = Y_full.shape[1]
-    baselines = []
-
-    for fold_f, test_idx in enumerate(test_idxs):
-        train_mask = np.ones(n_words, dtype=bool)
-        train_mask[test_idx] = False
-        train_idx = np.where(train_mask)[0]
-
-        Y_train_parts, Y_test_parts = [], []
-        Y_hat_train_parts, Y_hat_test_parts = [], []
-        beta_full_raw = np.zeros((n_embed, n_targets), dtype=np.float32)
-
-        for info in enc_subjects_info:
-            model = info["models"][fold_f]
-            scaler = info["scalers"][fold_f]
-            col_idxs = info["col_idxs"]
-            y_start = info["y_col_start"]
-            y_end = info["y_col_end"]
-
-            # Scale Y using saved scaler parameters (no refit)
-            scaler_mean = scaler.mean_[col_idxs]
-            scaler_scale = scaler.scale_[col_idxs]
-            Y_sub_train = Y_full[train_idx, y_start:y_end]
-            Y_sub_test = Y_full[test_idx, y_start:y_end]
-            Y_train_parts.append((Y_sub_train - scaler_mean) / scaler_scale)
-            Y_test_parts.append((Y_sub_test - scaler_mean) / scaler_scale)
-
-            # Predictions from saved model (already in scaled Y space).
-            # himalaya's predict does backend.to_cpu(X) @ backend.to_cpu(coef_).
-            # coef_ is a torch tensor (saved with torch backend), so X must also
-            # be a torch tensor on the same device for the matmul to type-match.
-            ridge_coef = model[-1].coef_
-            if hasattr(ridge_coef, "device"):
-                X_train = to_torch(X_raw[train_idx], device=str(ridge_coef.device))
-                X_test = to_torch(X_raw[test_idx], device=str(ridge_coef.device))
-            else:
-                X_train = X_raw[train_idx]
-                X_test = X_raw[test_idx]
-            Y_hat_all_train = to_numpy(model.predict(X_train))
-            Y_hat_all_test = to_numpy(model.predict(X_test))
-            Y_hat_train_parts.append(Y_hat_all_train[:, col_idxs])
-            Y_hat_test_parts.append(Y_hat_all_test[:, col_idxs])
-
-            # Unscaled coefficients in raw embedding space
-            coef = to_numpy(model[-1].coef_)
-            if coef.shape[0] != n_embed:
-                coef = coef.T  # → (n_embed, n_all_cols)
-            beta_sub_all = coef / model[0].scale_[:, np.newaxis]
-            beta_full_raw[:, y_start:y_end] = beta_sub_all[:, col_idxs]
-
-        baselines.append(
-            {
-                "train_idx": train_idx,
-                "test_idx": test_idx,
-                "Y_train": np.concatenate(Y_train_parts, axis=1).astype(np.float32),
-                "Y_test": np.concatenate(Y_test_parts, axis=1).astype(np.float32),
-                "Y_hat_full_train": np.concatenate(Y_hat_train_parts, axis=1).astype(
-                    np.float32
-                ),
-                "Y_hat_full_test": np.concatenate(Y_hat_test_parts, axis=1).astype(
-                    np.float32
-                ),
-                "beta_full_raw": beta_full_raw,
-            }
-        )
-
-    return baselines
-
-
 def apply_offset(averaged_embeddings, data, offset, valid_rows=None):
     """Apply word offset: trim embeddings and neural data to align them.
 
@@ -761,16 +518,13 @@ def save_subject_results(
     output_dir,
     sub_id,
     corrs,
-    coefficients,
-    intercepts,
-    models,
     tr_idxs,
     test_idxs,
     scalers,
     elec_names,
     offset,
     lags,
-    per_model_config={},
+    per_model_config=None,
     corrs_arb=None,
 ):
     """Build results dict and write outputs to {output_dir}/subjects/sub_{sub_id}/.
@@ -782,25 +536,19 @@ def save_subject_results(
         output_dir: Root output directory.
         sub_id: Subject BIDS ID.
         corrs: Correlation array (n_folds, n_elecs, n_lags).
-        coefficients: List of coefficient arrays, one per fold.
-        intercepts: List of intercept arrays, one per fold.
-        models: List of fitted models.
         tr_idxs: List of train index arrays.
         test_idxs: List of test index arrays.
         scalers: List of fitted StandardScalers.
         elec_names: Electrode name list.
         offset: Word offset used during alignment.
-        layer_int: Integer layer index.
         lags: Lag axis array.
+        per_model_config: Model metadata to store under the per_model_config key.
         corrs_arb: Optional null-model correlation array (same shape as corrs).
     """
     from src.utils.plotting import plot_corrs_vs_arbitrary
 
     results = {
         "corrs": corrs,
-        "coefficients": coefficients,
-        "intercepts": intercepts,
-        "models": models,
         "train_idxs": tr_idxs,
         "test_idxs": test_idxs,
         "scalers": scalers,
@@ -808,7 +556,7 @@ def save_subject_results(
         "subject_id": sub_id,
         "offset": offset,
         "lags": lags,
-        **per_model_config,
+        "per_model_config": dict(per_model_config or {}),
     }
     if corrs_arb is not None:
         results["arb_corrs"] = corrs_arb
@@ -882,57 +630,6 @@ def load_all_subject_correlations(output_dir: str, subjects=None):
     corrs_all = np.concatenate(corrs_list, axis=1)  # (n_folds, n_total_elecs, n_lags)
     metadata_df = pd.DataFrame(rows, columns=["subject", "electrode"])
     return corrs_all, metadata_df
-
-
-def load_all_subject_coefficients(output_dir: str, subjects=None):
-    """Load and concatenate model coefficients and intercepts across subjects.
-
-    Args:
-        output_dir: Root output directory containing subjects/sub_*/ subdirs.
-        subjects: Optional list of subject IDs to load; loads all found if None.
-
-    Returns:
-        coefficients_all: np.ndarray of shape (n_folds, n_total_elecs, n_lags, n_features).
-        intercepts_all: list of np.ndarray, one per fold, each shape (n_total_elecs * n_lags,).
-        metadata_df: pd.DataFrame with columns ['subject', 'electrode'], one row per electrode.
-
-    Raises:
-        FileNotFoundError: If no subject directories are found (after filtering).
-    """
-    # Collect per-subject coefficient/intercept lists and metadata
-    all_subject_coefs = []  # list of (list-of-folds per subject)
-    all_subject_intercepts = []  # list of (list-of-folds per subject)
-    rows = []
-    for sub_id, results in _iter_subject_results(output_dir, subjects):
-        coefficients = results[
-            "coefficients"
-        ]  # list of (n_elecs, n_lags, n_features) per fold
-        intercepts = results["intercepts"]  # list of (n_elecs * n_lags,) per fold
-        elec_names = results["elec_names"]
-        all_subject_coefs.append(coefficients)
-        all_subject_intercepts.append(intercepts)
-        for name in elec_names:
-            rows.append({"subject": sub_id, "electrode": name})
-
-    n_folds = len(all_subject_coefs[0])
-    # Stack per-fold concatenations into a single (n_folds, n_total_elecs, n_lags, n_features) array
-    coefficients_all = np.stack(
-        [
-            np.concatenate(
-                [subj_coefs[fold] for subj_coefs in all_subject_coefs], axis=0
-            )
-            for fold in range(n_folds)
-        ]
-    )
-    intercepts_all = [
-        np.concatenate(
-            [subj_intercepts[fold] for subj_intercepts in all_subject_intercepts],
-            axis=0,
-        )
-        for fold in range(n_folds)
-    ]
-    metadata_df = pd.DataFrame(rows, columns=["subject", "electrode"])
-    return coefficients_all, intercepts_all, metadata_df
 
 
 def get_all_predictions_and_targets_test_set(

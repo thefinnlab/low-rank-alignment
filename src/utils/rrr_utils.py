@@ -1,4 +1,4 @@
-"""Shared helpers for RRR-based scripts (run_rrr, run_ablation, etc.)."""
+"""Shared helpers for RRR analysis."""
 
 import os
 

@@ -1,11 +1,14 @@
 import marimo
 
-__generated_with = "0.20.0"
+__generated_with = "0.23.4"
 app = marimo.App(width="medium")
 
 
 @app.cell
 def _():
+    import sys
+    sys.path.insert(0, "/Users/zachparis/Documents/projects/alignment-attribution")
+
     import marimo as mo
     import altair as alt
     import numpy as np
@@ -33,12 +36,12 @@ def _():
         sp_entropy,
         sp_kurtosis,
         sp_skew,
+        sys,
     )
 
 
 @app.cell
-def _():
-    import sys
+def _(sys):
     import os
 
     _cwd = os.path.abspath(".")
@@ -69,7 +72,6 @@ def _():
         get_mo_display_activations,
         load_embeddings,
         load_encoding_results,
-        load_raws,
         load_sig_electrodes,
         os,
     )
@@ -204,11 +206,12 @@ def _(
     build_electrode_region_map,
     data_root_input,
     load_encoding_results,
-    load_raws,
     load_sig_electrodes,
     np,
+    pd,
     results_root_input,
     sig_dir_input,
+    subject,
 ):
     def load_electrode_metadata(source: str):
         """Load electrode metadata (names, lags, coords, y-column mapping) for a source.
@@ -273,6 +276,7 @@ def _(
         all_elec_names = []
         all_coords = []
 
+        print(per_sub_elecs)
         for sub_id in sorted(per_sub_elecs.keys()):
             elec_names = per_sub_elecs[sub_id]
             enc_path = os.path.join(
@@ -287,25 +291,13 @@ def _(
             n_lags = len(sub_lags)
             n_target_cols = len(elec_names) * n_lags
 
-            # Load MNE raw header (no data) for MNI coordinates
-            try:
-                raws = load_raws(
-                    [sub_id],
-                    data_root,
-                    use_high_gamma=True,
-                    per_subject_electrodes={sub_id: elec_names},
-                    no_preload=True,
-                )
-                raw = raws[0]
-                coords = np.array(
-                    [
-                        raw.info["chs"][raw.ch_names.index(ch)]["loc"][:3] * 1000
-                        for ch in elec_names
-                        if ch in raw.ch_names
-                    ]
-                )
-            except Exception:
-                coords = np.zeros((len(elec_names), 3))
+            import os
+
+            import json
+            file_path = os.path.join(data_root, f"sub-0{subject}/ieeg/sub-0{subject}_space-MNI152NLin2009aSym_electrodes.tsv")
+            loc_df = pd.read_csv(file_path, sep="\t")  
+            coords = np.stack([loc_df["x"], loc_df["y"], loc_df["z"]], axis=1)
+            print(coords)
 
             subjects_info.append(
                 {
@@ -2786,7 +2778,7 @@ def _(cluster_colors, cluster_counts, final_b_labels, meta, mo, np, plt):
     def _():
         import matplotlib.animation as animation
         from nilearn.plotting import plot_glass_brain
-    
+
         mo.stop(
             len(meta["subjects"]) == 0 or len(meta["lags"]) == 0,
             mo.callout(mo.md("Could not load electrode metadata."), kind="warn"),
@@ -2830,7 +2822,7 @@ def _(cluster_colors, cluster_counts, final_b_labels, meta, mo, np, plt):
                 color=cluster_colors[cluster],
                 linewidth=2
             )
-    
+
         ax_time.legend(loc="upper right")
         ax_time.set_xlabel("Time (lag_sec)")
         ax_time.set_ylabel("Electrode Count")
@@ -2872,7 +2864,7 @@ def _(cluster_colors, cluster_counts, final_b_labels, meta, mo, np, plt):
                     key = (row["subject"], row["elec"])
                     if key in coord_dict:
                         x, y, z = coord_dict[key]
-                    
+
                         # Project 3D MNI -> 2D depending on the view
                         if ax_name in ("l", "r"):  # sagittal
                             px, py = y, z
@@ -2880,10 +2872,10 @@ def _(cluster_colors, cluster_counts, final_b_labels, meta, mo, np, plt):
                             px, py = x, y
                         else:
                             continue
-                        
+
                         px_list.append(px)
                         py_list.append(py)
-                    
+
                         # Keep the base RGB color, use a fixed alpha for visibility at this frame
                         base_rgb = cluster_colors[row["cluster"]][:3]
                         color_list.append((*base_rgb, 0.8))

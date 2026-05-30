@@ -443,6 +443,73 @@ class TestRunRRRForUnit:
 
         assert calls["n"] == len(test_idxs)
 
+    def test_decomposition_inputs_accept_slim_encoding_results(
+        self, tmp_path, small_data, monkeypatch
+    ):
+        import run_rrr
+        from src.core.config import EncodingConfig
+        from src.utils.encoding import load_encoding_results, save_encoding_results
+
+        X, Y = small_data
+        n = X.shape[0]
+        test_idxs = [np.arange(0, n // 2), np.arange(n // 2, n)]
+        output_dir = tmp_path / "encoding_run"
+        sub_dir = output_dir / "subjects" / "sub_1"
+        sub_dir.mkdir(parents=True)
+        save_encoding_results(
+            {
+                "corrs": np.zeros((2, 1, 5), dtype=np.float32),
+                "train_idxs": [
+                    np.arange(n // 2, n),
+                    np.arange(0, n // 2),
+                ],
+                "test_idxs": test_idxs,
+                "scalers": [None, None],
+                "elec_names": ["E1"],
+                "subject_id": 1,
+                "offset": 0,
+                "lags": np.linspace(-2.0, 2.0, 5, endpoint=False),
+                "per_model_config": {"layer": 24},
+            },
+            str(sub_dir / "encoding_results.joblib"),
+        )
+
+        loaded = load_encoding_results(str(sub_dir / "encoding_results.joblib"))
+        assert "models" not in loaded
+        assert "coefficients" not in loaded
+        assert "intercepts" not in loaded
+
+        def fake_build_xy(
+            subject_ids, encoding_config, sig_electrodes, embeddings, **kwargs
+        ):
+            assert subject_ids == [1]
+            assert sig_electrodes == {1: ["E1"]}
+            return X, Y, np.arange(n), ["E1"]
+
+        monkeypatch.setattr(run_rrr, "build_XY_from_subjects", fake_build_xy)
+
+        enc = EncodingConfig(ridge_alphas=[1.0, 10.0], ridge_cv_folds=2)
+        result = run_rrr._get_decomposition_inputs(
+            [1],
+            str(output_dir),
+            {1: ["E1"]},
+            enc,
+            embeddings=X,
+            word_df=None,
+            folds_to_build={0, 1},
+        )
+
+        X_raw, per_fold_baselines, loaded_test_idxs, sig_mask_flat = result
+        np.testing.assert_array_equal(X_raw, X)
+        assert sig_mask_flat is None
+        assert len(per_fold_baselines) == 2
+        for baseline, expected_test_idx in zip(per_fold_baselines, test_idxs):
+            np.testing.assert_array_equal(baseline["test_idx"], expected_test_idx)
+            assert baseline["Y_train"].shape[1] == Y.shape[1]
+            assert baseline["beta_full_raw"].shape == (X.shape[1], Y.shape[1])
+        for got, expected in zip(loaded_test_idxs, test_idxs):
+            np.testing.assert_array_equal(got, expected)
+
 # ---------------------------------------------------------------------------
 # TestBuildXYFromSubjects
 # ---------------------------------------------------------------------------

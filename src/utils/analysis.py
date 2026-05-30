@@ -144,7 +144,7 @@ def compute_truncated_correlations(
     """Evaluate SVD truncation of encoding model weights against full-model performance.
 
     Args:
-        coefficients: (n_folds, n_elecs, n_lags, n_features) — raw-space weights (absorb_scaler).
+        coefficients: (n_folds, n_elecs, n_lags, n_features) raw-space weights.
         intercepts: list of (n_elecs * n_lags,) per fold.
         test_idxs: list of test index arrays per fold.
         X: (n_words, n_features) embedding matrix.
@@ -413,79 +413,6 @@ def _get_partial_cluster_filepath(partial_clusters):
     if end_path_directory:
         target_dir = os.path.join(*end_path_directory)
     return target_dir
-
-
-def run_comparative_analysis_on_folds(
-    encoding_models,
-    sig,
-    X,
-    Y,
-    train_folds,
-    num_electrodes,
-    num_lags,
-    n_components=50,
-):
-    """
-    Run Dictionary Learning, ICA, and PLS on significant encoding model coefficients.
-
-    Args:
-        encoding_models: List of trained sklearn Pipelines (one per fold).
-        sig: Boolean array of shape (num_electrodes, num_lags).
-        X: List of feature arrays (one per fold).
-        Y: Target array of shape (n_words, num_electrodes, num_lags).
-        train_folds: List of training index arrays.
-        num_electrodes: Number of electrodes.
-        num_lags: Number of time lags.
-        n_components: Number of components for decomposition methods.
-
-    Returns:
-        dict with keys 'dict_learning', 'icas', 'plss'.
-    """
-    from sklearn.decomposition import DictionaryLearning, FastICA
-    from sklearn.cross_decomposition import PLSRegression
-    from src.utils.encoding import absorb_scaler
-
-    all_coefs = []
-    for model in encoding_models:
-        coef, _ = absorb_scaler(model, num_electrodes, num_lags)
-        all_coefs.append(coef)
-
-    dls = []
-    icas = []
-    plss = []
-
-    for i, train_idx in enumerate(train_folds):
-        W_sig = all_coefs[i][sig]
-
-        print(f"Number of significant electrode-lags found: {W_sig.shape[0]}")
-
-        if W_sig.shape[0] < n_components:
-            print(
-                "Warning: More components requested than significant signals available."
-            )
-            n_components = W_sig.shape[0]
-
-        dl = DictionaryLearning(
-            n_components=n_components, transform_alpha=1.0, random_state=42
-        )
-        dls.append(dl)
-
-        ica = FastICA(n_components=n_components, random_state=42)
-        icas.append(ica)
-
-        Y_reshaped = Y.reshape(X[0].shape[0], -1)
-        sig_flat = sig.flatten()
-        Y_sig_only = Y_reshaped[:, sig_flat]
-
-        pls = PLSRegression(n_components=min(n_components, Y_sig_only.shape[1]))
-        pls.fit(X[train_idx], Y_sig_only[train_idx])
-        plss.append(pls)
-
-    return {
-        "dict_learning": dls,
-        "icas": icas,
-        "plss": plss,
-    }
 
 
 def get_method_mapping(fitted_model, W_sig, sig_mask, method="dl"):

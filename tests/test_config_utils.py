@@ -9,7 +9,6 @@ import yaml
 from src.core.config import (
     EncodingConfig,
     RRRConfig,
-    RRRSufficiencyConfig,
     SignificanceConfig,
     get_results_dir,
 )
@@ -153,7 +152,6 @@ class TestDictToDataclass:
 
     def test_rrr_subspace_standardization_defaults_false(self):
         assert RRRConfig().standardize_subspace_inputs is False
-        assert RRRSufficiencyConfig().standardize_subspace_inputs is False
 
 
 # ---------------------------------------------------------------------------

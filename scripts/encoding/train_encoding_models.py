@@ -24,15 +24,10 @@ from himalaya.backend import set_backend
 
 from src.utils import (
     train_encoding,
-    get_and_offset_arbitrary_embeddings,
-    get_models_coefficients,
     load_embeddings,
     get_glove_embeddings,
-    apply_offset,
     save_subject_results,
     read_electrode_file,
-    load_precomputed_epochs,
-    epochs_from_cache,
 )
 from src.core.config import EncodingConfig, get_results_dir
 from src.core.registry import get_dataset_adapter, resolve_dataset_context
@@ -224,10 +219,6 @@ def _run_joint(
         config=config,
         alphas=alpha_grid,
     )
-    coefficients, intercepts = get_models_coefficients(
-        models, total_elecs, n_lags, scaled_model=False
-    )
-
     if config is not None and config.log_alphas and alpha_grid is not None:
         _log_alpha_diagnostics(
             models,
@@ -242,15 +233,10 @@ def _run_joint(
     for sub_id, n_elecs in zip(all_subject_ids, elec_counts):
         sl = slice(cursor, cursor + n_elecs)
         cursor += n_elecs
-        coef_slices = [c[sl] for c in coefficients]
-        int_slices = [i.reshape(total_elecs, n_lags)[sl].ravel() for i in intercepts]
         save_subject_results(
             run_name,
             sub_id,
             corrs[:, sl, :],
-            coef_slices,
-            int_slices,
-            models,
             tr_idxs,
             test_idxs,
             scalers,
@@ -344,10 +330,6 @@ def _run_batch(
             config=config,
             alphas=alpha_grid,
         )
-        coefficients, intercepts = get_models_coefficients(
-            models, n_elecs, n_lags, scaled_model=False
-        )
-
         if config is not None and config.log_alphas and alpha_grid is not None:
             _log_alpha_diagnostics(
                 models,
@@ -362,9 +344,6 @@ def _run_batch(
             run_name,
             sub_id,
             corrs,
-            coefficients,
-            intercepts,
-            models,
             tr_idxs,
             test_idxs,
             scalers,
