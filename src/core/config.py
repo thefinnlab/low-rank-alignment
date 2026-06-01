@@ -166,6 +166,14 @@ class RRRConfig:
     # PCA baseline: run PCA subspace analysis alongside RRR using the same rank_grid
     run_pca_baseline: bool = False
 
+    # Null-augmented rank check: append circularly shifted omitted RRR coordinates
+    # to each rank-k subspace to estimate high-dimensional nuisance effects.
+    run_null_augmented: bool = False
+    null_augmented_repeats: int = 20
+    null_augmented_reference_rank: int | None = None
+    null_augmented_min_shift: int = 500
+    null_augmented_seed: int = 42
+
     # Per-region mode
     atlas_path: str | None = (
         None  # Path to Destrieux 2009 .nii.gz; None = download via nilearn

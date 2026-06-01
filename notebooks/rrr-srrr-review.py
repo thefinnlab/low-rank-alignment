@@ -15,8 +15,10 @@ def _():
     import pandas as pd
     import matplotlib.pyplot as plt
     from scipy.stats import (
+        f as sp_f,
         kurtosis as sp_kurtosis,
         entropy as sp_entropy,
+        t as sp_t,
         skew as sp_skew,
     )
     from pathlib import Path
@@ -34,8 +36,10 @@ def _():
         pd,
         plt,
         sp_entropy,
+        sp_f,
         sp_kurtosis,
         sp_skew,
+        sp_t,
         sys,
     )
 
@@ -107,7 +111,7 @@ def _(mo):
         label="Model"
     )
     model_configs_input = mo.ui.text(
-        value="layer:24",
+        value="layer:24,model_dir:gpt2-xl-batch",
         label="Model Config"
     )
     layer_input = mo.ui.number(value=24, label="Layer")
@@ -211,7 +215,6 @@ def _(
     pd,
     results_root_input,
     sig_dir_input,
-    subject,
 ):
     def load_electrode_metadata(source: str):
         """Load electrode metadata (names, lags, coords, y-column mapping) for a source.
@@ -276,7 +279,6 @@ def _(
         all_elec_names = []
         all_coords = []
 
-        print(per_sub_elecs)
         for sub_id in sorted(per_sub_elecs.keys()):
             elec_names = per_sub_elecs[sub_id]
             enc_path = os.path.join(
@@ -294,7 +296,7 @@ def _(
             import os
 
             import json
-            file_path = os.path.join(data_root, f"sub-0{subject}/ieeg/sub-0{subject}_space-MNI152NLin2009aSym_electrodes.tsv")
+            file_path = os.path.join(data_root, f"sub-0{sub_id}/ieeg/sub-0{sub_id}_space-MNI152NLin2009aSym_electrodes.tsv")
             loc_df = pd.read_csv(file_path, sep="\t")  
             coords = np.stack([loc_df["x"], loc_df["y"], loc_df["z"]], axis=1)
             print(coords)
@@ -574,6 +576,1212 @@ def _(
         s2_samp_per_bin,
         s2_ctx,
         s2_seed,
+    )
+    return
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md("""
+    ---
+    ## Section 2B: A-Direction Hypothesis Feature Explorer
+    """)
+    return
+
+
+@app.cell(hide_code=True)
+def _(mo, rrr_options):
+    mo.stop(
+        len(rrr_options) == 0,
+        mo.callout(mo.md("No RRR results found."), kind="warn"),
+    )
+    s2h_source = mo.ui.dropdown(
+        options=rrr_options,
+        value=rrr_options[0] if rrr_options else None,
+        label="Source",
+    )
+    s2h_fold = mo.ui.dropdown(
+        options=["fold_0", "fold_1"],
+        value="fold_0",
+        label="Fold",
+    )
+    s2h_k = mo.ui.number(value=10, start=1, stop=50, label="Rank k")
+    s2h_dir_idx = mo.ui.number(value=0, start=0, stop=49, label="Detail direction")
+    mo.hstack([s2h_source, s2h_fold, s2h_k, s2h_dir_idx])
+    return s2h_dir_idx, s2h_fold, s2h_k, s2h_source
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    s2h_family_options = [
+        "sentence_position",
+        "intonation_unit",
+        "word_tail",
+        "surprisal",
+        "part_of_speech",
+        "story_context",
+        "surface_lexical",
+    ]
+    s2h_families = mo.ui.multiselect(
+        options=s2h_family_options,
+        value=s2h_family_options,
+        label="Hypothesis families",
+    )
+    s2h_hypothesis_options = [
+        "sentence_position",
+        "sentence_time_position",
+        "iu_position",
+        "iu_time_position",
+        "iu_initial",
+        "iu_final",
+        "tail_contrast",
+        "surprise",
+        "entropy",
+        "surprise_class",
+        "is_content",
+        "pos",
+        "pos_class",
+        "story_position",
+        "context_any",
+        "context_window_score",
+        "context_segment",
+        "word_length",
+        "log_word_frequency",
+        "is_capitalized",
+    ]
+    s2h_detail_hypothesis = mo.ui.dropdown(
+        options=s2h_hypothesis_options,
+        value="surprise",
+        label="Detail hypothesis",
+    )
+    s2h_metric = mo.ui.dropdown(
+        options=["adj_r2", "r2", "pearson_r", "p_value"],
+        value="adj_r2",
+        label="Heatmap metric",
+    )
+    s2h_interactions = mo.ui.checkbox(
+        value=False,
+        label="Include selected pairwise interactions",
+    )
+    s2h_top_n = mo.ui.number(
+        value=25,
+        start=1,
+        stop=200,
+        step=1,
+        label="Word-tail top N words",
+    )
+    s2h_tail_percent = mo.ui.slider(
+        start=1,
+        stop=20,
+        value=5,
+        step=1,
+        label="Activation tail percentile",
+    )
+    s2h_context_window = mo.ui.number(
+        value=100,
+        start=10,
+        stop=1000,
+        step=10,
+        label="Context window size",
+    )
+    s2h_context_stride = mo.ui.number(
+        value=25,
+        start=1,
+        stop=500,
+        step=1,
+        label="Context stride",
+    )
+    s2h_context_alpha = mo.ui.slider(
+        start=0.01,
+        stop=0.25,
+        value=0.05,
+        step=0.01,
+        label="Context empirical p threshold",
+    )
+    s2h_context_max_windows = mo.ui.number(
+        value=5,
+        start=1,
+        stop=50,
+        step=1,
+        label="Max context windows",
+    )
+    s2h_context_mode = mo.ui.dropdown(
+        options=["high activation", "low activation", "both tails"],
+        value="high activation",
+        label="Context tail",
+    )
+    s2h_context_ranges = mo.ui.text(
+        value="",
+        label="Supplemental context ranges",
+        full_width=True,
+    )
+    mo.vstack(
+        [
+            mo.hstack([s2h_families, s2h_detail_hypothesis, s2h_metric]),
+            mo.hstack([s2h_interactions, s2h_top_n, s2h_tail_percent]),
+            mo.hstack(
+                [
+                    s2h_context_window,
+                    s2h_context_stride,
+                    s2h_context_alpha,
+                    s2h_context_max_windows,
+                    s2h_context_mode,
+                ]
+            ),
+            s2h_context_ranges,
+        ]
+    )
+    return (
+        s2h_context_alpha,
+        s2h_context_max_windows,
+        s2h_context_mode,
+        s2h_context_ranges,
+        s2h_context_stride,
+        s2h_context_window,
+        s2h_detail_hypothesis,
+        s2h_families,
+        s2h_interactions,
+        s2h_metric,
+        s2h_tail_percent,
+        s2h_top_n,
+    )
+
+
+@app.cell(hide_code=True)
+def _(Path, np, pd, sp_f, sp_t):
+    def normalize_word_for_hypothesis(word):
+        import re
+
+        word = "" if pd.isna(word) else str(word).lower()
+        return re.sub(r"\b[^\w\s']+|[^\w\s']+\b", "", word)
+
+    def parse_context_ranges(text, n_words):
+        ranges = []
+        for chunk in str(text).split(","):
+            chunk = chunk.strip()
+            if not chunk:
+                continue
+            if "-" not in chunk:
+                continue
+            left, right = chunk.split("-", 1)
+            try:
+                start = int(left.strip())
+                end = int(right.strip())
+            except ValueError:
+                continue
+            start = max(0, min(start, n_words - 1))
+            end = max(0, min(end, n_words - 1))
+            if end < start:
+                start, end = end, start
+            ranges.append((start, end))
+        return ranges
+
+    def build_hypothesis_feature_table(df_word, processed_root, context_ranges_text):
+        n_words = len(df_word)
+        features = df_word.reset_index(drop=True).copy()
+        features["word_idx"] = np.arange(n_words)
+        if "start" in features.columns:
+            features["onset"] = pd.to_numeric(features["start"], errors="coerce")
+        elif "onset" in features.columns:
+            features["onset"] = pd.to_numeric(features["onset"], errors="coerce")
+        else:
+            features["onset"] = np.arange(n_words, dtype=float)
+        features["word_norm"] = features["word"].map(normalize_word_for_hypothesis)
+        features["word_length"] = features["word_norm"].str.len().fillna(0).astype(float)
+        features["is_capitalized"] = (
+            features["word"].astype(str).str[:1].str.isupper().astype(float)
+        )
+        counts = features["word_norm"].value_counts()
+        features["log_word_frequency"] = np.log1p(
+            features["word_norm"].map(counts).fillna(0).astype(float)
+        )
+        denom = max(n_words - 1, 1)
+        features["story_position"] = features["word_idx"] / denom
+
+        processed_root = Path(processed_root)
+        pos_path = processed_root / "df_word_onset_with_pos_class.csv"
+        if pos_path.exists():
+            pos_df = pd.read_csv(pos_path)
+            pos_cols = [
+                c
+                for c in [
+                    "word",
+                    "onset",
+                    "pos",
+                    "is_content",
+                    "pos_class",
+                    "entropy",
+                    "surprise",
+                    "surprise_class",
+                ]
+                if c in pos_df.columns
+            ]
+            pos_df = pos_df[pos_cols].copy()
+            if len(pos_df) == n_words:
+                for col in pos_cols:
+                    features[f"processed_{col}"] = pos_df[col].to_numpy()
+                for col in ["pos", "is_content", "pos_class", "entropy", "surprise", "surprise_class"]:
+                    pcol = f"processed_{col}"
+                    if pcol in features.columns:
+                        features[col] = features[pcol]
+            elif "onset" in pos_df.columns:
+                pos_df = pos_df.sort_values("onset")
+                features = pd.merge_asof(
+                    features.sort_values("onset"),
+                    pos_df.sort_values("onset"),
+                    on="onset",
+                    direction="nearest",
+                    tolerance=0.25,
+                    suffixes=("", "_processed"),
+                ).sort_values("word_idx")
+        for col in ["pos", "pos_class", "surprise_class"]:
+            if col not in features.columns:
+                features[col] = "missing"
+            features[col] = features[col].astype("category")
+        for col in ["is_content", "entropy", "surprise"]:
+            if col not in features.columns:
+                features[col] = np.nan
+            features[col] = pd.to_numeric(features[col], errors="coerce")
+
+        sent_path = processed_root / "all_sentences_podcast.csv"
+        features["sentence_idx"] = -1
+        features["sentence_position"] = np.nan
+        features["sentence_time_position"] = np.nan
+        features["sentence_initial"] = 0.0
+        features["sentence_final"] = 0.0
+        if sent_path.exists():
+            sent_df = pd.read_csv(sent_path).sort_values("sentence_onset")
+            starts = sent_df["sentence_onset"].to_numpy()
+            ends = sent_df["sentence_offset"].to_numpy()
+            onset = features["onset"].to_numpy()
+            sent_idx = np.searchsorted(starts, onset, side="right") - 1
+            clipped_idx = np.clip(sent_idx, 0, max(len(ends) - 1, 0))
+            valid = (sent_idx >= 0) & (sent_idx < len(ends)) & (onset <= ends[clipped_idx])
+            features.loc[valid, "sentence_idx"] = sent_idx[valid]
+            duration = np.maximum(ends[sent_idx[valid]] - starts[sent_idx[valid]], 1e-9)
+            features.loc[valid, "sentence_time_position"] = (
+                features.loc[valid, "onset"].to_numpy() - starts[sent_idx[valid]]
+            ) / duration
+            for _, idxs in features[valid].groupby("sentence_idx").groups.items():
+                idxs = list(idxs)
+                denom = max(len(idxs) - 1, 1)
+                vals = np.arange(len(idxs), dtype=float) / denom
+                features.loc[idxs, "sentence_position"] = vals
+                features.loc[idxs[0], "sentence_initial"] = 1.0
+                features.loc[idxs[-1], "sentence_final"] = 1.0
+
+        iu_path = processed_root / "iu_boundaries.csv"
+        features["iu_idx"] = -1
+        features["iu_position"] = np.nan
+        features["iu_time_position"] = np.nan
+        features["iu_initial"] = 0.0
+        features["iu_final"] = 0.0
+        if iu_path.exists():
+            iu_df = pd.read_csv(iu_path).sort_values("time")
+            boundaries = iu_df["time"].to_numpy()
+            onset = features["onset"].to_numpy()
+            iu_idx = np.searchsorted(boundaries, onset, side="right") - 1
+            features["iu_idx"] = iu_idx
+            starts = np.where(iu_idx >= 0, boundaries[np.clip(iu_idx, 0, len(boundaries) - 1)], np.nan)
+            next_idx = np.clip(iu_idx + 1, 0, len(boundaries) - 1)
+            ends = boundaries[next_idx]
+            valid = np.isfinite(starts) & (ends > starts)
+            features.loc[valid, "iu_time_position"] = (onset[valid] - starts[valid]) / (ends[valid] - starts[valid])
+            for _, idxs in features.groupby("iu_idx").groups.items():
+                idxs = list(idxs)
+                if len(idxs) == 0:
+                    continue
+                denom = max(len(idxs) - 1, 1)
+                vals = np.arange(len(idxs), dtype=float) / denom
+                features.loc[idxs, "iu_position"] = vals
+                features.loc[idxs[0], "iu_initial"] = 1.0
+                features.loc[idxs[-1], "iu_final"] = 1.0
+
+        ranges = parse_context_ranges(context_ranges_text, n_words)
+        features["context_any"] = 0.0
+        features["context_segment"] = "none"
+        for i, (start, end) in enumerate(ranges, start=1):
+            mask = features["word_idx"].between(start, end)
+            features.loc[mask, "context_any"] = 1.0
+            features.loc[mask, "context_segment"] = f"manual_{i}_{start}_{end}"
+        features["context_segment"] = features["context_segment"].astype("category")
+        features["context_window_score"] = 0.0
+        return features, ranges
+
+    def discover_context_windows(
+        activations,
+        window_size=100,
+        stride=25,
+        empirical_alpha=0.05,
+        max_windows=5,
+        mode="high activation",
+    ):
+        y = np.asarray(activations, dtype=float)
+        n_words = len(y)
+        window_size = max(2, min(int(window_size), n_words))
+        stride = max(1, int(stride))
+        empirical_alpha = min(max(float(empirical_alpha), 0.0), 1.0)
+        max_windows = max(1, int(max_windows))
+        starts = np.arange(0, n_words - window_size + 1, stride)
+        if len(starts) == 0 or np.all(~np.isfinite(y)):
+            return pd.DataFrame(
+                columns=[
+                    "context_id",
+                    "start",
+                    "end",
+                    "mean_activation",
+                    "z_score",
+                    "empirical_p",
+                    "tail",
+                ]
+            )
+        means = np.array(
+            [np.nanmean(y[start : start + window_size]) for start in starts],
+            dtype=float,
+        )
+        finite = np.isfinite(means)
+        if finite.sum() < 2:
+            return pd.DataFrame(
+                columns=[
+                    "context_id",
+                    "start",
+                    "end",
+                    "mean_activation",
+                    "z_score",
+                    "empirical_p",
+                    "tail",
+                ]
+            )
+        null_means = means[finite]
+        null_mean = float(null_means.mean())
+        null_std = float(null_means.std(ddof=1))
+        if not np.isfinite(null_std) or null_std == 0:
+            null_std = 1.0
+
+        rows = []
+        n_null = len(null_means)
+        for start, mean_value in zip(starts[finite], means[finite]):
+            z_score = (float(mean_value) - null_mean) / null_std
+            upper_p = (1 + np.sum(null_means >= mean_value)) / (n_null + 1)
+            lower_p = (1 + np.sum(null_means <= mean_value)) / (n_null + 1)
+            if mode == "low activation":
+                p_value = float(lower_p)
+                tail = "low"
+                score = -z_score
+            elif mode == "both tails":
+                if upper_p <= lower_p:
+                    p_value = float(min(1.0, 2 * upper_p))
+                    tail = "high"
+                    score = z_score
+                else:
+                    p_value = float(min(1.0, 2 * lower_p))
+                    tail = "low"
+                    score = -z_score
+            else:
+                p_value = float(upper_p)
+                tail = "high"
+                score = z_score
+            if p_value <= empirical_alpha:
+                rows.append(
+                    {
+                        "start": int(start),
+                        "end": int(start + window_size - 1),
+                        "mean_activation": float(mean_value),
+                        "z_score": float(z_score),
+                        "selection_score": float(score),
+                        "empirical_p": p_value,
+                        "tail": tail,
+                    }
+                )
+
+        selected = []
+        for row in sorted(rows, key=lambda r: (r["empirical_p"], -r["selection_score"])):
+            overlaps = any(
+                not (row["end"] < kept["start"] or row["start"] > kept["end"])
+                for kept in selected
+            )
+            if overlaps:
+                continue
+            selected.append(row)
+            if len(selected) >= max_windows:
+                break
+        for i, row in enumerate(selected, start=1):
+            row["context_id"] = f"auto_{i}_{row['tail']}_{row['start']}_{row['end']}"
+        return pd.DataFrame(selected)
+
+    def add_auto_context_windows(features, context_windows):
+        result = features.copy()
+        if "context_any" not in result.columns:
+            result["context_any"] = 0.0
+        if "context_segment" not in result.columns:
+            result["context_segment"] = "none"
+        result["context_segment"] = result["context_segment"].astype(str)
+        if "context_window_score" not in result.columns:
+            result["context_window_score"] = 0.0
+        for _, row in context_windows.iterrows():
+            mask = result["word_idx"].between(int(row["start"]), int(row["end"]))
+            result.loc[mask, "context_any"] = 1.0
+            result.loc[mask, "context_segment"] = row["context_id"]
+            result.loc[mask, "context_window_score"] = float(row["z_score"])
+        result["context_segment"] = result["context_segment"].astype("category")
+        return result
+
+    def add_tail_contrast(features, activations, top_n=25, tail_percent=5):
+        result = features.copy()
+        y = np.asarray(activations, dtype=float)
+        top_n = max(1, int(top_n))
+        tail_percent = min(max(float(tail_percent), 0.1), 49.0)
+        high_cut = np.nanpercentile(y, 100.0 - tail_percent)
+        low_cut = np.nanpercentile(y, tail_percent)
+        high_counts = result.loc[y >= high_cut, "word_norm"].value_counts()
+        low_counts = result.loc[y <= low_cut, "word_norm"].value_counts()
+        high_words = set(high_counts.head(top_n).index)
+        low_words = set(low_counts.head(top_n).index)
+        overlap = high_words & low_words
+        high_words -= overlap
+        low_words -= overlap
+        contrast = np.zeros(len(result), dtype=float)
+        contrast[result["word_norm"].isin(high_words).to_numpy()] = 1.0
+        contrast[result["word_norm"].isin(low_words).to_numpy()] = -1.0
+        result["tail_contrast"] = contrast
+        tail_df = pd.DataFrame(
+            [{"tail": "high", "word": w, "count": int(high_counts.get(w, 0))} for w in high_words]
+            + [{"tail": "low", "word": w, "count": int(low_counts.get(w, 0))} for w in low_words]
+        ).sort_values(["tail", "count"], ascending=[True, False])
+        return result, tail_df
+
+    def hypothesis_specs():
+        return {
+            "sentence_position": {
+                "family": "sentence_position",
+                "continuous": ["sentence_position"],
+                "categorical": [],
+            },
+            "sentence_time_position": {
+                "family": "sentence_position",
+                "continuous": ["sentence_time_position"],
+                "categorical": [],
+            },
+            "iu_position": {
+                "family": "intonation_unit",
+                "continuous": ["iu_position"],
+                "categorical": [],
+            },
+            "iu_time_position": {
+                "family": "intonation_unit",
+                "continuous": ["iu_time_position"],
+                "categorical": [],
+            },
+            "iu_initial": {
+                "family": "intonation_unit",
+                "continuous": ["iu_initial"],
+                "categorical": [],
+            },
+            "iu_final": {
+                "family": "intonation_unit",
+                "continuous": ["iu_final"],
+                "categorical": [],
+            },
+            "tail_contrast": {
+                "family": "word_tail",
+                "continuous": ["tail_contrast"],
+                "categorical": [],
+            },
+            "surprise": {
+                "family": "surprisal",
+                "continuous": ["surprise"],
+                "categorical": [],
+            },
+            "entropy": {
+                "family": "surprisal",
+                "continuous": ["entropy"],
+                "categorical": [],
+            },
+            "surprise_class": {
+                "family": "surprisal",
+                "continuous": [],
+                "categorical": ["surprise_class"],
+            },
+            "is_content": {
+                "family": "part_of_speech",
+                "continuous": ["is_content"],
+                "categorical": [],
+            },
+            "pos": {
+                "family": "part_of_speech",
+                "continuous": [],
+                "categorical": ["pos"],
+            },
+            "pos_class": {
+                "family": "part_of_speech",
+                "continuous": [],
+                "categorical": ["pos_class"],
+            },
+            "story_position": {
+                "family": "story_context",
+                "continuous": ["story_position"],
+                "categorical": [],
+            },
+            "context_any": {
+                "family": "story_context",
+                "continuous": ["context_any"],
+                "categorical": [],
+            },
+            "context_window_score": {
+                "family": "story_context",
+                "continuous": ["context_window_score"],
+                "categorical": [],
+            },
+            "context_segment": {
+                "family": "story_context",
+                "continuous": [],
+                "categorical": ["context_segment"],
+            },
+            "word_length": {
+                "family": "surface_lexical",
+                "continuous": ["word_length"],
+                "categorical": [],
+            },
+            "log_word_frequency": {
+                "family": "surface_lexical",
+                "continuous": ["log_word_frequency"],
+                "categorical": [],
+            },
+            "is_capitalized": {
+                "family": "surface_lexical",
+                "continuous": ["is_capitalized"],
+                "categorical": [],
+            },
+        }
+
+    def enabled_hypotheses(enabled_families):
+        specs = hypothesis_specs()
+        return [
+            name
+            for name, spec in specs.items()
+            if spec["family"] in enabled_families
+        ]
+
+    def build_hypothesis_design(features, hypothesis, enabled_families, include_interactions):
+        specs = hypothesis_specs()
+        spec = specs[hypothesis]
+        pieces = []
+        for col in spec["continuous"]:
+            if col not in features.columns:
+                continue
+            vals = pd.to_numeric(features[col], errors="coerce").astype(float)
+            std = vals.std(skipna=True)
+            if pd.notna(std) and std > 0:
+                vals = (vals - vals.mean(skipna=True)) / std
+            pieces.append(vals.rename(col))
+        for col in spec["categorical"]:
+            if col not in features.columns:
+                continue
+            dummies = pd.get_dummies(features[col].astype("category"), prefix=col, drop_first=True, dtype=float)
+            pieces.append(dummies)
+        if include_interactions and len(spec["continuous"]) == 1 and not spec["categorical"]:
+            left = spec["continuous"][0]
+            if left in features.columns:
+                left_vals = pd.to_numeric(features[left], errors="coerce").astype(float)
+                left_std = left_vals.std(skipna=True)
+                if pd.notna(left_std) and left_std > 0:
+                    left_vals = (left_vals - left_vals.mean(skipna=True)) / left_std
+                compact_by_family = {
+                    "sentence_position": "sentence_position",
+                    "intonation_unit": "iu_position",
+                    "word_tail": "tail_contrast",
+                    "surprisal": "surprise",
+                    "part_of_speech": "is_content",
+                    "story_context": "context_any",
+                    "surface_lexical": "log_word_frequency",
+                }
+                for family in enabled_families:
+                    right = compact_by_family.get(family)
+                    if right is None or right == left or right not in features.columns:
+                        continue
+                    right_vals = pd.to_numeric(features[right], errors="coerce").astype(float)
+                    right_std = right_vals.std(skipna=True)
+                    if pd.notna(right_std) and right_std > 0:
+                        right_vals = (right_vals - right_vals.mean(skipna=True)) / right_std
+                    pieces.append((left_vals * right_vals).rename(f"{left} x {right}"))
+        if not pieces:
+            return pd.DataFrame(index=features.index)
+        design = pd.concat(pieces, axis=1)
+        design = design.loc[:, ~design.columns.duplicated()]
+        nunique = design.nunique(dropna=True)
+        design = design.loc[:, nunique > 1]
+        return design
+
+    def fit_hypothesis_ols(y, design):
+        y = pd.Series(np.asarray(y, dtype=float), name="activation")
+        model_df = pd.concat([y, design], axis=1).replace([np.inf, -np.inf], np.nan).dropna()
+        if len(model_df) < 4 or design.shape[1] == 0:
+            return None
+        yv = model_df["activation"].to_numpy(dtype=float)
+        X = model_df.drop(columns=["activation"]).to_numpy(dtype=float)
+        X = np.column_stack([np.ones(len(X)), X])
+        rank = np.linalg.matrix_rank(X)
+        df_model = rank - 1
+        df_resid = len(yv) - rank
+        if df_model <= 0 or df_resid <= 0:
+            return None
+        beta = np.linalg.lstsq(X, yv, rcond=None)[0]
+        yhat = X @ beta
+        resid = yv - yhat
+        sse = float(np.sum(resid ** 2))
+        centered = yv - yv.mean()
+        sse0 = float(np.sum(centered ** 2))
+        r2 = 1.0 - (sse / sse0) if sse0 > 0 else np.nan
+        adj_r2 = 1.0 - ((1.0 - r2) * (len(yv) - 1) / df_resid) if np.isfinite(r2) else np.nan
+        mse = sse / df_resid
+        f_stat = ((sse0 - sse) / df_model) / mse if mse > 0 else np.nan
+        p_value = float(sp_f.sf(f_stat, df_model, df_resid)) if np.isfinite(f_stat) else np.nan
+        pearson_r = float(np.corrcoef(yv, yhat)[0, 1]) if np.std(yhat) > 0 and np.std(yv) > 0 else np.nan
+        xtx_inv = np.linalg.pinv(X.T @ X)
+        se = np.sqrt(np.maximum(np.diag(xtx_inv) * mse, 0.0))
+        t_values = np.divide(beta, se, out=np.full_like(beta, np.nan), where=se > 0)
+        coef_p = 2.0 * sp_t.sf(np.abs(t_values), df_resid)
+        coef_names = ["intercept"] + model_df.drop(columns=["activation"]).columns.tolist()
+        coef_df = pd.DataFrame(
+            {
+                "term": coef_names,
+                "coef": beta,
+                "std_err": se,
+                "t": t_values,
+                "p_value": coef_p,
+            }
+        )
+        return {
+            "n": int(len(yv)),
+            "n_predictors": int(X.shape[1] - 1),
+            "df_model": int(df_model),
+            "df_resid": int(df_resid),
+            "pearson_r": pearson_r,
+            "r2": float(r2),
+            "adj_r2": float(adj_r2),
+            "f_stat": float(f_stat),
+            "p_value": p_value,
+            "y": yv,
+            "yhat": yhat,
+            "coef_df": coef_df,
+        }
+
+    return (
+        add_auto_context_windows,
+        add_tail_contrast,
+        build_hypothesis_design,
+        build_hypothesis_feature_table,
+        discover_context_windows,
+        enabled_hypotheses,
+        fit_hypothesis_ols,
+        hypothesis_specs,
+    )
+
+
+@app.cell(hide_code=True)
+def _(
+    Path,
+    add_auto_context_windows,
+    add_tail_contrast,
+    aligned_embeddings,
+    build_hypothesis_design,
+    build_hypothesis_feature_table,
+    df_word,
+    discover_context_windows,
+    enabled_hypotheses,
+    fit_hypothesis_ols,
+    get_rrr_dir,
+    hypothesis_specs,
+    load_rrr_AB,
+    mo,
+    np,
+    pd,
+    s2h_context_alpha,
+    s2h_context_max_windows,
+    s2h_context_mode,
+    s2h_context_ranges,
+    s2h_context_stride,
+    s2h_context_window,
+    s2h_families,
+    s2h_fold,
+    s2h_interactions,
+    s2h_k,
+    s2h_source,
+    s2h_tail_percent,
+    s2h_top_n,
+):
+    _unit_dir = get_rrr_dir(s2h_source.value)
+    _fold_dir = _unit_dir / s2h_fold.value
+    mo.stop(
+        not (_fold_dir / "A.npy").exists(),
+        mo.callout(mo.md(f"A.npy not found at `{_fold_dir}`."), kind="warn"),
+    )
+    _A, _ = load_rrr_AB(_unit_dir, s2h_fold.value, int(s2h_k.value))
+    _k = min(int(s2h_k.value), _A.shape[1])
+    s2h_all_activations = (aligned_embeddings @ _A[:, :_k]).astype(np.float64)
+
+    _processed_root = Path("processed_data")
+    s2h_feature_base, s2h_context_ranges_parsed = build_hypothesis_feature_table(
+        df_word,
+        _processed_root,
+        s2h_context_ranges.value,
+    )
+    mo.stop(
+        len(s2h_feature_base) != len(s2h_all_activations),
+        mo.callout(
+            mo.md(
+                f"Feature table length ({len(s2h_feature_base)}) does not match activations "
+                f"({len(s2h_all_activations)})."
+            ),
+            kind="warn",
+        ),
+    )
+
+    _enabled = [f for f in s2h_families.value if f]
+    _hypotheses = enabled_hypotheses(_enabled)
+    _specs = hypothesis_specs()
+    _rows = []
+    _model_outputs = {}
+    _design_spaces = {}
+    _tail_tables = {}
+    _context_tables = {}
+    for _dir_idx in range(_k):
+        _context_df = discover_context_windows(
+            s2h_all_activations[:, _dir_idx],
+            window_size=int(s2h_context_window.value),
+            stride=int(s2h_context_stride.value),
+            empirical_alpha=float(s2h_context_alpha.value),
+            max_windows=int(s2h_context_max_windows.value),
+            mode=s2h_context_mode.value,
+        )
+        _features, _tail_df = add_tail_contrast(
+            s2h_feature_base,
+            s2h_all_activations[:, _dir_idx],
+            top_n=int(s2h_top_n.value),
+            tail_percent=float(s2h_tail_percent.value),
+        )
+        _features = add_auto_context_windows(_features, _context_df)
+        _tail_tables[_dir_idx] = _tail_df
+        _context_tables[_dir_idx] = _context_df
+        for _hypothesis in _hypotheses:
+            _design = build_hypothesis_design(
+                _features,
+                _hypothesis,
+                _enabled,
+                bool(s2h_interactions.value),
+            )
+            _fit = fit_hypothesis_ols(s2h_all_activations[:, _dir_idx], _design)
+            if _fit is None:
+                continue
+            _design_spaces[(_dir_idx, _hypothesis)] = _design
+            _rows.append(
+                {
+                    "direction": _dir_idx,
+                    "family": _specs[_hypothesis]["family"],
+                    "hypothesis": _hypothesis,
+                    "n": _fit["n"],
+                    "n_predictors": _fit["n_predictors"],
+                    "pearson_r": _fit["pearson_r"],
+                    "r2": _fit["r2"],
+                    "adj_r2": _fit["adj_r2"],
+                    "f_stat": _fit["f_stat"],
+                    "p_value": _fit["p_value"],
+                    "minus_log10_p": -np.log10(max(_fit["p_value"], np.finfo(float).tiny)),
+                }
+            )
+            _model_outputs[(_dir_idx, _hypothesis)] = _fit
+    s2h_results = pd.DataFrame(_rows)
+    s2h_context_tables = _context_tables
+    s2h_design_spaces = _design_spaces
+    s2h_model_outputs = _model_outputs
+    s2h_tail_tables = _tail_tables
+    return (
+        s2h_all_activations,
+        s2h_context_tables,
+        s2h_design_spaces,
+        s2h_model_outputs,
+        s2h_results,
+        s2h_tail_tables,
+    )
+
+
+@app.cell(hide_code=True)
+def _(alt, mo, s2h_metric, s2h_results):
+    mo.stop(
+        len(s2h_results) == 0,
+        mo.callout(mo.md("No hypothesis models could be fit."), kind="warn"),
+    )
+    _metric = s2h_metric.value
+    _hm = (
+        alt.Chart(s2h_results)
+        .mark_rect()
+        .encode(
+            x=alt.X("direction:O", title="A direction"),
+            y=alt.Y("hypothesis:N", title="Hypothesis"),
+            color=alt.Color(
+                f"{_metric}:Q",
+                title=_metric,
+                scale=alt.Scale(scheme="viridis"),
+            ),
+            tooltip=[
+                alt.Tooltip("direction:O"),
+                alt.Tooltip("family:N"),
+                alt.Tooltip("hypothesis:N"),
+                alt.Tooltip("pearson_r:Q", format=".4f"),
+                alt.Tooltip("r2:Q", format=".4f"),
+                alt.Tooltip("adj_r2:Q", format=".4f"),
+                alt.Tooltip("p_value:Q", format=".3e"),
+                alt.Tooltip("n_predictors:Q"),
+                alt.Tooltip("n:Q"),
+            ],
+        )
+        .properties(
+            width="container",
+            height=max(260, 24 * s2h_results["hypothesis"].nunique()),
+            title=f"Hypothesis fit by A direction ({_metric})",
+        )
+        .configure_view(strokeWidth=0)
+    )
+    mo.ui.altair_chart(_hm)
+    return
+
+
+@app.cell(hide_code=True)
+def _(mo, s2h_results):
+    _ranked = (
+        s2h_results.sort_values(["direction", "adj_r2", "p_value"], ascending=[True, False, True])
+        .groupby("direction")
+        .head(10)
+        .copy()
+    )
+    _ranked["pearson_r"] = _ranked["pearson_r"].round(4)
+    _ranked["r2"] = _ranked["r2"].round(4)
+    _ranked["adj_r2"] = _ranked["adj_r2"].round(4)
+    _ranked["f_stat"] = _ranked["f_stat"].round(3)
+    _ranked["p_value"] = _ranked["p_value"].map(lambda x: f"{x:.3e}")
+    mo.vstack(
+        [
+            mo.md("### Best Hypotheses Per Direction"),
+            mo.ui.table(_ranked),
+        ]
+    )
+    return
+
+
+@app.cell(hide_code=True)
+def _(alt, mo, np, pd, s2h_design_spaces, s2h_dir_idx, s2h_results):
+    _dir_idx = int(s2h_dir_idx.value)
+    _hypotheses = (
+        s2h_results.loc[s2h_results["direction"] == _dir_idx, "hypothesis"]
+        .drop_duplicates()
+        .tolist()
+    )
+    mo.stop(
+        len(_hypotheses) < 2,
+        mo.callout(
+            mo.md("Need at least two fitted hypotheses for input-space correlation."),
+            kind="warn",
+        ),
+    )
+
+    def _zscore_design(design):
+        _x = design.to_numpy(dtype=float)
+        _valid = np.isfinite(_x).all(axis=1)
+        _x = _x[_valid]
+        if _x.size == 0:
+            return np.zeros((0, 0))
+        _std = _x.std(axis=0)
+        _keep = _std > 0
+        _x = _x[:, _keep]
+        _std = _std[_keep]
+        if _x.shape[1] == 0:
+            return np.zeros((len(_x), 0))
+        return (_x - _x.mean(axis=0)) / _std
+
+    _z_designs = {
+        _hyp: _zscore_design(s2h_design_spaces[(_dir_idx, _hyp)])
+        for _hyp in _hypotheses
+        if (_dir_idx, _hyp) in s2h_design_spaces
+    }
+    _rows = []
+    for _left in _hypotheses:
+        for _right in _hypotheses:
+            _xl = _z_designs.get(_left, np.zeros((0, 0)))
+            _xr = _z_designs.get(_right, np.zeros((0, 0)))
+            _n = min(len(_xl), len(_xr))
+            if _xl.shape[1] == 0 or _xr.shape[1] == 0 or _n < 2:
+                _value = np.nan
+            else:
+                _corr = (_xl[:_n].T @ _xr[:_n]) / max(_n - 1, 1)
+                _value = float(np.nanmax(np.abs(_corr)))
+            _rows.append(
+                {
+                    "hypothesis_a": _left,
+                    "hypothesis_b": _right,
+                    "max_abs_column_r": _value,
+                }
+            )
+    _corr_df = pd.DataFrame(_rows)
+    _chart = (
+        alt.Chart(_corr_df)
+        .mark_rect()
+        .encode(
+            x=alt.X("hypothesis_a:N", title="Hypothesis"),
+            y=alt.Y("hypothesis_b:N", title="Hypothesis"),
+            color=alt.Color(
+                "max_abs_column_r:Q",
+                title="max |column r|",
+                scale=alt.Scale(scheme="viridis", domain=[0, 1]),
+            ),
+            tooltip=[
+                alt.Tooltip("hypothesis_a:N"),
+                alt.Tooltip("hypothesis_b:N"),
+                alt.Tooltip("max_abs_column_r:Q", format=".4f"),
+            ],
+        )
+        .properties(
+            width="container",
+            height=max(300, 23 * len(_hypotheses)),
+            title=f"Hypothesis input-space similarity, direction {_dir_idx}",
+        )
+        .configure_view(strokeWidth=0)
+    )
+    mo.vstack(
+        [
+            mo.md("### Hypothesis Input-Space Correlation"),
+            mo.callout(
+                mo.md(
+                    "Categorical hypotheses expand to dummy columns, so each cell shows "
+                    "the largest absolute Pearson correlation between any pair of columns "
+                    "from the two hypothesis design matrices."
+                ),
+                kind="info",
+            ),
+            mo.ui.altair_chart(_chart),
+        ]
+    )
+    return
+
+
+@app.cell(hide_code=True)
+def _(alt, mo, np, pd, s2h_all_activations):
+    _acts = np.asarray(s2h_all_activations, dtype=float)
+    _n_dirs = _acts.shape[1]
+    mo.stop(
+        _n_dirs < 2,
+        mo.callout(
+            mo.md("Need at least two learned directions for activation correlation."),
+            kind="warn",
+        ),
+    )
+    _centered = _acts - np.nanmean(_acts, axis=0, keepdims=True)
+    _std = np.nanstd(_centered, axis=0, keepdims=True)
+    _std = np.where(_std > 0, _std, 1.0)
+    _z = _centered / _std
+    _corr = np.corrcoef(_z, rowvar=False)
+    _rows = []
+    for _i in range(_n_dirs):
+        for _j in range(_n_dirs):
+            _rows.append(
+                {
+                    "direction_a": _i,
+                    "direction_b": _j,
+                    "activation_r": float(_corr[_i, _j]),
+                }
+            )
+    _corr_df = pd.DataFrame(_rows)
+    _chart = (
+        alt.Chart(_corr_df)
+        .mark_rect()
+        .encode(
+            x=alt.X("direction_a:O", title="Direction"),
+            y=alt.Y("direction_b:O", title="Direction"),
+            color=alt.Color(
+                "activation_r:Q",
+                title="Pearson r",
+                scale=alt.Scale(scheme="redblue", domain=[-1, 1], reverse=True),
+            ),
+            tooltip=[
+                alt.Tooltip("direction_a:O"),
+                alt.Tooltip("direction_b:O"),
+                alt.Tooltip("activation_r:Q", format=".4f"),
+            ],
+        )
+        .properties(
+            width="container",
+            height=max(300, 24 * _n_dirs),
+            title="Learned-direction activation correlations",
+        )
+        .configure_view(strokeWidth=0)
+    )
+    mo.vstack(
+        [
+            mo.md("### Learned-Direction Activation Correlation"),
+            mo.ui.altair_chart(_chart),
+        ]
+    )
+    return
+
+
+@app.cell(hide_code=True)
+def _(
+    alt,
+    mo,
+    pd,
+    s2h_detail_hypothesis,
+    s2h_dir_idx,
+    s2h_model_outputs,
+    s2h_results,
+):
+    _dir_idx = int(s2h_dir_idx.value)
+    _hypothesis = s2h_detail_hypothesis.value
+    _key = (_dir_idx, _hypothesis)
+    mo.stop(
+        _key not in s2h_model_outputs,
+        mo.callout(
+            mo.md(f"No fitted model for direction `{_dir_idx}`, hypothesis `{_hypothesis}`."),
+            kind="warn",
+        ),
+    )
+    _fit = s2h_model_outputs[_key]
+    _row = s2h_results[
+        (s2h_results["direction"] == _dir_idx) & (s2h_results["hypothesis"] == _hypothesis)
+    ].iloc[0]
+    _scatter_df = pd.DataFrame({"activation": _fit["y"], "fitted": _fit["yhat"]})
+    _base = alt.Chart(_scatter_df).encode(
+        x=alt.X("fitted:Q", title="Fitted activation"),
+        y=alt.Y("activation:Q", title="Actual activation"),
+    )
+    _points = _base.mark_point(opacity=0.28, size=18, color="#2563eb")
+    _reg = _base.transform_regression("fitted", "activation").mark_line(
+        color="#dc2626",
+        strokeWidth=2,
+    )
+    _scatter = (
+        (_points + _reg)
+        .properties(
+            width="container",
+            height=320,
+            title=(
+                f"Direction {_dir_idx}: {_hypothesis} "
+                f"(r={_row['pearson_r']:.3f}, adj R²={_row['adj_r2']:.3f}, p={_row['p_value']:.2e})"
+            ),
+        )
+        .configure_view(strokeWidth=0)
+        .configure_axis(grid=False)
+    )
+    mo.ui.altair_chart(_scatter)
+    return
+
+
+@app.cell(hide_code=True)
+def _(alt, mo, s2h_detail_hypothesis, s2h_dir_idx, s2h_model_outputs):
+    _dir_idx = int(s2h_dir_idx.value)
+    _hypothesis = s2h_detail_hypothesis.value
+    _fit = s2h_model_outputs.get((_dir_idx, _hypothesis))
+    mo.stop(_fit is None, mo.md("*No coefficient table for this detail model.*"))
+    _coef_df = _fit["coef_df"]
+    _coef_df = _coef_df[_coef_df["term"] != "intercept"].copy()
+    _coef_df["abs_coef"] = _coef_df["coef"].abs()
+    _coef_df = _coef_df.sort_values("abs_coef", ascending=False).head(25)
+    _coef_df["signed_term"] = _coef_df["term"]
+    _coef_chart = (
+        alt.Chart(_coef_df)
+        .mark_bar()
+        .encode(
+            y=alt.Y("signed_term:N", sort="-x", title="Term"),
+            x=alt.X("coef:Q", title="OLS coefficient"),
+            color=alt.Color(
+                "coef:Q",
+                scale=alt.Scale(scheme="redblue", domainMid=0, reverse=True),
+                legend=None,
+            ),
+            tooltip=[
+                alt.Tooltip("term:N"),
+                alt.Tooltip("coef:Q", format=".4f"),
+                alt.Tooltip("std_err:Q", format=".4f"),
+                alt.Tooltip("t:Q", format=".3f"),
+                alt.Tooltip("p_value:Q", format=".3e"),
+            ],
+        )
+        .properties(
+            width="container",
+            height=max(220, 18 * len(_coef_df)),
+            title=f"Strongest coefficients: direction {_dir_idx}, {_hypothesis}",
+        )
+        .configure_view(strokeWidth=0)
+        .configure_axis(grid=False)
+    )
+    mo.ui.altair_chart(_coef_chart)
+    return
+
+
+@app.cell(hide_code=True)
+def _(mo, s2h_context_tables, s2h_dir_idx):
+    _dir_idx = int(s2h_dir_idx.value)
+    _context_df = s2h_context_tables.get(_dir_idx)
+    mo.stop(
+        _context_df is None,
+        mo.md("*No context-window diagnostics for this direction.*"),
+    )
+    if len(_context_df) == 0:
+        _context_display = mo.callout(
+            mo.md(
+                "No automatic context windows passed the current empirical threshold "
+                "for this direction."
+            ),
+            kind="warn",
+        )
+    else:
+        _display_df = _context_df[
+            [
+                "context_id",
+                "start",
+                "end",
+                "tail",
+                "mean_activation",
+                "z_score",
+                "empirical_p",
+            ]
+        ].copy()
+        _display_df["mean_activation"] = _display_df["mean_activation"].round(4)
+        _display_df["z_score"] = _display_df["z_score"].round(3)
+        _display_df["empirical_p"] = _display_df["empirical_p"].map(lambda x: f"{x:.3f}")
+        _context_display = mo.vstack(
+            [
+                mo.md("### Automatic Context Windows"),
+                mo.callout(
+                    mo.md(
+                        "Empirical p-values are rank-based over sliding-window means "
+                        "within this direction, so use them as exploratory context "
+                        "discovery scores."
+                    ),
+                    kind="info",
+                ),
+                mo.ui.table(_display_df),
+            ]
+        )
+    _context_display
+    return
+
+
+@app.cell(hide_code=True)
+def _(mo, s2h_dir_idx, s2h_tail_tables):
+    _dir_idx = int(s2h_dir_idx.value)
+    _tail_df = s2h_tail_tables.get(_dir_idx)
+    mo.stop(_tail_df is None or len(_tail_df) == 0, mo.md("*No word-tail labels for this direction.*"))
+    mo.vstack(
+        [
+            mo.md("### Word-Tail Diagnostic"),
+            mo.callout(
+                mo.md(
+                    "The word-tail hypothesis is selected from the activation distribution, "
+                    "so treat its p-value as exploratory rather than confirmatory."
+                ),
+                kind="warn",
+            ),
+            mo.ui.table(_tail_df),
+        ]
     )
     return
 

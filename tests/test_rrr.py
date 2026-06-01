@@ -129,6 +129,95 @@ class TestRunRRRForUnit:
         config.refresh = refresh
         return config
 
+    def test_null_shift_sampler_enforces_minimum_and_seed(self):
+        from run_rrr import _sample_valid_circular_shift
+
+        rng_a = np.random.default_rng(123)
+        rng_b = np.random.default_rng(123)
+        shifts_a = [_sample_valid_circular_shift(20, 4, rng_a) for _ in range(5)]
+        shifts_b = [_sample_valid_circular_shift(20, 4, rng_b) for _ in range(5)]
+
+        assert shifts_a == shifts_b
+        assert all(4 <= shift < 16 for shift in shifts_a)
+
+    def test_null_shift_sampler_rejects_short_splits(self):
+        from run_rrr import _sample_valid_circular_shift
+
+        with pytest.raises(ValueError, match="too short"):
+            _sample_valid_circular_shift(8, 4, np.random.default_rng(0))
+
+    def test_null_augmented_metrics_saved_per_fold_and_rank(self, tmp_path, small_data):
+        from run_rrr import _run_rrr_for_unit
+
+        X, Y = small_data
+        n = X.shape[0]
+        test_idxs = [np.arange(0, n // 2), np.arange(n // 2, n)]
+        config = self._make_config(rank_grid=[2, 4])
+        config.run_null_augmented = True
+        config.null_augmented_repeats = 2
+        config.null_augmented_min_shift = 2
+        config.encoding.ridge_alphas = [1.0]
+        config.encoding.ridge_cv_folds = 2
+        per_fold_baselines = _make_baselines(X, Y, test_idxs)
+
+        _run_rrr_for_unit(str(tmp_path), X, test_idxs, per_fold_baselines, config)
+
+        metrics = np.load(os.path.join(str(tmp_path), "k2", "fold_0", "metrics.npz"))
+        assert metrics["null_aug_corr_per_target"].shape == (2, Y.shape[1])
+        assert metrics["null_aug_r2_per_target"].shape == (2, Y.shape[1])
+        assert metrics["null_aug_shifts_train"].shape == (2,)
+        assert metrics["null_aug_shifts_test"].shape == (2,)
+        assert np.all(metrics["null_aug_shifts_train"] >= 2)
+        assert np.all(metrics["null_aug_shifts_test"] >= 2)
+
+        full_rank_metrics = np.load(
+            os.path.join(str(tmp_path), "k4", "fold_0", "metrics.npz")
+        )
+        assert full_rank_metrics["null_aug_corr_per_target"].shape == (0, Y.shape[1])
+        assert full_rank_metrics["null_aug_r2_per_target"].shape == (0, Y.shape[1])
+        assert full_rank_metrics["null_aug_shifts_train"].shape == (0,)
+        assert full_rank_metrics["null_aug_shifts_test"].shape == (0,)
+        assert np.isnan(full_rank_metrics["null_aug_corr"])
+
+        df = pd.read_csv(os.path.join(str(tmp_path), "grid_results.csv"))
+        for col in [
+            "null_aug_corr",
+            "null_aug_r2",
+            "null_aug_corr_q05",
+            "null_aug_corr_q50",
+            "null_aug_corr_q95",
+            "null_aug_full_advantage_within_q95",
+        ]:
+            assert col in df.columns
+
+    def test_null_augmented_resume_recomputes_legacy_metrics(
+        self, tmp_path, small_data
+    ):
+        import run_rrr
+
+        X, Y = small_data
+        n = X.shape[0]
+        test_idxs = [np.arange(0, n // 2), np.arange(n // 2, n)]
+        per_fold_baselines = _make_baselines(X, Y, test_idxs)
+
+        config = self._make_config(rank_grid=[1, 2])
+        run_rrr._run_rrr_for_unit(
+            str(tmp_path), X, test_idxs, per_fold_baselines, config
+        )
+
+        config = self._make_config(rank_grid=[1, 2], refresh=False)
+        config.run_null_augmented = True
+        config.null_augmented_repeats = 1
+        config.null_augmented_min_shift = 2
+        config.encoding.ridge_alphas = [1.0]
+        config.encoding.ridge_cv_folds = 2
+        run_rrr._run_rrr_for_unit(
+            str(tmp_path), X, test_idxs, per_fold_baselines, config
+        )
+
+        metrics = np.load(os.path.join(str(tmp_path), "k1", "fold_0", "metrics.npz"))
+        assert "null_aug_corr_per_target" in metrics.files
+
     def test_grid_results_csv_written(self, tmp_path, small_data):
         from run_rrr import _run_rrr_for_unit
 

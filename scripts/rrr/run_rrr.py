@@ -144,16 +144,18 @@ def _strip_per_target_and_add_sig_nonsig(
         for pt_key in per_target_keys:
             base = pt_key[: -len("_per_target")]
             arr = metrics[pt_key]
+            if arr.ndim > 1 and arr.shape[-1] == sig_mask_flat.shape[0]:
+                sig_arr = arr[..., sig_mask_flat]
+                nonsig_arr = arr[..., ~sig_mask_flat]
+            else:
+                sig_arr = arr[sig_mask_flat]
+                nonsig_arr = arr[~sig_mask_flat]
             reducer = fisher_z_mean if base.endswith("_corr") else np.nanmean
             metrics[f"{base}_sig"] = (
-                float(reducer(arr[sig_mask_flat]))
-                if sig_mask_flat.any()
-                else float("nan")
+                float(reducer(sig_arr)) if sig_mask_flat.any() else float("nan")
             )
             metrics[f"{base}_nonsig"] = (
-                float(reducer(arr[~sig_mask_flat]))
-                if (~sig_mask_flat).any()
-                else float("nan")
+                float(reducer(nonsig_arr)) if (~sig_mask_flat).any() else float("nan")
             )
     for array_key in per_target_keys + [
         k for k in list(metrics) if k.endswith("_best_alphas")
@@ -195,17 +197,26 @@ def _completed_pairs_from_artifacts(
     rank_grid: list[int],
     n_folds: int,
     require_factors: bool = False,
+    required_metric_keys: "set[str] | None" = None,
 ) -> set[tuple[int, int]]:
     """Completed (k, fold) pairs based on artifact files, not grid_results.csv."""
     completed: set[tuple[int, int]] = set()
     for k in rank_grid:
         for fold_f in range(n_folds):
-            if not os.path.exists(_metrics_path(unit_dir, k, fold_f)):
+            metrics_path = _metrics_path(unit_dir, k, fold_f)
+            if not os.path.exists(metrics_path):
                 continue
             if require_factors and not _fold_factors_exist(
                 unit_dir, fold_f, require_b=True
             ):
                 continue
+            if required_metric_keys:
+                try:
+                    with np.load(metrics_path, allow_pickle=True) as metrics:
+                        if not required_metric_keys.issubset(set(metrics.files)):
+                            continue
+                except Exception:
+                    continue
             completed.add((k, fold_f))
     return completed
 
@@ -216,6 +227,7 @@ def _ranks_by_fold_to_run(
     n_folds: int,
     refresh: bool,
     require_factors: bool = False,
+    required_metric_keys: "set[str] | None" = None,
 ) -> tuple[dict[int, list[int]], set[tuple[int, int]]]:
     """Return per-fold ranks to compute plus (k, fold) pairs reusable from disk."""
     if refresh:
@@ -225,6 +237,7 @@ def _ranks_by_fold_to_run(
         rank_grid,
         n_folds,
         require_factors=require_factors,
+        required_metric_keys=required_metric_keys,
     )
     ranks_by_fold = {
         fold_f: [k for k in rank_grid if (k, fold_f) not in completed]
@@ -243,6 +256,7 @@ def _unit_ranks_by_fold_to_run(
     n_folds: int,
     refresh: bool,
     require_factors: bool,
+    required_metric_keys: "set[str] | None" = None,
 ) -> tuple[dict[int, list[int]], set[tuple[int, int]]]:
     return _ranks_by_fold_to_run(
         unit_dir,
@@ -250,6 +264,7 @@ def _unit_ranks_by_fold_to_run(
         n_folds,
         refresh=refresh,
         require_factors=require_factors,
+        required_metric_keys=required_metric_keys,
     )
 
 
@@ -264,6 +279,11 @@ def _rrr_output_resume_plan(
         n_folds,
         refresh=config.refresh,
         require_factors=True,
+        required_metric_keys=(
+            {"null_aug_corr_per_target", "null_aug_r2_per_target"}
+            if config.run_null_augmented
+            else None
+        ),
     )
     folds_needed = _folds_to_build_from_ranks(rrr_ranks_by_fold)
     pca_ranks_by_fold = None
@@ -346,6 +366,12 @@ def _row_from_metrics_file(
         "full_r2",
         f"{primary_label}_corr",
         f"{primary_label}_r2",
+        "null_aug_corr",
+        "null_aug_r2",
+        "null_aug_corr_q05",
+        "null_aug_corr_q50",
+        "null_aug_corr_q95",
+        "null_aug_full_advantage_within_q95",
     ]
     if primary_label == "nr":
         base_keys.extend(["rrr_corr", "rrr_r2"])
@@ -362,13 +388,19 @@ def _row_from_metrics_file(
                 continue
             arr = np.asarray(metrics[per_target_key])
             if key.endswith("_corr"):
+                if arr.ndim > 1 and arr.shape[-1] == sig_mask_flat.shape[0]:
+                    sig_arr = arr[..., sig_mask_flat]
+                    nonsig_arr = arr[..., ~sig_mask_flat]
+                else:
+                    sig_arr = arr[sig_mask_flat]
+                    nonsig_arr = arr[~sig_mask_flat]
                 row[f"{key}_sig"] = (
-                    float(fisher_z_mean(arr[sig_mask_flat]))
+                    float(fisher_z_mean(sig_arr))
                     if sig_mask_flat.any()
                     else float("nan")
                 )
                 row[f"{key}_nonsig"] = (
-                    float(fisher_z_mean(arr[~sig_mask_flat]))
+                    float(fisher_z_mean(nonsig_arr))
                     if (~sig_mask_flat).any()
                     else float("nan")
                 )
@@ -452,6 +484,8 @@ def _run_common_subspace_fold_k(
     device: str,
     unit_dir: str,
     primary_label: str,
+    full_corr_per_target: "np.ndarray | None" = None,
+    null_augmented_config: "RRRConfig | None" = None,
 ) -> dict:
     """Shared evaluation for one (fold, k) projected subspace.
 
@@ -514,10 +548,233 @@ def _run_common_subspace_fold_k(
         f"{primary_label}_r2_per_target": result[f"{primary_label}_r2_per_target"],
         f"{primary_label}_best_alphas": result[f"{primary_label}_best_alphas"],
     }
+    if null_augmented_config is not None and null_augmented_config.run_null_augmented:
+        if full_corr_per_target is None:
+            raise ValueError(
+                "full_corr_per_target is required when run_null_augmented=True"
+            )
+        metrics.update(
+            _run_null_augmented_fold_k(
+                A_full,
+                k,
+                X_train,
+                X_test,
+                Y_train,
+                Y_test,
+                full_corr_per_target=full_corr_per_target,
+                primary_corr_per_target=result[f"{primary_label}_corr_per_target"],
+                fold_f=fold_f,
+                alphas=alphas,
+                alpha_policy=alpha_policy,
+                standardize_subspace_inputs=standardize_subspace_inputs,
+                ridge_cv_folds=ridge_cv_folds,
+                ridge_solver_params=ridge_solver_params,
+                ridge_y_in_cpu=ridge_y_in_cpu,
+                ridge_force_cpu=ridge_force_cpu,
+                device=device,
+                unit_dir=unit_dir,
+                config=null_augmented_config,
+            )
+        )
 
     save_rrr_result(unit_dir, k=k, fold=fold_f, metrics=metrics)
     _strip_per_target_and_add_sig_nonsig(metrics, sig_mask_flat)
+    for artifact_key in (
+        "null_aug_shifts_train",
+        "null_aug_shifts_test",
+        "null_aug_reference_rank",
+    ):
+        metrics.pop(artifact_key, None)
     return metrics
+
+
+def _sample_valid_circular_shift(
+    split_len: int,
+    min_shift: int,
+    rng: np.random.Generator,
+) -> int:
+    """Sample a non-trivial circular shift respecting a minimum distance."""
+    min_shift = int(min_shift)
+    if min_shift < 0:
+        raise ValueError(
+            f"null_augmented_min_shift must be non-negative, got {min_shift}"
+        )
+    if split_len <= 1:
+        raise ValueError("Cannot circularly shift a split with fewer than 2 rows.")
+    if min_shift == 0:
+        low = 1
+        high = split_len
+    else:
+        low = min_shift
+        high = split_len - min_shift
+    if high <= low:
+        raise ValueError(
+            "Split is too short for null-augmented circular shifts: "
+            f"split_len={split_len}, min_shift={min_shift}. "
+            "Need split_len > 2 * min_shift."
+        )
+    return int(rng.integers(low, high))
+
+
+def _null_augmented_reference_rank(A_full: np.ndarray, config: RRRConfig) -> int:
+    """Resolve and validate the rank used as the low+tail augmented width."""
+    requested = (
+        max(config.rank_grid)
+        if config.null_augmented_reference_rank is None
+        else int(config.null_augmented_reference_rank)
+    )
+    if requested <= 0:
+        raise ValueError(
+            f"null_augmented_reference_rank must be positive, got {requested}"
+        )
+    if requested > A_full.shape[1]:
+        raise ValueError(
+            "null_augmented_reference_rank exceeds fitted RRR factor width: "
+            f"{requested} > {A_full.shape[1]}"
+        )
+    return requested
+
+
+def _run_null_augmented_fold_k(
+    A_full: np.ndarray,
+    k: int,
+    X_train: np.ndarray,
+    X_test: np.ndarray,
+    Y_train: np.ndarray,
+    Y_test: np.ndarray,
+    full_corr_per_target: np.ndarray,
+    primary_corr_per_target: np.ndarray,
+    fold_f: int,
+    alphas: "np.ndarray | None",
+    alpha_policy: dict | None,
+    standardize_subspace_inputs: bool,
+    ridge_cv_folds: int,
+    ridge_solver_params: dict | None,
+    ridge_y_in_cpu: bool | None,
+    ridge_force_cpu: bool | None,
+    device: str,
+    unit_dir: str,
+    config: RRRConfig,
+) -> dict:
+    """Evaluate null-augmented models by appending shifted omitted coordinates."""
+    reference_rank = _null_augmented_reference_rank(A_full, config)
+    if k > reference_rank:
+        raise ValueError(
+            f"Rank k={k} exceeds null_augmented_reference_rank={reference_rank}"
+        )
+
+    n_repeats = int(config.null_augmented_repeats)
+    if n_repeats <= 0:
+        raise ValueError(f"null_augmented_repeats must be positive, got {n_repeats}")
+
+    X_low_train = X_train @ A_full[:, :k]
+    X_low_test = X_test @ A_full[:, :k]
+    X_tail_train = X_train @ A_full[:, k:reference_rank]
+    X_tail_test = X_test @ A_full[:, k:reference_rank]
+    has_tail = X_tail_train.shape[1] > 0
+    if not has_tail:
+        n_targets = Y_test.shape[1]
+        empty_target = np.empty((0, n_targets), dtype=np.float32)
+        empty_repeat = np.empty((0,), dtype=np.int64)
+        return {
+            "null_aug_corr_per_target": empty_target,
+            "null_aug_r2_per_target": empty_target.copy(),
+            "null_aug_shifts_train": empty_repeat,
+            "null_aug_shifts_test": empty_repeat.copy(),
+            "null_aug_reference_rank": np.array(reference_rank, dtype=np.int64),
+            "null_aug_corr": float("nan"),
+            "null_aug_r2": float("nan"),
+            "null_aug_corr_q05": float("nan"),
+            "null_aug_corr_q50": float("nan"),
+            "null_aug_corr_q95": float("nan"),
+            "null_aug_full_advantage_within_q95": float("nan"),
+        }
+
+    corr_repeats = []
+    r2_repeats = []
+    train_shifts = np.zeros(n_repeats, dtype=np.int64)
+    test_shifts = np.zeros(n_repeats, dtype=np.int64)
+
+    seed = int(config.null_augmented_seed) + 1000003 * int(fold_f) + 9176 * int(k)
+    rng = np.random.default_rng(seed)
+
+    for repeat_i in range(n_repeats):
+        train_shift = _sample_valid_circular_shift(
+            X_tail_train.shape[0], config.null_augmented_min_shift, rng
+        )
+        test_shift = _sample_valid_circular_shift(
+            X_tail_test.shape[0], config.null_augmented_min_shift, rng
+        )
+        tail_train = np.roll(X_tail_train, shift=train_shift, axis=0)
+        tail_test = np.roll(X_tail_test, shift=test_shift, axis=0)
+        X_aug_train = np.concatenate([X_low_train, tail_train], axis=1)
+        X_aug_test = np.concatenate([X_low_test, tail_test], axis=1)
+        train_shifts[repeat_i] = train_shift
+        test_shifts[repeat_i] = test_shift
+
+        rank_dir = os.path.join(unit_dir, f"k{k}", f"fold_{fold_f}")
+        context = {
+            "script": "run_rrr",
+            "role": "null_aug",
+            "fold": int(fold_f),
+            "k": int(k),
+            "repeat": int(repeat_i),
+            "reference_rank": int(reference_rank),
+            "n_features": int(X_aug_train.shape[1]),
+            "standardize": bool(standardize_subspace_inputs),
+        }
+        resolved_alphas = resolve_ridge_alphas(
+            alphas,
+            X_aug_train,
+            standardize=standardize_subspace_inputs,
+            context=context,
+            policy=alpha_policy,
+        )
+        result = evaluate_input_space(
+            X_aug_train,
+            X_aug_test,
+            Y_train,
+            Y_test,
+            subspace_name="null_aug",
+            alphas=resolved_alphas,
+            ridge_cv_folds=ridge_cv_folds,
+            standardize=standardize_subspace_inputs,
+            ridge_solver_params=ridge_solver_params,
+            ridge_y_in_cpu=ridge_y_in_cpu,
+            ridge_force_cpu=ridge_force_cpu,
+            return_alphas=True,
+            device=device,
+        )
+        corr_repeats.append(result["null_aug_corr_per_target"])
+        r2_repeats.append(result["null_aug_r2_per_target"])
+
+    corr_arr = np.stack(corr_repeats, axis=0)
+    r2_arr = np.stack(r2_repeats, axis=0)
+    full_advantage = full_corr_per_target[np.newaxis, :] - corr_arr
+    observed_advantage = full_corr_per_target - primary_corr_per_target
+    upper = np.nanpercentile(full_advantage, 95, axis=0)
+    finite = (
+        np.isfinite(observed_advantage) & np.isfinite(upper) & (observed_advantage > 0)
+    )
+    frac_within = (
+        float(np.nanmean(observed_advantage[finite] <= upper[finite]))
+        if finite.any()
+        else float("nan")
+    )
+
+    return {
+        "null_aug_corr_per_target": corr_arr,
+        "null_aug_r2_per_target": r2_arr,
+        "null_aug_shifts_train": train_shifts,
+        "null_aug_shifts_test": test_shifts,
+        "null_aug_reference_rank": np.array(reference_rank, dtype=np.int64),
+        "null_aug_corr": float(fisher_z_mean(corr_arr.reshape(-1))),
+        "null_aug_r2": float(np.nanmean(r2_arr)),
+        "null_aug_corr_q05": float(np.nanpercentile(corr_arr, 5)),
+        "null_aug_corr_q50": float(np.nanpercentile(corr_arr, 50)),
+        "null_aug_corr_q95": float(np.nanpercentile(corr_arr, 95)),
+        "null_aug_full_advantage_within_q95": frac_within,
+    }
 
 
 def _build_results(
@@ -542,6 +799,12 @@ def _build_results(
         f"{primary_label}_corr",
         f"{primary_label}_r2",
         "effective_rank",
+        "null_aug_corr",
+        "null_aug_r2",
+        "null_aug_corr_q05",
+        "null_aug_corr_q50",
+        "null_aug_corr_q95",
+        "null_aug_full_advantage_within_q95",
         # RRR-specific (only in RRR runs)
         "rrr_corr",
         "rrr_r2",
@@ -653,6 +916,11 @@ def _run_rrr_for_unit(
             n_folds,
             refresh=config.refresh,
             require_factors=True,
+            required_metric_keys=(
+                {"null_aug_corr_per_target", "null_aug_r2_per_target"}
+                if config.run_null_augmented
+                else None
+            ),
         )
     total_to_run = sum(len(ranks) for ranks in ranks_by_fold.values())
     if completed_pairs:
@@ -719,9 +987,8 @@ def _run_rrr_for_unit(
 
         # Save full model metrics once per fold (not per-k)
         _save_full_model_metrics_once(rrr_unit_dir, fold_f, Y_test, Y_hat_full)
-        full_corr = float(
-            fisher_z_mean(to_numpy(correlation_score(Y_test, Y_hat_full)))
-        )
+        full_corr_per_target = to_numpy(correlation_score(Y_test, Y_hat_full))
+        full_corr = float(fisher_z_mean(full_corr_per_target))
         full_r2 = float(to_numpy(r2_score(Y_test, Y_hat_full)).mean())
 
         # Fit or load RRR once per fold; truncate to each k below.
@@ -797,6 +1064,8 @@ def _run_rrr_for_unit(
                 device,
                 rrr_unit_dir,
                 primary_label="nr",
+                full_corr_per_target=full_corr_per_target,
+                null_augmented_config=config,
             )
 
             # Load existing metrics.npz and append RRR per-target metrics.

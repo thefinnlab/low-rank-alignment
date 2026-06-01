@@ -6,7 +6,7 @@ The retained pipeline has three main analysis entrypoints:
 
 1. **Lag-cluster significance** (`make sig`) — trains per-subject encoding models with out-of-fold predictions, builds reliable electrode-lag clusters, scores a fold-local circular-shift null distribution, applies BH-FDR across candidate clusters, and writes downstream-compatible significance CSVs.
 2. **Encoding model training** (`make train`) — trains ridge regression encoding models on significant electrodes. New `encoding_results.joblib` files are intentionally slim: they keep correlations, fold indices, target scalers, electrode names, run metadata, and optional arbitrary-baseline correlations, while avoiding fitted model and coefficient payloads.
-3. **RRR analysis** (`make rrr`) — fits raw-input reduced-rank regression from embeddings to neural targets, sweeps rank-k projections, and compares rank-k neural-relevance ridge predictions against fresh full-ridge fold baselines. The retained RRR script can also run a PCA subspace baseline when `RRRConfig.run_pca_baseline` is enabled.
+3. **RRR analysis** (`make rrr`) — fits raw-input reduced-rank regression from embeddings to neural targets, sweeps rank-k projections, and compares rank-k neural-relevance ridge predictions against fresh full-ridge fold baselines. The retained RRR script can also run a PCA subspace baseline when `RRRConfig.run_pca_baseline` is enabled, plus an optional circular-shift null-augmented rank check when `RRRConfig.run_null_augmented` is enabled.
 
 The Makefile also provides batch targets for releasing multiple config runs:
 `make generate-embeddings-batch`, `make sig-batch`, and `make rrr-batch`. Random-init embedding runs can use `make generate-random-embeddings`, which wraps `scripts/utilities/generate_random_embeddings.py`.
@@ -60,6 +60,12 @@ Downstream configs can store list-valued `encoding.per_model_config.layer` entri
 | `scripts/utilities/electrode_region_distribution.py` | Dataset-aware electrode region summaries and plots |
 | `scripts/utilities/print_atlas_regions.py` | Print atlas region labels for electrodes |
 | `scripts/utilities/download_model.py`, `download_tokenizer.py` | Cache HuggingFace model/tokenizer assets |
+
+### `notebooks/`
+
+| File | Purpose |
+|------|---------|
+| `notebooks/rrr-srrr-review.py` | Marimo review app for RRR/SRRR outputs, including A-direction activation examples, hypothesis-feature regressions against A-direction activations, B-matrix temporal/brain-map views, and cross-fold/source comparisons |
 
 ### `src/`
 

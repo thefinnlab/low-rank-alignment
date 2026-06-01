@@ -122,6 +122,32 @@ def _(Path, np, pd):
             raise FileNotFoundError(f"No fold metrics found under {rank_dir}")
         return np.stack(fold_corrs, axis=0)
 
+    def load_rank_null_corrs(result_dir: Path, rank: int, lag_count: int):
+        rank_dir = result_dir / f"k{rank}"
+        fold_corrs = []
+        for fold in discover_folds(rank_dir):
+            metrics_path = rank_dir / f"fold_{fold}" / "metrics.npz"
+            with np.load(metrics_path) as metrics:
+                if "null_aug_corr_per_target" not in metrics:
+                    return None
+                corrs = np.asarray(metrics["null_aug_corr_per_target"], dtype=np.float32)
+            if corrs.ndim != 2:
+                raise ValueError(
+                    f"{metrics_path} null_aug_corr_per_target must be "
+                    f"(n_repeats, n_targets), got {corrs.shape}"
+                )
+            if corrs.shape[1] % lag_count != 0:
+                raise ValueError(
+                    f"{metrics_path} has {corrs.shape[1]} targets, not divisible by "
+                    f"lag_count={lag_count}"
+                )
+            fold_corrs.append(
+                corrs.reshape(corrs.shape[0], corrs.shape[1] // lag_count, lag_count)
+            )
+        if not fold_corrs:
+            return None
+        return np.stack(fold_corrs, axis=0)
+
     def load_source(label: str, result_dir: Path, lag_count: int) -> dict:
         ranks = discover_ranks(result_dir)
         if not ranks:
@@ -131,6 +157,11 @@ def _(Path, np, pd):
             rank: load_rank_corrs(result_dir, rank, metric_key, lag_count)
             for rank in ranks
         }
+        null_corrs_by_rank = {}
+        for rank in ranks:
+            null_corrs = load_rank_null_corrs(result_dir, rank, lag_count)
+            if null_corrs is not None:
+                null_corrs_by_rank[rank] = null_corrs
         shape_by_rank = {rank: corrs.shape for rank, corrs in corrs_by_rank.items()}
         ref_rank = max(ranks)
         ref_shape = shape_by_rank[ref_rank]
@@ -146,6 +177,7 @@ def _(Path, np, pd):
             "compatible_ranks": compatible_ranks,
             "ref_rank": ref_rank,
             "corrs_by_rank": corrs_by_rank,
+            "null_corrs_by_rank": null_corrs_by_rank,
             "shape_by_rank": shape_by_rank,
             "grid_df": pd.read_csv(grid_path) if grid_path.exists() else None,
             "summary_df": pd.read_csv(summary_path) if summary_path.exists() else None,
@@ -751,7 +783,7 @@ def _(brain_map_df, mo, np, rank_selector, selected_source):
         y=1.02,
     )
     plt.show()
-    return
+    return (plt,)
 
 
 @app.cell(hide_code=True)
@@ -804,6 +836,28 @@ def _(fisher_z_mean, np, pd, rank_selector, selected_source):
             ),
         }
     )
+    null_corrs = selected_source.get("null_corrs_by_rank", {}).get(
+        int(rank_selector.value)
+    )
+    if null_corrs is not None:
+        null_flat = null_corrs.reshape(
+            null_corrs.shape[0] * null_corrs.shape[1], -1
+        )
+        null_mean = fisher_z_mean(null_flat, axis=0)
+        null_q05 = np.nanpercentile(null_flat, 5, axis=0)
+        null_q95 = np.nanpercentile(null_flat, 95, axis=0)
+        observed_advantage = reference_mean - selected_mean
+        null_advantage_q95 = np.nanpercentile(
+            reference_mean[np.newaxis, :] - null_flat, 95, axis=0
+        )
+        target_distribution_df["null_aug_corr_mean"] = null_mean
+        target_distribution_df["null_aug_corr_q05"] = null_q05
+        target_distribution_df["null_aug_corr_q95"] = null_q95
+        target_distribution_df["reference_advantage"] = observed_advantage
+        target_distribution_df["null_advantage_q95"] = null_advantage_q95
+        target_distribution_df["under_recovered_vs_null"] = (
+            observed_advantage > null_advantage_q95
+        )
     target_distribution_df
     return (target_distribution_df,)
 
@@ -845,6 +899,57 @@ def _(alt, mo, target_distribution_df):
     return
 
 
+@app.cell(hide_code=True)
+def _(alt, mo, target_distribution_df):
+    if "null_aug_corr_mean" not in target_distribution_df.columns:
+        _output = mo.callout(
+            mo.md("No null-augmented metrics are available for this selected rank."),
+            kind="warn",
+        )
+    else:
+        _scatter = alt.Chart(target_distribution_df).mark_circle(size=10, opacity=0.25).encode(
+            x=alt.X("null_aug_corr_mean:Q", title="Null-augmented mean corr"),
+            y=alt.Y("reference_corr:Q", title="Reference corr"),
+            color=alt.Color(
+                "under_recovered_vs_null:N",
+                title="Under-recovered vs null",
+            ),
+            tooltip=[
+                alt.Tooltip("selected_corr:Q", format=".4f"),
+                alt.Tooltip("reference_corr:Q", format=".4f"),
+                alt.Tooltip("null_aug_corr_mean:Q", format=".4f"),
+                alt.Tooltip("reference_advantage:Q", format=".4f"),
+                alt.Tooltip("null_advantage_q95:Q", format=".4f"),
+                "under_recovered_vs_null",
+            ],
+        )
+        _advantage = alt.Chart(target_distribution_df).mark_bar(opacity=0.75).encode(
+            x=alt.X(
+                "reference_advantage:Q",
+                bin=alt.Bin(maxbins=80),
+                title="Reference - selected",
+            ),
+            y=alt.Y("count():Q", title="Targets"),
+            color=alt.Color(
+                "under_recovered_vs_null:N",
+                title="Under-recovered vs null",
+            ),
+        )
+        _output = mo.ui.tabs(
+            {
+                "Null scatter": mo.ui.altair_chart(
+                    _scatter.properties(width=720, height=420)
+                ),
+                "Advantage distribution": mo.ui.altair_chart(
+                    _advantage.properties(width=720, height=320)
+                ),
+                "Table": mo.ui.table(target_distribution_df),
+            }
+        )
+    _output
+    return
+
+
 @app.cell
 def _(np, pct_passing_by_recovery, rank_selector, selected_source):
     recovery_curve_df = pct_passing_by_recovery(
@@ -874,41 +979,62 @@ def _(alt, mo, recovery_curve_df):
 
 @app.cell
 def _():
-    return
+    num_examples = 500
+    num_targets = 500
+
+    num_linear_features = 10
+    num_interaction_features = 10
+    num_random_features = 100
+
+    prob_linear_inclusion = 0.5
+    prob_linear_interaction_inclusion = 0.1
+    prob_interaction_inclusion = 0.2
+
+    linear_weight_strength = 10
+    interaction_weight_strength = 0
+    noise_strength = 30
+    return (
+        interaction_weight_strength,
+        linear_weight_strength,
+        noise_strength,
+        num_examples,
+        num_interaction_features,
+        num_linear_features,
+        num_random_features,
+        num_targets,
+        prob_interaction_inclusion,
+        prob_linear_inclusion,
+        prob_linear_interaction_inclusion,
+    )
 
 
 @app.cell
-def _(np):
-    features = np.random.randn(1000, 10)
-    interaction_term_combos = np.random.randn(10, 10) * (np.random.uniform(0, 1, (10, 10)) > 0.25).astype(int)
+def _(
+    interaction_weight_strength,
+    linear_weight_strength,
+    noise_strength,
+    np,
+    num_examples,
+    num_interaction_features,
+    num_linear_features,
+    num_targets,
+    prob_interaction_inclusion,
+    prob_linear_inclusion,
+    prob_linear_interaction_inclusion,
+):
+    features = np.random.randn(num_examples, num_linear_features)
+    interaction_term_combos = np.random.randn(num_linear_features, num_interaction_features) * (np.random.uniform(0, 1, (num_linear_features, num_interaction_features)) > prob_linear_interaction_inclusion).astype(int)
 
-    interaction_term_weights = np.random.randn(2000, 10)
-    interaction_features = features @ interaction_term_combos
+    interaction_term_weights = np.random.randn(num_targets, num_interaction_features)
+    interaction_features = (features - features.mean(0)) @ interaction_term_combos
     all_features = np.concatenate((features, interaction_features), axis=1)
 
-    linear_target_weights = np.random.randn(2000, 10) * 10 * (np.random.uniform(0, 1, (2000, 10)) > 0.5).astype(int)
-    interaction_target_weights = np.random.randn(2000, 10) * (np.random.uniform(0, 1, (2000, 10)) > 0.5).astype(int)
+    linear_target_weights = np.random.randn(num_targets, num_linear_features) * linear_weight_strength * (np.random.uniform(0, 1, (num_targets, 10)) > prob_linear_inclusion).astype(int)
+    interaction_target_weights = np.random.randn(num_targets, num_interaction_features) * interaction_weight_strength * (np.random.uniform(0, 1, (num_targets, num_interaction_features)) > prob_interaction_inclusion).astype(int)
     target_values = features @ linear_target_weights.T + interaction_features @ interaction_target_weights.T
     # Add noise
-    target_values = target_values + np.random.randn(*target_values.shape) * 4
+    target_values = target_values + np.random.randn(*target_values.shape) * noise_strength
     return features, target_values
-
-
-@app.cell
-def _(features, np):
-    from scipy.stats import ortho_group
-
-    # Generate model input feature space. Add random noise features and then rotate. Do not include interaction terms.
-    random_features = np.random.randn(1000, 500)
-    input_features = np.concatenate((features, random_features), axis=1)
-
-    rotation_matrix = ortho_group.rvs(dim=input_features.shape[-1])
-
-    if np.linalg.det(rotation_matrix) < 0:
-        rotation_matrix[0, :] *= -1
-
-    rotated_features = input_features @ rotation_matrix
-    return (rotated_features,)
 
 
 @app.cell
@@ -920,36 +1046,38 @@ def _():
 
 @app.cell
 def _(
+    features,
     get_ridge_model_constructor,
-    rotated_features,
+    np,
+    num_examples,
+    num_random_features,
     target_values,
     train_encoding,
 ):
-    train_encoding(rotated_features, target_values, model_constructor_fn=get_ridge_model_constructor(), num_folds=5)
-    return
+    from scipy.stats import ortho_group
+
+
+    all_corrs = []
+    for _ in range(100):
+        # Generate model input feature space. Add random noise features and then rotate. Do not include interaction terms.
+        random_features = np.random.randn(num_examples, num_random_features)
+        input_features = np.concatenate((features, random_features), axis=1)
+    
+        rotation_matrix = ortho_group.rvs(dim=input_features.shape[-1])
+    
+        if np.linalg.det(rotation_matrix) < 0:
+            rotation_matrix[0, :] *= -1
+    
+        rotated_features = input_features @ rotation_matrix
+    
+        corrs, _, _, _, _ = train_encoding(rotated_features, target_values, model_constructor_fn=get_ridge_model_constructor(), num_folds=5)
+        all_corrs.append(corrs)
+    return (all_corrs,)
 
 
 @app.cell
-def _(target_values_interaction_features):
-    target_values_interaction_features.shape
-    return
-
-
-@app.cell
-def _():
-    return
-
-
-@app.cell
-def _(features, target_params):
-    targets = features @ target_params
-    targets
-    return
-
-
-@app.cell
-def _(feature_interactions):
-    feature_interactions
+def _(all_corrs, np, plt):
+    plt.hist(np.stack(all_corrs).mean(1)[:, 0])
     return
 
 
