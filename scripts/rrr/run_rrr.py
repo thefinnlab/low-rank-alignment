@@ -992,7 +992,7 @@ def _run_rrr_for_unit(
         full_r2 = float(to_numpy(r2_score(Y_test, Y_hat_full)).mean())
 
         # Fit or load RRR once per fold; truncate to each k below.
-        max_k = max(config.rank_grid)
+        max_k = min(X_train.shape[1], Y_train.shape[1])
         fold_dir = os.path.join(rrr_unit_dir, f"fold_{fold_f}")
         a_path = os.path.join(fold_dir, "A.npy")
         b_path = os.path.join(fold_dir, "B.npy")
