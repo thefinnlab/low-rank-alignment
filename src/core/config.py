@@ -130,6 +130,12 @@ class SignificanceConfig:
             raise ValueError("num_null_shifts must be a positive integer")
         if isinstance(self.null_seed, bool) or not isinstance(self.null_seed, int):
             raise ValueError("null_seed must be an integer")
+        if isinstance(self.null_batch_size, bool) or not isinstance(
+            self.null_batch_size, int
+        ):
+            raise ValueError("null_batch_size must be a positive integer")
+        if self.null_batch_size <= 0:
+            raise ValueError("null_batch_size must be a positive integer")
         if self.fdr_mode not in {"electrode", "cluster"}:
             raise ValueError(
                 "fdr_mode must be either 'electrode' or 'cluster', "

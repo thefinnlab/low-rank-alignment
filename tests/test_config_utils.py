@@ -217,6 +217,7 @@ class TestApplyOverrides:
         [
             ({"num_null_shifts": 0}, "positive integer"),
             ({"null_seed": 1.5}, "must be an integer"),
+            ({"null_batch_size": 0}, "positive integer"),
             ({"fdr_mode": "lag"}, "electrode.*cluster"),
         ],
     )

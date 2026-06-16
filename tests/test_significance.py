@@ -266,6 +266,36 @@ class TestClusterLagHelpers:
         assert meta["seed"] == 123
         assert meta["sampling_mode"] == "iid_with_replacement_per_fold"
 
+    def test_fold_local_shift_null_scores_batch_size_matches_scalar_path(self):
+        rng = np.random.default_rng(16)
+        fold_predictions = []
+        fold_targets = []
+        for fold_len in [8, 9]:
+            fold_predictions.append(rng.standard_normal((fold_len, 2, 3)))
+            fold_targets.append(rng.standard_normal((fold_len, 2, 3)))
+        kwargs = {
+            "blocks_per_fold": 2,
+            "minimal_shift": 2,
+            "shift_step": 2,
+            "num_null_shifts": 10,
+            "seed": 123,
+            "positive_fraction": 0.0,
+            "mean_corr_threshold": -1.0,
+            "device": "cpu",
+        }
+
+        scalar_max, scalar_meta = fold_local_circular_shift_null_scores(
+            fold_predictions, fold_targets, null_batch_size=1, **kwargs
+        )
+        batched_max, batched_meta = fold_local_circular_shift_null_scores(
+            fold_predictions, fold_targets, null_batch_size=4, **kwargs
+        )
+
+        np.testing.assert_array_equal(
+            scalar_meta["shift_matrix"], batched_meta["shift_matrix"]
+        )
+        np.testing.assert_allclose(batched_max, scalar_max, rtol=1e-6, atol=1e-6)
+
     def test_fold_local_shift_sampling_is_reproducible_and_iid(self, monkeypatch):
         monkeypatch.setattr(
             significance_utils,
@@ -316,6 +346,19 @@ class TestClusterLagHelpers:
                 arrays,
                 minimal_shift=2,
                 num_null_shifts=0,
+                device="cpu",
+            )
+
+    @pytest.mark.parametrize("bad_batch_size", [0, -1, True, 1.5])
+    def test_null_sampling_validates_batch_size(self, bad_batch_size):
+        arrays = [np.zeros((8, 1, 1))]
+        with pytest.raises(ValueError, match="null_batch_size.*positive integer"):
+            fold_local_circular_shift_null_scores(
+                arrays,
+                arrays,
+                minimal_shift=2,
+                num_null_shifts=1,
+                null_batch_size=bad_batch_size,
                 device="cpu",
             )
 
