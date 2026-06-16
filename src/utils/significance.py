@@ -1,3 +1,4 @@
+import hashlib
 import os
 from pathlib import Path
 import warnings
@@ -391,6 +392,22 @@ def valid_fold_shifts(fold_length, minimal_shift=500, shift_step=1):
     return np.arange(minimal_shift, stop, shift_step, dtype=int)
 
 
+def derive_subject_null_seed(null_seed, subject_id):
+    """Derive a stable RNG seed from a base seed and subject identifier."""
+    if isinstance(null_seed, bool) or not isinstance(null_seed, int):
+        raise ValueError("null_seed must be an integer")
+    digest = hashlib.blake2b(
+        str(subject_id).encode("utf-8"), digest_size=8, person=b"sig-null"
+    ).digest()
+    subject_component = int.from_bytes(digest, byteorder="little", signed=False)
+    base_component = null_seed % (2**64)
+    return int(
+        np.random.SeedSequence([base_component, subject_component]).generate_state(
+            1, dtype=np.uint64
+        )[0]
+    )
+
+
 def fold_local_circular_shift_null_scores(
     fold_predictions,
     fold_targets,
@@ -400,32 +417,42 @@ def fold_local_circular_shift_null_scores(
     mean_corr_threshold=0.0,
     minimal_shift=500,
     shift_step=1,
+    num_null_shifts=10000,
+    seed=42,
     device=None,
     null_batch_size=16,
 ):
     """Score a fold-local circular-shift cluster null distribution.
 
-    Each null sample shifts targets independently inside each held-out fold.
-    Fold predictions are never paired with targets from another fold. When folds
-    have different numbers of valid shifts, shorter shift lists cycle.
+    Each null sample independently draws one allowed shift per held-out fold,
+    with replacement. Fold predictions are never paired with targets from
+    another fold.
     """
     del null_batch_size  # Reserved for future batching; looped scoring keeps RAM bounded.
     _validate_fold_arrays(fold_predictions, fold_targets)
+    if isinstance(num_null_shifts, bool) or not isinstance(num_null_shifts, int):
+        raise ValueError("num_null_shifts must be a positive integer")
+    if num_null_shifts <= 0:
+        raise ValueError("num_null_shifts must be a positive integer")
+    if isinstance(seed, bool) or not isinstance(seed, int):
+        raise ValueError("seed must be an integer")
     shift_lists = [
         valid_fold_shifts(len(target), minimal_shift, shift_step)
         for target in fold_targets
     ]
-    n_null = max(len(shifts) for shifts in shift_lists)
+    rng = np.random.default_rng(seed % (2**64))
+    n_null = num_null_shifts
     n_electrodes = np.asarray(fold_predictions[0]).shape[1]
     max_per_electrode = np.zeros((n_null, n_electrodes), dtype=np.float32)
-    shift_matrix = np.zeros((n_null, len(fold_predictions)), dtype=int)
+    shift_matrix = np.column_stack(
+        [rng.choice(shifts, size=n_null, replace=True) for shifts in shift_lists]
+    )
 
     for sample_idx in tqdm(range(n_null), desc="Fold-local circular shifts"):
-        shifted_targets = []
-        for fold_idx, (target, shifts) in enumerate(zip(fold_targets, shift_lists)):
-            shift = int(shifts[sample_idx % len(shifts)])
-            shift_matrix[sample_idx, fold_idx] = shift
-            shifted_targets.append(np.roll(target, shift=shift, axis=0))
+        shifted_targets = [
+            np.roll(target, shift=int(shift_matrix[sample_idx, fold_idx]), axis=0)
+            for fold_idx, target in enumerate(fold_targets)
+        ]
         result = score_fold_lag_clusters(
             fold_predictions,
             shifted_targets,
@@ -447,6 +474,8 @@ def fold_local_circular_shift_null_scores(
         "minimal_shift": int(minimal_shift),
         "shift_step": int(shift_step),
         "fold_lengths": np.array([len(target) for target in fold_targets], dtype=int),
+        "seed": int(seed),
+        "sampling_mode": "iid_with_replacement_per_fold",
     }
 
 
@@ -494,6 +523,65 @@ def compute_per_electrode_cluster_p_values(cluster_records, max_per_electrode):
         score = float(rec["cluster_score"])
         p_values.append((np.sum(null >= score) + 1) / (len(null) + 1))
     return np.asarray(p_values, dtype=float)
+
+
+def apply_cluster_fdr(cluster_records, fdr_q=0.01, fdr_mode="electrode"):
+    """Assign cluster- and electrode-level BH results to candidate records."""
+    if fdr_mode not in {"electrode", "cluster"}:
+        raise ValueError(
+            f"fdr_mode must be either 'electrode' or 'cluster', got {fdr_mode!r}"
+        )
+    if not cluster_records:
+        return cluster_records
+
+    cluster_p = np.asarray(
+        [record["cluster_p_value"] for record in cluster_records], dtype=float
+    )
+    cluster_reject, cluster_q, _, _ = multipletests(
+        cluster_p, alpha=fdr_q, method="fdr_bh"
+    )
+
+    best_by_electrode = {}
+    for index, record in enumerate(cluster_records):
+        key = (record["subject"], record["electrode"])
+        candidate = (
+            -float(record["cluster_score"]),
+            int(record["cluster_id"]),
+            index,
+        )
+        if key not in best_by_electrode or candidate < best_by_electrode[key]:
+            best_by_electrode[key] = candidate
+
+    best_indices = [candidate[2] for candidate in best_by_electrode.values()]
+    electrode_p = cluster_p[best_indices]
+    electrode_reject, electrode_q, _, _ = multipletests(
+        electrode_p, alpha=fdr_q, method="fdr_bh"
+    )
+    electrode_results = {
+        (cluster_records[index]["subject"], cluster_records[index]["electrode"]): (
+            float(electrode_p[result_idx]),
+            float(electrode_q[result_idx]),
+            bool(electrode_reject[result_idx]),
+            index,
+        )
+        for result_idx, index in enumerate(best_indices)
+    }
+
+    for index, record in enumerate(cluster_records):
+        key = (record["subject"], record["electrode"])
+        elec_p, elec_q, elec_sig, best_index = electrode_results[key]
+        is_best = index == best_index
+        record["cluster_q_value"] = float(cluster_q[index])
+        record["electrode_p_value"] = elec_p
+        record["electrode_q_value"] = elec_q
+        record["is_electrode_best_cluster"] = is_best
+        record["p_value"] = float(cluster_p[index])
+        record["q_value"] = float(cluster_q[index])
+        if fdr_mode == "cluster":
+            record["sig"] = bool(cluster_reject[index])
+        else:
+            record["sig"] = bool(is_best and elec_sig)
+    return cluster_records
 
 
 def significant_lags_all_electrodes_gpu(

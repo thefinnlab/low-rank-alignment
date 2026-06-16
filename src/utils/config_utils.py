@@ -64,6 +64,9 @@ def apply_overrides(config, overrides: dict):
     config = deepcopy(config)
     for key_path, value in overrides.items():
         set_nested_attr(config, key_path, value)
+    validate = getattr(config, "validate", None)
+    if callable(validate):
+        validate()
     return config
 
 

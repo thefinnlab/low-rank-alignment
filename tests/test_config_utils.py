@@ -21,7 +21,6 @@ from src.utils.config_utils import (
     expand_per_model_layer_configs,
 )
 
-
 # ---------------------------------------------------------------------------
 # parse_override_args
 # ---------------------------------------------------------------------------
@@ -61,6 +60,20 @@ class TestParseOverrideArgs:
         result = parse_override_args(["--encoding.layer=48", "--n_permutations=100"])
         assert result == {"encoding.layer": 48, "n_permutations": 100}
 
+    def test_significance_sampling_and_fdr_args(self):
+        result = parse_override_args(
+            [
+                "--num_null_shifts=250",
+                "--null_seed=7",
+                "--fdr_mode=cluster",
+            ]
+        )
+        assert result == {
+            "num_null_shifts": 250,
+            "null_seed": 7,
+            "fdr_mode": "cluster",
+        }
+
     def test_ignores_non_flag_args(self):
         result = parse_override_args(["not_a_flag", "--layer=24"])
         assert result == {"layer": 24}
@@ -95,6 +108,9 @@ class TestDictToDataclass:
         assert config.encoding.data_root == "my_data/"
         assert config.minimal_shift == 250
         assert config.fdr_q == 0.01  # default
+        assert config.num_null_shifts == 10000
+        assert config.null_seed == 42
+        assert config.fdr_mode == "electrode"
 
     def test_partial_dict_uses_defaults(self):
         config = dict_to_dataclass({}, EncodingConfig)
@@ -182,6 +198,32 @@ class TestApplyOverrides:
         assert result.minimal_shift == 250
         assert result.fdr_q == 0.05
 
+    def test_significance_sampling_and_fdr_overrides(self):
+        config = SignificanceConfig()
+        result = apply_overrides(
+            config,
+            {
+                "num_null_shifts": 250,
+                "null_seed": 7,
+                "fdr_mode": "cluster",
+            },
+        )
+        assert result.num_null_shifts == 250
+        assert result.null_seed == 7
+        assert result.fdr_mode == "cluster"
+
+    @pytest.mark.parametrize(
+        ("override", "message"),
+        [
+            ({"num_null_shifts": 0}, "positive integer"),
+            ({"null_seed": 1.5}, "must be an integer"),
+            ({"fdr_mode": "lag"}, "electrode.*cluster"),
+        ],
+    )
+    def test_invalid_significance_overrides(self, override, message):
+        with pytest.raises(ValueError, match=message):
+            apply_overrides(SignificanceConfig(), override)
+
     def test_rrr_refresh_override(self):
         config = RRRConfig()
         result = apply_overrides(config, {"refresh": True})
@@ -242,9 +284,7 @@ class TestGetResultsDir:
             stimulus_id="coraline",
             stimulus_label="coraline",
         )
-        result = get_results_dir(
-            "gpt2xl", 0, {"layer": 24}, dataset_context=context
-        )
+        result = get_results_dir("gpt2xl", 0, {"layer": 24}, dataset_context=context)
         assert result.endswith(os.path.join("gpt2xl_layer24_offset0", "movie-coraline"))
 
     def test_different_brain_treebank_movies_get_different_dirs(self):
@@ -298,8 +338,7 @@ class TestExpandPerModelLayerConfigs:
 
         assert [c.encoding.per_model_config["layer"] for c in expanded] == [0, 24, 48]
         assert all(
-            not isinstance(c.encoding.per_model_config["layer"], list)
-            for c in expanded
+            not isinstance(c.encoding.per_model_config["layer"], list) for c in expanded
         )
         assert config.encoding.per_model_config["layer"] == [0, 24, 48]
 
@@ -337,7 +376,10 @@ class TestLoadConfig:
             },
             "output_dir": None,
             "minimal_shift": 500,
+            "num_null_shifts": 123,
+            "null_seed": 9,
             "fdr_q": 0.01,
+            "fdr_mode": "cluster",
             "save_weights": False,
         }
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -348,7 +390,10 @@ class TestLoadConfig:
         assert isinstance(config, SignificanceConfig)
         assert config.encoding.per_model_config == {"layer": 48}
         assert config.minimal_shift == 500
+        assert config.num_null_shifts == 123
+        assert config.null_seed == 9
         assert config.fdr_q == 0.01
+        assert config.fdr_mode == "cluster"
 
     def test_cli_overrides_take_precedence(self):
         data = {
@@ -359,11 +404,22 @@ class TestLoadConfig:
             path = os.path.join(tmpdir, "sig.yml")
             self._write_yaml(data, path)
             config = load_config(
-                path, {"encoding.offset": 2, "minimal_shift": 250}, SignificanceConfig
+                path,
+                {
+                    "encoding.offset": 2,
+                    "minimal_shift": 250,
+                    "num_null_shifts": 50,
+                    "null_seed": 11,
+                    "fdr_mode": "cluster",
+                },
+                SignificanceConfig,
             )
 
         assert config.encoding.offset == 2
         assert config.minimal_shift == 250
+        assert config.num_null_shifts == 50
+        assert config.null_seed == 11
+        assert config.fdr_mode == "cluster"
 
     def test_none_config_path_uses_defaults(self):
         config = load_config(None, {}, EncodingConfig)
