@@ -39,7 +39,10 @@ positive_fraction: 0.8
 mean_corr_threshold: 0.0
 minimal_shift: 500
 shift_step: 1
+num_null_shifts: 10000
+null_seed: 42
 null_batch_size: 16
 device: null
 fdr_q: 0.01
+fdr_mode: electrode
 save_weights: true

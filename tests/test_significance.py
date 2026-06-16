@@ -5,7 +5,9 @@ import pandas as pd
 import pytest
 import torch
 
+import src.utils.significance as significance_utils
 from src.utils.significance import (
+    apply_cluster_fdr,
     aggregate_global_null,
     batch_corrcoef,
     build_cluster_filter,
@@ -13,6 +15,7 @@ from src.utils.significance import (
     compute_fold_correlations,
     compute_per_electrode_cluster_p_values,
     compute_sem_normalized_target_scores,
+    derive_subject_null_seed,
     fold_local_circular_shift_null_scores,
     label_lag_clusters,
     mark_clusters_by_min_size,
@@ -198,9 +201,7 @@ class TestClusterLagHelpers:
                 [[0.60, 0.25], [0.15, 0.00]],
             ]
         )
-        target_scores, mean_z, sem_z = compute_sem_normalized_target_scores(
-            block_corrs
-        )
+        target_scores, mean_z, sem_z = compute_sem_normalized_target_scores(block_corrs)
         scored = score_lag_clusters(target_scores, clusters)
         expected = target_scores[0, 0] + target_scores[0, 1]
         assert scored[0]["cluster_score"] == pytest.approx(expected)
@@ -253,6 +254,8 @@ class TestClusterLagHelpers:
             blocks_per_fold=2,
             minimal_shift=2,
             shift_step=2,
+            num_null_shifts=3,
+            seed=123,
             positive_fraction=0.0,
             mean_corr_threshold=-1.0,
             device="cpu",
@@ -260,6 +263,104 @@ class TestClusterLagHelpers:
         assert max_per_electrode.shape == (3, 2)
         assert meta["shift_matrix"].shape == (3, 2)
         np.testing.assert_array_equal(meta["fold_lengths"], np.array([8, 9]))
+        assert meta["seed"] == 123
+        assert meta["sampling_mode"] == "iid_with_replacement_per_fold"
+
+    def test_fold_local_shift_null_scores_batch_size_matches_scalar_path(self):
+        rng = np.random.default_rng(16)
+        fold_predictions = []
+        fold_targets = []
+        for fold_len in [8, 9]:
+            fold_predictions.append(rng.standard_normal((fold_len, 2, 3)))
+            fold_targets.append(rng.standard_normal((fold_len, 2, 3)))
+        kwargs = {
+            "blocks_per_fold": 2,
+            "minimal_shift": 2,
+            "shift_step": 2,
+            "num_null_shifts": 10,
+            "seed": 123,
+            "positive_fraction": 0.0,
+            "mean_corr_threshold": -1.0,
+            "device": "cpu",
+        }
+
+        scalar_max, scalar_meta = fold_local_circular_shift_null_scores(
+            fold_predictions, fold_targets, null_batch_size=1, **kwargs
+        )
+        batched_max, batched_meta = fold_local_circular_shift_null_scores(
+            fold_predictions, fold_targets, null_batch_size=4, **kwargs
+        )
+
+        np.testing.assert_array_equal(
+            scalar_meta["shift_matrix"], batched_meta["shift_matrix"]
+        )
+        np.testing.assert_allclose(batched_max, scalar_max, rtol=1e-6, atol=1e-6)
+
+    def test_fold_local_shift_sampling_is_reproducible_and_iid(self, monkeypatch):
+        monkeypatch.setattr(
+            significance_utils,
+            "score_fold_lag_clusters",
+            lambda *args, **kwargs: {"scored_clusters": []},
+        )
+        rng = np.random.default_rng(15)
+        predictions = [rng.standard_normal((12, 1, 1)) for _ in range(3)]
+        targets = [rng.standard_normal((12, 1, 1)) for _ in range(3)]
+        kwargs = {
+            "blocks_per_fold": 2,
+            "minimal_shift": 2,
+            "shift_step": 2,
+            "num_null_shifts": 100,
+            "device": "cpu",
+        }
+
+        _, first = fold_local_circular_shift_null_scores(
+            predictions, targets, seed=10, **kwargs
+        )
+        _, repeated = fold_local_circular_shift_null_scores(
+            predictions, targets, seed=10, **kwargs
+        )
+        _, changed = fold_local_circular_shift_null_scores(
+            predictions, targets, seed=11, **kwargs
+        )
+
+        np.testing.assert_array_equal(first["shift_matrix"], repeated["shift_matrix"])
+        assert not np.array_equal(first["shift_matrix"], changed["shift_matrix"])
+        allowed = set(valid_fold_shifts(12, minimal_shift=2, shift_step=2))
+        assert all(
+            set(first["shift_matrix"][:, fold]).issubset(allowed) for fold in range(3)
+        )
+        assert not np.array_equal(
+            first["shift_matrix"][:, 0], first["shift_matrix"][:, 1]
+        )
+
+    def test_subject_null_seed_is_stable_and_subject_specific(self):
+        assert derive_subject_null_seed(42, 1) == derive_subject_null_seed(42, 1)
+        assert derive_subject_null_seed(42, 1) != derive_subject_null_seed(42, 2)
+        assert derive_subject_null_seed(42, 1) != derive_subject_null_seed(43, 1)
+
+    def test_null_sampling_validates_count(self):
+        arrays = [np.zeros((8, 1, 1))]
+        with pytest.raises(ValueError, match="positive integer"):
+            fold_local_circular_shift_null_scores(
+                arrays,
+                arrays,
+                minimal_shift=2,
+                num_null_shifts=0,
+                device="cpu",
+            )
+
+    @pytest.mark.parametrize("bad_batch_size", [0, -1, True, 1.5])
+    def test_null_sampling_validates_batch_size(self, bad_batch_size):
+        arrays = [np.zeros((8, 1, 1))]
+        with pytest.raises(ValueError, match="null_batch_size.*positive integer"):
+            fold_local_circular_shift_null_scores(
+                arrays,
+                arrays,
+                minimal_shift=2,
+                num_null_shifts=1,
+                null_batch_size=bad_batch_size,
+                device="cpu",
+            )
 
     def test_global_null_aggregation_across_subjects_and_electrodes(self):
         sub_a = np.array([[1.0, 2.0], [3.0, 0.5], [4.0, 1.0]])
@@ -292,23 +393,135 @@ class TestClusterLagHelpers:
 
     def test_per_electrode_cluster_p_values_plus_one_correction(self):
         max_per_electrode = np.array([[0.1], [0.2], [0.3]])
-        records = [
-            {"subject": 1, "subject_electrode_index": 0, "cluster_score": 10.0}
-        ]
+        records = [{"subject": 1, "subject_electrode_index": 0, "cluster_score": 10.0}]
 
         p_values = compute_per_electrode_cluster_p_values(records, max_per_electrode)
 
         np.testing.assert_allclose(p_values, np.array([1 / 4]))
 
     def test_per_electrode_cluster_p_values_missing_null_error(self):
-        records = [
-            {"subject": 1, "subject_electrode_index": 7, "cluster_score": 1.0}
-        ]
+        records = [{"subject": 1, "subject_electrode_index": 7, "cluster_score": 1.0}]
         with pytest.raises(
             ValueError,
             match="Missing null distribution for subject=1, subject_electrode_index=7",
         ):
             compute_per_electrode_cluster_p_values(records, np.array([[1.0]]))
+
+    def test_cluster_fdr_mode_preserves_all_cluster_hypotheses(self):
+        records = [
+            {
+                "subject": 1,
+                "electrode": "E1",
+                "cluster_id": 0,
+                "cluster_score": 4.0,
+                "cluster_p_value": 0.01,
+            },
+            {
+                "subject": 1,
+                "electrode": "E1",
+                "cluster_id": 1,
+                "cluster_score": 3.0,
+                "cluster_p_value": 0.04,
+            },
+            {
+                "subject": 2,
+                "electrode": "E2",
+                "cluster_id": 0,
+                "cluster_score": 2.0,
+                "cluster_p_value": 0.2,
+            },
+        ]
+
+        apply_cluster_fdr(records, fdr_q=0.05, fdr_mode="cluster")
+
+        expected_reject, expected_q, _, _ = significance_utils.multipletests(
+            [0.01, 0.04, 0.2], alpha=0.05, method="fdr_bh"
+        )
+        np.testing.assert_array_equal([r["sig"] for r in records], expected_reject)
+        np.testing.assert_allclose([r["q_value"] for r in records], expected_q)
+        np.testing.assert_allclose([r["cluster_q_value"] for r in records], expected_q)
+        np.testing.assert_allclose([r["p_value"] for r in records], [0.01, 0.04, 0.2])
+        assert all("electrode_p_value" in record for record in records)
+        assert all("electrode_q_value" in record for record in records)
+
+    def test_electrode_fdr_uses_one_deterministic_winner_per_electrode_for_sig_only(
+        self,
+    ):
+        records = [
+            {
+                "subject": 1,
+                "electrode": "E1",
+                "cluster_id": 8,
+                "cluster_score": 5.0,
+                "cluster_p_value": 0.001,
+            },
+            {
+                "subject": 1,
+                "electrode": "E1",
+                "cluster_id": 3,
+                "cluster_score": 5.0,
+                "cluster_p_value": 0.01,
+            },
+            {
+                "subject": 1,
+                "electrode": "E2",
+                "cluster_id": 2,
+                "cluster_score": 4.0,
+                "cluster_p_value": 0.04,
+            },
+            {
+                "subject": 2,
+                "electrode": "E3",
+                "cluster_id": 1,
+                "cluster_score": 3.0,
+                "cluster_p_value": 0.8,
+            },
+        ]
+
+        apply_cluster_fdr(records, fdr_q=0.05, fdr_mode="electrode")
+
+        expected_cluster_reject, expected_cluster_q, _, _ = (
+            significance_utils.multipletests(
+                [0.001, 0.01, 0.04, 0.8], alpha=0.05, method="fdr_bh"
+            )
+        )
+        assert [r["is_electrode_best_cluster"] for r in records] == [
+            False,
+            True,
+            True,
+            True,
+        ]
+        expected_reject, expected_q, _, _ = significance_utils.multipletests(
+            [0.01, 0.04, 0.8], alpha=0.05, method="fdr_bh"
+        )
+        assert sum(r["is_electrode_best_cluster"] for r in records) == 3
+        np.testing.assert_allclose(
+            [records[0]["electrode_p_value"], records[1]["electrode_p_value"]],
+            [0.01, 0.01],
+        )
+        np.testing.assert_allclose(
+            [record["p_value"] for record in records], [0.001, 0.01, 0.04, 0.8]
+        )
+        np.testing.assert_allclose(
+            [record["q_value"] for record in records], expected_cluster_q
+        )
+        np.testing.assert_allclose(
+            [record["cluster_q_value"] for record in records], expected_cluster_q
+        )
+        np.testing.assert_allclose(
+            [
+                records[1]["electrode_q_value"],
+                records[2]["electrode_q_value"],
+                records[3]["electrode_q_value"],
+            ],
+            expected_q,
+        )
+        assert records[0]["sig"] is False
+        assert bool(expected_cluster_reject[0]) is True
+        np.testing.assert_array_equal(
+            [records[1]["sig"], records[2]["sig"], records[3]["sig"]],
+            expected_reject,
+        )
 
     def test_mark_clusters_by_min_size_filters_small_clusters(self):
         clusters = [

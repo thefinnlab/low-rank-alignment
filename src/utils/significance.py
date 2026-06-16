@@ -1,3 +1,4 @@
+import hashlib
 import os
 from pathlib import Path
 import warnings
@@ -33,11 +34,42 @@ def batch_corrcoef(x, y):
     Returns:
         torch.Tensor: Shape (n_electrodes, n_lags) of Pearson r values.
     """
+    return _batch_corrcoef_last_dim(x, y)
+
+
+def _batch_corrcoef_last_dim(x, y):
+    """Compute Pearson correlations over the last dimension with broadcasting."""
     x = x - x.mean(dim=-1, keepdim=True)
     y = y - y.mean(dim=-1, keepdim=True)
     num = (x * y).sum(dim=-1)
     denom = (x**2).sum(dim=-1).sqrt() * (y**2).sum(dim=-1).sqrt()
     with torch.no_grad():
+        out = num / denom
+        out = torch.where(denom == 0, torch.full_like(out, float("nan")), out)
+    return out
+
+
+def _nan_batch_corrcoef_last_dim(x, y):
+    """Compute Pearson correlations over the last dimension, ignoring NaN padding."""
+    valid = torch.isfinite(x) & torch.isfinite(y)
+    count = valid.sum(dim=-1, keepdim=True)
+    x_clean = torch.where(valid, x, torch.zeros_like(x))
+    y_clean = torch.where(valid, y, torch.zeros_like(y))
+    with torch.no_grad():
+        mean_x = torch.where(
+            count > 0,
+            x_clean.sum(dim=-1, keepdim=True) / count.clamp_min(1),
+            torch.zeros_like(count, dtype=x.dtype),
+        )
+        mean_y = torch.where(
+            count > 0,
+            y_clean.sum(dim=-1, keepdim=True) / count.clamp_min(1),
+            torch.zeros_like(count, dtype=y.dtype),
+        )
+        x_centered = torch.where(valid, x - mean_x, torch.zeros_like(x))
+        y_centered = torch.where(valid, y - mean_y, torch.zeros_like(y))
+        num = (x_centered * y_centered).sum(dim=-1)
+        denom = (x_centered**2).sum(dim=-1).sqrt() * (y_centered**2).sum(dim=-1).sqrt()
         out = num / denom
         out = torch.where(denom == 0, torch.full_like(out, float("nan")), out)
     return out
@@ -163,6 +195,67 @@ def compute_fold_block_correlations(
     if not block_corrs:
         raise ValueError("No fold blocks were available for correlation scoring.")
     return np.stack(block_corrs), block_rows
+
+
+def _compute_shifted_block_correlations_batch(
+    fold_predictions, fold_targets, blocks_per_fold, batch_shift_matrix, device=None
+):
+    """Compute block correlations for a batch of fold-local circular shifts.
+
+    Returns an array with shape
+    ``(batch_size, n_blocks_total, n_electrodes, n_lags)``.
+    """
+    _validate_fold_arrays(fold_predictions, fold_targets)
+    batch_shift_matrix = np.asarray(batch_shift_matrix, dtype=int)
+    if batch_shift_matrix.ndim != 2:
+        raise ValueError(
+            "batch_shift_matrix must have shape (batch_size, n_folds), got "
+            f"{batch_shift_matrix.shape}"
+        )
+    if batch_shift_matrix.shape[1] != len(fold_predictions):
+        raise ValueError(
+            "batch_shift_matrix fold count does not match fold data: "
+            f"{batch_shift_matrix.shape[1]} and {len(fold_predictions)}"
+        )
+    if batch_shift_matrix.shape[0] == 0:
+        raise ValueError("batch_shift_matrix must contain at least one shift row.")
+
+    batch_size = batch_shift_matrix.shape[0]
+    block_specs = []
+    for fold_idx, pred in enumerate(fold_predictions):
+        for local_idx in split_fold_into_blocks(len(pred), blocks_per_fold):
+            block_specs.append((fold_idx, local_idx))
+    if not block_specs:
+        raise ValueError("No fold blocks were available for correlation scoring.")
+
+    n_electrodes = np.asarray(fold_predictions[0]).shape[1]
+    n_lags = np.asarray(fold_predictions[0]).shape[2]
+    max_block_len = max(len(local_idx) for _, local_idx in block_specs)
+    n_blocks = len(block_specs)
+    pred_blocks = np.full(
+        (batch_size, n_blocks, n_electrodes, n_lags, max_block_len),
+        np.nan,
+        dtype=np.float32,
+    )
+    target_blocks = np.full_like(pred_blocks, np.nan)
+
+    for block_idx, (fold_idx, local_idx) in enumerate(block_specs):
+        pred = np.asarray(fold_predictions[fold_idx])
+        target = np.asarray(fold_targets[fold_idx])
+        fold_shifts = batch_shift_matrix[:, fold_idx]
+        fold_len = len(target)
+        block_len = len(local_idx)
+        source_idx = (local_idx[None, :] - fold_shifts[:, None]) % fold_len
+        pred_block = pred[local_idx].transpose(1, 2, 0)
+        pred_blocks[:, block_idx, :, :, :block_len] = pred_block
+        target_blocks[:, block_idx, :, :, :block_len] = target[source_idx].transpose(
+            0, 2, 3, 1
+        )
+
+    torch_device = _resolve_torch_device(device)
+    pred_t = torch.tensor(pred_blocks, dtype=torch.float32, device=torch_device)
+    target_t = torch.tensor(target_blocks, dtype=torch.float32, device=torch_device)
+    return to_numpy(_nan_batch_corrcoef_last_dim(pred_t, target_t))
 
 
 def compute_fold_correlations(fold_predictions, fold_targets, device=None):
@@ -391,6 +484,22 @@ def valid_fold_shifts(fold_length, minimal_shift=500, shift_step=1):
     return np.arange(minimal_shift, stop, shift_step, dtype=int)
 
 
+def derive_subject_null_seed(null_seed, subject_id):
+    """Derive a stable RNG seed from a base seed and subject identifier."""
+    if isinstance(null_seed, bool) or not isinstance(null_seed, int):
+        raise ValueError("null_seed must be an integer")
+    digest = hashlib.blake2b(
+        str(subject_id).encode("utf-8"), digest_size=8, person=b"sig-null"
+    ).digest()
+    subject_component = int.from_bytes(digest, byteorder="little", signed=False)
+    base_component = null_seed % (2**64)
+    return int(
+        np.random.SeedSequence([base_component, subject_component]).generate_state(
+            1, dtype=np.uint64
+        )[0]
+    )
+
+
 def fold_local_circular_shift_null_scores(
     fold_predictions,
     fold_targets,
@@ -400,53 +509,79 @@ def fold_local_circular_shift_null_scores(
     mean_corr_threshold=0.0,
     minimal_shift=500,
     shift_step=1,
+    num_null_shifts=10000,
+    seed=42,
     device=None,
     null_batch_size=16,
 ):
     """Score a fold-local circular-shift cluster null distribution.
 
-    Each null sample shifts targets independently inside each held-out fold.
-    Fold predictions are never paired with targets from another fold. When folds
-    have different numbers of valid shifts, shorter shift lists cycle.
+    Each null sample independently draws one allowed shift per held-out fold,
+    with replacement. Fold predictions are never paired with targets from
+    another fold.
     """
-    del null_batch_size  # Reserved for future batching; looped scoring keeps RAM bounded.
     _validate_fold_arrays(fold_predictions, fold_targets)
+    if isinstance(num_null_shifts, bool) or not isinstance(num_null_shifts, int):
+        raise ValueError("num_null_shifts must be a positive integer")
+    if num_null_shifts <= 0:
+        raise ValueError("num_null_shifts must be a positive integer")
+    if isinstance(seed, bool) or not isinstance(seed, int):
+        raise ValueError("seed must be an integer")
+    if isinstance(null_batch_size, bool) or not isinstance(
+        null_batch_size, (int, np.integer)
+    ):
+        raise ValueError("null_batch_size must be a positive integer")
+    null_batch_size = int(null_batch_size)
+    if null_batch_size <= 0:
+        raise ValueError("null_batch_size must be a positive integer")
     shift_lists = [
         valid_fold_shifts(len(target), minimal_shift, shift_step)
         for target in fold_targets
     ]
-    n_null = max(len(shifts) for shifts in shift_lists)
+    rng = np.random.default_rng(seed % (2**64))
+    n_null = num_null_shifts
     n_electrodes = np.asarray(fold_predictions[0]).shape[1]
     max_per_electrode = np.zeros((n_null, n_electrodes), dtype=np.float32)
-    shift_matrix = np.zeros((n_null, len(fold_predictions)), dtype=int)
+    shift_matrix = np.column_stack(
+        [rng.choice(shifts, size=n_null, replace=True) for shifts in shift_lists]
+    )
 
-    for sample_idx in tqdm(range(n_null), desc="Fold-local circular shifts"):
-        shifted_targets = []
-        for fold_idx, (target, shifts) in enumerate(zip(fold_targets, shift_lists)):
-            shift = int(shifts[sample_idx % len(shifts)])
-            shift_matrix[sample_idx, fold_idx] = shift
-            shifted_targets.append(np.roll(target, shift=shift, axis=0))
-        result = score_fold_lag_clusters(
+    for batch_start in tqdm(
+        range(0, n_null, null_batch_size), desc="Fold-local circular shifts"
+    ):
+        batch_stop = min(batch_start + null_batch_size, n_null)
+        batch_block_corrs = _compute_shifted_block_correlations_batch(
             fold_predictions,
-            shifted_targets,
-            blocks_per_fold,
-            max_matching_distance=max_matching_distance,
-            positive_fraction=positive_fraction,
-            mean_corr_threshold=mean_corr_threshold,
+            fold_targets,
+            blocks_per_fold=blocks_per_fold,
+            batch_shift_matrix=shift_matrix[batch_start:batch_stop],
             device=device,
         )
-        for cluster in result["scored_clusters"]:
-            elec_idx = int(cluster["electrode_idx"])
-            max_per_electrode[sample_idx, elec_idx] = max(
-                max_per_electrode[sample_idx, elec_idx],
-                float(cluster["cluster_score"]),
+        for batch_offset, block_corrs in enumerate(batch_block_corrs):
+            sample_idx = batch_start + batch_offset
+            cluster_mask, _, _ = build_cluster_filter(
+                block_corrs,
+                positive_fraction=positive_fraction,
+                mean_corr_threshold=mean_corr_threshold,
             )
+            _, clusters = label_lag_clusters(
+                cluster_mask, max_matching_distance=max_matching_distance
+            )
+            target_scores, _, _ = compute_sem_normalized_target_scores(block_corrs)
+            for cluster in score_lag_clusters(target_scores, clusters):
+                elec_idx = int(cluster["electrode_idx"])
+                max_per_electrode[sample_idx, elec_idx] = max(
+                    max_per_electrode[sample_idx, elec_idx],
+                    float(cluster["cluster_score"]),
+                )
     return max_per_electrode, {
         "shift_matrix": shift_matrix,
         "n_null": int(n_null),
         "minimal_shift": int(minimal_shift),
         "shift_step": int(shift_step),
         "fold_lengths": np.array([len(target) for target in fold_targets], dtype=int),
+        "seed": int(seed),
+        "sampling_mode": "iid_with_replacement_per_fold",
     }
 
 
@@ -494,6 +629,65 @@ def compute_per_electrode_cluster_p_values(cluster_records, max_per_electrode):
         score = float(rec["cluster_score"])
         p_values.append((np.sum(null >= score) + 1) / (len(null) + 1))
     return np.asarray(p_values, dtype=float)
+
+
+def apply_cluster_fdr(cluster_records, fdr_q=0.01, fdr_mode="electrode"):
+    """Assign cluster- and electrode-level BH results to candidate records."""
+    if fdr_mode not in {"electrode", "cluster"}:
+        raise ValueError(
+            f"fdr_mode must be either 'electrode' or 'cluster', got {fdr_mode!r}"
+        )
+    if not cluster_records:
+        return cluster_records
+
+    cluster_p = np.asarray(
+        [record["cluster_p_value"] for record in cluster_records], dtype=float
+    )
+    cluster_reject, cluster_q, _, _ = multipletests(
+        cluster_p, alpha=fdr_q, method="fdr_bh"
+    )
+
+    best_by_electrode = {}
+    for index, record in enumerate(cluster_records):
+        key = (record["subject"], record["electrode"])
+        candidate = (
+            -float(record["cluster_score"]),
+            int(record["cluster_id"]),
+            index,
+        )
+        if key not in best_by_electrode or candidate < best_by_electrode[key]:
+            best_by_electrode[key] = candidate
+
+    best_indices = [candidate[2] for candidate in best_by_electrode.values()]
+    electrode_p = cluster_p[best_indices]
+    electrode_reject, electrode_q, _, _ = multipletests(
+        electrode_p, alpha=fdr_q, method="fdr_bh"
+    )
+    electrode_results = {
+        (cluster_records[index]["subject"], cluster_records[index]["electrode"]): (
+            float(electrode_p[result_idx]),
+            float(electrode_q[result_idx]),
+            bool(electrode_reject[result_idx]),
+            index,
+        )
+        for result_idx, index in enumerate(best_indices)
+    }
+
+    for index, record in enumerate(cluster_records):
+        key = (record["subject"], record["electrode"])
+        elec_p, elec_q, elec_sig, best_index = electrode_results[key]
+        is_best = index == best_index
+        record["cluster_q_value"] = float(cluster_q[index])
+        record["electrode_p_value"] = elec_p
+        record["electrode_q_value"] = elec_q
+        record["is_electrode_best_cluster"] = is_best
+        record["p_value"] = float(cluster_p[index])
+        record["q_value"] = float(cluster_q[index])
+        if fdr_mode == "cluster":
+            record["sig"] = bool(cluster_reject[index])
+        else:
+            record["sig"] = bool(is_best and elec_sig)
+    return cluster_records
 
 
 def significant_lags_all_electrodes_gpu(

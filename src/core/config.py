@@ -109,13 +109,38 @@ class SignificanceConfig:
     mean_z_threshold: float | None = None  # Deprecated: converted to r-space if set.
     minimal_shift: int = 500
     shift_step: int = 1
+    num_null_shifts: int = 10000
+    null_seed: int = 42
     null_batch_size: int = 16
     device: str | None = None
     fdr_q: float = 0.01
+    fdr_mode: str = "electrode"
     save_weights: bool = False
-    min_cluster_size: int = (
-        1  # Heuristic significance: minimum generated cluster size.
-    )
+    min_cluster_size: int = 1  # Heuristic significance: minimum generated cluster size.
+
+    def __post_init__(self):
+        self.validate()
+
+    def validate(self):
+        if isinstance(self.num_null_shifts, bool) or not isinstance(
+            self.num_null_shifts, int
+        ):
+            raise ValueError("num_null_shifts must be a positive integer")
+        if self.num_null_shifts <= 0:
+            raise ValueError("num_null_shifts must be a positive integer")
+        if isinstance(self.null_seed, bool) or not isinstance(self.null_seed, int):
+            raise ValueError("null_seed must be an integer")
+        if isinstance(self.null_batch_size, bool) or not isinstance(
+            self.null_batch_size, int
+        ):
+            raise ValueError("null_batch_size must be a positive integer")
+        if self.null_batch_size <= 0:
+            raise ValueError("null_batch_size must be a positive integer")
+        if self.fdr_mode not in {"electrode", "cluster"}:
+            raise ValueError(
+                "fdr_mode must be either 'electrode' or 'cluster', "
+                f"got {self.fdr_mode!r}"
+            )
 
 
 @dataclass

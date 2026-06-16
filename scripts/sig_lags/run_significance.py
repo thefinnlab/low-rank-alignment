@@ -14,8 +14,6 @@ import pandas as pd
 from himalaya.backend import set_backend
 from src.utils.embeddings import get_glove_embeddings
 import torch
-from statsmodels.stats.multitest import multipletests
-
 from src.utils import (
     train_encoding,
     load_embeddings,
@@ -31,7 +29,9 @@ from src.utils.encoding import extract_best_alphas, get_ridge_model_constructor
 from src.utils.alpha_grids import resolve_ridge_alphas, save_alpha_diagnostics
 from src.utils.data_loaders import load_data_from_cache
 from src.utils.significance import (
+    apply_cluster_fdr,
     compute_per_electrode_cluster_p_values,
+    derive_subject_null_seed,
     fold_local_circular_shift_null_scores,
     reshape_fold_predictions_and_targets,
     score_fold_lag_clusters,
@@ -43,6 +43,7 @@ from src.utils.significance import (
 
 
 def run_config(config: SignificanceConfig):
+    config.validate()
     enc = config.encoding
     mean_corr_threshold = (
         float(np.tanh(config.mean_z_threshold))
@@ -220,6 +221,7 @@ def run_config(config: SignificanceConfig):
         # g. Score fold-local circular-shift null for this subject
         # ------------------------------------------------------------------
         print("  Scoring fold-local circular-shift null...")
+        subject_null_seed = derive_subject_null_seed(config.null_seed, bids_sub_id)
         max_per_electrode, shift_meta = fold_local_circular_shift_null_scores(
             fold_predictions_3d,
             fold_targets_3d,
@@ -229,6 +231,8 @@ def run_config(config: SignificanceConfig):
             mean_corr_threshold=mean_corr_threshold,
             minimal_shift=config.minimal_shift,
             shift_step=config.shift_step,
+            num_null_shifts=config.num_null_shifts,
+            seed=subject_null_seed,
             device=config.device,
             null_batch_size=config.null_batch_size,
         )
@@ -279,6 +283,9 @@ def run_config(config: SignificanceConfig):
                         "cluster_score": np.nan,
                         "cluster_p_value": 1.0,
                         "cluster_q_value": 1.0,
+                        "electrode_p_value": 1.0,
+                        "electrode_q_value": 1.0,
+                        "is_electrode_best_cluster": False,
                         "positive_fraction": float(positive_frac[elec_idx, lag_idx]),
                         "mean_corr": float(mean_corr[elec_idx, lag_idx]),
                     }
@@ -305,26 +312,11 @@ def run_config(config: SignificanceConfig):
     if not subject_nulls:
         raise ValueError("No subject null distributions were computed.")
 
-    if all_cluster_records:
-        cluster_p = np.array(
-            [rec["cluster_p_value"] for rec in all_cluster_records], dtype=float
-        )
-        reject, cluster_q, _, _ = multipletests(
-            cluster_p, alpha=config.fdr_q, method="fdr_bh"
-        )
-    else:
-        cluster_p = np.array([], dtype=float)
-        cluster_q = np.array([], dtype=float)
-        reject = np.array([], dtype=bool)
+    apply_cluster_fdr(all_cluster_records, fdr_q=config.fdr_q, fdr_mode=config.fdr_mode)
 
     # Write data to CSVs and NPZ, merging cluster-level results back to lag-level records for convenience.
     cluster_lookup = {}
-    for rec, p_value, q_value, is_sig in zip(
-        all_cluster_records, cluster_p, cluster_q, reject
-    ):
-        rec["cluster_p_value"] = float(p_value)
-        rec["cluster_q_value"] = float(q_value)
-        rec["sig"] = bool(is_sig)
+    for rec in all_cluster_records:
         key = (rec["subject"], rec["electrode"], rec["cluster_id"])
         cluster_lookup[key] = rec
 
@@ -336,8 +328,11 @@ def run_config(config: SignificanceConfig):
         row["cluster_score"] = rec["cluster_score"]
         row["cluster_p_value"] = rec["cluster_p_value"]
         row["cluster_q_value"] = rec["cluster_q_value"]
-        row["p_value"] = rec["cluster_p_value"]
-        row["q_value"] = rec["cluster_q_value"]
+        row["electrode_p_value"] = rec["electrode_p_value"]
+        row["electrode_q_value"] = rec["electrode_q_value"]
+        row["is_electrode_best_cluster"] = rec["is_electrode_best_cluster"]
+        row["p_value"] = rec["p_value"]
+        row["q_value"] = rec["q_value"]
         row["sig"] = rec["sig"]
 
     detailed_path = os.path.join(output_dir, "significance_detailed.csv")
@@ -380,6 +375,10 @@ def run_config(config: SignificanceConfig):
         mean_corr_threshold=float(mean_corr_threshold),
         minimal_shift=int(config.minimal_shift),
         shift_step=int(config.shift_step),
+        num_null_shifts=int(config.num_null_shifts),
+        null_seed=int(config.null_seed),
+        null_sampling_mode="iid_with_replacement_per_fold",
+        fdr_mode=config.fdr_mode,
         subject_shift_metadata=np.array(subject_shift_metadata, dtype=object),
     )
 
