@@ -5,6 +5,7 @@ results/
 __marimo__/
 correlation_diagnostics/
 cluster_sig_playground.py
+subjects/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
@@ -186,3 +187,7 @@ rrr/
 pca/
 *.pdf
 *.csv
+processed_data/regions.txt
+.gitignore
+cluster_null_distribution.npz
+.gitignore

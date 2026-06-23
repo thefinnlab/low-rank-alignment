@@ -20,7 +20,7 @@ def _():
     from src.utils.data_loaders import load_raws
 
     alt.data_transformers.disable_max_rows()
-    return Path, alt, fisher_z_mean, mo, np, pd
+    return Path, alt, mo, np, pd
 
 
 @app.cell
@@ -261,6 +261,65 @@ def _(load_errors, mo, sources):
 
 @app.cell(hide_code=True)
 def _(fisher_z, np, pd):
+    def build_group_corrs(
+        corrs: np.ndarray,
+        grouping: str,
+        cluster_idxs: list[list[tuple[int, int]]] | None = None,
+    ) -> tuple[list[int], list[np.ndarray]]:
+        if corrs.ndim == 3:
+            electrode_axis = 1
+            lag_axis = 2
+            cluster_stack_axis = 1
+        elif corrs.ndim == 4:
+            electrode_axis = 2
+            lag_axis = 3
+            cluster_stack_axis = 2
+        else:
+            raise ValueError(
+                "Grouped correlations must be fold x electrode x lag or "
+                "fold x repeat x electrode x lag, got shape "
+                f"{corrs.shape}"
+            )
+
+        if grouping == "electrode":
+            labels = list(range(corrs.shape[electrode_axis]))
+            if corrs.ndim == 3:
+                groups = [corrs[:, elec, :] for elec in labels]
+            else:
+                groups = [corrs[:, :, elec, :] for elec in labels]
+        elif grouping == "lag":
+            labels = list(range(corrs.shape[lag_axis]))
+            if corrs.ndim == 3:
+                groups = [corrs[:, :, lag] for lag in labels]
+            else:
+                groups = [corrs[:, :, :, lag] for lag in labels]
+        elif grouping == "cluster":
+            if not cluster_idxs:
+                return [], []
+            labels = []
+            groups = []
+            for idx, cluster in enumerate(cluster_idxs):
+                if not cluster:
+                    continue
+                if corrs.ndim == 3:
+                    values = [corrs[:, elec, lag] for elec, lag in cluster]
+                else:
+                    values = [corrs[:, :, elec, lag] for elec, lag in cluster]
+                labels.append(idx)
+                groups.append(np.stack(values, axis=cluster_stack_axis))
+        else:
+            raise ValueError(f"Unknown grouping: {grouping}")
+        return labels, groups
+
+    def fisher_z_group_mean(corrs: np.ndarray) -> float:
+        return float(np.tanh(np.nanmean(fisher_z(corrs))))
+
+    def fisher_z_group_samples(corrs: np.ndarray) -> np.ndarray:
+        return np.tanh(np.nanmean(fisher_z(corrs), axis=1))
+
+    def fisher_z_null_repeat_group_samples(corrs: np.ndarray) -> np.ndarray:
+        return np.tanh(np.nanmean(fisher_z(corrs), axis=(0, 2)))
+
     def summarize_group_diffs(
         cmp_groups: list[np.ndarray],
         ref_groups: list[np.ndarray],
@@ -345,31 +404,10 @@ def _(fisher_z, np, pd):
     ) -> pd.DataFrame:
         cmp_corrs = source["corrs_by_rank"][rank]
         ref_corrs = source["corrs_by_rank"][source["ref_rank"]]
-
-        if grouping == "electrode":
-            labels = list(range(cmp_corrs.shape[1]))
-            cmp_groups = [cmp_corrs[:, elec, :] for elec in labels]
-            ref_groups = [ref_corrs[:, elec, :] for elec in labels]
-        elif grouping == "lag":
-            labels = list(range(cmp_corrs.shape[2]))
-            cmp_groups = [cmp_corrs[:, :, lag] for lag in labels]
-            ref_groups = [ref_corrs[:, :, lag] for lag in labels]
-        elif grouping == "cluster":
-            if not cluster_idxs:
-                return pd.DataFrame()
-            labels = []
-            cmp_groups = []
-            ref_groups = []
-            for idx, cluster in enumerate(cluster_idxs):
-                if not cluster:
-                    continue
-                values_cmp = [cmp_corrs[:, elec, lag] for elec, lag in cluster]
-                values_ref = [ref_corrs[:, elec, lag] for elec, lag in cluster]
-                labels.append(idx)
-                cmp_groups.append(np.stack(values_cmp, axis=1))
-                ref_groups.append(np.stack(values_ref, axis=1))
-        else:
-            raise ValueError(f"Unknown grouping: {grouping}")
+        labels, cmp_groups = build_group_corrs(cmp_corrs, grouping, cluster_idxs)
+        _, ref_groups = build_group_corrs(ref_corrs, grouping, cluster_idxs)
+        if not labels:
+            return pd.DataFrame()
 
         results = summarize_group_diffs(
             cmp_groups,
@@ -381,11 +419,133 @@ def _(fisher_z, np, pd):
                 "source": source["label"],
                 "rank": rank,
                 grouping: labels,
+                "selected_corr": [
+                    fisher_z_group_mean(group) for group in cmp_groups
+                ],
+                "reference_corr": [
+                    fisher_z_group_mean(group) for group in ref_groups
+                ],
                 "mean_diff_z": results["mean_diff_z"],
                 "epsilon_z": results["epsilon_z"],
                 "sd_diff_z": results["sd_diff_z"],
                 "se_diff_z": results["se_diff_z"],
                 "passes_recovery": results["passes_recovery"],
+            }
+        ).assign(
+            delta=lambda df: df["selected_corr"] - df["reference_corr"],
+            ratio=lambda df: np.divide(
+                df["selected_corr"],
+                df["reference_corr"],
+                out=np.full(len(df), np.nan, dtype=np.float64),
+                where=np.abs(df["reference_corr"]) > 1e-12,
+            ),
+        )
+
+    def make_group_null_summary(
+        source: dict,
+        rank: int,
+        grouping: str,
+        cluster_idxs: list[list[tuple[int, int]]] | None = None,
+    ) -> pd.DataFrame:
+        null_corrs = source.get("null_corrs_by_rank", {}).get(rank)
+        if null_corrs is None or null_corrs.size == 0:
+            return pd.DataFrame()
+
+        selected_corrs = source["corrs_by_rank"][rank]
+        reference_corrs = source["corrs_by_rank"][source["ref_rank"]]
+        labels, selected_groups = build_group_corrs(
+            selected_corrs, grouping, cluster_idxs
+        )
+        _, reference_groups = build_group_corrs(reference_corrs, grouping, cluster_idxs)
+        _, null_groups = build_group_corrs(null_corrs, grouping, cluster_idxs)
+        if not labels:
+            return pd.DataFrame()
+
+        rows = []
+        for label, selected_group, reference_group, null_group in zip(
+            labels, selected_groups, reference_groups, null_groups
+        ):
+            selected_corr = fisher_z_group_mean(selected_group)
+            reference_corr = fisher_z_group_mean(reference_group)
+            null_values = fisher_z_null_repeat_group_samples(null_group)
+            finite_null_values = null_values[np.isfinite(null_values)]
+            if finite_null_values.size == 0:
+                null_mean = np.nan
+                null_q05 = np.nan
+                null_q50 = np.nan
+                null_q95 = np.nan
+                null_advantage_q95 = np.nan
+            else:
+                null_mean = float(np.nanmean(finite_null_values))
+                null_q05 = float(np.nanpercentile(finite_null_values, 5))
+                null_q50 = float(np.nanpercentile(finite_null_values, 50))
+                null_q95 = float(np.nanpercentile(finite_null_values, 95))
+                null_advantage_q95 = float(
+                    np.nanpercentile(reference_corr - finite_null_values, 95)
+                )
+            reference_advantage = reference_corr - selected_corr
+            rows.append(
+                {
+                    "source": source["label"],
+                    "rank": rank,
+                    "reference_rank": source["ref_rank"],
+                    "grouping": grouping,
+                    grouping: label,
+                    "selected_corr": selected_corr,
+                    "reference_corr": reference_corr,
+                    "delta": selected_corr - reference_corr,
+                    "ratio": (
+                        selected_corr / reference_corr
+                        if abs(reference_corr) > 1e-12
+                        else np.nan
+                    ),
+                    "null_aug_corr_mean": null_mean,
+                    "null_aug_corr_q05": null_q05,
+                    "null_aug_corr_q50": null_q50,
+                    "null_aug_corr_q95": null_q95,
+                    "null_sample_count": int(finite_null_values.size),
+                    "reference_advantage": reference_advantage,
+                    "null_advantage_q95": null_advantage_q95,
+                    "under_recovered_vs_null": reference_advantage
+                    > null_advantage_q95,
+                }
+            )
+        return pd.DataFrame(rows)
+
+    def make_group_null_samples(
+        source: dict,
+        rank: int,
+        grouping: str,
+        group_label: int,
+        cluster_idxs: list[list[tuple[int, int]]] | None = None,
+    ) -> pd.DataFrame:
+        null_corrs = source.get("null_corrs_by_rank", {}).get(rank)
+        if null_corrs is None or null_corrs.size == 0:
+            return pd.DataFrame()
+
+        selected_corrs = source["corrs_by_rank"][rank]
+        reference_corrs = source["corrs_by_rank"][source["ref_rank"]]
+        labels, selected_groups = build_group_corrs(
+            selected_corrs, grouping, cluster_idxs
+        )
+        _, reference_groups = build_group_corrs(reference_corrs, grouping, cluster_idxs)
+        _, null_groups = build_group_corrs(null_corrs, grouping, cluster_idxs)
+        if group_label not in labels:
+            return pd.DataFrame()
+
+        group_pos = labels.index(group_label)
+        null_values = fisher_z_null_repeat_group_samples(null_groups[group_pos])
+        return pd.DataFrame(
+            {
+                "source": source["label"],
+                "rank": rank,
+                "reference_rank": source["ref_rank"],
+                "grouping": grouping,
+                grouping: group_label,
+                "sample_idx": np.arange(null_values.size),
+                "null_corr": null_values,
+                "selected_corr": fisher_z_group_mean(selected_groups[group_pos]),
+                "reference_corr": fisher_z_group_mean(reference_groups[group_pos]),
             }
         )
 
@@ -419,7 +579,13 @@ def _(fisher_z, np, pd):
             )
         return pd.DataFrame(rows)
 
-    return make_group_summary, pct_passing_by_recovery, summarize_rank_totals
+    return (
+        make_group_null_samples,
+        make_group_null_summary,
+        make_group_summary,
+        pct_passing_by_recovery,
+        summarize_rank_totals,
+    )
 
 
 @app.cell(hide_code=True)
@@ -600,6 +766,7 @@ def _(
     build_cluster_indices,
     electrode_order_for_source,
     grouping_selector,
+    make_group_null_summary,
     make_group_summary,
     rank_selector,
     recovery_threshold_input,
@@ -628,8 +795,19 @@ def _(
         float(recovery_threshold_input.value),
         cluster_idxs=cluster_idxs,
     )
+    grouped_null_summary_df = make_group_null_summary(
+        selected_source,
+        int(rank_selector.value),
+        grouping_selector.value,
+        cluster_idxs=cluster_idxs,
+    )
     group_summary_df
-    return electrode_summary_df, group_summary_df
+    return (
+        cluster_idxs,
+        electrode_summary_df,
+        group_summary_df,
+        grouped_null_summary_df,
+    )
 
 
 @app.cell(hide_code=True)
@@ -783,7 +961,7 @@ def _(brain_map_df, mo, np, rank_selector, selected_source):
         y=1.02,
     )
     plt.show()
-    return (plt,)
+    return
 
 
 @app.cell(hide_code=True)
@@ -816,98 +994,150 @@ def _(brain_map_df, mo):
 
 
 @app.cell
-def _(fisher_z_mean, np, pd, rank_selector, selected_source):
-    selected_corrs = selected_source["corrs_by_rank"][int(rank_selector.value)]
-    reference_corrs = selected_source["corrs_by_rank"][selected_source["ref_rank"]]
-    selected_mean = fisher_z_mean(selected_corrs, axis=0).reshape(-1)
-    reference_mean = fisher_z_mean(reference_corrs, axis=0).reshape(-1)
-    target_distribution_df = pd.DataFrame(
-        {
-            "source": selected_source["label"],
-            "rank": int(rank_selector.value),
-            "selected_corr": selected_mean,
-            "reference_corr": reference_mean,
-            "delta": selected_mean - reference_mean,
-            "ratio": np.divide(
-                selected_mean,
-                reference_mean,
-                out=np.full_like(selected_mean, np.nan, dtype=np.float64),
-                where=np.abs(reference_mean) > 1e-12,
-            ),
-        }
-    )
-    null_corrs = selected_source.get("null_corrs_by_rank", {}).get(
-        int(rank_selector.value)
-    )
-    if null_corrs is not None:
-        null_flat = null_corrs.reshape(
-            null_corrs.shape[0] * null_corrs.shape[1], -1
+def _(group_summary_df, grouped_null_summary_df, grouping_selector):
+    grouped_distribution_df = group_summary_df.copy()
+    if not grouped_distribution_df.empty and not grouped_null_summary_df.empty:
+        _group_col = grouping_selector.value
+        _null_cols = [
+            "source",
+            "rank",
+            _group_col,
+            "null_aug_corr_mean",
+            "null_aug_corr_q05",
+            "null_aug_corr_q50",
+            "null_aug_corr_q95",
+            "null_sample_count",
+            "reference_advantage",
+            "null_advantage_q95",
+            "under_recovered_vs_null",
+        ]
+        grouped_distribution_df = grouped_distribution_df.merge(
+            grouped_null_summary_df[_null_cols],
+            on=["source", "rank", _group_col],
+            how="left",
         )
-        null_mean = fisher_z_mean(null_flat, axis=0)
-        null_q05 = np.nanpercentile(null_flat, 5, axis=0)
-        null_q95 = np.nanpercentile(null_flat, 95, axis=0)
-        observed_advantage = reference_mean - selected_mean
-        null_advantage_q95 = np.nanpercentile(
-            reference_mean[np.newaxis, :] - null_flat, 95, axis=0
-        )
-        target_distribution_df["null_aug_corr_mean"] = null_mean
-        target_distribution_df["null_aug_corr_q05"] = null_q05
-        target_distribution_df["null_aug_corr_q95"] = null_q95
-        target_distribution_df["reference_advantage"] = observed_advantage
-        target_distribution_df["null_advantage_q95"] = null_advantage_q95
-        target_distribution_df["under_recovered_vs_null"] = (
-            observed_advantage > null_advantage_q95
-        )
-    target_distribution_df
-    return (target_distribution_df,)
+    grouped_distribution_df
+    return (grouped_distribution_df,)
 
 
 @app.cell(hide_code=True)
-def _(alt, mo, target_distribution_df):
-    _scatter = alt.Chart(target_distribution_df).mark_circle(size=10, opacity=0.25).encode(
-        x=alt.X("reference_corr:Q", title="Reference corr"),
-        y=alt.Y("selected_corr:Q", title="Selected rank corr"),
-        tooltip=[
-            alt.Tooltip("reference_corr:Q", format=".4f"),
-            alt.Tooltip("selected_corr:Q", format=".4f"),
-            alt.Tooltip("delta:Q", format=".4f"),
-            alt.Tooltip("ratio:Q", format=".4f"),
-        ],
-    )
-    _delta_hist = alt.Chart(target_distribution_df).mark_bar(opacity=0.75).encode(
-        x=alt.X("delta:Q", bin=alt.Bin(maxbins=80), title="Selected - reference"),
-        y=alt.Y("count():Q", title="Targets"),
-    )
-    _ratio_hist = alt.Chart(target_distribution_df).mark_bar(opacity=0.75).encode(
-        x=alt.X("ratio:Q", bin=alt.Bin(maxbins=80), title="Selected / reference"),
-        y=alt.Y("count():Q", title="Targets"),
-    )
-    mo.ui.tabs(
-        {
-            "Target scatter": mo.ui.altair_chart(
-                _scatter.properties(width=720, height=420)
-            ),
-            "Delta distribution": mo.ui.altair_chart(
-                _delta_hist.properties(width=720, height=320)
-            ),
-            "Ratio distribution": mo.ui.altair_chart(
-                _ratio_hist.properties(width=720, height=320)
-            ),
-            "Table": mo.ui.table(target_distribution_df),
-        }
-    )
+def _(alt, grouped_distribution_df, grouping_selector, mo):
+    if grouped_distribution_df.empty:
+        _output = mo.callout(
+            mo.md(f"No {grouping_selector.value} distribution is available."),
+            kind="warn",
+        )
+    else:
+        _group_col = grouping_selector.value
+        _scatter = alt.Chart(grouped_distribution_df).mark_circle(
+            size=35,
+            opacity=0.65,
+        ).encode(
+            x=alt.X("reference_corr:Q", title="Reference corr"),
+            y=alt.Y("selected_corr:Q", title="Selected rank corr"),
+            tooltip=[
+                _group_col,
+                alt.Tooltip("reference_corr:Q", format=".4f"),
+                alt.Tooltip("selected_corr:Q", format=".4f"),
+                alt.Tooltip("delta:Q", format=".4f"),
+                alt.Tooltip("ratio:Q", format=".4f"),
+            ],
+        )
+        _delta_hist = alt.Chart(grouped_distribution_df).mark_bar(opacity=0.75).encode(
+            x=alt.X("delta:Q", bin=alt.Bin(maxbins=80), title="Selected - reference"),
+            y=alt.Y("count():Q", title=f"{grouping_selector.value.title()} groups"),
+        )
+        _ratio_hist = alt.Chart(grouped_distribution_df).mark_bar(opacity=0.75).encode(
+            x=alt.X("ratio:Q", bin=alt.Bin(maxbins=80), title="Selected / reference"),
+            y=alt.Y("count():Q", title=f"{grouping_selector.value.title()} groups"),
+        )
+        _output = mo.ui.tabs(
+            {
+                "Group scatter": mo.ui.altair_chart(
+                    _scatter.properties(width=720, height=420)
+                ),
+                "Delta distribution": mo.ui.altair_chart(
+                    _delta_hist.properties(width=720, height=320)
+                ),
+                "Ratio distribution": mo.ui.altair_chart(
+                    _ratio_hist.properties(width=720, height=320)
+                ),
+                "Table": mo.ui.table(grouped_distribution_df),
+            }
+        )
+    _output
     return
 
 
 @app.cell(hide_code=True)
-def _(alt, mo, target_distribution_df):
-    if "null_aug_corr_mean" not in target_distribution_df.columns:
+def _(grouped_null_summary_df, grouping_selector, mo):
+    if grouped_null_summary_df.empty:
+        focused_group_selector = None
         _output = mo.callout(
             mo.md("No null-augmented metrics are available for this selected rank."),
             kind="warn",
         )
     else:
-        _scatter = alt.Chart(target_distribution_df).mark_circle(size=10, opacity=0.25).encode(
+        _group_col = grouping_selector.value
+        _options = grouped_null_summary_df[_group_col].dropna().astype(int).tolist()
+        if not _options:
+            focused_group_selector = None
+            _output = mo.callout(
+                mo.md("No valid null-augmented groups are available."),
+                kind="warn",
+            )
+        else:
+            focused_group_selector = mo.ui.dropdown(
+                options=_options,
+                value=_options[0],
+                label=f"{grouping_selector.value.title()} focus",
+            )
+            _output = focused_group_selector
+    _output
+    return (focused_group_selector,)
+
+
+@app.cell
+def _(
+    cluster_idxs,
+    focused_group_selector,
+    grouping_selector,
+    make_group_null_samples,
+    pd,
+    rank_selector,
+    selected_source,
+):
+    if focused_group_selector is None:
+        focused_group_null_samples_df = pd.DataFrame()
+    else:
+        focused_group_null_samples_df = make_group_null_samples(
+            selected_source,
+            int(rank_selector.value),
+            grouping_selector.value,
+            int(focused_group_selector.value),
+            cluster_idxs=cluster_idxs,
+        )
+    focused_group_null_samples_df
+    return (focused_group_null_samples_df,)
+
+
+@app.cell(hide_code=True)
+def _(
+    alt,
+    focused_group_null_samples_df,
+    grouped_null_summary_df,
+    grouping_selector,
+    mo,
+    pd,
+):
+    if grouped_null_summary_df.empty:
+        _output = mo.md("")
+    else:
+        _group_col = grouping_selector.value
+        _scatter = alt.Chart(grouped_null_summary_df).mark_circle(
+            size=35,
+            opacity=0.65,
+        ).encode(
             x=alt.X("null_aug_corr_mean:Q", title="Null-augmented mean corr"),
             y=alt.Y("reference_corr:Q", title="Reference corr"),
             color=alt.Color(
@@ -915,26 +1145,61 @@ def _(alt, mo, target_distribution_df):
                 title="Under-recovered vs null",
             ),
             tooltip=[
+                _group_col,
                 alt.Tooltip("selected_corr:Q", format=".4f"),
                 alt.Tooltip("reference_corr:Q", format=".4f"),
                 alt.Tooltip("null_aug_corr_mean:Q", format=".4f"),
+                alt.Tooltip("null_aug_corr_q05:Q", format=".4f"),
+                alt.Tooltip("null_aug_corr_q95:Q", format=".4f"),
+                "null_sample_count",
                 alt.Tooltip("reference_advantage:Q", format=".4f"),
                 alt.Tooltip("null_advantage_q95:Q", format=".4f"),
                 "under_recovered_vs_null",
             ],
         )
-        _advantage = alt.Chart(target_distribution_df).mark_bar(opacity=0.75).encode(
+        _advantage = alt.Chart(grouped_null_summary_df).mark_bar(opacity=0.75).encode(
             x=alt.X(
                 "reference_advantage:Q",
                 bin=alt.Bin(maxbins=80),
                 title="Reference - selected",
             ),
-            y=alt.Y("count():Q", title="Targets"),
+            y=alt.Y("count():Q", title=f"{grouping_selector.value.title()} groups"),
             color=alt.Color(
                 "under_recovered_vs_null:N",
                 title="Under-recovered vs null",
             ),
         )
+        if focused_group_null_samples_df.empty:
+            _focused = alt.Chart(pd.DataFrame({"null_corr": []})).mark_bar()
+        else:
+            _first = focused_group_null_samples_df.iloc[0]
+            _line_df = pd.DataFrame(
+                {
+                    "label": ["Selected rank", "Reference"],
+                    "corr": [_first["selected_corr"], _first["reference_corr"]],
+                }
+            )
+            _hist = alt.Chart(focused_group_null_samples_df).mark_bar(
+                opacity=0.45,
+                color="#94a3b8",
+            ).encode(
+                x=alt.X(
+                    "null_corr:Q",
+                    bin=alt.Bin(maxbins=50),
+                    title="Grouped null correlation",
+                ),
+                y=alt.Y("count():Q", title="Null samples"),
+                tooltip=["count()"],
+            )
+            _lines = alt.Chart(_line_df).mark_rule(size=2).encode(
+                x=alt.X("corr:Q"),
+                color=alt.Color("label:N", title="Observed value"),
+                tooltip=[
+                    "label",
+                    alt.Tooltip("corr:Q", format=".4f"),
+                ],
+            )
+            _focused = _hist + _lines
         _output = mo.ui.tabs(
             {
                 "Null scatter": mo.ui.altair_chart(
@@ -943,7 +1208,10 @@ def _(alt, mo, target_distribution_df):
                 "Advantage distribution": mo.ui.altair_chart(
                     _advantage.properties(width=720, height=320)
                 ),
-                "Table": mo.ui.table(target_distribution_df),
+                "Focused null": mo.ui.altair_chart(
+                    _focused.properties(width=720, height=320)
+                ),
+                "Table": mo.ui.table(grouped_null_summary_df),
             }
         )
     _output
@@ -1000,7 +1268,6 @@ def _():
         num_examples,
         num_interaction_features,
         num_linear_features,
-        num_random_features,
         num_targets,
         prob_interaction_inclusion,
         prob_linear_inclusion,
@@ -1034,50 +1301,42 @@ def _(
     target_values = features @ linear_target_weights.T + interaction_features @ interaction_target_weights.T
     # Add noise
     target_values = target_values + np.random.randn(*target_values.shape) * noise_strength
-    return features, target_values
+    return
 
 
 @app.cell
 def _():
     from src.utils.encoding import train_encoding, get_ridge_model_constructor
 
-    return get_ridge_model_constructor, train_encoding
+    return
 
 
 @app.cell
-def _(
-    features,
-    get_ridge_model_constructor,
-    np,
-    num_examples,
-    num_random_features,
-    target_values,
-    train_encoding,
-):
-    from scipy.stats import ortho_group
+def _():
+    # from scipy.stats import ortho_group
 
 
-    all_corrs = []
-    for _ in range(100):
-        # Generate model input feature space. Add random noise features and then rotate. Do not include interaction terms.
-        random_features = np.random.randn(num_examples, num_random_features)
-        input_features = np.concatenate((features, random_features), axis=1)
-    
-        rotation_matrix = ortho_group.rvs(dim=input_features.shape[-1])
-    
-        if np.linalg.det(rotation_matrix) < 0:
-            rotation_matrix[0, :] *= -1
-    
-        rotated_features = input_features @ rotation_matrix
-    
-        corrs, _, _, _, _ = train_encoding(rotated_features, target_values, model_constructor_fn=get_ridge_model_constructor(), num_folds=5)
-        all_corrs.append(corrs)
-    return (all_corrs,)
+    # all_corrs = []
+    # for _ in range(100):
+    #     # Generate model input feature space. Add random noise features and then rotate. Do not include interaction terms.
+    #     random_features = np.random.randn(num_examples, num_random_features)
+    #     input_features = np.concatenate((features, random_features), axis=1)
+
+    #     rotation_matrix = ortho_group.rvs(dim=input_features.shape[-1])
+
+    #     if np.linalg.det(rotation_matrix) < 0:
+    #         rotation_matrix[0, :] *= -1
+
+    #     rotated_features = input_features @ rotation_matrix
+
+    #     corrs, _, _, _, _ = train_encoding(rotated_features, target_values, model_constructor_fn=get_ridge_model_constructor(), num_folds=5)
+    #     all_corrs.append(corrs)
+    return
 
 
 @app.cell
-def _(all_corrs, np, plt):
-    plt.hist(np.stack(all_corrs).mean(1)[:, 0])
+def _():
+    # plt.hist(np.stack(all_corrs).mean(1)[:, 0])
     return
 
 

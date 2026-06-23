@@ -147,7 +147,6 @@ class PodcastDatasetAdapter:
 
         use_high_gamma = load_options.get("use_high_gamma", False)
         no_preload = load_options.get("no_preload", False)
-        target_sr = load_options.get("target_sr")
         do_drop_bads = load_options.get("do_drop_bads", False)
         signal_unit = load_options.get("signal_unit")
         per_subject_electrodes = load_options.get("per_subject_electrodes")
@@ -169,10 +168,6 @@ class PodcastDatasetAdapter:
             raise FileNotFoundError(f"Data file not found: {file_path}")
 
         raw = mne.io.read_raw_fif(file_path, preload=not no_preload, verbose=False)
-
-        if target_sr is not None and int(raw.info["sfreq"]) != int(target_sr):
-            print(f"  - [Config] Resampling {raw.info['sfreq']}Hz -> {target_sr}Hz")
-            raw.resample(target_sr, npad="auto", method="fft", window="hamming")
 
         if do_drop_bads:
             try:
@@ -536,15 +531,148 @@ class BrainTreebankDatasetAdapter:
         info = mne.create_info(ch_names=ch_names, sfreq=self.sfreq, ch_types="seeg")
         return mne.io.RawArray(data, info, verbose=False)
 
+    def _drop_corrupted_electrodes(self, raw, subject_id: int, data_root: str):
+        corrupted_path = os.path.join(data_root, "corrupted_elec.json")
+        if not os.path.exists(corrupted_path):
+            raise FileNotFoundError(
+                "Brain Treebank corrupted-electrode metadata not found: "
+                f"{corrupted_path}"
+            )
+        with open(corrupted_path) as f:
+            corrupted_by_subject = json.load(f)
+
+        subject_key = f"sub_{subject_id}"
+        if subject_key not in corrupted_by_subject:
+            raise KeyError(
+                f"Brain Treebank corrupted-electrode metadata has no '{subject_key}' entry: "
+                f"{corrupted_path}"
+            )
+
+        listed = [str(name) for name in corrupted_by_subject[subject_key]]
+        to_drop = [name for name in listed if name in raw.ch_names]
+        missing = [name for name in listed if name not in raw.ch_names]
+        if missing:
+            print(
+                f"  - [Config] Warning: {len(missing)} listed corrupted electrodes "
+                "were absent from this recording"
+            )
+        if to_drop:
+            print(f"  - [Config] Dropping {len(to_drop)} corrupted electrodes")
+            raw.drop_channels(to_drop)
+        if len(raw.ch_names) < 2:
+            raise ValueError(
+                "Brain Treebank common-average reference requires at least two "
+                "non-corrupted electrodes."
+            )
+        return raw
+
+    def _attach_electrode_coordinates(self, raw, subject_id: int, data_root: str):
+        """Attach available Brain Treebank MNI coordinates to an MNE Raw."""
+        import warnings
+
+        import mne
+
+        localization_path = os.path.join(
+            data_root, "localization", "elec_coords_full.csv"
+        )
+        if not os.path.exists(localization_path):
+            print(
+                "  - [Config] Warning: Brain Treebank electrode localization "
+                f"not found: {localization_path}"
+            )
+            return raw
+
+        localization = pd.read_csv(localization_path)
+        required = {"Subject", "Electrode", "X", "Y", "Z"}
+        missing_columns = required - set(localization.columns)
+        if missing_columns:
+            raise ValueError(
+                "Brain Treebank localization file missing columns "
+                f"{sorted(missing_columns)}: {localization_path}"
+            )
+
+        subject_rows = localization[
+            localization["Subject"].astype(str) == f"sub_{subject_id}"
+        ].copy()
+        coordinate_lookup = {}
+        for row in subject_rows.to_dict("records"):
+            coords_mm = np.asarray([row["X"], row["Y"], row["Z"]], dtype=float)
+            if not np.all(np.isfinite(coords_mm)):
+                continue
+            normalized_name = re.sub(r"[#*]", "", str(row["Electrode"]))
+            if normalized_name in coordinate_lookup:
+                raise ValueError(
+                    "Duplicate Brain Treebank localization entry for "
+                    f"subject {subject_id}, electrode {normalized_name}."
+                )
+            coordinate_lookup[normalized_name] = coords_mm / 1000.0
+
+        ch_pos = {}
+        for ch_name in raw.ch_names:
+            normalized_name = re.sub(r"[#*]", "", ch_name)
+            if normalized_name in coordinate_lookup:
+                ch_pos[ch_name] = coordinate_lookup[normalized_name]
+
+        if not ch_pos:
+            print(
+                f"  - [Config] Warning: No electrode coordinates matched subject {subject_id}"
+            )
+            return raw
+
+        montage = mne.channels.make_dig_montage(
+            ch_pos=ch_pos,
+            coord_frame="mni_tal",
+        )
+        with warnings.catch_warnings():
+            warnings.filterwarnings(
+                "ignore",
+                message="Fiducial point nasion not found.*",
+                category=RuntimeWarning,
+            )
+            raw.set_montage(montage, on_missing="ignore", verbose=False)
+        missing_count = len(raw.ch_names) - len(ch_pos)
+        print(
+            f"  - [Config] Attached MNI coordinates for {len(ch_pos)} electrodes"
+            + (f" ({missing_count} unavailable)" if missing_count else "")
+        )
+        return raw
+
+    def _despike(self, raw, iqr_mult: float = 4.0, dil_len: float = 0.10):
+        """Match the Podcast derivative's per-channel spike interpolation."""
+        from scipy import interpolate, signal, stats
+
+        raw.load_data()
+        data = raw._data
+        medians = np.median(data, axis=-1, keepdims=True)
+        iqrs = stats.iqr(data, axis=-1)
+        spike_mask = np.abs(data - medians) > (iqrs[:, np.newaxis] * iqr_mult)
+
+        if dil_len > 0:
+            dilation_filter = np.ones(int(dil_len * raw.info["sfreq"]))
+            spike_mask = signal.filtfilt(dilation_filter, 1, spike_mask) > 0
+
+        for channel_idx, spikes in enumerate(spike_mask):
+            if not np.any(spikes):
+                continue
+            good_indices = np.flatnonzero(~spikes)
+            if good_indices.size < 2:
+                raise ValueError(
+                    f"Cannot interpolate spikes for {raw.ch_names[channel_idx]}: "
+                    "fewer than two clean samples remain."
+                )
+            spike_indices = np.flatnonzero(spikes)
+            raw._data[channel_idx, spikes] = interpolate.pchip_interpolate(
+                good_indices,
+                raw._data[channel_idx, ~spikes],
+                spike_indices,
+            )
+        return raw
+
     def _apply_high_gamma(self, raw):
         raw = raw.copy()
         if int(raw.info["sfreq"]) != int(self.preprocessing_sfreq):
-            raw.resample(
-                self.preprocessing_sfreq,
-                npad="auto",
-                method="fft",
-                window="hamming",
-            )
+            raw.resample(sfreq=self.preprocessing_sfreq)
+        raw = self._despike(raw)
         raw.set_eeg_reference(ref_channels="average", ch_type="seeg", verbose=False)
         raw.notch_filter(
             freqs=[60, 120, 180],
@@ -594,6 +722,10 @@ class BrainTreebankDatasetAdapter:
             ),
         )
         raw = self._load_hdf5_raw_array(recording_path, electrode_labels_path)
+        raw = self._attach_electrode_coordinates(raw, subject_id, data_root)
+
+        if load_options.get("do_drop_bads", False):
+            raw = self._drop_corrupted_electrodes(raw, subject_id, data_root)
 
         if load_options.get("use_high_gamma", False):
             print("  - [Config] Computing high-gamma envelope (70-200 Hz)")
@@ -614,11 +746,6 @@ class BrainTreebankDatasetAdapter:
         elif channel_reg_ex:
             picks = mne.pick_channels_regexp(raw.ch_names, channel_reg_ex)
             raw = raw.pick(picks)
-
-        target_sr = load_options.get("target_sr")
-        if target_sr is not None and int(raw.info["sfreq"]) != int(target_sr):
-            print(f"  - [Config] Resampling {raw.info['sfreq']}Hz -> {target_sr}Hz")
-            raw.resample(target_sr, npad="auto", method="fft", window="hamming")
 
         return raw
 

@@ -2,6 +2,8 @@
 
 This repository is a neuroscience encoding analysis pipeline for studying how language-model embeddings predict intracranial EEG (iEEG) neural activity. The default dataset is the podcast stimulus, and the dataset registry also supports Brain Treebank movie stimuli by centralizing transcript loading, neural-data/cache paths, and stimulus-scoped result directories.
 
+Neural preprocessing uses 70–200 Hz Hilbert amplitude. Brain Treebank attaches available MNI electrode coordinates to each MNE recording, excludes the contacts listed in `corrupted_elec.json`, applies the Podcast despiking procedure, and computes a global common-average reference over the remaining contacts before notch and high-gamma filtering. Epoch precomputation extracts word-locked windows at 512 Hz and only then resamples each aligned window to 32 Hz, avoiding quantization onto one continuous 32 Hz time grid.
+
 The retained pipeline has three main analysis entrypoints:
 
 1. **Lag-cluster significance** (`make sig`) — trains per-subject encoding models with out-of-fold predictions, builds reliable electrode-lag clusters, and scores 10,000 reproducible null draws using independent fold-local circular shifts sampled with replacement. It applies global BH-FDR either across one winning cluster per electrode (the default) or across all candidate clusters, then writes downstream-compatible significance CSVs.
@@ -55,7 +57,7 @@ Downstream configs can store list-valued `encoding.per_model_config.layer` entri
 | `scripts/rrr/run_rrr.py` | Raw-input RRR rank sweep with fresh full-ridge fold baselines and optional PCA baseline via `run_pca_baseline` |
 | `scripts/utilities/generate_embeddings.py` | Generate contextual HuggingFace embeddings |
 | `scripts/utilities/generate_random_embeddings.py` | Generate random-init contextual embeddings |
-| `scripts/utilities/precompute_epochs.py` | Build dataset-scoped epoch caches |
+| `scripts/utilities/precompute_epochs.py` | Build dataset-scoped, word-aligned 32 Hz epoch-tensor caches |
 | `scripts/utilities/generate_plots.py` | Regenerate correlation plots from existing encoding results |
 | `scripts/utilities/electrode_region_distribution.py` | Dataset-aware electrode region summaries and plots |
 | `scripts/utilities/print_atlas_regions.py` | Print atlas region labels for electrodes |
@@ -75,7 +77,7 @@ Downstream configs can store list-valued `encoding.per_model_config.layer` entri
 | `src/core/config.py` | Dataclasses for retained entrypoints and utilities: `EncodingConfig`, `SignificanceConfig`, `RRRConfig`, embedding generation, epoch precompute, and electrode-region configs |
 | `src/core/registry.py` | Embedding getter and dataset adapter registries |
 | `src/utils/config_utils.py` | YAML loading, CLI overrides, and layer fanout |
-| `src/utils/data_loaders.py` | Dataset-dispatched iEEG and epoch-cache loading, significance loading, and X/Y assembly |
+| `src/utils/data_loaders.py` | Dataset-dispatched iEEG loading, aligned epoch extraction/cache I/O, significance loading, and X/Y assembly |
 | `src/utils/embeddings.py` | Contextual and static embedding loaders |
 | `src/utils/encoding.py` | Cross-validation ridge training, slim encoding result serialization, fold baseline training for RRR, offsets, and correlation loaders |
 | `src/utils/significance.py` | Correlation, FDR, lag-cluster scoring, and circular-shift null helpers |

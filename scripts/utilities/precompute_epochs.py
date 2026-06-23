@@ -1,20 +1,17 @@
 """
-precompute_epochs.py — One-time preprocessing: resample each subject's high-gamma
-signal to 32 Hz and save the result to disk.
+precompute_epochs.py — One-time preprocessing: build word-aligned 32 Hz epochs.
 
 After running this script, all other scripts can replace the slow
   load_raws(...) + build_word_epochs(...)
 sequence with the fast
   load_precomputed_epochs(...) + epochs_from_cache(...)
-which avoids re-running high-gamma preprocessing/resampling on every script
-invocation and avoids materializing a full MNE Epochs array during precompute.
+which avoids re-running high-gamma preprocessing/resampling on every invocation.
 
 Saves per subject to the active dataset adapter's precomputed-epochs path.
 
 The .npz contains:
-  raw_data     — (n_elecs, n_total_samples) float32 at 32 Hz
+  epoch_data   — (n_words_kept, n_elecs, 128) float32 at 32 Hz
   selection    — (n_words_kept,) int, word indices kept after duplicate/bounds filtering
-  epoch_starts — (n_words_kept,) int, start sample in raw_data for each epoch
   n_lags       — scalar int, samples per epoch window
   ch_names     — (n_elecs,) electrode names
 """
@@ -22,13 +19,12 @@ The .npz contains:
 import argparse
 import gc
 
-import numpy as np
 from tqdm import tqdm
 
 from src.utils import (
     load_raws,
     load_embeddings,
-    compute_epoch_cache_indices,
+    build_aligned_epoch_data,
     save_precomputed_epochs,
 )
 from src.core.config import EncodingConfig
@@ -40,36 +36,37 @@ _TMIN = -2.0
 _TMAX = 2.0
 
 
-def precompute_subject(sub_id, raw, df_word):
+def precompute_subject(raw, df_word):
     """Precompute and return cache components for one subject.
 
-    Resamples the full continuous signal to 32 Hz, then computes valid
-    word-epoch windows by direct time-to-sample conversion. This avoids
-    materializing an n_words × n_electrodes × n_lags MNE Epochs array.
+    Extracts word epochs on the source-rate grid, then resamples aligned
+    batches to 32 Hz.
 
     Returns:
-        raw_data     — (n_elecs, n_samples) float32
+        epoch_data   — (n_words_kept, n_elecs, n_lags) float32
         selection    — int array
-        epoch_starts — int array
         ch_names     — list of str
         n_lags       — int
     """
-    print(f"  Resampling full continuous signal to {_TARGET_SFREQ} Hz...")
-    raw_resampled = raw.copy().resample(
-        _TARGET_SFREQ, npad="auto", method="fft", window="hamming"
+    print(
+        f"  Extracting epochs at {raw.info['sfreq']} Hz and resampling aligned "
+        f"batches to {_TARGET_SFREQ} Hz..."
     )
-    raw_data = raw_resampled.get_data().astype(np.float32)
-    print(f"  raw_data shape: {raw_data.shape}")
-
-    selection, epoch_starts, n_lags = compute_epoch_cache_indices(
-        raw_resampled, df_word, _TMIN, _TMAX, _TARGET_SFREQ
+    epoch_data, selection = build_aligned_epoch_data(
+        raw,
+        df_word,
+        tmin=_TMIN,
+        tmax=_TMAX,
+        target_sfreq=_TARGET_SFREQ,
+        batch_size=64,
     )
+    n_lags = epoch_data.shape[-1]
+    print(f"  epoch_data shape: {epoch_data.shape}")
     print(f"  n_words_kept={len(selection)}, n_lags={n_lags}")
 
-    del raw_resampled
     gc.collect()
 
-    return raw_data, selection, epoch_starts, raw.ch_names, n_lags
+    return epoch_data, selection, raw.ch_names, n_lags
 
 
 def main():
@@ -131,23 +128,24 @@ def main():
             )
             print(f"  Subject-aligned words: {len(subject_df_word)}")
 
-        raw_data, selection, epoch_starts, ch_names, n_lags = precompute_subject(
-            sub_id, raw, subject_df_word
+        epoch_data, selection, ch_names, n_lags = precompute_subject(
+            raw, subject_df_word
         )
         save_precomputed_epochs(
             sub_id,
             config.data_root,
-            raw_data,
+            epoch_data,
             selection,
-            epoch_starts,
             ch_names,
-            n_lags,
+            sfreq=_TARGET_SFREQ,
+            tmin=_TMIN,
+            tmax=_TMAX,
             dataset=config.dataset,
             per_dataset_config=config.per_dataset_config,
             dataset_context=dataset_context,
         )
 
-        del raws, raw, raw_data
+        del raws, raw, epoch_data
         gc.collect()
 
     print("\nDone.")

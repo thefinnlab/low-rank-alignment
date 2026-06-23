@@ -8,14 +8,17 @@ import pandas as pd
 import pytest
 
 from src.utils.data_loaders import (
+    build_aligned_epoch_data,
     build_word_epochs,
     compute_epoch_cache_indices,
     get_precomputed_epochs_path,
     get_arbitrary_embeddings,
     load_data_from_cache,
+    load_precomputed_epochs,
     load_sig_electrodes,
     read_electrode_file,
     read_subject_mapping,
+    save_precomputed_epochs,
 )
 from src.core.registry import DatasetContext
 
@@ -68,13 +71,13 @@ class TestComputeEpochCacheIndices:
         np.testing.assert_array_equal(epoch_starts, np.array([16]))
         assert n_lags == 64
 
-    def test_uses_estimated_sample_indices_when_present(self):
+    def test_uses_canonical_start_when_estimated_indices_are_present(self):
         raw = self.FakeRaw(sfreq=32.0, n_times=320)
         df_word = pd.DataFrame(
             {
                 "word_idx": [10, 11, 12],
-                "start": [99.0, 99.5, 100.0],
-                "est_idx": [2048, 4096, 4100],
+                "start": [1.0, 2.0, 2.001],
+                "est_idx": [2048, 2048, 2048],
                 "est_idx_sfreq": [2048.0, 2048.0, 2048.0],
                 "word": ["first", "second", "duplicate_at_32hz"],
             }
@@ -309,7 +312,102 @@ class TestBuildWordEpochs:
         assert int(epochs.info["sfreq"]) == 32
 
 
+class TestBuildAlignedEpochData:
+    def test_preserves_word_relative_alignment_across_global_grid_phases(self):
+        mne = pytest.importorskip("mne")
+        sfreq = 512.0
+        data = np.zeros((1, int(8 * sfreq)))
+        onset_samples = np.array([1536, 2562])
+        data[0, onset_samples] = 1.0
+        raw = mne.io.RawArray(
+            data,
+            mne.create_info(["A1"], sfreq=sfreq, ch_types=["seeg"]),
+            verbose=False,
+        )
+        df_word = pd.DataFrame(
+            {
+                "word_idx": [10, 11],
+                "start": onset_samples / sfreq,
+                "word": ["first", "second"],
+            }
+        )
+
+        epoch_data, selection = build_aligned_epoch_data(raw, df_word)
+
+        assert epoch_data.shape == (2, 1, 128)
+        np.testing.assert_array_equal(selection, np.array([10, 11]))
+        np.testing.assert_array_equal(
+            np.argmax(np.abs(epoch_data[:, 0]), axis=-1), np.array([64, 64])
+        )
+
+    def test_uses_canonical_start_and_filters_duplicates_and_bounds(self):
+        mne = pytest.importorskip("mne")
+        raw = mne.io.RawArray(
+            np.zeros((1, 512 * 6)),
+            mne.create_info(["A1"], sfreq=512.0, ch_types=["seeg"]),
+            verbose=False,
+        )
+        df_word = pd.DataFrame(
+            {
+                "word_idx": [4, 5, 6, 7],
+                "start": [0.25, 2.0, 2.0005, np.nan],
+                # Dataset-specific provenance must not override canonical seconds.
+                "est_idx": [4096, 512, 8192, 4096],
+                "est_idx_sfreq": [2048.0] * 4,
+            }
+        )
+
+        epoch_data, selection = build_aligned_epoch_data(
+            raw, df_word, tmin=-1.0, tmax=1.0
+        )
+
+        assert epoch_data.shape == (1, 1, 64)
+        np.testing.assert_array_equal(selection, np.array([5]))
+
+
 class TestDatasetAwareLoaders:
+    def test_aligned_epoch_cache_round_trip_and_electrode_selection(self, tmp_path):
+        epoch_data = np.arange(2 * 3 * 4, dtype=np.float32).reshape(2, 3, 4)
+        save_precomputed_epochs(
+            1,
+            str(tmp_path),
+            epoch_data,
+            np.array([3, 7]),
+            ["A1", "A2", "A3"],
+            sfreq=32.0,
+            tmin=-1.0,
+            tmax=-0.875,
+        )
+
+        cache = load_precomputed_epochs(1, str(tmp_path))
+
+        np.testing.assert_array_equal(cache["epoch_data"], epoch_data)
+        assert cache["sfreq"] == 32.0
+        assert cache["tmin"] == -1.0
+        assert cache["tmax"] == -0.875
+        from src.utils.data_loaders import epochs_from_cache
+
+        np.testing.assert_array_equal(
+            epochs_from_cache(cache, ["A3", "A1"]), epoch_data[:, [2, 0], :]
+        )
+
+    def test_legacy_continuous_cache_requires_regeneration(self, tmp_path):
+        path = get_precomputed_epochs_path(1, str(tmp_path))
+        import os
+
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        np.savez(
+            path,
+            raw_data=np.zeros((1, 32), dtype=np.float32),
+            selection=np.array([0]),
+            epoch_starts=np.array([0]),
+            n_lags=np.array(4),
+            ch_names=np.array(["A1"]),
+        )
+
+        with pytest.raises(ValueError, match="Legacy continuous epoch cache"):
+            load_precomputed_epochs(1, str(tmp_path))
+
     def test_brain_treebank_cache_path_includes_movie(self):
         context = DatasetContext(
             dataset="brain_treebank",
@@ -327,9 +425,8 @@ class TestDatasetAwareLoaders:
         def _fake_load_precomputed_epochs(sub_id, data_root, **kwargs):
             stimulus_id = "coraline" if sub_id == 1 else "venom"
             return {
-                "raw_data": np.zeros((1, 8), dtype=np.float32),
+                "epoch_data": np.zeros((2, 1, 4), dtype=np.float32),
                 "selection": np.arange(2),
-                "epoch_starts": np.array([0, 4]),
                 "n_lags": 4,
                 "ch_names": ["A1"],
                 "stimulus_id": stimulus_id,
@@ -367,9 +464,8 @@ class TestDatasetAwareLoaders:
         def _fake_load_precomputed_epochs(sub_id, data_root, **kwargs):
             selection = np.array([0, 1]) if sub_id == 1 else np.array([0, 2])
             return {
-                "raw_data": np.zeros((1, 8), dtype=np.float32),
+                "epoch_data": np.zeros((2, 1, 4), dtype=np.float32),
                 "selection": selection,
-                "epoch_starts": np.array([0, 4]),
                 "n_lags": 4,
                 "ch_names": ["A1"],
                 "stimulus_id": "coraline",

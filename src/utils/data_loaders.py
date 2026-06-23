@@ -30,7 +30,6 @@ def load_raws(
     subject_ids,
     data_root,
     use_high_gamma=False,
-    target_sr=None,
     do_drop_bads=False,
     signal_unit=None,
     per_subject_electrodes=None,
@@ -42,7 +41,8 @@ def load_raws(
 ):
     """
     Loads raw iEEG data with YAML-configurable preprocessing.
-    All transformations (Resampling, Drop Bad, Scaling) happen here directly on the Raw object.
+    Dataset preprocessing, bad-channel removal, and unit scaling happen here.
+    Analysis-rate resampling is intentionally deferred until after epoch alignment.
     """
     context = _maybe_resolve_dataset_context(
         dataset, subject_ids, per_dataset_config, data_root, dataset_context
@@ -55,7 +55,6 @@ def load_raws(
 
     load_options = {
         "use_high_gamma": use_high_gamma,
-        "target_sr": target_sr,
         "do_drop_bads": do_drop_bads,
         "signal_unit": signal_unit,
         "per_subject_electrodes": per_subject_electrodes,
@@ -226,6 +225,91 @@ def build_word_epochs(
     return epochs, epochs.get_data(copy=False)
 
 
+def build_aligned_epoch_data(
+    raw,
+    df_word: pd.DataFrame,
+    tmin: float = -2.0,
+    tmax: float = 2.0,
+    target_sfreq: float = 32.0,
+    batch_size: int = 64,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Extract source-rate word epochs, then resample each aligned epoch.
+
+    The returned data uses a word-relative sampling grid instead of slicing all
+    words from one globally downsampled continuous signal.
+    """
+    import mne
+
+    if "start" not in df_word:
+        raise ValueError("df_word must contain a 'start' column.")
+    if tmax <= tmin:
+        raise ValueError(f"tmax must be greater than tmin, got {tmin=} {tmax=}.")
+    if batch_size <= 0:
+        raise ValueError(f"batch_size must be positive, got {batch_size}.")
+
+    source_sfreq = float(raw.info["sfreq"])
+    if "word_idx" in df_word.columns:
+        original_indices = pd.to_numeric(
+            df_word["word_idx"], errors="coerce"
+        ).to_numpy()
+    else:
+        original_indices = np.arange(len(df_word), dtype=int)
+
+    onset_times = pd.to_numeric(df_word["start"], errors="coerce").to_numpy()
+
+    finite = np.isfinite(onset_times) & np.isfinite(original_indices)
+    source_onsets = np.rint(onset_times[finite] * source_sfreq).astype(np.int64)
+    finite_indices = original_indices[finite].astype(int)
+
+    _, first_positions = np.unique(source_onsets, return_index=True)
+    first_positions = np.sort(first_positions)
+    source_onsets = source_onsets[first_positions]
+    selection = finite_indices[first_positions]
+
+    source_n_lags = int(round((tmax - tmin) * source_sfreq))
+    target_n_lags = int(round((tmax - tmin) * target_sfreq))
+    tmin_samples = int(round(tmin * source_sfreq))
+    epoch_starts = source_onsets + tmin_samples
+    in_bounds = (epoch_starts >= 0) & (
+        epoch_starts + source_n_lags <= raw.n_times
+    )
+    epoch_starts = epoch_starts[in_bounds]
+    selection = selection[in_bounds]
+
+    epoch_data = np.empty(
+        (len(selection), len(raw.ch_names), target_n_lags), dtype=np.float32
+    )
+    for batch_start in range(0, len(selection), batch_size):
+        batch_stop = min(batch_start + batch_size, len(selection))
+        source_batch = np.stack(
+            [
+                raw.get_data(start=int(start), stop=int(start + source_n_lags))
+                for start in epoch_starts[batch_start:batch_stop]
+            ],
+            axis=0,
+        )
+        resampled = mne.filter.resample(
+            source_batch,
+            up=target_sfreq,
+            down=source_sfreq,
+            axis=-1,
+            npad="auto",
+            method="fft",
+            window="hamming",
+            verbose=False,
+        )
+        if resampled.shape[-1] != target_n_lags:
+            raise RuntimeError(
+                "Aligned epoch resampling produced an unexpected number of samples: "
+                f"expected {target_n_lags}, got {resampled.shape[-1]}."
+            )
+        epoch_data[batch_start:batch_stop] = resampled.astype(
+            np.float32, copy=False
+        )
+
+    return epoch_data, selection.astype(int)
+
+
 def compute_epoch_cache_indices(
     raw,
     df_word: pd.DataFrame,
@@ -250,17 +334,7 @@ def compute_epoch_cache_indices(
         original_indices = np.arange(len(df_word), dtype=int)
 
     source_sfreq = float(raw.info["sfreq"])
-    if "est_idx" in df_word.columns:
-        est_idx = pd.to_numeric(df_word["est_idx"], errors="coerce").to_numpy()
-        if "est_idx_sfreq" in df_word.columns:
-            est_sfreq = pd.to_numeric(
-                df_word["est_idx_sfreq"], errors="coerce"
-            ).to_numpy()
-        else:
-            est_sfreq = np.full(len(df_word), source_sfreq)
-        starts = est_idx / est_sfreq
-    else:
-        starts = pd.to_numeric(df_word["start"], errors="coerce").to_numpy()
+    starts = pd.to_numeric(df_word["start"], errors="coerce").to_numpy()
 
     finite = np.isfinite(starts) & np.isfinite(original_indices)
     source_onsets = np.floor(starts[finite] * source_sfreq).astype(np.int64)
@@ -538,11 +612,12 @@ def get_precomputed_epochs_path(
 def save_precomputed_epochs(
     sub_id,
     data_root,
-    raw_data,
+    epoch_data,
     selection,
-    epoch_starts,
     ch_names,
-    n_lags,
+    sfreq=32.0,
+    tmin=-2.0,
+    tmax=2.0,
     dataset="podcast",
     per_dataset_config=None,
     dataset_context=None,
@@ -552,12 +627,29 @@ def save_precomputed_epochs(
     Args:
         sub_id: Integer subject ID.
         data_root: BIDS dataset root directory.
-        raw_data: np.ndarray of shape (n_elecs, n_samples) at 32 Hz (float32).
+        epoch_data: np.ndarray shaped (n_words, n_elecs, n_lags), float32.
         selection: np.ndarray of word indices kept by MNE epoching.
-        epoch_starts: np.ndarray of start sample indices in raw_data for each epoch.
         ch_names: List of electrode name strings.
-        n_lags: Number of samples per epoch window.
+        sfreq: Epoch sampling frequency.
+        tmin: Epoch start relative to word onset, in seconds.
+        tmax: Exclusive epoch end relative to word onset, in seconds.
     """
+    epoch_data = np.asarray(epoch_data, dtype=np.float32)
+    selection = np.asarray(selection, dtype=int)
+    if epoch_data.ndim != 3:
+        raise ValueError(
+            f"epoch_data must have shape (words, electrodes, lags), got {epoch_data.shape}."
+        )
+    if epoch_data.shape[0] != len(selection):
+        raise ValueError(
+            "epoch_data word count must match selection length, got "
+            f"{epoch_data.shape[0]} and {len(selection)}."
+        )
+    if epoch_data.shape[1] != len(ch_names):
+        raise ValueError(
+            "epoch_data electrode count must match ch_names length, got "
+            f"{epoch_data.shape[1]} and {len(ch_names)}."
+        )
     context = _maybe_resolve_dataset_context(
         dataset, [sub_id], per_dataset_config, data_root, dataset_context
     )
@@ -571,10 +663,12 @@ def save_precomputed_epochs(
     os.makedirs(os.path.dirname(path), exist_ok=True)
     np.savez(
         path,
-        raw_data=raw_data,
+        epoch_data=epoch_data,
         selection=selection,
-        epoch_starts=epoch_starts,
-        n_lags=np.array(n_lags),
+        n_lags=np.array(epoch_data.shape[-1]),
+        sfreq=np.array(sfreq),
+        tmin=np.array(tmin),
+        tmax=np.array(tmax),
         ch_names=np.array(ch_names),
         dataset=np.array((context.dataset if context is not None else dataset)),
         stimulus_id=np.array(
@@ -602,9 +696,8 @@ def load_precomputed_epochs(
 
     Returns:
         dict with keys:
-            raw_data  — (n_elecs, n_samples) float32 array at 32 Hz
+            epoch_data — (n_words, n_elecs, n_lags) float32 array
             selection — (n_words_kept,) int array of kept word indices
-            epoch_starts — (n_words_kept,) int array of start sample indices
             n_lags    — int, samples per epoch window
             ch_names  — list of electrode name strings
 
@@ -626,31 +719,38 @@ def load_precomputed_epochs(
             f"Precomputed epochs not found: {path}. "
             "Run scripts/precompute_epochs.py first."
         )
-    cache = np.load(path, allow_pickle=False)
-    return {
-        "raw_data": cache["raw_data"],
-        "selection": cache["selection"],
-        "epoch_starts": cache["epoch_starts"],
-        "n_lags": int(cache["n_lags"]),
-        "ch_names": cache["ch_names"].tolist(),
-        "dataset": str(cache["dataset"]) if "dataset" in cache else dataset,
-        "stimulus_id": (
-            str(cache["stimulus_id"])
-            if "stimulus_id" in cache
-            else getattr(context, "stimulus_id", "podcast")
-        ),
-        "stimulus_label": (
-            str(cache["stimulus_label"])
-            if "stimulus_label" in cache
-            else getattr(context, "stimulus_label", "podcast")
-        ),
-    }
+    with np.load(path, allow_pickle=False) as cache:
+        if "epoch_data" not in cache:
+            raise ValueError(
+                f"Legacy continuous epoch cache found: {path}. Regenerate it with "
+                "scripts/utilities/precompute_epochs.py before running analyses."
+            )
+        return {
+            "epoch_data": cache["epoch_data"],
+            "selection": cache["selection"],
+            "n_lags": int(cache["n_lags"]),
+            "sfreq": float(cache["sfreq"]),
+            "tmin": float(cache["tmin"]),
+            "tmax": float(cache["tmax"]),
+            "ch_names": cache["ch_names"].tolist(),
+            "dataset": str(cache["dataset"]) if "dataset" in cache else dataset,
+            "stimulus_id": (
+                str(cache["stimulus_id"])
+                if "stimulus_id" in cache
+                else getattr(context, "stimulus_id", "podcast")
+            ),
+            "stimulus_label": (
+                str(cache["stimulus_label"])
+                if "stimulus_label" in cache
+                else getattr(context, "stimulus_label", "podcast")
+            ),
+        }
 
 
 def epochs_from_cache(cache, elec_names=None):
     """Extract epoch data array from a precomputed cache.
 
-    Slices epoch windows directly out of the stored 32 Hz raw array.
+    Returns the aligned epoch tensor stored in the cache.
 
     Args:
         cache: dict returned by load_precomputed_epochs.
@@ -660,18 +760,14 @@ def epochs_from_cache(cache, elec_names=None):
     Returns:
         np.ndarray of shape (n_words_kept, n_elecs, n_lags), float32.
     """
-    raw_data = cache["raw_data"]
-    epoch_starts = cache["epoch_starts"]
-    n_lags = cache["n_lags"]
+    epoch_data = cache["epoch_data"]
 
     if elec_names is not None:
         ch_names = cache["ch_names"]
         idx = [ch_names.index(e) for e in elec_names]
-        raw_data = raw_data[idx]
+        epoch_data = epoch_data[:, idx, :]
 
-    return np.stack([raw_data[:, s : s + n_lags] for s in epoch_starts], axis=0).astype(
-        np.float32
-    )
+    return np.asarray(epoch_data, dtype=np.float32)
 
 
 def get_arbitrary_embeddings(X, epochs_or_selection, df_word, seed=None):

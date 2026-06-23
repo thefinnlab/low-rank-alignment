@@ -62,6 +62,19 @@ def _write_btb_electrode_labels(root, subject_id, labels):
     return path
 
 
+def _write_btb_corrupted_electrodes(root, mapping):
+    path = root / "corrupted_elec.json"
+    path.write_text(json.dumps(mapping))
+    return path
+
+
+def _write_btb_surface_coordinates(root, rows):
+    path = root / "localization" / "elec_coords_full.csv"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame(rows).to_csv(path, index=False)
+    return path
+
+
 class TestDatasetRegistry:
     def test_default_datasets_are_registered(self):
         assert get_dataset_adapter("podcast").name == "podcast"
@@ -230,6 +243,42 @@ class TestDatasetRegistry:
         assert raw.get_channel_types() == ["seeg", "seeg"]
         np.testing.assert_allclose(raw.get_data(), [[0.0] * 8, [2e-6] * 8])
 
+    def test_brain_treebank_attaches_mni_electrode_coordinates(self, tmp_path):
+        _write_btb_metadata(tmp_path, 3, 0, "coraline")
+        _write_btb_h5(
+            tmp_path,
+            3,
+            0,
+            {0: np.zeros(8, dtype=np.float32), 1: np.ones(8, dtype=np.float32)},
+        )
+        _write_btb_electrode_labels(tmp_path, 3, ["A*1", "A2"])
+        _write_btb_surface_coordinates(
+            tmp_path,
+            [
+                {
+                    "Subject": "sub_3",
+                    "Electrode": "A1",
+                    "X": 12.0,
+                    "Y": -34.0,
+                    "Z": 56.0,
+                }
+            ],
+        )
+        context = resolve_dataset_context(
+            dataset="brain_treebank",
+            subject_ids=[3],
+            per_dataset_config={"movie": "coraline"},
+            data_root=str(tmp_path),
+        )
+
+        raw = get_dataset_adapter("brain_treebank").load_raw_recording(
+            3, str(tmp_path), context, {"use_high_gamma": False}
+        )
+
+        np.testing.assert_allclose(raw.info["chs"][0]["loc"][:3], [0.012, -0.034, 0.056])
+        assert np.isnan(raw.info["chs"][1]["loc"][:3]).all()
+        assert raw.get_montage().get_positions()["coord_frame"] == "mni_tal"
+
     def test_brain_treebank_signal_unit_uv_returns_hdf5_scale(self, tmp_path):
         _write_btb_metadata(tmp_path, 3, 0, "coraline")
         _write_btb_h5(tmp_path, 3, 0, {0: np.full(8, 2.0, dtype=np.float32)})
@@ -279,7 +328,7 @@ class TestDatasetRegistry:
         assert called["value"] is True
         assert raw.get_channel_types() == ["seeg"]
 
-    def test_brain_treebank_high_gamma_preprocessing_order(self):
+    def test_brain_treebank_high_gamma_preprocessing_order(self, monkeypatch):
         adapter = get_dataset_adapter("brain_treebank")
 
         class FakeRaw:
@@ -312,18 +361,39 @@ class TestDatasetRegistry:
                 return self
 
         raw = FakeRaw()
+        monkeypatch.setattr(
+            adapter,
+            "_despike",
+            lambda inst: inst.calls.append(("despike",)) or inst,
+        )
         processed = adapter._apply_high_gamma(raw)
 
         assert processed is raw
         assert raw.calls == [
             ("resample", 512.0),
+            ("despike",),
             ("reference", "average", "seeg"),
             ("notch", [60, 120, 180]),
             ("filter", 70.0, 200.0),
             ("hilbert",),
         ]
 
-    def test_brain_treebank_explicit_target_resampling(self, tmp_path):
+    def test_brain_treebank_despiking_interpolates_large_transient(self):
+        mne = pytest.importorskip("mne")
+        rng = np.random.default_rng(4)
+        data = rng.normal(scale=1e-6, size=(2, 2048))
+        data[0, 1024] = 1e-3
+        raw = mne.io.RawArray(
+            data,
+            mne.create_info(["A1", "A2"], sfreq=512.0, ch_types=["seeg"] * 2),
+            verbose=False,
+        )
+
+        processed = get_dataset_adapter("brain_treebank")._despike(raw)
+
+        assert abs(processed.get_data()[0, 1024]) < 1e-5
+
+    def test_brain_treebank_does_not_apply_analysis_rate_resampling(self, tmp_path):
         _write_btb_metadata(tmp_path, 3, 0, "coraline")
         _write_btb_h5(
             tmp_path,
@@ -345,5 +415,60 @@ class TestDatasetRegistry:
             {"target_sr": 32.0},
         )
 
-        assert raw.info["sfreq"] == 32.0
-        assert raw.n_times == 32
+        assert raw.info["sfreq"] == 2048.0
+        assert raw.n_times == 2048
+
+    def test_brain_treebank_drops_corrupted_contacts_before_preprocessing(
+        self, tmp_path
+    ):
+        _write_btb_metadata(tmp_path, 3, 0, "coraline")
+        _write_btb_h5(
+            tmp_path,
+            3,
+            0,
+            {
+                0: np.zeros(16, dtype=np.float32),
+                1: np.ones(16, dtype=np.float32),
+                2: np.full(16, 2.0, dtype=np.float32),
+            },
+        )
+        _write_btb_electrode_labels(tmp_path, 3, ["A0", "BAD", "A2"])
+        _write_btb_corrupted_electrodes(tmp_path, {"sub_3": ["BAD"]})
+        context = resolve_dataset_context(
+            dataset="brain_treebank",
+            subject_ids=[3],
+            per_dataset_config={"movie": "coraline"},
+            data_root=str(tmp_path),
+        )
+
+        raw = get_dataset_adapter("brain_treebank").load_raw_recording(
+            3,
+            str(tmp_path),
+            context,
+            {"use_high_gamma": False, "do_drop_bads": True},
+        )
+
+        assert raw.ch_names == ["A0", "A2"]
+
+    def test_brain_treebank_drop_bads_requires_corruption_metadata(self, tmp_path):
+        _write_btb_metadata(tmp_path, 3, 0, "coraline")
+        _write_btb_h5(
+            tmp_path,
+            3,
+            0,
+            {0: np.zeros(16, dtype=np.float32), 1: np.ones(16, dtype=np.float32)},
+        )
+        context = resolve_dataset_context(
+            dataset="brain_treebank",
+            subject_ids=[3],
+            per_dataset_config={"movie": "coraline"},
+            data_root=str(tmp_path),
+        )
+
+        with pytest.raises(FileNotFoundError, match="corrupted-electrode metadata"):
+            get_dataset_adapter("brain_treebank").load_raw_recording(
+                3,
+                str(tmp_path),
+                context,
+                {"use_high_gamma": False, "do_drop_bads": True},
+            )
