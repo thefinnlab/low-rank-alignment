@@ -48,14 +48,12 @@ def load_embeddings(
             transcript_df = adapter.load_word_table(
                 data_root,
                 context,
-                model_dir=model_dir,
                 **kwargs,
             )
     else:
         transcript_df = adapter.load_word_table(
             data_root,
             context,
-            model_dir=model_dir,
             **kwargs,
         )
 

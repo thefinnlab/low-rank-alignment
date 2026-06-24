@@ -111,3 +111,33 @@ class TestLoadEmbeddings:
         np.testing.assert_allclose(aligned[0], embeddings[0], rtol=1e-5)
         np.testing.assert_allclose(aligned[1], embeddings[1:].mean(0), rtol=1e-5)
         assert df_word["word"].tolist() == ["Hello", "world"]
+
+    def test_brain_treebank_fallback_word_table_accepts_explicit_model_dir(
+        self, tmp_path
+    ):
+        embeddings = np.arange(8, dtype=np.float32).reshape(2, 4)
+        stim_path = tmp_path / "stimuli" / "roberta-base" / "movie-coraline"
+        stim_path.mkdir(parents=True)
+        with h5py.File(stim_path / "features.hdf5", "w") as f:
+            f.create_dataset("layer-1", data=embeddings)
+
+        movie_path = tmp_path / "transcripts" / "coraline" / "features.csv"
+        movie_path.parent.mkdir(parents=True)
+        pd.DataFrame(
+            [
+                {"text": "Hello", "start": 1.0, "end": 1.2},
+                {"text": "world", "start": 2.0, "end": 2.2},
+            ]
+        ).to_csv(movie_path, index=False)
+
+        aligned, df_word = load_embeddings(
+            str(tmp_path),
+            embedding_getter_name="transformer",
+            model_dir="roberta-base",
+            layer=1,
+            dataset="brain_treebank",
+            per_dataset_config={"movie": "coraline"},
+        )
+
+        np.testing.assert_array_equal(aligned, embeddings)
+        assert df_word["word"].tolist() == ["Hello", "world"]
