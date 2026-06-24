@@ -6,7 +6,7 @@ Neural preprocessing uses 70–200 Hz Hilbert amplitude. Brain Treebank attaches
 
 The retained pipeline has three main analysis entrypoints:
 
-1. **Lag-cluster significance** (`make sig`) — trains per-subject encoding models with out-of-fold predictions, builds reliable electrode-lag clusters, and scores 10,000 reproducible null draws using independent fold-local circular shifts sampled with replacement. It applies global BH-FDR either across one winning cluster per electrode (the default) or across all candidate clusters, then writes downstream-compatible significance CSVs.
+1. **Lag-cluster significance** (`make sig`) — trains per-subject encoding models with out-of-fold predictions, builds reliable electrode-lag clusters, and scores 10,000 reproducible null draws using independent fold-local circular shifts sampled with replacement. It applies global BH-FDR either across one winning cluster per electrode (the default) or across all candidate clusters, then writes downstream-compatible significance CSVs and a minimal per-subject `encoding_results.joblib` containing the test-fold indices used by RRR.
 2. **Encoding model training** (`make train`) — trains ridge regression encoding models on significant electrodes. New `encoding_results.joblib` files are intentionally slim: they keep correlations, fold indices, target scalers, electrode names, run metadata, and optional arbitrary-baseline correlations, while avoiding fitted model and coefficient payloads.
 3. **RRR analysis** (`make rrr`) — fits raw-input reduced-rank regression from embeddings to neural targets, sweeps rank-k projections, and compares rank-k neural-relevance ridge predictions against fresh full-ridge fold baselines. The retained RRR script can also run a PCA subspace baseline when `RRRConfig.run_pca_baseline` is enabled, plus an optional circular-shift null-augmented rank check when `RRRConfig.run_null_augmented` is enabled.
 
@@ -52,7 +52,7 @@ Downstream configs can store list-valued `encoding.per_model_config.layer` entri
 
 | File | Purpose |
 |------|---------|
-| `scripts/sig_lags/run_significance.py` | Cluster-based lag significance entrypoint with configurable null count, seed, and electrode- or cluster-level global FDR; writes `significance_detailed.csv`, `all_subject_sig.csv`, and `cluster_null_distribution.npz` |
+| `scripts/sig_lags/run_significance.py` | Cluster-based lag significance entrypoint with configurable null count, seed, and electrode- or cluster-level global FDR; writes significance CSVs, the null distribution, and per-subject test-fold index artifacts for RRR |
 | `scripts/encoding/train_encoding_models.py` | Ridge encoding training entrypoint; writes slim per-subject `encoding_results.joblib`, `corrs.npy`, optional `arbitrary_corrs.npy`, plots, and alpha diagnostics |
 | `scripts/rrr/run_rrr.py` | Raw-input RRR rank sweep with fresh full-ridge fold baselines and optional PCA baseline via `run_pca_baseline` |
 | `scripts/utilities/generate_embeddings.py` | Generate contextual HuggingFace embeddings |

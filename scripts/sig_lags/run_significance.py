@@ -25,7 +25,11 @@ from src.utils.config_utils import (
     load_config,
     expand_per_model_layer_configs,
 )
-from src.utils.encoding import extract_best_alphas, get_ridge_model_constructor
+from src.utils.encoding import (
+    extract_best_alphas,
+    get_ridge_model_constructor,
+    save_encoding_results,
+)
 from src.utils.alpha_grids import resolve_ridge_alphas, save_alpha_diagnostics
 from src.utils.data_loaders import load_data_from_cache
 from src.utils.significance import (
@@ -167,6 +171,11 @@ def run_config(config: SignificanceConfig):
             epochs_shape=(n_elec, n_lags),
             num_folds=enc.num_folds,
             return_preds=True,
+        )
+        os.makedirs(alpha_dir, exist_ok=True)
+        save_encoding_results(
+            {"test_idxs": test_idxs},
+            os.path.join(alpha_dir, "encoding_results.joblib"),
         )
         if enc.log_alphas:
             save_alpha_diagnostics(
