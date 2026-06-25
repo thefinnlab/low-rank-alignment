@@ -372,6 +372,7 @@ def load_data_from_cache(
     dataset="podcast",
     per_dataset_config=None,
     dataset_context=None,
+    shared_selection=None,
 ):
     import gc
     from src.utils.encoding import apply_offset
@@ -403,6 +404,8 @@ def load_data_from_cache(
                 f"Cached subjects must share one stimulus. "
                 f"Expected '{ref_stimulus_id}', got '{cache_stimulus_id}' for subject {sub_id}."
             )
+        if shared_selection is not None:
+            cache = filter_epoch_cache_to_selection(cache, shared_selection)
         selection = cache["selection"]
         if ref_selection is None:
             ref_selection = selection
@@ -444,6 +447,7 @@ def build_XY_from_subjects(
     sig_electrodes: dict,
     aligned_embeddings: "np.ndarray",
     valid_rows: Optional[np.ndarray] = None,
+    shared_selection: Optional[np.ndarray] = None,
 ) -> tuple:
     """Load neural data for multiple subjects and stack into X and Y arrays.
 
@@ -492,6 +496,7 @@ def build_XY_from_subjects(
         dataset=dataset,
         per_dataset_config=per_dataset_config,
         dataset_context=dataset_context,
+        shared_selection=shared_selection,
     )
 
 
@@ -745,6 +750,100 @@ def load_precomputed_epochs(
                 else getattr(context, "stimulus_label", "podcast")
             ),
         }
+
+
+def compute_shared_word_selection(
+    subject_ids,
+    data_root,
+    dataset="podcast",
+    per_dataset_config=None,
+    dataset_context=None,
+):
+    """Return the sorted intersection of cached word selections across subjects."""
+    selections = []
+    for sub_id in subject_ids:
+        cache = load_precomputed_epochs(
+            sub_id,
+            data_root,
+            dataset=dataset,
+            per_dataset_config=per_dataset_config,
+            dataset_context=dataset_context,
+        )
+        selections.append(np.asarray(cache["selection"], dtype=int))
+    if not selections:
+        raise ValueError("Cannot compute a shared word selection for no subjects.")
+    shared = selections[0]
+    for selection in selections[1:]:
+        shared = np.intersect1d(shared, selection, assume_unique=False)
+    if shared.size == 0:
+        raise ValueError(
+            f"No shared cached word selections found across subjects {list(subject_ids)}."
+        )
+    return shared.astype(int, copy=False)
+
+
+def filter_epoch_cache_to_selection(cache: dict, shared_selection) -> dict:
+    """Return a cache copy restricted to ``shared_selection`` in that order."""
+    shared_selection = np.asarray(shared_selection, dtype=int)
+    cache_selection = np.asarray(cache["selection"], dtype=int)
+    row_by_word = {int(word_idx): row_i for row_i, word_idx in enumerate(cache_selection)}
+    missing = [
+        int(word_idx)
+        for word_idx in shared_selection
+        if int(word_idx) not in row_by_word
+    ]
+    if missing:
+        preview = ", ".join(str(x) for x in missing[:5])
+        suffix = "..." if len(missing) > 5 else ""
+        raise ValueError(
+            "Requested shared word selection contains word indices absent from "
+            f"subject cache: {preview}{suffix}"
+        )
+    row_idxs = np.array([row_by_word[int(word_idx)] for word_idx in shared_selection])
+    filtered = dict(cache)
+    filtered["epoch_data"] = np.asarray(cache["epoch_data"])[row_idxs]
+    filtered["selection"] = shared_selection
+    return filtered
+
+
+def selection_after_offset(epoch_selection, offset: int, valid_rows=None) -> np.ndarray:
+    """Return word indices represented by model rows after offset and filtering."""
+    selection = np.asarray(epoch_selection, dtype=int)
+    if offset < 0:
+        selection = selection[:offset]
+        if valid_rows is not None:
+            valid_rows = np.asarray(valid_rows)[:offset]
+    elif offset > 0:
+        selection = selection[offset:]
+        if valid_rows is not None:
+            valid_rows = np.asarray(valid_rows)[offset:]
+    if valid_rows is not None:
+        selection = selection[np.asarray(valid_rows, dtype=bool)]
+    return selection.astype(int, copy=False)
+
+
+def build_word_selection_metadata(
+    mode: str,
+    subjects,
+    epoch_selection,
+    offset: int,
+    valid_rows=None,
+) -> dict:
+    """Build row-provenance metadata stored in encoding_results.joblib."""
+    epoch_selection = np.asarray(epoch_selection, dtype=int)
+    analysis_selection = selection_after_offset(
+        epoch_selection,
+        int(offset),
+        valid_rows=valid_rows,
+    )
+    return {
+        "mode": mode,
+        "subjects": [int(s) for s in subjects],
+        "epoch_selection": epoch_selection,
+        "analysis_selection": analysis_selection,
+        "offset": int(offset),
+        "valid_rows_applied": valid_rows is not None,
+    }
 
 
 def epochs_from_cache(cache, elec_names=None):

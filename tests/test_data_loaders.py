@@ -9,8 +9,11 @@ import pytest
 
 from src.utils.data_loaders import (
     build_aligned_epoch_data,
+    build_word_selection_metadata,
     build_word_epochs,
     compute_epoch_cache_indices,
+    compute_shared_word_selection,
+    filter_epoch_cache_to_selection,
     get_precomputed_epochs_path,
     get_arbitrary_embeddings,
     load_data_from_cache,
@@ -19,6 +22,7 @@ from src.utils.data_loaders import (
     read_electrode_file,
     read_subject_mapping,
     save_precomputed_epochs,
+    selection_after_offset,
 )
 from src.core.registry import DatasetContext
 
@@ -489,6 +493,94 @@ class TestDatasetAwareLoaders:
                     stimulus_label="coraline",
                 ),
             )
+
+    def test_shared_word_selection_helpers_filter_and_track_rows(self):
+        cache = {
+            "epoch_data": np.array([[[10]], [[11]], [[12]]], dtype=np.float32),
+            "selection": np.array([4, 2, 8]),
+        }
+        filtered = filter_epoch_cache_to_selection(cache, np.array([8, 4]))
+        np.testing.assert_array_equal(filtered["selection"], np.array([8, 4]))
+        np.testing.assert_array_equal(
+            filtered["epoch_data"], np.array([[[12]], [[10]]], dtype=np.float32)
+        )
+
+        valid_rows = np.array([True, False, True, True])
+        np.testing.assert_array_equal(
+            selection_after_offset(np.array([1, 2, 3, 4]), 1, valid_rows),
+            np.array([3, 4]),
+        )
+        metadata = build_word_selection_metadata(
+            "shared_intersection",
+            [1, 2],
+            np.array([1, 2, 3, 4]),
+            1,
+            valid_rows=valid_rows,
+        )
+        assert metadata["subjects"] == [1, 2]
+        np.testing.assert_array_equal(metadata["epoch_selection"], np.array([1, 2, 3, 4]))
+        np.testing.assert_array_equal(metadata["analysis_selection"], np.array([3, 4]))
+
+    def test_compute_shared_word_selection_intersects_cached_subjects(self, monkeypatch):
+        def _fake_load_precomputed_epochs(sub_id, data_root, **kwargs):
+            selection = {
+                1: np.array([0, 2, 4, 6]),
+                2: np.array([2, 3, 4, 5]),
+                3: np.array([1, 2, 4, 8]),
+            }[sub_id]
+            return {
+                "epoch_data": np.zeros((len(selection), 1, 1), dtype=np.float32),
+                "selection": selection,
+                "n_lags": 1,
+                "ch_names": ["A1"],
+                "stimulus_id": "podcast",
+            }
+
+        import src.utils.data_loaders as dl
+
+        monkeypatch.setattr(dl, "load_precomputed_epochs", _fake_load_precomputed_epochs)
+        shared = compute_shared_word_selection([1, 2, 3], "data/")
+        np.testing.assert_array_equal(shared, np.array([2, 4]))
+
+    def test_load_data_from_cache_accepts_mismatched_selections_with_shared_selection(
+        self, monkeypatch
+    ):
+        def _fake_load_precomputed_epochs(sub_id, data_root, **kwargs):
+            if sub_id == 1:
+                selection = np.array([0, 1])
+                values = np.array([10, 11], dtype=np.float32)
+            else:
+                selection = np.array([1, 2])
+                values = np.array([21, 22], dtype=np.float32)
+            return {
+                "epoch_data": values.reshape(2, 1, 1),
+                "selection": selection,
+                "n_lags": 1,
+                "ch_names": ["A1"],
+                "stimulus_id": "coraline",
+            }
+
+        import src.utils.data_loaders as dl
+
+        monkeypatch.setattr(dl, "load_precomputed_epochs", _fake_load_precomputed_epochs)
+        X, Y, selection, elec_names = load_data_from_cache(
+            [1, 2],
+            "data/",
+            0,
+            np.arange(9, dtype=np.float32).reshape(3, 3),
+            dataset="brain_treebank",
+            per_dataset_config={"movie": "coraline"},
+            dataset_context=DatasetContext(
+                dataset="brain_treebank",
+                stimulus_id="coraline",
+                stimulus_label="coraline",
+            ),
+            shared_selection=np.array([1]),
+        )
+        np.testing.assert_array_equal(selection, np.array([1]))
+        np.testing.assert_array_equal(X, np.array([[3, 4, 5]], dtype=np.float32))
+        np.testing.assert_array_equal(Y, np.array([[11, 21]], dtype=np.float32))
+        assert elec_names == [["A1"], ["A1"]]
 
     def test_significance_loading_uses_stimulus_scoped_dir(self, tmp_path):
         sig_dir = tmp_path / "results" / "gpt2xl_layer24_offset0" / "movie-coraline"

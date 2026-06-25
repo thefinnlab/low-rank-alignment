@@ -526,6 +526,7 @@ def save_subject_results(
     lags,
     per_model_config=None,
     corrs_arb=None,
+    word_selection_metadata=None,
 ):
     """Build results dict and write outputs to {output_dir}/subjects/sub_{sub_id}/.
 
@@ -544,6 +545,7 @@ def save_subject_results(
         lags: Lag axis array.
         per_model_config: Model metadata to store under the per_model_config key.
         corrs_arb: Optional null-model correlation array (same shape as corrs).
+        word_selection_metadata: Optional row-provenance metadata to persist.
     """
     from src.utils.plotting import plot_corrs_vs_arbitrary
 
@@ -560,6 +562,8 @@ def save_subject_results(
     }
     if corrs_arb is not None:
         results["arb_corrs"] = corrs_arb
+    if word_selection_metadata is not None:
+        results["word_selection"] = word_selection_metadata
 
     sub_dir = os.path.join(output_dir, "subjects", f"sub_{sub_id}")
     os.makedirs(sub_dir, exist_ok=True)

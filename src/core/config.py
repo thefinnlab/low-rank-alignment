@@ -89,6 +89,9 @@ class EncodingConfig:
     limit_to_glove: bool = (
         False  # If true, only run over words which have a glove embedding.
     )
+    shared_word_selection: bool = (
+        False  # If true, use the intersection of cached word selections across subjects.
+    )
     # Per model type config. Used when generating embeddings in load_embeddings.
     per_model_config: dict = field(default_factory=lambda: {"layer": 24})
     per_dataset_config: dict = field(default_factory=dict)

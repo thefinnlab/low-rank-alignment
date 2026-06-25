@@ -180,6 +180,46 @@ def _load_reference_test_idxs(output_dir: str, subject_ids) -> list:
     return enc_results["test_idxs"]
 
 
+def _load_shared_word_selection_metadata(output_dir: str, subject_ids: list[int]) -> dict:
+    """Load and validate shared word-selection metadata from encoding results."""
+    reference = None
+    for sub_id in subject_ids:
+        path = os.path.join(
+            output_dir, "subjects", f"sub_{sub_id}", "encoding_results.joblib"
+        )
+        enc_results = load_encoding_results(path)
+        metadata = enc_results.get("word_selection")
+        if metadata is None:
+            raise ValueError(
+                "RRRConfig.encoding.shared_word_selection=True requires "
+                f"word_selection metadata in {path}. Re-run significance or encoding "
+                "with shared_word_selection enabled."
+            )
+        stored_subjects = [int(s) for s in metadata.get("subjects", [])]
+        if stored_subjects != [int(s) for s in subject_ids]:
+            raise ValueError(
+                "Shared word-selection metadata subjects do not match current RRR "
+                f"subjects. Stored={stored_subjects}, current={list(subject_ids)}."
+            )
+        if metadata.get("mode") != "shared_intersection":
+            raise ValueError(
+                f"Expected shared_intersection word selection in {path}, "
+                f"got {metadata.get('mode')!r}."
+            )
+        if reference is None:
+            reference = metadata
+            continue
+        for key in ("epoch_selection", "analysis_selection"):
+            if not np.array_equal(reference[key], metadata[key]):
+                raise ValueError(
+                    "Shared word-selection metadata differs across subject encoding "
+                    f"results for key {key!r}."
+                )
+    if reference is None:
+        raise ValueError("Cannot load shared word-selection metadata for no subjects.")
+    return reference
+
+
 def _metrics_path(unit_dir: str, k: int, fold_f: int) -> str:
     return os.path.join(unit_dir, f"k{k}", f"fold_{fold_f}", "metrics.npz")
 
@@ -1328,6 +1368,7 @@ def _get_decomposition_inputs(
     word_in_glove=None,
     folds_to_build: "set[int] | None" = None,
     alpha_cache_dir: str | None = None,
+    shared_selection_metadata: "dict | None" = None,
 ):
     enc_results = load_encoding_results(
         os.path.join(
@@ -1349,8 +1390,26 @@ def _get_decomposition_inputs(
         sig_electrodes,
         embeddings,
         valid_rows=word_in_glove,
+        shared_selection=(
+            shared_selection_metadata["epoch_selection"]
+            if shared_selection_metadata is not None
+            else None
+        ),
     )
     print(f"  X: {X_raw.shape}, Y: {Y_full.shape}")
+    if shared_selection_metadata is not None:
+        expected_n = len(shared_selection_metadata["analysis_selection"])
+        if X_raw.shape[0] != expected_n:
+            raise ValueError(
+                "Loaded RRR rows do not match saved shared word-selection metadata: "
+                f"X has {X_raw.shape[0]} rows, metadata has {expected_n} analysis rows."
+            )
+    max_test_idx = max(int(np.max(idx)) for idx in test_idxs if len(idx))
+    if max_test_idx >= X_raw.shape[0]:
+        raise ValueError(
+            "Saved fold indices are incompatible with loaded RRR rows: "
+            f"max test index {max_test_idx} for {X_raw.shape[0]} rows."
+        )
 
     per_fold_baselines = build_per_fold_baselines(
         X_raw,
@@ -1404,6 +1463,7 @@ def _run_cross_subject_rrr(
     aligned_embeddings,
     word_df,
     word_in_glove=None,
+    shared_selection_metadata=None,
 ):
     """RRR on raw embeddings using all subjects' significant electrodes."""
     n_folds = len(_load_reference_test_idxs(output_dir, subject_ids))
@@ -1427,6 +1487,7 @@ def _run_cross_subject_rrr(
         word_in_glove=word_in_glove,
         folds_to_build=folds_to_build,
         alpha_cache_dir=rrr_dir,
+        shared_selection_metadata=shared_selection_metadata,
     )
     if results is None:
         return
@@ -1461,6 +1522,7 @@ def _run_per_subject_rrr(
     aligned_embeddings,
     word_df,
     word_in_glove=None,
+    shared_selection_metadata=None,
 ):
     """RRR on raw embeddings independently per subject."""
     for sub_id in subject_ids:
@@ -1491,6 +1553,7 @@ def _run_per_subject_rrr(
             word_in_glove=word_in_glove,
             folds_to_build=folds_to_build,
             alpha_cache_dir=rrr_sub_dir,
+            shared_selection_metadata=shared_selection_metadata,
         )
         if results is None:
             continue
@@ -1525,6 +1588,7 @@ def _run_per_region_rrr(
     aligned_embeddings,
     word_df,
     word_in_glove=None,
+    shared_selection_metadata=None,
 ):
     """RRR on raw embeddings independently per atlas region."""
     print("Building electrode region map...")
@@ -1573,6 +1637,7 @@ def _run_per_region_rrr(
             word_in_glove=word_in_glove,
             folds_to_build=folds_to_build,
             alpha_cache_dir=rrr_region_dir,
+            shared_selection_metadata=shared_selection_metadata,
         )
         if results is None:
             continue
@@ -1754,6 +1819,7 @@ def _run_leave_one_subject_out_rrr(
     aligned_embeddings,
     word_df,
     word_in_glove=None,
+    shared_selection_metadata=None,
 ):
     """Leave-one-subject-out RRR: train on n-1 subjects, transfer A to held-out subject.
 
@@ -1790,6 +1856,7 @@ def _run_leave_one_subject_out_rrr(
                 word_in_glove=word_in_glove,
                 folds_to_build=train_folds_to_build,
                 alpha_cache_dir=train_dir,
+                shared_selection_metadata=shared_selection_metadata,
             )
             if results_train is None:
                 print("  No training data; skipping this held-out subject.")
@@ -1847,6 +1914,7 @@ def _run_leave_one_subject_out_rrr(
             word_in_glove=word_in_glove,
             folds_to_build=held_folds_to_build,
             alpha_cache_dir=os.path.join(loso_sub_dir, "held_out_alpha"),
+            shared_selection_metadata=shared_selection_metadata,
         )
         if results_held is None:
             print(f"  No held-out subject data; skipping transfer/baseline.")
@@ -1944,6 +2012,16 @@ def run_config(config: RRRConfig):
         dataset_context=dataset_context,
         data_root=enc.data_root,
     )
+    shared_selection_metadata = None
+    if enc.shared_word_selection:
+        shared_selection_metadata = _load_shared_word_selection_metadata(
+            sig_dir, subject_ids
+        )
+        print(
+            "Using saved shared word-selection metadata: "
+            f"{len(shared_selection_metadata['epoch_selection']):,} cached words, "
+            f"{len(shared_selection_metadata['analysis_selection']):,} analysis rows"
+        )
 
     # Load embeddings
     print("Loading embeddings...")
@@ -1973,6 +2051,7 @@ def run_config(config: RRRConfig):
         aligned_embeddings=aligned_embeddings,
         word_df=word_df,
         word_in_glove=word_in_glove,
+        shared_selection_metadata=shared_selection_metadata,
     )
 
     if config.mode == ScriptMode.PER_REGION:
