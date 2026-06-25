@@ -18,7 +18,11 @@ import gc
 import os
 
 import numpy as np
-from src.utils.data_loaders import load_data_from_cache
+from src.utils.data_loaders import (
+    build_word_selection_metadata,
+    compute_shared_word_selection,
+    load_data_from_cache,
+)
 import torch
 from himalaya.backend import set_backend
 
@@ -159,8 +163,11 @@ def _run_joint(
     alphas=None,
     alpha_grid=None,
     word_in_glove=None,
+    shared_selection=None,
+    selection_subject_ids=None,
 ):
     all_subject_ids = list(sig_elecs.keys())
+    selection_subject_ids = list(selection_subject_ids or all_subject_ids)
     X_arr, Y, selection, elec_names = load_data_from_cache(
         all_subject_ids,
         data_root,
@@ -171,7 +178,9 @@ def _run_joint(
         dataset=config.dataset,
         per_dataset_config=config.per_dataset_config,
         dataset_context=dataset_context,
+        shared_selection=shared_selection,
     )
+    epoch_selection_for_metadata = selection
     if word_in_glove is not None:
         selection = selection[word_in_glove[selection]]
 
@@ -231,6 +240,19 @@ def _run_joint(
 
     cursor = 0
     for sub_id, n_elecs in zip(all_subject_ids, elec_counts):
+        word_selection_metadata = None
+        if config.shared_word_selection:
+            word_selection_metadata = build_word_selection_metadata(
+                "shared_intersection",
+                selection_subject_ids,
+                epoch_selection_for_metadata,
+                offset,
+                valid_rows=(
+                    word_in_glove[epoch_selection_for_metadata]
+                    if word_in_glove is not None
+                    else None
+                ),
+            )
         sl = slice(cursor, cursor + n_elecs)
         cursor += n_elecs
         save_subject_results(
@@ -245,6 +267,7 @@ def _run_joint(
             lags,
             corrs_arb=corrs_arb[:, sl, :],
             per_model_config=config.per_model_config,
+            word_selection_metadata=word_selection_metadata,
         )
 
 
@@ -267,6 +290,7 @@ def _run_batch(
     alphas=None,
     alpha_grid=None,
     word_in_glove=None,
+    shared_selection=None,
 ):
     for sub_id in subject_ids:
         if sub_id not in sig_elecs:
@@ -286,7 +310,19 @@ def _run_batch(
             dataset=config.dataset,
             per_dataset_config=config.per_dataset_config,
             dataset_context=dataset_context,
+            shared_selection=shared_selection,
         )
+        word_selection_metadata = None
+        if config.shared_word_selection:
+            word_selection_metadata = build_word_selection_metadata(
+                "shared_intersection",
+                subject_ids,
+                selection,
+                offset,
+                valid_rows=(
+                    word_in_glove[selection] if word_in_glove is not None else None
+                ),
+            )
         elec_counts = [len(x) for x in elec_names]
         n_elecs = sum(elec_counts)
         n_lags = Y.shape[1] // n_elecs
@@ -352,6 +388,7 @@ def _run_batch(
             lags,
             corrs_arb=corrs_arb,
             per_model_config=config.per_model_config,
+            word_selection_metadata=word_selection_metadata,
         )
 
         del X_arr, Y, models, scalers, corrs, corrs_arb
@@ -413,6 +450,19 @@ def run_config(config: EncodingConfig):
         word_in_glove = get_glove_embeddings(
             config.data_root, word_df, **config.per_model_config
         )[1]["in_glove"]
+    shared_selection = None
+    if config.shared_word_selection:
+        shared_selection = compute_shared_word_selection(
+            subject_ids,
+            config.data_root,
+            dataset=config.dataset,
+            per_dataset_config=config.per_dataset_config,
+            dataset_context=dataset_context,
+        )
+        print(
+            "Using shared word-selection intersection: "
+            f"{len(shared_selection):,} cached words across {len(subject_ids)} subjects"
+        )
 
     explicit_alphas = (
         np.array(config.ridge_alphas, dtype=float)
@@ -435,6 +485,7 @@ def run_config(config: EncodingConfig):
             alphas=explicit_alphas,
             alpha_grid=None,
             word_in_glove=word_in_glove,
+            shared_selection=shared_selection,
         )
     else:
         _run_joint(
@@ -450,6 +501,8 @@ def run_config(config: EncodingConfig):
             alphas=explicit_alphas,
             alpha_grid=None,
             word_in_glove=word_in_glove,
+            shared_selection=shared_selection,
+            selection_subject_ids=subject_ids,
         )
 
 

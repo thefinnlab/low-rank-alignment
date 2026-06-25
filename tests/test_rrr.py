@@ -599,6 +599,58 @@ class TestRunRRRForUnit:
         for got, expected in zip(loaded_test_idxs, test_idxs):
             np.testing.assert_array_equal(got, expected)
 
+    def test_shared_selection_metadata_requires_matching_subjects(self, tmp_path):
+        import run_rrr
+        from src.utils.encoding import save_encoding_results
+
+        output_dir = tmp_path / "encoding_run"
+        for sub_id in [1, 2]:
+            sub_dir = output_dir / "subjects" / f"sub_{sub_id}"
+            sub_dir.mkdir(parents=True)
+            save_encoding_results(
+                {
+                    "test_idxs": [np.array([0])],
+                    "word_selection": {
+                        "mode": "shared_intersection",
+                        "subjects": [1, 3],
+                        "epoch_selection": np.array([0, 2]),
+                        "analysis_selection": np.array([0, 2]),
+                        "offset": 0,
+                        "valid_rows_applied": False,
+                    },
+                },
+                str(sub_dir / "encoding_results.joblib"),
+            )
+
+        with pytest.raises(ValueError, match="subjects do not match"):
+            run_rrr._load_shared_word_selection_metadata(str(output_dir), [1, 2])
+
+    def test_shared_selection_metadata_loads_when_all_subjects_agree(self, tmp_path):
+        import run_rrr
+        from src.utils.encoding import save_encoding_results
+
+        output_dir = tmp_path / "encoding_run"
+        for sub_id in [1, 2]:
+            sub_dir = output_dir / "subjects" / f"sub_{sub_id}"
+            sub_dir.mkdir(parents=True)
+            save_encoding_results(
+                {
+                    "test_idxs": [np.array([0])],
+                    "word_selection": {
+                        "mode": "shared_intersection",
+                        "subjects": [1, 2],
+                        "epoch_selection": np.array([0, 2]),
+                        "analysis_selection": np.array([0, 2]),
+                        "offset": 0,
+                        "valid_rows_applied": False,
+                    },
+                },
+                str(sub_dir / "encoding_results.joblib"),
+            )
+
+        metadata = run_rrr._load_shared_word_selection_metadata(str(output_dir), [1, 2])
+        np.testing.assert_array_equal(metadata["epoch_selection"], np.array([0, 2]))
+
 # ---------------------------------------------------------------------------
 # TestBuildXYFromSubjects
 # ---------------------------------------------------------------------------

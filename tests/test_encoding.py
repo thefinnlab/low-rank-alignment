@@ -337,6 +337,30 @@ class TestSaveSubjectResults:
         loaded = load_encoding_results(str(sub_dir / "encoding_results.joblib"))
         assert "arb_corrs" in loaded
 
+    def test_persists_word_selection_metadata(self, tmp_path, minimal_args):
+        metadata = {
+            "mode": "shared_intersection",
+            "subjects": [1, 2],
+            "epoch_selection": np.array([0, 2, 4]),
+            "analysis_selection": np.array([2, 4]),
+            "offset": 1,
+            "valid_rows_applied": False,
+        }
+        save_subject_results(
+            str(tmp_path),
+            sub_id=1,
+            word_selection_metadata=metadata,
+            **minimal_args,
+        )
+        loaded = load_encoding_results(
+            str(tmp_path / "subjects" / "sub_1" / "encoding_results.joblib")
+        )
+        assert loaded["word_selection"]["mode"] == "shared_intersection"
+        assert loaded["word_selection"]["subjects"] == [1, 2]
+        np.testing.assert_array_equal(
+            loaded["word_selection"]["epoch_selection"], np.array([0, 2, 4])
+        )
+
 
 # ---------------------------------------------------------------------------
 # Helpers for multi-subject tests

@@ -17,6 +17,7 @@ import torch
 from src.utils import (
     train_encoding,
     load_embeddings,
+    save_subject_results,
 )
 from src.core.config import SignificanceConfig, get_results_dir
 from src.core.registry import get_dataset_adapter, resolve_dataset_context
@@ -31,7 +32,11 @@ from src.utils.encoding import (
     save_encoding_results,
 )
 from src.utils.alpha_grids import resolve_ridge_alphas, save_alpha_diagnostics
-from src.utils.data_loaders import load_data_from_cache
+from src.utils.data_loaders import (
+    build_word_selection_metadata,
+    compute_shared_word_selection,
+    load_data_from_cache,
+)
 from src.utils.significance import (
     apply_cluster_fdr,
     compute_per_electrode_cluster_p_values,
@@ -97,6 +102,19 @@ def run_config(config: SignificanceConfig):
         word_in_glove = get_glove_embeddings(
             enc.data_root, transcript_df, **enc.per_model_config
         )[1]["in_glove"]
+    shared_selection = None
+    if enc.shared_word_selection:
+        shared_selection = compute_shared_word_selection(
+            subject_ids,
+            enc.data_root,
+            dataset=enc.dataset,
+            per_dataset_config=enc.per_dataset_config,
+            dataset_context=dataset_context,
+        )
+        print(
+            "Using shared word-selection intersection: "
+            f"{len(shared_selection):,} cached words across {len(subject_ids)} subjects"
+        )
 
     explicit_alphas = (
         np.array(enc.ridge_alphas, dtype=float)
@@ -124,7 +142,19 @@ def run_config(config: SignificanceConfig):
             dataset=enc.dataset,
             per_dataset_config=enc.per_dataset_config,
             dataset_context=dataset_context,
+            shared_selection=shared_selection,
         )
+        word_selection_metadata = None
+        if enc.shared_word_selection:
+            word_selection_metadata = build_word_selection_metadata(
+                "shared_intersection",
+                subject_ids,
+                selection,
+                enc.offset,
+                valid_rows=(
+                    word_in_glove[selection] if word_in_glove is not None else None
+                ),
+            )
         _, n_targets = Y.shape
         elec_counts = [len(x) for x in elec_names]
         n_lags = n_targets // sum(elec_counts)
@@ -184,6 +214,20 @@ def run_config(config: SignificanceConfig):
                 best_alphas=[extract_best_alphas(m) for m in models],
                 context=alpha_context,
                 policy=enc.alpha_grid,
+            )
+        if enc.shared_word_selection:
+            save_subject_results(
+                output_dir,
+                bids_sub_id,
+                corrs,
+                tr_idxs,
+                test_idxs,
+                scalers,
+                elec_names[0],
+                enc.offset,
+                actual_lag_sec,
+                per_model_config=enc.per_model_config,
+                word_selection_metadata=word_selection_metadata,
             )
 
         # ------------------------------------------------------------------
