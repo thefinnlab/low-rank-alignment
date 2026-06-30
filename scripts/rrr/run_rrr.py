@@ -1288,6 +1288,9 @@ def _run_pca_for_unit(
         X_mean = X_train.mean(axis=0)
         _, _, Vt = np.linalg.svd(X_train - X_mean, full_matrices=False)
         A_full = Vt.T  # (n_embed, min(n_train, n_embed))
+        fold_dir = os.path.join(pca_unit_dir, f"fold_{fold_f}")
+        os.makedirs(fold_dir, exist_ok=True)
+        np.save(os.path.join(fold_dir, "A.npy"), A_full)
         max_components = A_full.shape[1]
 
         valid_ranks = [k for k in ranks_to_run if k <= max_components]

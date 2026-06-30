@@ -8,7 +8,7 @@ The retained pipeline has three main analysis entrypoints:
 
 1. **Lag-cluster significance** (`make sig`) — trains per-subject encoding models with out-of-fold predictions, builds reliable electrode-lag clusters, and scores 10,000 reproducible null draws using independent fold-local circular shifts sampled with replacement. It applies global BH-FDR either across one winning cluster per electrode (the default) or across all candidate clusters, then writes downstream-compatible significance CSVs.
 2. **Encoding model training** (`make train`) — trains ridge regression encoding models on significant electrodes. New `encoding_results.joblib` files are intentionally slim: they keep correlations, fold indices, target scalers, electrode names, run metadata, optional shared word-selection provenance, and optional arbitrary-baseline correlations, while avoiding fitted model and coefficient payloads.
-3. **RRR analysis** (`make rrr`) — fits raw-input reduced-rank regression from embeddings to neural targets, sweeps rank-k projections, and compares rank-k neural-relevance ridge predictions against fresh full-ridge fold baselines. The retained RRR script can also reuse shared word selections saved by significance/encoding runs, run a PCA subspace baseline when `RRRConfig.run_pca_baseline` is enabled, plus an optional circular-shift null-augmented rank check when `RRRConfig.run_null_augmented` is enabled.
+3. **RRR analysis** (`make rrr`) — fits raw-input reduced-rank regression from embeddings to neural targets, sweeps rank-k projections, and compares rank-k neural-relevance ridge predictions against fresh full-ridge fold baselines. The retained RRR script can also reuse shared word selections saved by significance/encoding runs, run a PCA subspace baseline when `RRRConfig.run_pca_baseline` is enabled, plus an optional circular-shift null-augmented rank check when `RRRConfig.run_null_augmented` is enabled. RRR and PCA baselines save fold-level `A.npy` subspace factors for downstream comparison.
 
 The Makefile also provides batch targets for releasing multiple config runs:
 `make generate-embeddings-batch`, `make sig-batch`, and `make rrr-batch`. Random-init embedding runs can use `make generate-random-embeddings`, which wraps `scripts/utilities/generate_random_embeddings.py`.
@@ -68,6 +68,7 @@ Downstream configs can store list-valued `encoding.per_model_config.layer` entri
 | File | Purpose |
 |------|---------|
 | `notebooks/rank-correlation-distributions.py` | Marimo app for comparing rank-k, reference, and null-augmented correlation distributions across electrode, lag, and cluster groupings |
+| `notebooks/compare-subspaces.py` | Marimo app for discovering saved RRR/PCA `A.npy` factors, comparing selected subspaces with principal angles and Grassmann/spectral/Fubini-Study distances, and optionally plotting random-subspace nulls |
 | `notebooks/rrr-srrr-review.py` | Marimo review app for RRR/SRRR outputs, including A-direction activation examples, hypothesis-feature regressions against A-direction activations, B-matrix temporal/brain-map views, and cross-fold/source comparisons |
 
 ### `src/`
@@ -82,7 +83,7 @@ Downstream configs can store list-valued `encoding.per_model_config.layer` entri
 | `src/utils/encoding.py` | Cross-validation ridge training, slim encoding result serialization, fold baseline training for RRR, offsets, and correlation loaders |
 | `src/utils/significance.py` | Correlation, FDR, lag-cluster scoring, and circular-shift null helpers |
 | `src/utils/alpha_grids.py`, `constants.py` | Shared ridge alpha-grid policy and diagnostics |
-| `src/utils/srrr.py`, `rrr_utils.py`, `subspace_utils.py` | RRR factor fitting, RRR result I/O, rank evaluation, and subspace helpers |
+| `src/utils/srrr.py`, `rrr_utils.py`, `subspace_utils.py`, `subspace_compare.py` | RRR factor fitting, RRR result I/O, rank evaluation, saved-subspace discovery, and subspace comparison helpers |
 | `src/utils/plotting.py` | Correlation, alpha, RRR/PCA rank, and utility plots |
 | `src/utils/atlas.py` | Atlas lookup and electrode-region grouping |
 
