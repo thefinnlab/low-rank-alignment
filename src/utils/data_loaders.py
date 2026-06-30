@@ -1,6 +1,7 @@
 import os
 from typing import Optional
 
+import h5py
 import numpy as np
 import pandas as pd
 
@@ -666,24 +667,96 @@ def save_precomputed_epochs(
         dataset_context=context,
     )
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    np.savez(
-        path,
-        epoch_data=epoch_data,
-        selection=selection,
-        n_lags=np.array(epoch_data.shape[-1]),
-        sfreq=np.array(sfreq),
-        tmin=np.array(tmin),
-        tmax=np.array(tmax),
-        ch_names=np.array(ch_names),
-        dataset=np.array((context.dataset if context is not None else dataset)),
-        stimulus_id=np.array(
-            getattr(context, "stimulus_id", "podcast" if dataset == "podcast" else "")
-        ),
-        stimulus_label=np.array(
-            getattr(context, "stimulus_label", "podcast" if dataset == "podcast" else "")
-        ),
-    )
+    n_words, n_elecs, n_lags = epoch_data.shape
+    chunks = (min(n_words, 128), min(n_elecs, 16), n_lags)
+    with h5py.File(path, "w") as h5f:
+        h5f.create_dataset(
+            "epoch_data",
+            data=epoch_data,
+            dtype="float32",
+            chunks=chunks,
+            compression="lzf",
+        )
+        h5f.create_dataset("selection", data=selection)
+        h5f.create_dataset(
+            "ch_names",
+            data=np.asarray(ch_names, dtype=h5py.string_dtype(encoding="utf-8")),
+        )
+        h5f.attrs["n_lags"] = int(n_lags)
+        h5f.attrs["sfreq"] = float(sfreq)
+        h5f.attrs["tmin"] = float(tmin)
+        h5f.attrs["tmax"] = float(tmax)
+        h5f.attrs["dataset"] = context.dataset if context is not None else dataset
+        h5f.attrs["stimulus_id"] = getattr(
+            context, "stimulus_id", "podcast" if dataset == "podcast" else ""
+        )
+        h5f.attrs["stimulus_label"] = getattr(
+            context, "stimulus_label", "podcast" if dataset == "podcast" else ""
+        )
     print(f"  Saved precomputed epochs: {path}")
+
+
+class _LazyH5EpochData:
+    """Array-like handle for epoch data stored in an HDF5 cache."""
+
+    def __init__(self, path: str, row_indices=None):
+        self.path = path
+        self.row_indices = (
+            None if row_indices is None else np.asarray(row_indices, dtype=int)
+        )
+        with h5py.File(self.path, "r") as h5f:
+            dset = h5f["epoch_data"]
+            self._shape = tuple(dset.shape)
+            self.dtype = dset.dtype
+
+    @property
+    def shape(self):
+        if self.row_indices is None:
+            return self._shape
+        return (len(self.row_indices), self._shape[1], self._shape[2])
+
+    def __array__(self, dtype=None, copy=None):
+        data = self.read()
+        if copy is None:
+            return np.asarray(data, dtype=dtype)
+        return np.array(data, dtype=dtype, copy=copy)
+
+    @staticmethod
+    def _sorted_indexer(indices):
+        indices = np.asarray(indices, dtype=int)
+        order = np.argsort(indices)
+        return indices[order], np.argsort(order)
+
+    def _read_rows_for_electrode(self, dset, elec_idx: int):
+        if self.row_indices is None:
+            return dset[:, elec_idx, :]
+        if len(self.row_indices) == 0:
+            return np.empty((0, dset.shape[2]), dtype=dset.dtype)
+        sorted_rows, restore = self._sorted_indexer(self.row_indices)
+        return dset[sorted_rows, elec_idx, :][restore]
+
+    def read(self, electrode_indices=None):
+        with h5py.File(self.path, "r") as h5f:
+            dset = h5f["epoch_data"]
+            if electrode_indices is None:
+                if self.row_indices is None:
+                    return dset[:].astype(np.float32, copy=False)
+                if len(self.row_indices) == 0:
+                    return np.empty((0, dset.shape[1], dset.shape[2]), dtype=np.float32)
+                sorted_rows, restore = self._sorted_indexer(self.row_indices)
+                return dset[sorted_rows, :, :][restore].astype(np.float32, copy=False)
+
+            electrode_indices = np.asarray(electrode_indices, dtype=int)
+            out = np.empty(
+                (self.shape[0], len(electrode_indices), dset.shape[2]),
+                dtype=np.float32,
+            )
+            for out_idx, elec_idx in enumerate(electrode_indices):
+                out[:, out_idx, :] = self._read_rows_for_electrode(dset, int(elec_idx))
+            return out
+
+    def with_rows(self, row_indices):
+        return _LazyH5EpochData(self.path, row_indices=row_indices)
 
 
 def load_precomputed_epochs(
@@ -701,7 +774,7 @@ def load_precomputed_epochs(
 
     Returns:
         dict with keys:
-            epoch_data — (n_words, n_elecs, n_lags) float32 array
+            epoch_data — lazy HDF5 handle or legacy float32 array
             selection — (n_words_kept,) int array of kept word indices
             n_lags    — int, samples per epoch window
             ch_names  — list of electrode name strings
@@ -721,34 +794,39 @@ def load_precomputed_epochs(
     )
     if not os.path.exists(path):
         raise FileNotFoundError(
-            f"Precomputed epochs not found: {path}. "
-            "Run scripts/precompute_epochs.py first."
+            f"Precomputed HDF5 epochs not found: {path}. "
+            "Run scripts/utilities/precompute_epochs.py first."
         )
-    with np.load(path, allow_pickle=False) as cache:
+
+    with h5py.File(path, "r") as cache:
         if "epoch_data" not in cache:
             raise ValueError(
-                f"Legacy continuous epoch cache found: {path}. Regenerate it with "
-                "scripts/utilities/precompute_epochs.py before running analyses."
+                f"Precomputed epoch cache missing 'epoch_data': {path}. Regenerate it "
+                "with scripts/utilities/precompute_epochs.py before running analyses."
             )
+        attrs = cache.attrs
+        ch_names = [
+            name.decode("utf-8") if isinstance(name, bytes) else str(name)
+            for name in cache["ch_names"][:]
+        ]
         return {
-            "epoch_data": cache["epoch_data"],
-            "selection": cache["selection"],
-            "n_lags": int(cache["n_lags"]),
-            "sfreq": float(cache["sfreq"]),
-            "tmin": float(cache["tmin"]),
-            "tmax": float(cache["tmax"]),
-            "ch_names": cache["ch_names"].tolist(),
-            "dataset": str(cache["dataset"]) if "dataset" in cache else dataset,
-            "stimulus_id": (
-                str(cache["stimulus_id"])
-                if "stimulus_id" in cache
-                else getattr(context, "stimulus_id", "podcast")
+            "epoch_data": _LazyH5EpochData(path),
+            "selection": cache["selection"][:],
+            "n_lags": int(attrs["n_lags"]),
+            "sfreq": float(attrs["sfreq"]),
+            "tmin": float(attrs["tmin"]),
+            "tmax": float(attrs["tmax"]),
+            "ch_names": ch_names,
+            "dataset": str(attrs.get("dataset", dataset)),
+            "stimulus_id": str(
+                attrs.get("stimulus_id", getattr(context, "stimulus_id", "podcast"))
             ),
-            "stimulus_label": (
-                str(cache["stimulus_label"])
-                if "stimulus_label" in cache
-                else getattr(context, "stimulus_label", "podcast")
+            "stimulus_label": str(
+                attrs.get(
+                    "stimulus_label", getattr(context, "stimulus_label", "podcast")
+                )
             ),
+            "path": path,
         }
 
 
@@ -801,7 +879,11 @@ def filter_epoch_cache_to_selection(cache: dict, shared_selection) -> dict:
         )
     row_idxs = np.array([row_by_word[int(word_idx)] for word_idx in shared_selection])
     filtered = dict(cache)
-    filtered["epoch_data"] = np.asarray(cache["epoch_data"])[row_idxs]
+    epoch_data = cache["epoch_data"]
+    if hasattr(epoch_data, "with_rows"):
+        filtered["epoch_data"] = epoch_data.with_rows(row_idxs)
+    else:
+        filtered["epoch_data"] = np.asarray(epoch_data)[row_idxs]
     filtered["selection"] = shared_selection
     return filtered
 
@@ -859,11 +941,16 @@ def epochs_from_cache(cache, elec_names=None):
     Returns:
         np.ndarray of shape (n_words_kept, n_elecs, n_lags), float32.
     """
-    epoch_data = cache["epoch_data"]
-
     if elec_names is not None:
         ch_names = cache["ch_names"]
         idx = [ch_names.index(e) for e in elec_names]
+    else:
+        idx = None
+
+    epoch_data = cache["epoch_data"]
+    if hasattr(epoch_data, "read"):
+        return epoch_data.read(electrode_indices=idx)
+    if idx is not None:
         epoch_data = epoch_data[:, idx, :]
 
     return np.asarray(epoch_data, dtype=np.float32)

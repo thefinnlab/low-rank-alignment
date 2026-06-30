@@ -222,7 +222,7 @@ class PodcastDatasetAdapter:
             "ecogprep",
             f"sub-{subject_id:02d}",
             "ieeg",
-            f"sub-{subject_id:02d}_task-podcast_desc-epochs32hz_ieeg.npz",
+            f"sub-{subject_id:02d}_task-podcast_desc-epochs32hz_ieeg.h5",
         )
 
     def load_significance(
@@ -756,7 +756,7 @@ class BrainTreebankDatasetAdapter:
             data_root,
             "precomputed_epochs",
             f"sub_{subject_id}",
-            f"sub_{subject_id}_movie-{context.stimulus_id}_desc-epochs32hz_ieeg.npz",
+            f"sub_{subject_id}_movie-{context.stimulus_id}_desc-epochs32hz_ieeg.h5",
         )
 
     def load_significance(

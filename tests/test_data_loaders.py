@@ -384,8 +384,11 @@ class TestDatasetAwareLoaders:
         )
 
         cache = load_precomputed_epochs(1, str(tmp_path))
+        path = get_precomputed_epochs_path(1, str(tmp_path))
 
-        np.testing.assert_array_equal(cache["epoch_data"], epoch_data)
+        assert path.endswith(".h5")
+        assert hasattr(cache["epoch_data"], "read")
+        np.testing.assert_array_equal(np.asarray(cache["epoch_data"]), epoch_data)
         assert cache["sfreq"] == 32.0
         assert cache["tmin"] == -1.0
         assert cache["tmax"] == -0.875
@@ -395,8 +398,8 @@ class TestDatasetAwareLoaders:
             epochs_from_cache(cache, ["A3", "A1"]), epoch_data[:, [2, 0], :]
         )
 
-    def test_legacy_continuous_cache_requires_regeneration(self, tmp_path):
-        path = get_precomputed_epochs_path(1, str(tmp_path))
+    def test_legacy_npz_cache_is_ignored(self, tmp_path):
+        path = get_precomputed_epochs_path(1, str(tmp_path))[:-3] + ".npz"
         import os
 
         os.makedirs(os.path.dirname(path), exist_ok=True)
@@ -409,8 +412,28 @@ class TestDatasetAwareLoaders:
             ch_names=np.array(["A1"]),
         )
 
-        with pytest.raises(ValueError, match="Legacy continuous epoch cache"):
+        with pytest.raises(FileNotFoundError, match="Precomputed HDF5 epochs not found"):
             load_precomputed_epochs(1, str(tmp_path))
+
+    def test_hdf5_epoch_cache_filters_shared_selection_before_electrodes(self, tmp_path):
+        epoch_data = np.arange(4 * 3 * 2, dtype=np.float32).reshape(4, 3, 2)
+        save_precomputed_epochs(
+            1,
+            str(tmp_path),
+            epoch_data,
+            np.array([4, 2, 8, 6]),
+            ["A1", "A2", "A3"],
+        )
+
+        cache = load_precomputed_epochs(1, str(tmp_path))
+        filtered = filter_epoch_cache_to_selection(cache, np.array([8, 4]))
+
+        from src.utils.data_loaders import epochs_from_cache
+
+        np.testing.assert_array_equal(
+            epochs_from_cache(filtered, ["A3", "A1"]),
+            epoch_data[[2, 0]][:, [2, 0], :],
+        )
 
     def test_brain_treebank_cache_path_includes_movie(self):
         context = DatasetContext(

@@ -9,7 +9,7 @@ which avoids re-running high-gamma preprocessing/resampling on every invocation.
 
 Saves per subject to the active dataset adapter's precomputed-epochs path.
 
-The .npz contains:
+The .h5 contains:
   epoch_data   — (n_words_kept, n_elecs, 128) float32 at 32 Hz
   selection    — (n_words_kept,) int, word indices kept after duplicate/bounds filtering
   n_lags       — scalar int, samples per epoch window
