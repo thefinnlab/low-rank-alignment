@@ -237,6 +237,29 @@ class TestRunRRRForUnit:
         assert len(df) == 4
         assert set(df["k"].unique()) == {1, 3}
 
+    def test_pca_baseline_saves_fold_a_factors(self, tmp_path, small_data):
+        from run_rrr import _run_rrr_for_unit
+
+        X, Y = small_data
+        n = X.shape[0]
+        test_idxs = [np.arange(0, n // 2), np.arange(n // 2, n)]
+        config = self._make_config(rank_grid=[1])
+        config.run_pca_baseline = True
+        config.encoding.ridge_alphas = [1.0]
+        config.encoding.ridge_cv_folds = 2
+        per_fold_baselines = _make_baselines(X, Y, test_idxs)
+
+        rrr_dir = tmp_path / "rrr"
+        _run_rrr_for_unit(str(rrr_dir), X, test_idxs, per_fold_baselines, config)
+
+        pca_a_path = tmp_path / "pca" / "fold_0" / "A.npy"
+        assert pca_a_path.exists()
+        A_pca = np.load(pca_a_path)
+        n_train = n - len(test_idxs[0])
+        assert A_pca.shape[0] == X.shape[1]
+        assert A_pca.shape[1] <= min(n_train, X.shape[1])
+        assert not (tmp_path / "pca" / "fold_0" / "B.npy").exists()
+
     def test_summary_csv_averages_over_folds(self, tmp_path, small_data):
         from run_rrr import _run_rrr_for_unit
 
