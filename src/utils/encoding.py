@@ -480,9 +480,9 @@ def apply_offset(averaged_embeddings, data, offset, valid_rows=None):
     """
     n_words = data.shape[0]
     if data.ndim == 3:
-        Y = data.reshape(n_words, -1).astype(np.float32)
+        Y = data.reshape(n_words, -1).astype(np.float32, copy=False)
     else:
-        Y = data.astype(np.float32)
+        Y = data.astype(np.float32, copy=False)
 
     if offset < 0:
         averaged_embeddings, Y = averaged_embeddings[:offset], Y[-offset:]
@@ -496,7 +496,7 @@ def apply_offset(averaged_embeddings, data, offset, valid_rows=None):
     if valid_rows is not None:
         averaged_embeddings, Y = averaged_embeddings[valid_rows], Y[valid_rows]
 
-    return averaged_embeddings.astype(np.float32), Y
+    return averaged_embeddings.astype(np.float32, copy=False), Y
 
 
 def get_and_offset_arbitrary_embeddings(

@@ -416,11 +416,17 @@ def load_data_from_cache(
                 f"Subject {sub_id} differs from the first loaded subject; regenerate caches "
                 "with the same transcript/alignment policy or train subjects separately."
             )
-        data = epochs_from_cache(
-            cache, elec_names=sig_electrodes[sub_id] if sig_electrodes else None
-        )
+        selected_elec_names = sig_electrodes[sub_id] if sig_electrodes else None
+        epoch_data = cache.get("epoch_data")
+        if selected_elec_names is not None and hasattr(epoch_data, "read_flat"):
+            ch_names = cache["ch_names"]
+            data = epoch_data.read_flat(
+                electrode_indices=[ch_names.index(e) for e in selected_elec_names]
+            )
+        else:
+            data = epochs_from_cache(cache, elec_names=selected_elec_names)
         if sig_electrodes:
-            elec_names.append(sig_electrodes[sub_id])
+            elec_names.append(selected_elec_names)
         else:
             elec_names.append(cache["ch_names"])
         X_arr, Y_sub = apply_offset(
@@ -433,10 +439,11 @@ def load_data_from_cache(
             X_ref = X_arr
 
         Y_cols.append(Y_sub)
+        del cache, data, Y_sub
     gc.collect()
     return (
         X_ref,
-        np.concatenate(Y_cols, axis=1).astype(np.float32),
+        np.concatenate(Y_cols, axis=1).astype(np.float32, copy=False),
         ref_selection,
         elec_names,
     )
@@ -753,6 +760,23 @@ class _LazyH5EpochData:
             )
             for out_idx, elec_idx in enumerate(electrode_indices):
                 out[:, out_idx, :] = self._read_rows_for_electrode(dset, int(elec_idx))
+            return out
+
+    def read_flat(self, electrode_indices=None):
+        with h5py.File(self.path, "r") as h5f:
+            dset = h5f["epoch_data"]
+            if electrode_indices is None:
+                electrode_indices = np.arange(dset.shape[1])
+            else:
+                electrode_indices = np.asarray(electrode_indices, dtype=int)
+
+            n_rows = self.shape[0]
+            n_lags = dset.shape[2]
+            out = np.empty((n_rows, len(electrode_indices) * n_lags), dtype=np.float32)
+            for out_idx, elec_idx in enumerate(electrode_indices):
+                out[:, out_idx * n_lags : (out_idx + 1) * n_lags] = (
+                    self._read_rows_for_electrode(dset, int(elec_idx))
+                )
             return out
 
     def with_rows(self, row_indices):
