@@ -25,6 +25,7 @@ def _():
 
     from src.utils.subspace_compare import (
         discover_subspace_sources,
+        extrinsic_mean_from_unit_dir,
         orthonormal_basis,
         principal_angles_from_bases,
         sample_random_principal_angles,
@@ -33,6 +34,7 @@ def _():
 
     return (
         discover_subspace_sources,
+        extrinsic_mean_from_unit_dir,
         mo,
         np,
         orthonormal_basis,
@@ -137,8 +139,15 @@ def _(mo, source_options, sources):
         value="Off",
         label="PCA overlay",
     )
-    mo.vstack([source_a_input, source_b_input, pca_overlay_input])
-    return pca_overlay_input, source_a_input, source_b_input
+    average_folds_input = mo.ui.checkbox(value=False, label="Average folds")
+    mo.vstack(
+        [
+            source_a_input,
+            source_b_input,
+            mo.hstack([pca_overlay_input, average_folds_input]),
+        ]
+    )
+    return average_folds_input, pca_overlay_input, source_a_input, source_b_input
 
 
 @app.cell(hide_code=True)
@@ -181,11 +190,24 @@ def _(mo, pd, sources):
 
 
 @app.cell(hide_code=True)
-def _(np, orthonormal_basis, rank_a_input, rank_b_input, source_a, source_b):
+def _(
+    average_folds_input,
+    extrinsic_mean_from_unit_dir,
+    np,
+    orthonormal_basis,
+    rank_a_input,
+    rank_b_input,
+    source_a,
+    source_b,
+):
     matrix_a = np.load(source_a.path, mmap_mode="r")
     matrix_b = np.load(source_b.path, mmap_mode="r")
-    basis_a = orthonormal_basis(matrix_a, int(rank_a_input.value))
-    basis_b = orthonormal_basis(matrix_b, int(rank_b_input.value))
+    if average_folds_input.value:
+        basis_a = extrinsic_mean_from_unit_dir(source_a.unit_dir, int(rank_a_input.value))
+        basis_b = extrinsic_mean_from_unit_dir(source_b.unit_dir, int(rank_b_input.value))
+    else:
+        basis_a = orthonormal_basis(matrix_a, int(rank_a_input.value))
+        basis_b = orthonormal_basis(matrix_b, int(rank_b_input.value))
     return basis_a, basis_b
 
 
@@ -238,6 +260,8 @@ def _(np, source_a, source_b, sources):
 
 @app.cell(hide_code=True)
 def _(
+    average_folds_input,
+    extrinsic_mean_from_unit_dir,
     np,
     orthonormal_basis,
     pca_a,
@@ -252,18 +276,40 @@ def _(
     overlay_angles = {}
     _mode = pca_overlay_input.value
     if _mode in {"a", "both"} and pca_a is not None and pca_a.path != source_a.path:
-        _basis = orthonormal_basis(np.load(pca_a.path, mmap_mode="r"), rank_a_input.value)
+        _basis = (
+            extrinsic_mean_from_unit_dir(pca_a.unit_dir, rank_a_input.value)
+            if average_folds_input.value
+            else orthonormal_basis(np.load(pca_a.path, mmap_mode="r"), rank_a_input.value)
+        )
         if _basis.shape[0] == source_a.ambient_dim:
+            _source_basis = (
+                extrinsic_mean_from_unit_dir(source_a.unit_dir, rank_a_input.value)
+                if average_folds_input.value
+                else orthonormal_basis(
+                    np.load(source_a.path, mmap_mode="r"), rank_a_input.value
+                )
+            )
             overlay_angles["PCA sibling vs A"] = principal_angles_from_bases(
                 _basis,
-                orthonormal_basis(np.load(source_a.path, mmap_mode="r"), rank_a_input.value),
+                _source_basis,
             )
     if _mode in {"b", "both"} and pca_b is not None and pca_b.path != source_b.path:
-        _basis = orthonormal_basis(np.load(pca_b.path, mmap_mode="r"), rank_b_input.value)
+        _basis = (
+            extrinsic_mean_from_unit_dir(pca_b.unit_dir, rank_b_input.value)
+            if average_folds_input.value
+            else orthonormal_basis(np.load(pca_b.path, mmap_mode="r"), rank_b_input.value)
+        )
         if _basis.shape[0] == source_b.ambient_dim:
+            _source_basis = (
+                extrinsic_mean_from_unit_dir(source_b.unit_dir, rank_b_input.value)
+                if average_folds_input.value
+                else orthonormal_basis(
+                    np.load(source_b.path, mmap_mode="r"), rank_b_input.value
+                )
+            )
             overlay_angles["PCA sibling vs B"] = principal_angles_from_bases(
                 _basis,
-                orthonormal_basis(np.load(source_b.path, mmap_mode="r"), rank_b_input.value),
+                _source_basis,
             )
     return (overlay_angles,)
 

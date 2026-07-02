@@ -13,6 +13,12 @@ Four modes controlled by RRRConfig.mode:
     Builds global Y across all subjects (significant electrodes).
     Writes to {output_dir}/rrr/.
 
+  cross_dataset:
+    Loads fold-level A matrices from RRRConfig.cross_result_dir, averages them
+    into one source-dataset subspace, and evaluates rank-k NR ridge models on
+    the configured target dataset folds.
+    Writes to {output_dir}/cross_dataset_rrr/{source_name}/.
+
   per_subject:
     Runs independently per subject.
     Writes to {output_dir}/per_subject_rrr/subjects/sub_{id}/.
@@ -92,6 +98,7 @@ from src.utils.rrr_utils import (
 from src.utils.subspace_utils import (
     evaluate_input_space,
 )
+from src.utils.subspace_compare import extrinsic_mean_from_unit_dir
 from src.utils.alpha_grids import resolve_ridge_alphas, save_alpha_diagnostics
 from himalaya.scoring import correlation_score, r2_score
 
@@ -125,6 +132,7 @@ def _save_full_model_metrics_once(
 def _resolve_pca_sibling_dir(rrr_unit_dir: str) -> str:
     """Return the PCA output dir that mirrors a given RRR unit dir."""
     for rrr_part, pca_part in [
+        ("cross_dataset_rrr", "cross_dataset_pca"),
         ("per_subject_rrr", "per_subject_pca"),
         ("per_region_rrr", "per_region_pca"),
         ("/rrr", "/pca"),
@@ -400,6 +408,8 @@ def _row_from_metrics_file(
         row["effective_rank"] = (
             int(np.sum(sv > 1e-6 * sv[0])) if len(sv) > 0 and sv[0] > 0 else 0
         )
+    elif include_effective_rank and "effective_rank" in metrics:
+        row["effective_rank"] = int(np.asarray(metrics["effective_rank"]).item())
 
     base_keys = [
         "full_corr",
@@ -626,6 +636,125 @@ def _run_common_subspace_fold_k(
     ):
         metrics.pop(artifact_key, None)
     return metrics
+
+
+def _run_subspace_rank_loop_for_fold(
+    *,
+    unit_dir: str,
+    A_full: np.ndarray,
+    ranks_to_run: list[int],
+    X_raw: np.ndarray,
+    baseline: dict,
+    sig_mask_flat: "np.ndarray | None",
+    fold_f: int,
+    alphas: "np.ndarray | None",
+    alpha_policy: dict | None,
+    standardize_subspace_inputs: bool,
+    ridge_cv_folds: int,
+    ridge_solver_params: dict | None,
+    ridge_y_in_cpu: bool | None,
+    ridge_force_cpu: bool | None,
+    device: str,
+    primary_label: str,
+    progress_desc: str,
+    B_full: "np.ndarray | None" = None,
+    null_augmented_config: "RRRConfig | None" = None,
+) -> list[dict]:
+    """Evaluate rank-k projected ridge models for one fold from a known A matrix.
+
+    ``B_full`` is provided only for native RRR runs, where raw RRR predictions are
+    also evaluated alongside NR.
+    """
+    train_idx = baseline["train_idx"]
+    test_idx = baseline["test_idx"]
+    X_train = X_raw[train_idx]
+    X_test = X_raw[test_idx]
+    Y_train = baseline["Y_train"]
+    Y_test = baseline["Y_test"]
+    Y_hat_full = baseline["Y_hat_full_test"]
+
+    _save_full_model_metrics_once(unit_dir, fold_f, Y_test, Y_hat_full)
+    full_corr_per_target = to_numpy(correlation_score(Y_test, Y_hat_full))
+    full_corr = float(fisher_z_mean(full_corr_per_target))
+    full_r2 = float(to_numpy(r2_score(Y_test, Y_hat_full)).mean())
+
+    valid_ranks = [k for k in ranks_to_run if k <= A_full.shape[1]]
+    if len(valid_ranks) < len(ranks_to_run):
+        skipped = [k for k in ranks_to_run if k > A_full.shape[1]]
+        print(f"  Skipping ranks {skipped} (> {A_full.shape[1]} source directions)")
+
+    print(f"  Running {len(valid_ranks)} rank(s): {valid_ranks}")
+    rows = []
+    for k in tqdm(valid_ranks, desc=progress_desc, leave=True, unit="rank"):
+        A_k = A_full[:, :k]
+        sv = np.linalg.svd(A_k, compute_uv=False)
+        effective_rank = (
+            int(np.sum(sv > 1e-6 * sv[0])) if len(sv) > 0 and sv[0] > 0 else 0
+        )
+
+        common = _run_common_subspace_fold_k(
+            A_full,
+            k,
+            X_train,
+            X_test,
+            Y_train,
+            Y_test,
+            sig_mask_flat,
+            fold_f,
+            alphas,
+            alpha_policy,
+            standardize_subspace_inputs,
+            ridge_cv_folds,
+            ridge_solver_params,
+            ridge_y_in_cpu,
+            ridge_force_cpu,
+            device,
+            unit_dir,
+            primary_label=primary_label,
+            full_corr_per_target=full_corr_per_target,
+            null_augmented_config=null_augmented_config,
+        )
+
+        metrics_path = os.path.join(unit_dir, f"k{k}", f"fold_{fold_f}", "metrics.npz")
+        existing = dict(np.load(metrics_path, allow_pickle=True))
+        existing["full_corr"] = full_corr
+        existing["full_r2"] = full_r2
+        existing["effective_rank"] = np.array(effective_rank, dtype=np.int64)
+
+        row = {
+            "fold": fold_f,
+            "k": k,
+            "effective_rank": effective_rank,
+            "full_corr": full_corr,
+            "full_r2": full_r2,
+            **common,
+        }
+
+        if B_full is not None:
+            B_k = B_full[:, :k]
+            Y_hat_rrr = Y_hat_full @ B_k @ B_k.T
+            rrr_corr_arr = to_numpy(correlation_score(Y_test, Y_hat_rrr))
+            rrr_r2_arr = to_numpy(r2_score(Y_test, Y_hat_rrr))
+            existing["rrr_corr_per_target"] = rrr_corr_arr
+            existing["rrr_r2_per_target"] = rrr_r2_arr
+            row["rrr_corr"] = float(fisher_z_mean(rrr_corr_arr))
+            row["rrr_r2"] = float(rrr_r2_arr.mean())
+            if sig_mask_flat is not None:
+                row["rrr_corr_sig"] = (
+                    float(fisher_z_mean(rrr_corr_arr[sig_mask_flat]))
+                    if sig_mask_flat.any()
+                    else float("nan")
+                )
+                row["rrr_corr_nonsig"] = (
+                    float(fisher_z_mean(rrr_corr_arr[~sig_mask_flat]))
+                    if (~sig_mask_flat).any()
+                    else float("nan")
+                )
+
+        np.savez(metrics_path, **existing)
+        rows.append(row)
+
+    return rows
 
 
 def _sample_valid_circular_shift(
@@ -1017,19 +1146,9 @@ def _run_rrr_for_unit(
 
         baseline = per_fold_baselines[fold_f]
         train_idx = baseline["train_idx"]
-        test_idx = baseline["test_idx"]
         X_train = X_raw[train_idx]
-        X_test = X_raw[test_idx]
         Y_train = baseline["Y_train"]
-        Y_test = baseline["Y_test"]
-        Y_hat_full = baseline["Y_hat_full_test"]
         Y_hat_ols_train = baseline["Y_hat_full_train"]
-
-        # Save full model metrics once per fold (not per-k)
-        _save_full_model_metrics_once(rrr_unit_dir, fold_f, Y_test, Y_hat_full)
-        full_corr_per_target = to_numpy(correlation_score(Y_test, Y_hat_full))
-        full_corr = float(fisher_z_mean(full_corr_per_target))
-        full_r2 = float(to_numpy(r2_score(Y_test, Y_hat_full)).mean())
 
         # Fit or load RRR once per fold; truncate to each k below.
         max_k = min(X_train.shape[1], Y_train.shape[1])
@@ -1069,79 +1188,29 @@ def _run_rrr_for_unit(
             B_full = rrr_result["B_dense"]
             save_rrr_factors(rrr_unit_dir, fold=fold_f, A=A_full, B=B_full)
 
-        print(f"  Running {len(ranks_to_run)} rank(s): {ranks_to_run}")
-        for k in tqdm(ranks_to_run, desc=f"  fold {fold_f}", leave=True, unit="rank"):
-            A_k = A_full[:, :k]
-            B_k = B_full[:, :k]
-
-            # Effective rank of A_k
-            sv = np.linalg.svd(A_k, compute_uv=False)
-            effective_rank = (
-                int(np.sum(sv > 1e-6 * sv[0])) if len(sv) > 0 and sv[0] > 0 else 0
-            )
-
-            # Raw RRR predictions (project Y through B)
-            Y_hat_rrr = Y_hat_full @ B_k @ B_k.T
-            rrr_corr_arr = to_numpy(correlation_score(Y_test, Y_hat_rrr))
-            rrr_r2_arr = to_numpy(r2_score(Y_test, Y_hat_rrr))
-
-            common = _run_common_subspace_fold_k(
-                A_full,
-                k,
-                X_train,
-                X_test,
-                Y_train,
-                Y_test,
-                sig_mask_flat,
-                fold_f,
-                alphas,
-                config.encoding.alpha_grid,
-                config.standardize_subspace_inputs,
-                config.encoding.ridge_cv_folds,
-                config.encoding.ridge_solver_params,
-                config.encoding.ridge_y_in_cpu,
-                config.encoding.ridge_force_cpu,
-                device,
-                rrr_unit_dir,
+        all_rows.extend(
+            _run_subspace_rank_loop_for_fold(
+                unit_dir=rrr_unit_dir,
+                A_full=A_full,
+                B_full=B_full,
+                ranks_to_run=ranks_to_run,
+                X_raw=X_raw,
+                baseline=baseline,
+                sig_mask_flat=sig_mask_flat,
+                fold_f=fold_f,
+                alphas=alphas,
+                alpha_policy=config.encoding.alpha_grid,
+                standardize_subspace_inputs=config.standardize_subspace_inputs,
+                ridge_cv_folds=config.encoding.ridge_cv_folds,
+                ridge_solver_params=config.encoding.ridge_solver_params,
+                ridge_y_in_cpu=config.encoding.ridge_y_in_cpu,
+                ridge_force_cpu=config.encoding.ridge_force_cpu,
+                device=device,
                 primary_label="nr",
-                full_corr_per_target=full_corr_per_target,
+                progress_desc=f"  fold {fold_f}",
                 null_augmented_config=config,
             )
-
-            # Load existing metrics.npz and append RRR per-target metrics.
-            metrics_path = os.path.join(
-                rrr_unit_dir, f"k{k}", f"fold_{fold_f}", "metrics.npz"
-            )
-            existing = dict(np.load(metrics_path, allow_pickle=True))
-            existing["full_corr"] = full_corr
-            existing["full_r2"] = full_r2
-            existing["rrr_corr_per_target"] = rrr_corr_arr
-            existing["rrr_r2_per_target"] = rrr_r2_arr
-            np.savez(metrics_path, **existing)
-
-            # Build row (no per-target)
-            row = {
-                "fold": fold_f,
-                "k": k,
-                "effective_rank": effective_rank,
-                "full_corr": full_corr,
-                "full_r2": full_r2,
-                "rrr_corr": float(fisher_z_mean(rrr_corr_arr)),
-                "rrr_r2": float(rrr_r2_arr.mean()),
-                **common,
-            }
-            if sig_mask_flat is not None:
-                row["rrr_corr_sig"] = (
-                    float(fisher_z_mean(rrr_corr_arr[sig_mask_flat]))
-                    if sig_mask_flat.any()
-                    else float("nan")
-                )
-                row["rrr_corr_nonsig"] = (
-                    float(fisher_z_mean(rrr_corr_arr[~sig_mask_flat]))
-                    if (~sig_mask_flat).any()
-                    else float("nan")
-                )
-            all_rows.append(row)
+        )
 
         print(f"  Fold {fold_f} done in {time.time() - fold_start:.1f}s")
 
@@ -1955,6 +2024,248 @@ def _run_leave_one_subject_out_rrr(
 
 
 # ---------------------------------------------------------------------------
+# Branch: cross-dataset RRR
+# ---------------------------------------------------------------------------
+
+
+def _sanitize_cross_source_name(cross_result_dir: str) -> str:
+    """Return a filesystem-safe short name for a source results directory."""
+    normalized = os.path.normpath(str(cross_result_dir))
+    name = os.path.basename(normalized) or os.path.basename(os.path.dirname(normalized))
+    safe = "".join(c if c.isalnum() or c in {"-", "_", "."} else "_" for c in name)
+    return safe or "source"
+
+
+def _cross_dataset_source_unit_dir(cross_result_dir: str, kind: str) -> str:
+    """Resolve a source run root to its RRR/PCA unit directory."""
+    if kind not in {"rrr", "pca"}:
+        raise ValueError(f"Unsupported cross-dataset source kind: {kind}")
+    return os.path.join(cross_result_dir, kind)
+
+
+def _load_cross_dataset_A(cross_result_dir: str, kind: str, rank: int) -> np.ndarray:
+    """Load and average source fold A matrices for cross-dataset evaluation."""
+    unit_dir = _cross_dataset_source_unit_dir(cross_result_dir, kind)
+    try:
+        return extrinsic_mean_from_unit_dir(unit_dir, rank=rank)
+    except FileNotFoundError as exc:
+        raise FileNotFoundError(
+            f"Could not load cross-dataset {kind.upper()} source factors from "
+            f"{unit_dir}. Expected fold_*/A.npy under a {kind}/ unit directory."
+        ) from exc
+
+
+def _run_cross_dataset_subspace_for_unit(
+    unit_dir: str,
+    A_full: np.ndarray,
+    X_raw: np.ndarray,
+    test_idxs: list,
+    per_fold_baselines: list,
+    config: RRRConfig,
+    primary_label: str = "nr",
+    sig_mask_flat: "np.ndarray | None" = None,
+    ranks_by_fold: "dict[int, list[int]] | None" = None,
+    completed_pairs: "set[tuple[int, int]] | None" = None,
+) -> pd.DataFrame:
+    """Evaluate a fixed source-dataset subspace on target dataset folds."""
+    os.makedirs(unit_dir, exist_ok=True)
+
+    if A_full.ndim != 2:
+        raise ValueError(f"Expected 2D A matrix, got shape {A_full.shape}")
+    if A_full.shape[0] != X_raw.shape[1]:
+        raise ValueError(
+            "Cross-dataset source A ambient dimension does not match target embeddings: "
+            f"{A_full.shape[0]} vs {X_raw.shape[1]}"
+        )
+
+    import torch
+
+    enc = config.encoding
+    alphas = np.array(enc.ridge_alphas) if enc.ridge_alphas is not None else None
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    n_folds = len(test_idxs)
+
+    existing_grid = _load_existing_grid(unit_dir)
+    if ranks_by_fold is None or completed_pairs is None:
+        ranks_by_fold, completed_pairs = _unit_ranks_by_fold_to_run(
+            unit_dir,
+            config.rank_grid,
+            n_folds,
+            refresh=config.refresh,
+            require_factors=False,
+        )
+
+    total_to_run = sum(len(ranks) for ranks in ranks_by_fold.values())
+    if completed_pairs:
+        print(
+            f"  Reusing {len(completed_pairs)} completed cross-dataset fold/rank pair(s)"
+        )
+    if total_to_run == 0:
+        print(
+            "  All requested cross-dataset fold/rank pairs complete; rebuilding summary/plots from existing artifacts."
+        )
+        df = _merge_grid_rows(
+            existing_grid,
+            [],
+            completed_pairs,
+            config.rank_grid,
+            unit_dir=unit_dir,
+            primary_label=primary_label,
+            sig_mask_flat=sig_mask_flat,
+            include_effective_rank=True,
+        )
+        df.to_csv(os.path.join(unit_dir, "grid_results.csv"), index=False)
+        _build_results(df, sig_mask_flat, unit_dir, primary_label=primary_label)
+        return df
+
+    all_rows = []
+    for fold_f in range(n_folds):
+        ranks_to_run = ranks_by_fold[fold_f]
+        if not ranks_to_run:
+            print(f"\n[Cross-dataset fold {fold_f + 1}/{n_folds}] complete; skipping")
+            continue
+
+        fold_start = time.time()
+        print(f"\n[Cross-dataset fold {fold_f + 1}/{n_folds}]")
+
+        all_rows.extend(
+            _run_subspace_rank_loop_for_fold(
+                unit_dir=unit_dir,
+                A_full=A_full,
+                ranks_to_run=ranks_to_run,
+                X_raw=X_raw,
+                baseline=per_fold_baselines[fold_f],
+                sig_mask_flat=sig_mask_flat,
+                fold_f=fold_f,
+                alphas=alphas,
+                alpha_policy=config.encoding.alpha_grid,
+                standardize_subspace_inputs=config.standardize_subspace_inputs,
+                ridge_cv_folds=config.encoding.ridge_cv_folds,
+                ridge_solver_params=config.encoding.ridge_solver_params,
+                ridge_y_in_cpu=config.encoding.ridge_y_in_cpu,
+                ridge_force_cpu=config.encoding.ridge_force_cpu,
+                device=device,
+                primary_label=primary_label,
+                progress_desc=f"  cross-dataset fold {fold_f}",
+            )
+        )
+
+        print(f"  Cross-dataset fold {fold_f} done in {time.time() - fold_start:.1f}s")
+
+    df = _merge_grid_rows(
+        existing_grid,
+        all_rows,
+        completed_pairs,
+        config.rank_grid,
+        unit_dir=unit_dir,
+        primary_label=primary_label,
+        sig_mask_flat=sig_mask_flat,
+        include_effective_rank=True,
+    )
+    df.to_csv(os.path.join(unit_dir, "grid_results.csv"), index=False)
+    _build_results(df, sig_mask_flat, unit_dir, primary_label=primary_label)
+    return df
+
+
+def _run_cross_dataset_rrr(
+    config: RRRConfig,
+    enc,
+    output_dir,
+    sig_dir,
+    rrr_dir,
+    subject_ids,
+    sig_electrodes,
+    aligned_embeddings,
+    word_df,
+    word_in_glove=None,
+    shared_selection_metadata=None,
+):
+    """Evaluate target-dataset NR models using a source-dataset averaged A matrix."""
+    if not config.cross_result_dir:
+        raise ValueError("RRRConfig.cross_result_dir is required for mode=cross_dataset")
+
+    source_rank = max(config.rank_grid)
+    print(
+        "Loading cross-dataset source RRR subspace from "
+        f"{config.cross_result_dir} at rank {source_rank}"
+    )
+    A_rrr = _load_cross_dataset_A(config.cross_result_dir, kind="rrr", rank=source_rank)
+
+    A_pca = None
+    pca_dir = None
+    pca_resume_plan = None
+    if config.run_pca_baseline:
+        print(
+            "Loading cross-dataset source PCA subspace from "
+            f"{config.cross_result_dir} at rank {source_rank}"
+        )
+        A_pca = _load_cross_dataset_A(
+            config.cross_result_dir, kind="pca", rank=source_rank
+        )
+        pca_dir = _resolve_pca_sibling_dir(rrr_dir)
+
+    n_folds = len(_load_reference_test_idxs(output_dir, subject_ids))
+    rrr_resume_plan = _transfer_output_resume_plan(rrr_dir, config, n_folds)
+    folds_to_build = set(rrr_resume_plan["folds_to_build"])
+    if config.run_pca_baseline and pca_dir is not None:
+        pca_resume_plan = _transfer_output_resume_plan(pca_dir, config, n_folds)
+        folds_to_build |= pca_resume_plan["folds_to_build"]
+
+    if not folds_to_build:
+        print(
+            "  Cross-dataset RRR/PCA outputs complete; skipping data/regression setup."
+        )
+        return
+
+    results = _get_decomposition_inputs(
+        subject_ids,
+        output_dir,
+        sig_electrodes,
+        enc,
+        aligned_embeddings,
+        word_df,
+        compute_sig_nonsig=config.compute_sig_nonsig,
+        sig_dir=sig_dir,
+        word_in_glove=word_in_glove,
+        folds_to_build=folds_to_build,
+        alpha_cache_dir=rrr_dir,
+        shared_selection_metadata=shared_selection_metadata,
+    )
+    if results is None:
+        return
+    X_raw, per_fold_baselines, test_idxs, sig_mask_flat = results
+
+    print(f"  Running cross-dataset RRR-source evaluation → {rrr_dir}")
+    _run_cross_dataset_subspace_for_unit(
+        unit_dir=rrr_dir,
+        A_full=A_rrr,
+        X_raw=X_raw,
+        test_idxs=test_idxs,
+        per_fold_baselines=per_fold_baselines,
+        config=config,
+        primary_label="nr",
+        sig_mask_flat=sig_mask_flat,
+        ranks_by_fold=rrr_resume_plan["ranks_by_fold"],
+        completed_pairs=rrr_resume_plan["completed_pairs"],
+    )
+
+    if config.run_pca_baseline and A_pca is not None and pca_dir is not None:
+        print(f"  Running cross-dataset PCA-source evaluation → {pca_dir}")
+        _run_cross_dataset_subspace_for_unit(
+            unit_dir=pca_dir,
+            A_full=A_pca,
+            X_raw=X_raw,
+            test_idxs=test_idxs,
+            per_fold_baselines=per_fold_baselines,
+            config=config,
+            primary_label="pca",
+            sig_mask_flat=sig_mask_flat,
+            ranks_by_fold=pca_resume_plan["ranks_by_fold"],
+            completed_pairs=pca_resume_plan["completed_pairs"],
+        )
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
@@ -1987,15 +2298,28 @@ def run_config(config: RRRConfig):
 
     # Resolve RRR output directory
     if config.rrr_output_dir:
-        rrr_dir = config.rrr_output_dir
+        rrr_base_dir = config.rrr_output_dir
     elif config.mode == ScriptMode.PER_REGION:
-        rrr_dir = os.path.join(output_dir, "per_region_rrr")
+        rrr_base_dir = os.path.join(output_dir, "per_region_rrr")
     elif config.mode == ScriptMode.PER_SUBJECT:
-        rrr_dir = os.path.join(output_dir, "per_subject_rrr")
+        rrr_base_dir = os.path.join(output_dir, "per_subject_rrr")
     elif config.mode == ScriptMode.LEAVE_ONE_SUBJECT_OUT:
-        rrr_dir = os.path.join(output_dir, "loso_rrr")
+        rrr_base_dir = os.path.join(output_dir, "loso_rrr")
+    elif config.mode == ScriptMode.CROSS_DATASET:
+        rrr_base_dir = os.path.join(output_dir, "cross_dataset_rrr")
     else:
-        rrr_dir = os.path.join(output_dir, "rrr")
+        rrr_base_dir = os.path.join(output_dir, "rrr")
+
+    if config.mode == ScriptMode.CROSS_DATASET:
+        if not config.cross_result_dir:
+            raise ValueError(
+                "RRRConfig.cross_result_dir is required for mode=cross_dataset"
+            )
+        rrr_dir = os.path.join(
+            rrr_base_dir, _sanitize_cross_source_name(config.cross_result_dir)
+        )
+    else:
+        rrr_dir = rrr_base_dir
 
     os.makedirs(rrr_dir, exist_ok=True)
     print(f"Output dir:  {output_dir}")
@@ -2063,6 +2387,8 @@ def run_config(config: RRRConfig):
         _run_per_subject_rrr(**branch_kwargs)
     elif config.mode == ScriptMode.LEAVE_ONE_SUBJECT_OUT:
         _run_leave_one_subject_out_rrr(**branch_kwargs)
+    elif config.mode == ScriptMode.CROSS_DATASET:
+        _run_cross_dataset_rrr(**branch_kwargs)
     else:
         _run_cross_subject_rrr(**branch_kwargs)
 

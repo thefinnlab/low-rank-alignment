@@ -10,6 +10,7 @@ class ScriptMode(str, Enum):
     """Which Script branch to run in analysis"""
 
     CROSS_SUBJECT = "cross_subject"
+    CROSS_DATASET = "cross_dataset"
     PER_SUBJECT = "per_subject"
     PER_REGION = "per_region"
     LEAVE_ONE_SUBJECT_OUT = "leave_one_subject_out"
@@ -171,6 +172,9 @@ class RRRConfig:
         None  # Override for RRR root subdir; default depends on mode
     )
     mode: ScriptMode = ScriptMode.CROSS_SUBJECT
+    cross_result_dir: str | None = (
+        None  # Source results run root for mode=cross_dataset.
+    )
 
     # Rank sweep
     rank_grid: list[int] = field(default_factory=lambda: [1, 2, 5, 10, 20, 50])

@@ -260,6 +260,74 @@ class TestRunRRRForUnit:
         assert A_pca.shape[1] <= min(n_train, X.shape[1])
         assert not (tmp_path / "pca" / "fold_0" / "B.npy").exists()
 
+    def test_cross_dataset_subspace_writes_nr_metrics_without_factors(
+        self, tmp_path, small_data
+    ):
+        from run_rrr import _run_cross_dataset_subspace_for_unit
+
+        X, Y = small_data
+        n = X.shape[0]
+        test_idxs = [np.arange(0, n // 2), np.arange(n // 2, n)]
+        config = self._make_config(rank_grid=[1, 2])
+        config.encoding.ridge_alphas = [1.0]
+        config.encoding.ridge_cv_folds = 2
+        per_fold_baselines = _make_baselines(X, Y, test_idxs)
+        A_full = np.eye(X.shape[1], 2, dtype=np.float32)
+
+        _run_cross_dataset_subspace_for_unit(
+            str(tmp_path),
+            A_full,
+            X,
+            test_idxs,
+            per_fold_baselines,
+            config,
+            primary_label="nr",
+        )
+
+        df = pd.read_csv(os.path.join(str(tmp_path), "grid_results.csv"))
+        assert len(df) == 4
+        assert {"full_corr", "full_r2", "nr_corr", "nr_r2", "effective_rank"}.issubset(
+            df.columns
+        )
+        assert os.path.exists(os.path.join(str(tmp_path), "summary.csv"))
+        assert os.path.exists(os.path.join(str(tmp_path), "rank_analysis.png"))
+        assert not os.path.exists(os.path.join(str(tmp_path), "fold_0", "A.npy"))
+        assert os.path.exists(
+            os.path.join(str(tmp_path), "fold_0", "full_model_metrics.npz")
+        )
+
+    def test_cross_dataset_pca_sibling_dir_and_metrics(self, tmp_path, small_data):
+        import run_rrr
+
+        X, Y = small_data
+        n = X.shape[0]
+        test_idxs = [np.arange(0, n // 2), np.arange(n // 2, n)]
+        config = self._make_config(rank_grid=[1])
+        config.encoding.ridge_alphas = [1.0]
+        config.encoding.ridge_cv_folds = 2
+        per_fold_baselines = _make_baselines(X, Y, test_idxs)
+        A_full = np.eye(X.shape[1], 1, dtype=np.float32)
+
+        rrr_dir = tmp_path / "cross_dataset_rrr" / "movie-cars-2"
+        pca_dir = run_rrr._resolve_pca_sibling_dir(str(rrr_dir))
+        assert pca_dir.endswith(os.path.join("cross_dataset_pca", "movie-cars-2"))
+
+        run_rrr._run_cross_dataset_subspace_for_unit(
+            pca_dir,
+            A_full,
+            X,
+            test_idxs,
+            per_fold_baselines,
+            config,
+            primary_label="pca",
+        )
+
+        df = pd.read_csv(os.path.join(pca_dir, "grid_results.csv"))
+        assert len(df) == 2
+        assert {"pca_corr", "pca_r2"}.issubset(df.columns)
+        assert not os.path.exists(os.path.join(pca_dir, "fold_0", "A.npy"))
+        assert not os.path.exists(os.path.join(pca_dir, "fold_0", "B.npy"))
+
     def test_summary_csv_averages_over_folds(self, tmp_path, small_data):
         from run_rrr import _run_rrr_for_unit
 
@@ -393,7 +461,7 @@ class TestRunRRRForUnit:
             str(tmp_path), X, test_idxs, per_fold_baselines, config
         )
 
-        assert calls["n"] == len(test_idxs)
+        assert calls["n"] == 0
         df = pd.read_csv(os.path.join(str(tmp_path), "grid_results.csv"))
         assert set(df["k"].unique()) == {1, 3}
         rank1_after = df[df["k"] == 1].sort_values("fold").reset_index(drop=True)
