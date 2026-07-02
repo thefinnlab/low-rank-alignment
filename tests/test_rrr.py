@@ -272,11 +272,14 @@ class TestRunRRRForUnit:
         config.encoding.ridge_alphas = [1.0]
         config.encoding.ridge_cv_folds = 2
         per_fold_baselines = _make_baselines(X, Y, test_idxs)
-        A_full = np.eye(X.shape[1], 2, dtype=np.float32)
+        A_by_rank = {
+            1: np.eye(X.shape[1], 1, dtype=np.float32),
+            2: np.eye(X.shape[1], 2, dtype=np.float32),
+        }
 
         _run_cross_dataset_subspace_for_unit(
             str(tmp_path),
-            A_full,
+            A_by_rank,
             X,
             test_idxs,
             per_fold_baselines,
@@ -296,6 +299,54 @@ class TestRunRRRForUnit:
             os.path.join(str(tmp_path), "fold_0", "full_model_metrics.npz")
         )
 
+    def test_cross_dataset_subspace_uses_rank_specific_source_average(
+        self, tmp_path, small_data, monkeypatch
+    ):
+        import run_rrr
+
+        X, Y = small_data
+        n = X.shape[0]
+        test_idxs = [np.arange(0, n // 2), np.arange(n // 2, n)]
+        config = self._make_config(rank_grid=[1, 2])
+        per_fold_baselines = _make_baselines(X, Y, test_idxs)
+        A_rank1 = np.full((X.shape[1], 1), 1.0, dtype=np.float32)
+        A_rank2 = np.full((X.shape[1], 2), 2.0, dtype=np.float32)
+        seen = []
+
+        def capture_rank_loop(**kwargs):
+            rank = kwargs["ranks_to_run"][0]
+            seen.append((rank, kwargs["A_full"].copy()))
+            return [
+                {
+                    "fold": kwargs["fold_f"],
+                    "k": rank,
+                    "effective_rank": rank,
+                    "full_corr": 0.0,
+                    "full_r2": 0.0,
+                    "nr_corr": 0.0,
+                    "nr_r2": 0.0,
+                }
+            ]
+
+        monkeypatch.setattr(
+            run_rrr, "_run_subspace_rank_loop_for_fold", capture_rank_loop
+        )
+        monkeypatch.setattr(run_rrr, "_build_results", lambda *args, **kwargs: None)
+
+        run_rrr._run_cross_dataset_subspace_for_unit(
+            str(tmp_path),
+            {1: A_rank1, 2: A_rank2},
+            X,
+            test_idxs,
+            per_fold_baselines,
+            config,
+            primary_label="nr",
+        )
+
+        by_rank = {rank: matrix for rank, matrix in seen[:2]}
+        np.testing.assert_array_equal(by_rank[1], A_rank1)
+        np.testing.assert_array_equal(by_rank[2], A_rank2)
+
     def test_cross_dataset_pca_sibling_dir_and_metrics(self, tmp_path, small_data):
         import run_rrr
 
@@ -306,7 +357,7 @@ class TestRunRRRForUnit:
         config.encoding.ridge_alphas = [1.0]
         config.encoding.ridge_cv_folds = 2
         per_fold_baselines = _make_baselines(X, Y, test_idxs)
-        A_full = np.eye(X.shape[1], 1, dtype=np.float32)
+        A_by_rank = {1: np.eye(X.shape[1], 1, dtype=np.float32)}
 
         rrr_dir = tmp_path / "cross_dataset_rrr" / "movie-cars-2"
         pca_dir = run_rrr._resolve_pca_sibling_dir(str(rrr_dir))
@@ -314,7 +365,7 @@ class TestRunRRRForUnit:
 
         run_rrr._run_cross_dataset_subspace_for_unit(
             pca_dir,
-            A_full,
+            A_by_rank,
             X,
             test_idxs,
             per_fold_baselines,

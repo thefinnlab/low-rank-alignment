@@ -2043,21 +2043,28 @@ def _cross_dataset_source_unit_dir(cross_result_dir: str, kind: str) -> str:
     return os.path.join(cross_result_dir, kind)
 
 
-def _load_cross_dataset_A(cross_result_dir: str, kind: str, rank: int) -> np.ndarray:
-    """Load and average source fold A matrices for cross-dataset evaluation."""
+def _load_cross_dataset_A_by_rank(
+    cross_result_dir: str,
+    kind: str,
+    ranks: list[int],
+) -> dict[int, np.ndarray]:
+    """Load rank-specific averaged source fold A matrices for cross-dataset evaluation."""
     unit_dir = _cross_dataset_source_unit_dir(cross_result_dir, kind)
-    try:
-        return extrinsic_mean_from_unit_dir(unit_dir, rank=rank)
-    except FileNotFoundError as exc:
-        raise FileNotFoundError(
-            f"Could not load cross-dataset {kind.upper()} source factors from "
-            f"{unit_dir}. Expected fold_*/A.npy under a {kind}/ unit directory."
-        ) from exc
+    averaged = {}
+    for rank in sorted(set(int(k) for k in ranks)):
+        try:
+            averaged[rank] = extrinsic_mean_from_unit_dir(unit_dir, rank=rank)
+        except FileNotFoundError as exc:
+            raise FileNotFoundError(
+                f"Could not load cross-dataset {kind.upper()} source factors from "
+                f"{unit_dir}. Expected fold_*/A.npy under a {kind}/ unit directory."
+            ) from exc
+    return averaged
 
 
 def _run_cross_dataset_subspace_for_unit(
     unit_dir: str,
-    A_full: np.ndarray,
+    A_by_rank: dict[int, np.ndarray],
     X_raw: np.ndarray,
     test_idxs: list,
     per_fold_baselines: list,
@@ -2067,16 +2074,22 @@ def _run_cross_dataset_subspace_for_unit(
     ranks_by_fold: "dict[int, list[int]] | None" = None,
     completed_pairs: "set[tuple[int, int]] | None" = None,
 ) -> pd.DataFrame:
-    """Evaluate a fixed source-dataset subspace on target dataset folds."""
+    """Evaluate rank-specific source-dataset subspaces on target dataset folds."""
     os.makedirs(unit_dir, exist_ok=True)
 
-    if A_full.ndim != 2:
-        raise ValueError(f"Expected 2D A matrix, got shape {A_full.shape}")
-    if A_full.shape[0] != X_raw.shape[1]:
-        raise ValueError(
-            "Cross-dataset source A ambient dimension does not match target embeddings: "
-            f"{A_full.shape[0]} vs {X_raw.shape[1]}"
-        )
+    for rank, A_rank in A_by_rank.items():
+        if A_rank.ndim != 2:
+            raise ValueError(f"Expected 2D A matrix for rank {rank}, got {A_rank.shape}")
+        if A_rank.shape[0] != X_raw.shape[1]:
+            raise ValueError(
+                "Cross-dataset source A ambient dimension does not match target embeddings: "
+                f"{A_rank.shape[0]} vs {X_raw.shape[1]} for rank {rank}"
+            )
+        if A_rank.shape[1] < rank:
+            raise ValueError(
+                f"Cross-dataset source A for rank {rank} has only "
+                f"{A_rank.shape[1]} direction(s)."
+            )
 
     import torch
 
@@ -2093,6 +2106,19 @@ def _run_cross_dataset_subspace_for_unit(
             n_folds,
             refresh=config.refresh,
             require_factors=False,
+        )
+    missing_ranks = sorted(
+        {
+            int(rank)
+            for ranks in ranks_by_fold.values()
+            for rank in ranks
+            if int(rank) not in A_by_rank
+        }
+    )
+    if missing_ranks:
+        raise ValueError(
+            "Missing rank-specific cross-dataset source A matrix/matrices for "
+            f"rank(s): {missing_ranks}"
         )
 
     total_to_run = sum(len(ranks) for ranks in ranks_by_fold.values())
@@ -2128,27 +2154,28 @@ def _run_cross_dataset_subspace_for_unit(
         fold_start = time.time()
         print(f"\n[Cross-dataset fold {fold_f + 1}/{n_folds}]")
 
-        all_rows.extend(
-            _run_subspace_rank_loop_for_fold(
-                unit_dir=unit_dir,
-                A_full=A_full,
-                ranks_to_run=ranks_to_run,
-                X_raw=X_raw,
-                baseline=per_fold_baselines[fold_f],
-                sig_mask_flat=sig_mask_flat,
-                fold_f=fold_f,
-                alphas=alphas,
-                alpha_policy=config.encoding.alpha_grid,
-                standardize_subspace_inputs=config.standardize_subspace_inputs,
-                ridge_cv_folds=config.encoding.ridge_cv_folds,
-                ridge_solver_params=config.encoding.ridge_solver_params,
-                ridge_y_in_cpu=config.encoding.ridge_y_in_cpu,
-                ridge_force_cpu=config.encoding.ridge_force_cpu,
-                device=device,
-                primary_label=primary_label,
-                progress_desc=f"  cross-dataset fold {fold_f}",
+        for rank in ranks_to_run:
+            all_rows.extend(
+                _run_subspace_rank_loop_for_fold(
+                    unit_dir=unit_dir,
+                    A_full=A_by_rank[int(rank)],
+                    ranks_to_run=[int(rank)],
+                    X_raw=X_raw,
+                    baseline=per_fold_baselines[fold_f],
+                    sig_mask_flat=sig_mask_flat,
+                    fold_f=fold_f,
+                    alphas=alphas,
+                    alpha_policy=config.encoding.alpha_grid,
+                    standardize_subspace_inputs=config.standardize_subspace_inputs,
+                    ridge_cv_folds=config.encoding.ridge_cv_folds,
+                    ridge_solver_params=config.encoding.ridge_solver_params,
+                    ridge_y_in_cpu=config.encoding.ridge_y_in_cpu,
+                    ridge_force_cpu=config.encoding.ridge_force_cpu,
+                    device=device,
+                    primary_label=primary_label,
+                    progress_desc=f"  cross-dataset fold {fold_f}",
+                )
             )
-        )
 
         print(f"  Cross-dataset fold {fold_f} done in {time.time() - fold_start:.1f}s")
 
@@ -2180,27 +2207,32 @@ def _run_cross_dataset_rrr(
     word_in_glove=None,
     shared_selection_metadata=None,
 ):
-    """Evaluate target-dataset NR models using a source-dataset averaged A matrix."""
+    """Evaluate target-dataset NR models using rank-specific source A averages."""
     if not config.cross_result_dir:
         raise ValueError("RRRConfig.cross_result_dir is required for mode=cross_dataset")
 
-    source_rank = max(config.rank_grid)
     print(
-        "Loading cross-dataset source RRR subspace from "
-        f"{config.cross_result_dir} at rank {source_rank}"
+        "Loading rank-specific cross-dataset source RRR subspaces from "
+        f"{config.cross_result_dir}"
     )
-    A_rrr = _load_cross_dataset_A(config.cross_result_dir, kind="rrr", rank=source_rank)
+    A_rrr_by_rank = _load_cross_dataset_A_by_rank(
+        config.cross_result_dir,
+        kind="rrr",
+        ranks=config.rank_grid,
+    )
 
-    A_pca = None
+    A_pca_by_rank = None
     pca_dir = None
     pca_resume_plan = None
     if config.run_pca_baseline:
         print(
-            "Loading cross-dataset source PCA subspace from "
-            f"{config.cross_result_dir} at rank {source_rank}"
+            "Loading rank-specific cross-dataset source PCA subspaces from "
+            f"{config.cross_result_dir}"
         )
-        A_pca = _load_cross_dataset_A(
-            config.cross_result_dir, kind="pca", rank=source_rank
+        A_pca_by_rank = _load_cross_dataset_A_by_rank(
+            config.cross_result_dir,
+            kind="pca",
+            ranks=config.rank_grid,
         )
         pca_dir = _resolve_pca_sibling_dir(rrr_dir)
 
@@ -2238,7 +2270,7 @@ def _run_cross_dataset_rrr(
     print(f"  Running cross-dataset RRR-source evaluation → {rrr_dir}")
     _run_cross_dataset_subspace_for_unit(
         unit_dir=rrr_dir,
-        A_full=A_rrr,
+        A_by_rank=A_rrr_by_rank,
         X_raw=X_raw,
         test_idxs=test_idxs,
         per_fold_baselines=per_fold_baselines,
@@ -2249,11 +2281,11 @@ def _run_cross_dataset_rrr(
         completed_pairs=rrr_resume_plan["completed_pairs"],
     )
 
-    if config.run_pca_baseline and A_pca is not None and pca_dir is not None:
+    if config.run_pca_baseline and A_pca_by_rank is not None and pca_dir is not None:
         print(f"  Running cross-dataset PCA-source evaluation → {pca_dir}")
         _run_cross_dataset_subspace_for_unit(
             unit_dir=pca_dir,
-            A_full=A_pca,
+            A_by_rank=A_pca_by_rank,
             X_raw=X_raw,
             test_idxs=test_idxs,
             per_fold_baselines=per_fold_baselines,
