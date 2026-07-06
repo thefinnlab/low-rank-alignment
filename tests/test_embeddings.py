@@ -112,6 +112,39 @@ class TestLoadEmbeddings:
         np.testing.assert_allclose(aligned[1], embeddings[1:].mean(0), rtol=1e-5)
         assert df_word["word"].tolist() == ["Hello", "world"]
 
+    def test_generated_transcript_drops_untimed_words_and_preserves_token_rows(
+        self, tmp_path
+    ):
+        embeddings = np.arange(20, dtype=np.float32).reshape(5, 4)
+
+        stim_path = tmp_path / "stimuli" / "roberta-base" / "movie-coraline"
+        stim_path.mkdir(parents=True)
+        with h5py.File(stim_path / "features.hdf5", "w") as f:
+            f.create_dataset("layer-1", data=embeddings)
+        pd.DataFrame(
+            [
+                {"word_idx": 0, "word": "timed", "start": 1.0, "end": 1.1},
+                {"word_idx": 1, "word": "untimed", "start": np.nan, "end": np.nan},
+                {"word_idx": 1, "word": "untimed", "start": np.nan, "end": np.nan},
+                {"word_idx": 2, "word": "again", "start": 2.0, "end": 2.1},
+                {"word_idx": 2, "word": "again", "start": 2.0, "end": 2.2},
+            ]
+        ).to_csv(stim_path / "transcript.tsv", sep="\t")
+
+        aligned, df_word = load_embeddings(
+            str(tmp_path),
+            embedding_getter_name="transformer",
+            model_dir="roberta-base",
+            layer=1,
+            dataset="brain_treebank",
+            per_dataset_config={"movie": "coraline"},
+        )
+
+        np.testing.assert_allclose(aligned[0], embeddings[0])
+        np.testing.assert_allclose(aligned[1], embeddings[[3, 4]].mean(0))
+        assert df_word["word"].tolist() == ["timed", "again"]
+        assert df_word.index.tolist() == [0, 1]
+
     def test_brain_treebank_fallback_word_table_accepts_explicit_model_dir(
         self, tmp_path
     ):

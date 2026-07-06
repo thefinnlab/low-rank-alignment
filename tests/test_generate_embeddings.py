@@ -1,7 +1,7 @@
 """Tests for scripts/utilities/generate_embeddings.py.
 
 Covers the four logic blocks called out in PR review:
-  - _tokenize_transcript: pre-split word tokenization + word_id alignment checks
+  - _tokenize_transcript_per_word: per-word tokenization + word_id alignment checks
   - _build_transcript_df: per-token transcript.tsv schema assembly
   - _causal_window_plan: sliding-window step logic for causal models
   - _build_bidir_batch: left-padded batch construction for bidirectional_strict
@@ -23,9 +23,9 @@ from scripts.utilities.generate_embeddings import (
     _load_model_for_generation,
     _run_podcast_per_token,
     _select_generation_model_class,
-    _tokenize_transcript_podcast,
+    _tokenize_for_attention_mode,
     _load_generation_words,
-    _tokenize_transcript,
+    _tokenize_transcript_per_word,
     _write_features_hdf5,
 )
 from src.core.config import GenerateEmbeddingsConfig
@@ -36,26 +36,11 @@ from src.core.registry import get_dataset_adapter
 # Fake tokenizer that mimics the slice of the HF tokenizer API we rely on.
 # ---------------------------------------------------------------------------
 
-class _FakeEncoding:
-    def __init__(self, input_ids, word_ids):
-        self._input_ids = input_ids
-        self._word_ids = word_ids
-
-    def __getitem__(self, key):
-        if key == "input_ids":
-            return self._input_ids
-        raise KeyError(key)
-
-    def word_ids(self):
-        return self._word_ids
-
-
 class FakeTokenizer:
     """Minimal HF-tokenizer-compatible stub.
 
     ``word_to_tokens`` maps each word → list of ``(token_str, token_id)``. An
-    empty list simulates a word that fails to tokenize (to exercise the assertion
-    in ``_tokenize_transcript``).
+    empty list simulates a word that fails to tokenize.
     """
 
     def __init__(self, word_to_tokens: dict):
@@ -67,24 +52,6 @@ class FakeTokenizer:
             tok: tid for toks in word_to_tokens.values() for tok, tid in toks
         }
         self.pad_token_id = None
-
-    def __call__(
-        self,
-        words,
-        is_split_into_words=False,
-        add_special_tokens=True,
-        return_tensors=None,
-    ):
-        assert is_split_into_words, "only is_split_into_words=True is used"
-        assert not add_special_tokens, "only add_special_tokens=False is used"
-        assert return_tensors is None
-        input_ids: list[int] = []
-        word_ids: list[int] = []
-        for w_idx, word in enumerate(words):
-            for _, tid in self.word_to_tokens[word]:
-                input_ids.append(tid)
-                word_ids.append(w_idx)
-        return _FakeEncoding(input_ids, word_ids)
 
     def tokenize(self, text):
         assert text.startswith(" ")
@@ -104,10 +71,11 @@ class TestLoadGenerationWords:
         adapter = get_dataset_adapter("brain_treebank")
         called = {"value": False}
 
-        def fake_load_word_table(data_root, context):
+        def fake_load_word_table(data_root, context, drop_untimed_words=False):
             called["value"] = True
             assert data_root == str(tmp_path)
             assert context.stimulus_id == "coraline"
+            assert drop_untimed_words is False
             return pd.DataFrame(
                 {
                     "word": ["Hello", "world"],
@@ -270,38 +238,41 @@ class TestLoadModelForGeneration:
 
 
 # ---------------------------------------------------------------------------
-# _tokenize_transcript
+# _tokenize_transcript_per_word
 # ---------------------------------------------------------------------------
 
 class TestTokenizeTranscript:
     def test_single_token_words(self):
-        tok = FakeTokenizer({"hello": [("hello", 1)], "world": [("world", 2)]})
-        input_ids, word_ids = _tokenize_transcript(["hello", "world"], tok)
+        tok = FakeTokenizer({"hello": [("Ġhello", 1)], "world": [("Ġworld", 2)]})
+        input_ids, word_ids, hftokens = _tokenize_transcript_per_word(["hello", "world"], tok)
         assert input_ids.dtype == np.int64
         assert input_ids.tolist() == [1, 2]
         assert word_ids == [0, 1]
+        assert hftokens == ["Ġhello", "Ġworld"]
 
     def test_multi_token_words(self):
         tok = FakeTokenizer(
-            {"pre": [("pre", 10)], "fix": [("fix", 11)], "ation": [("ation", 12)], "banana": [("ban", 20), ("ana", 21)]}
+            {"pre": [("Ġpre", 10)], "fix": [("Ġfix", 11)], "ation": [("Ġation", 12)], "banana": [("Ġban", 20), ("ana", 21)]}
         )
-        input_ids, word_ids = _tokenize_transcript(["pre", "banana", "fix"], tok)
+        input_ids, word_ids, hftokens = _tokenize_transcript_per_word(["pre", "banana", "fix"], tok)
         assert input_ids.tolist() == [10, 20, 21, 11]
         assert word_ids == [0, 1, 1, 2]
+        assert hftokens == ["Ġpre", "Ġban", "ana", "Ġfix"]
 
     def test_all_words_mapped_assertion(self):
         """Every word must produce at least one token — empty mapping raises."""
         tok = FakeTokenizer({"good": [("good", 1)], "bad": []})
         with pytest.raises(AssertionError, match="failed to tokenize"):
-            _tokenize_transcript(["good", "bad"], tok)
+            _tokenize_transcript_per_word(["good", "bad"], tok)
 
     def test_input_ids_word_ids_length_match(self):
         tok = FakeTokenizer({"a": [("a", 1)], "b": [("b1", 2), ("b2", 3)]})
-        input_ids, word_ids = _tokenize_transcript(["a", "b"], tok)
+        input_ids, word_ids, hftokens = _tokenize_transcript_per_word(["a", "b"], tok)
         assert len(input_ids) == len(word_ids) == 3
+        assert len(hftokens) == 3
 
 
-class TestPodcastTokenizeTranscript:
+class TestPerWordTokenizeTranscript:
     def test_uses_space_prefixed_word_tokenization(self):
         tok = FakeTokenizer(
             {
@@ -309,12 +280,40 @@ class TestPodcastTokenizeTranscript:
                 "banana": [("Ġban", 20), ("ana", 21)],
             }
         )
-        input_ids, word_ids, hftokens = _tokenize_transcript_podcast(["hello", "banana"], tok)
+        input_ids, word_ids, hftokens = _tokenize_transcript_per_word(["hello", "banana"], tok)
 
         assert input_ids.dtype == np.int64
         assert input_ids.tolist() == [10, 20, 21]
         assert word_ids == [0, 1, 1]
         assert hftokens == ["Ġhello", "Ġban", "ana"]
+
+
+class TestTokenizeForAttentionMode:
+    def test_causal_native_uses_per_word_tokenization(self):
+        tok = FakeTokenizer({"won't": [("Ġwon", 10), ("'t", 11)]})
+
+        input_ids, word_ids, hftokens = _tokenize_for_attention_mode(
+            ["won't"],
+            tok,
+            "causal_native",
+        )
+
+        assert input_ids.tolist() == [10, 11]
+        assert word_ids == [0, 0]
+        assert hftokens == ["Ġwon", "'t"]
+
+    def test_bidirectional_strict_uses_same_per_word_tokenization(self):
+        tok = FakeTokenizer({"hello": [("Ġhello", 10)]})
+
+        input_ids, word_ids, hftokens = _tokenize_for_attention_mode(
+            ["hello"],
+            tok,
+            "bidirectional_strict",
+        )
+
+        assert input_ids.tolist() == [10]
+        assert word_ids == [0]
+        assert hftokens == ["Ġhello"]
 
 
 # ---------------------------------------------------------------------------

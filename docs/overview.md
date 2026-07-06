@@ -17,7 +17,7 @@ The Makefile also provides batch targets for releasing multiple config runs:
 
 `make generate-embeddings EMBED_CONFIG=configs/embeddings/generate_<model>.yml` runs `scripts/utilities/generate_embeddings.py`, which loads HuggingFace models through `transformers`, loads words through the active dataset adapter, and writes per-token contextual embeddings.
 
-Generic HuggingFace generation tokenizes with `is_split_into_words=True` and uses a sliding window controlled by `context_window` and `stride`. Causal models use native causal attention; bidirectional models use `attention_mode=bidirectional_strict` so each target sees only preceding tokens. Set `random_init_model: true` to use a model id as the tokenizer and architecture source while initializing fresh random weights.
+HuggingFace generation tokenizes each transcript word independently with the same space-prefixed convention as `data/code/llm.py` for all model types, then uses a sliding window controlled by `context_window` and `stride`. Causal models use native causal attention; bidirectional models use `attention_mode=bidirectional_strict` so each target sees only preceding tokens. Set `random_init_model: true` to use a model id as the tokenizer and architecture source while initializing fresh random weights.
 
 Outputs use the existing layout:
 
@@ -56,6 +56,7 @@ Downstream configs can store list-valued `encoding.per_model_config.layer` entri
 | `scripts/encoding/train_encoding_models.py` | Ridge encoding training entrypoint; writes slim per-subject `encoding_results.joblib`, `corrs.npy`, optional `arbitrary_corrs.npy`, plots, and alpha diagnostics |
 | `scripts/rrr/run_rrr.py` | Raw-input RRR rank sweep with fresh full-ridge fold baselines, optional PCA baseline via `run_pca_baseline`, and cross-dataset evaluation from averaged source subspaces |
 | `scripts/utilities/generate_embeddings.py` | Generate contextual HuggingFace embeddings |
+| `scripts/utilities/export_transcript.py` | Export a dataset adapter's normalized transcript word table for review |
 | `scripts/utilities/generate_random_embeddings.py` | Generate random-init contextual embeddings |
 | `scripts/utilities/precompute_epochs.py` | Build dataset-scoped, word-aligned 32 Hz epoch-tensor caches |
 | `scripts/utilities/generate_plots.py` | Regenerate correlation plots from existing encoding results |

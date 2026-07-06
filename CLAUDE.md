@@ -5,3 +5,5 @@ See [docs/overview.md](docs/overview.md) for a broad overview of this repository
 See the other files in docs/ for more in-depth dives into specific topics to onboard quicker.
 
 For running python code use the conda env decoding_env.
+
+Do not make decisions about meaningful behavior yourself (i.e. if you are making a decision that would change the behavior of the code, not just an implementation detail) always consult with me first. Do not make any behaviorally relevant choices.
