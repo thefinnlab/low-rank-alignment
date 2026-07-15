@@ -9,7 +9,7 @@ encoding:
     - 0
     - 24
     - 48
-    model_dir: gpt2-xl
+    model_dir: gpt2-xl-batch
   offset: 0
   subjects:
   - 3
@@ -18,6 +18,7 @@ encoding:
   run_name: null
   sig_dir: null
   batch: false
+  shared_word_selection: true
 output_dir: null
 sig_dir: null
 rrr_output_dir: null
