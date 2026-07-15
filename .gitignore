@@ -185,6 +185,10 @@ cython_debug/
 
 rrr/
 pca/
+!scripts/rrr/
+!scripts/rrr/compare_subspaces.py
+!configs/rrr/
+!configs/rrr/compare_subspaces.yml
 *.pdf
 *.csv
 processed_data/regions.txt

@@ -11,6 +11,8 @@ from src.core.config import (
     RRRConfig,
     ScriptMode,
     SignificanceConfig,
+    SubspaceComparisonConfig,
+    SubspaceComparisonRun,
     get_results_dir,
 )
 from src.core.registry import DatasetContext
@@ -183,6 +185,35 @@ class TestDictToDataclass:
 
     def test_rrr_subspace_standardization_defaults_false(self):
         assert RRRConfig().standardize_subspace_inputs is False
+
+    def test_subspace_comparison_config_converts_run_dicts(self):
+        config = dict_to_dataclass(
+            {
+                "runs": [
+                    {
+                        "name": "podcast",
+                        "rrr_config": "configs/rrr/gpt2-xl/cross_subject.yml",
+                        "unit_dir": "results/run/rrr",
+                    }
+                ],
+                "cca_ranks": [1, 2],
+                "rsa_ranks": [1],
+            },
+            SubspaceComparisonConfig,
+        )
+
+        assert isinstance(config.runs[0], SubspaceComparisonRun)
+        assert config.runs[0].name == "podcast"
+        assert config.cca_ranks == [1, 2]
+
+    def test_subspace_comparison_config_rejects_duplicate_names(self):
+        with pytest.raises(ValueError, match="Duplicate"):
+            SubspaceComparisonConfig(
+                runs=[
+                    SubspaceComparisonRun("same", "a.yml", "a/rrr"),
+                    SubspaceComparisonRun("same", "b.yml", "b/rrr"),
+                ]
+            )
 
 
 # ---------------------------------------------------------------------------

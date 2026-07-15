@@ -9,7 +9,7 @@ encoding:
     model_dir: gpt2-xl-batch
     layer:
     - 0
-    # - 24
+    - 24
     - 48
 output_dir: null
 sig_dir: null

@@ -10,6 +10,8 @@ The retained pipeline has three main analysis entrypoints:
 2. **Encoding model training** (`make train`) — trains ridge regression encoding models on significant electrodes. New `encoding_results.joblib` files are intentionally slim: they keep correlations, fold indices, target scalers, electrode names, run metadata, optional shared word-selection provenance, and optional arbitrary-baseline correlations, while avoiding fitted model and coefficient payloads.
 3. **RRR analysis** (`make rrr`) — fits raw-input reduced-rank regression from embeddings to neural targets, sweeps rank-k projections, and compares rank-k neural-relevance ridge predictions against fresh full-ridge fold baselines. The retained RRR script can also reuse shared word selections saved by significance/encoding runs, run a PCA subspace baseline when `RRRConfig.run_pca_baseline` is enabled, evaluate a `cross_dataset` mode from rank-specific source-run averaged RRR/PCA subspaces, plus an optional circular-shift null-augmented rank check when `RRRConfig.run_null_augmented` is enabled. RRR and PCA baselines save fold-level `A.npy` subspace factors for downstream comparison.
 
+Downstream pairwise subspace reproducibility analysis is available through `scripts/rrr/compare_subspaces.py`, which computes ordered CCA/RSA comparisons over configured saved RRR/PCA unit directories and writes reusable CSV/NPZ summaries plus quick-look plots under each base unit directory. Config-driven partial-support MAXVAR GCCA is available through `scripts/gcca/run_gcca.py`. It uses an explicitly configured anchor and independently ranked views, selects component-specific support and ridge values within the anchor folds, and saves calibrated per-view ambient maps, word-level scores, reliability sufficient statistics, and fold-stable axis/block diagnostics under a dataset-scoped directory. `scripts/gcca/run_encoding.py` reconstructs those fold-specific scores, contribution-weights them by default, and evaluates ridge encodings against a union of anchor-dataset significant targets while reusing independently fingerprinted raw-embedding baseline caches. The companion comparison notebook provides the interactive component explorer.
+
 The Makefile also provides batch targets for releasing multiple config runs:
 `make generate-embeddings-batch`, `make sig-batch`, and `make rrr-batch`. Random-init embedding runs can use `make generate-random-embeddings`, which wraps `scripts/utilities/generate_random_embeddings.py`.
 
@@ -44,6 +46,9 @@ Downstream configs can store list-valued `encoding.per_model_config.layer` entri
 | `configs/encoding/` | Encoding training configs |
 | `configs/significance/` | Lag-cluster significance configs |
 | `configs/rrr/` | RRR configs, including optional embedded PCA baseline settings |
+| `configs/rrr/compare_subspaces.yml` | Example config for ordered pairwise CCA/RSA comparisons over saved RRR/PCA subspace factors |
+| `configs/gcca/maxvar_gcca.yml` | Example anchor/view configuration for partial-support MAXVAR GCCA and downstream score artifacts |
+| `configs/gcca/encoding.yml` | Contribution-weighted downstream GCCA encoding and reusable-baseline configuration |
 | `configs/embeddings/` | HuggingFace and random-init embedding generation configs |
 | `configs/precompute_epochs/` | Epoch-cache precompute configs |
 | `configs/brain_treebank/` | Brain Treebank scoped embedding, epoch, significance, training, and RRR configs |
@@ -54,7 +59,10 @@ Downstream configs can store list-valued `encoding.per_model_config.layer` entri
 |------|---------|
 | `scripts/sig_lags/run_significance.py` | Cluster-based lag significance entrypoint with configurable null count, seed, and electrode- or cluster-level global FDR; writes significance CSVs, the null distribution, and per-subject test-fold index artifacts for RRR |
 | `scripts/encoding/train_encoding_models.py` | Ridge encoding training entrypoint; writes slim per-subject `encoding_results.joblib`, `corrs.npy`, optional `arbitrary_corrs.npy`, plots, and alpha diagnostics |
-| `scripts/rrr/run_rrr.py` | Raw-input RRR rank sweep with fresh full-ridge fold baselines, optional PCA baseline via `run_pca_baseline`, and cross-dataset evaluation from averaged source subspaces |
+| `scripts/rrr/run_rrr.py` | Raw-input RRR rank sweep with fresh full-ridge fold baselines and optional PCA baseline via `run_pca_baseline`, and cross-dataset evaluation from averaged source subspaces |
+| `scripts/rrr/compare_subspaces.py` | Pairwise saved-subspace reproducibility analysis; computes ordered CCA/RSA over configured RRR/PCA `A.npy` factors and saves tables, component artifacts, and plots |
+| `scripts/gcca/run_gcca.py` | Config-driven partial-support MAXVAR GCCA; saves fold models, calibrated word representations, support/reliability tables, and stability blocks |
+| `scripts/gcca/run_encoding.py` | Reconstruct fold-specific GCCA scores and evaluate contribution-weighted ridge encodings with fingerprinted controlled baselines |
 | `scripts/utilities/generate_embeddings.py` | Generate contextual HuggingFace embeddings |
 | `scripts/utilities/export_transcript.py` | Export a dataset adapter's normalized transcript word table for review |
 | `scripts/utilities/generate_random_embeddings.py` | Generate random-init contextual embeddings |
@@ -69,14 +77,15 @@ Downstream configs can store list-valued `encoding.per_model_config.layer` entri
 | File | Purpose |
 |------|---------|
 | `notebooks/rank-correlation-distributions.py` | Marimo app for comparing rank-k, reference, and null-augmented correlation distributions across electrode, lag, and cluster groupings |
-| `notebooks/compare-subspaces.py` | Marimo app for discovering saved RRR/PCA `A.npy` factors, comparing selected subspaces with principal angles and Grassmann/spectral/Fubini-Study distances, and optionally plotting random-subspace nulls |
+| `notebooks/fisher-ecog.py` | Marimo app for generating word-level Fisher participation-ratio features from causal LMs or Whisper ASR encoder states and optionally comparing saved features with ECoG responses |
+| `notebooks/compare-subspaces.py` | Marimo app for discovering saved RRR/PCA `A.npy` factors, comparing selected or fold-averaged RRR subspaces with principal angles and Grassmann/spectral/Fubini-Study distances, cross-rank Grassmann summaries, optional intrinsic Grassmann means, random-subspace nulls, automatically resolved cross-side PCA sibling baselines, RSA over projected transcript word embeddings, held-out Procrustes/CCA alignment within or across datasets, partial-support multiview MAXVAR GCCA with union-rank capacity, per-view ambient maps, and fold-stable axis/block diagnostics, and subplot summaries of batch CCA/RSA outputs |
 | `notebooks/rrr-srrr-review.py` | Marimo review app for RRR/SRRR outputs, including A-direction activation examples, hypothesis-feature regressions against A-direction activations, B-matrix temporal/brain-map views, and cross-fold/source comparisons |
 
 ### `src/`
 
 | File | Purpose |
 |------|---------|
-| `src/core/config.py` | Dataclasses for retained entrypoints and utilities: `EncodingConfig`, `SignificanceConfig`, `RRRConfig`, embedding generation, epoch precompute, and electrode-region configs |
+| `src/core/config.py` | Dataclasses for retained entrypoints and utilities: `EncodingConfig`, `SignificanceConfig`, `RRRConfig`, subspace comparison, embedding generation, epoch precompute, and electrode-region configs |
 | `src/core/registry.py` | Embedding getter and dataset adapter registries |
 | `src/utils/config_utils.py` | YAML loading, CLI overrides, and layer fanout |
 | `src/utils/data_loaders.py` | Dataset-dispatched iEEG loading, aligned epoch extraction/cache I/O, significance loading, and X/Y assembly |
@@ -84,7 +93,8 @@ Downstream configs can store list-valued `encoding.per_model_config.layer` entri
 | `src/utils/encoding.py` | Cross-validation ridge training, slim encoding result serialization, fold baseline training for RRR, offsets, and correlation loaders |
 | `src/utils/significance.py` | Correlation, FDR, lag-cluster scoring, and circular-shift null helpers |
 | `src/utils/alpha_grids.py`, `constants.py` | Shared ridge alpha-grid policy and diagnostics |
-| `src/utils/srrr.py`, `rrr_utils.py`, `subspace_utils.py`, `subspace_compare.py` | RRR factor fitting, RRR result I/O, rank evaluation, saved-subspace discovery, and subspace comparison helpers |
+| `src/utils/srrr.py`, `rrr_utils.py`, `subspace_utils.py`, `subspace_compare.py`, `subspace_io.py` | RRR factor fitting, RRR result I/O, rank evaluation, saved-subspace discovery, comparison-run loading, and subspace CCA/RSA helpers |
+| `src/utils/gcca.py` | Config-driven partial-support GCCA orchestration, calibrated fold artifact serialization, and dataset-scoped output resolution |
 | `src/utils/plotting.py` | Correlation, alpha, RRR/PCA rank, and utility plots |
 | `src/utils/atlas.py` | Atlas lookup and electrode-region grouping |
 

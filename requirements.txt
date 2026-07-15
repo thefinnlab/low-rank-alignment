@@ -1,0 +1,11 @@
+marimo
+mne
+h5py
+torch
+numpy
+pandas
+matplotlib
+nilearn
+mne-bids
+himalaya
+scikit-learn

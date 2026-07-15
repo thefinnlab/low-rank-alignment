@@ -20,6 +20,7 @@ encoding:
   run_name: null
   sig_dir: null
   batch: false
+  shared_word_selection: true
 output_dir: null
 sig_dir: null
 rrr_output_dir: null

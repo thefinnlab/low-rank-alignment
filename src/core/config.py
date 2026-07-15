@@ -214,6 +214,149 @@ class RRRConfig:
 
 
 @dataclass
+class SubspaceComparisonRun:
+    """One saved subspace run to include in pairwise comparisons."""
+
+    name: str
+    rrr_config: str
+    unit_dir: str
+    kind: str | None = None
+
+
+@dataclass
+class SubspaceComparisonConfig:
+    """Parameters for pairwise RRR/PCA subspace reproducibility analysis."""
+
+    runs: list[SubspaceComparisonRun] = field(default_factory=list)
+    cca_ranks: list[int] = field(default_factory=lambda: [1, 2, 4, 8, 16, 32, 64, 128])
+    rsa_ranks: list[int] = field(default_factory=lambda: [1, 2, 4, 8, 16, 32, 64, 128])
+    output_name: str = "subspace_reproducibility"
+    refresh: bool = False
+    shared_corr_threshold: float = 0.2
+    rsm_metric: str = "cosine"
+    save_ambient_axes: bool = False
+    save_rsm_vectors: bool = False
+    include_self: bool = False
+
+    def __post_init__(self):
+        self.validate()
+
+    def validate(self):
+        if not self.runs:
+            raise ValueError("SubspaceComparisonConfig.runs must contain at least one run")
+        names = [run.name for run in self.runs]
+        duplicates = sorted({name for name in names if names.count(name) > 1})
+        if duplicates:
+            raise ValueError(f"Duplicate subspace comparison run name(s): {duplicates}")
+        for field_name in ("cca_ranks", "rsa_ranks"):
+            ranks = getattr(self, field_name)
+            if any(int(rank) < 1 for rank in ranks):
+                raise ValueError(f"{field_name} must contain positive integer ranks")
+        if not self.output_name:
+            raise ValueError("output_name must be non-empty")
+        if self.rsm_metric not in {"cosine", "euclidean"}:
+            raise ValueError("rsm_metric must be either 'cosine' or 'euclidean'")
+
+
+@dataclass
+class MaxvarGCCAViewConfig:
+    """One brain-aligned subspace view in a MAXVAR GCCA analysis."""
+
+    name: str
+    rrr_config: str
+    unit_dir: str
+    rank: int
+    kind: str | None = None
+
+
+@dataclass
+class MaxvarGCCAConfig:
+    """Configuration for anchor-scoped partial-support MAXVAR GCCA."""
+
+    anchor: str = ""
+    views: list[MaxvarGCCAViewConfig] = field(default_factory=list)
+    shared_dimensions: list[int] = field(default_factory=lambda: [1, 2, 4, 8, 16, 32])
+    ridge_alphas: list[float] = field(
+        default_factory=lambda: [0.0, 1e-6, 1e-4, 1e-2, 1e-1, 1.0]
+    )
+    support_cumulative_mass: float = 0.8
+    axis_match_correlation_threshold: float = 0.8
+    relative_neighboring_eigengap_threshold: float = 0.05
+    output_root: str = "results/maxvar_gcca"
+    output_dir: str | None = None
+    refresh: bool = False
+
+    def __post_init__(self):
+        self.validate()
+
+    def validate(self):
+        if len(self.views) < 2:
+            raise ValueError("MaxvarGCCAConfig.views must contain at least two views")
+        names = [view.name for view in self.views]
+        duplicates = sorted({name for name in names if names.count(name) > 1})
+        if duplicates:
+            raise ValueError(f"Duplicate GCCA view name(s): {duplicates}")
+        if self.anchor not in names:
+            raise ValueError("MaxvarGCCAConfig.anchor must name one configured view")
+        if any(int(view.rank) < 1 for view in self.views):
+            raise ValueError("Every GCCA view rank must be positive")
+        dimensions = [int(value) for value in self.shared_dimensions]
+        if not dimensions or any(value < 1 for value in dimensions):
+            raise ValueError("shared_dimensions must contain positive integers")
+        if max(dimensions) > sum(int(view.rank) for view in self.views):
+            raise ValueError("A shared dimension exceeds the configured union-rank upper bound")
+        if not self.ridge_alphas or any(float(value) < 0 for value in self.ridge_alphas):
+            raise ValueError("ridge_alphas must contain non-negative values")
+        if not 0 < float(self.support_cumulative_mass) <= 1:
+            raise ValueError("support_cumulative_mass must be in (0, 1]")
+        for name, value in (
+            ("axis_match_correlation_threshold", self.axis_match_correlation_threshold),
+            ("relative_neighboring_eigengap_threshold", self.relative_neighboring_eigengap_threshold),
+        ):
+            if not 0 <= float(value) <= 1:
+                raise ValueError(f"{name} must be in [0, 1]")
+        if not self.output_root or self.output_dir == "":
+            raise ValueError("output_root must be non-empty and output_dir cannot be empty")
+
+
+@dataclass
+class GCCAEncodingConfig:
+    """Downstream neural encoding from saved fold-specific GCCA scores."""
+
+    gcca_dir: str = ""
+    run_name: str = ""
+    shared_dimensions: list[int] = field(default_factory=list)
+    refresh: bool = False
+    averaging_method: str = "contribution"
+    calibrated_scores: bool = True
+    ridge_alphas: list[float] | None = None
+    ridge_cv_folds: int = 5
+    ridge_solver_params: dict | None = None
+    ridge_y_in_cpu: bool | None = None
+    ridge_force_cpu: bool | None = None
+    alpha_grid: dict = field(default_factory=dict)
+    standardize_inputs: bool = True
+
+    def __post_init__(self):
+        self.validate()
+
+    def validate(self):
+        if not self.gcca_dir:
+            raise ValueError("gcca_dir must be non-empty")
+        if not self.run_name or any(ch in self.run_name for ch in "/\\"):
+            raise ValueError("run_name must be a non-empty directory name")
+        allowed = {"contribution", "equal", "inner_agreement", "inverse_error", "hybrid"}
+        if self.averaging_method not in allowed:
+            raise ValueError(f"averaging_method must be one of {sorted(allowed)}")
+        if self.shared_dimensions and any(int(k) < 1 for k in self.shared_dimensions):
+            raise ValueError("shared_dimensions must contain positive integers")
+        if self.ridge_alphas is not None and (
+            not self.ridge_alphas or any(float(a) < 0 for a in self.ridge_alphas)
+        ):
+            raise ValueError("ridge_alphas must contain non-negative values")
+
+
+@dataclass
 class GenerateEmbeddingsConfig:
     """Parameters for generating contextual embeddings from a HuggingFace model
     over a dataset transcript (used by scripts/utilities/generate_embeddings.py).

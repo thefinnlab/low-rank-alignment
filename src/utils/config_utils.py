@@ -97,6 +97,15 @@ def dict_to_dataclass(d: dict, cls):
         resolved = _resolve_type(hints[f.name])
         if is_dataclass(resolved) and isinstance(value, dict):
             kwargs[f.name] = dict_to_dataclass(value, resolved)
+        elif get_origin(resolved) is list and isinstance(value, list):
+            args = get_args(resolved)
+            if args and is_dataclass(args[0]):
+                kwargs[f.name] = [
+                    dict_to_dataclass(item, args[0]) if isinstance(item, dict) else item
+                    for item in value
+                ]
+            else:
+                kwargs[f.name] = value
         elif (
             isinstance(resolved, type)
             and issubclass(resolved, enum.Enum)
