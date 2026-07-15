@@ -1,0 +1,76 @@
+output_name: subspace_reproducibility
+cca_ranks:
+  - 1
+  - 2
+  - 4
+  - 8
+  - 16
+  - 32
+#   - 64
+#   - 128
+rsa_ranks:
+  - 1
+  - 2
+  - 4
+  - 8
+  - 16
+  - 32
+  - 64
+  - 128
+shared_corr_threshold: 0.2
+rsm_metric: cosine
+refresh: true
+save_ambient_axes: false
+save_rsm_vectors: false
+include_self: false
+
+runs:
+  - name: podcast_gpt2xl_l0
+    rrr_config: configs/rrr/gpt2-xl/cross_subject.yml
+    unit_dir: results/gpt2-xl-batch_layer0_offset0/rrr
+
+  - name: podcast_gpt2xl_l24
+    rrr_config: configs/rrr/gpt2-xl/cross_subject.yml
+    unit_dir: results/gpt2-xl-batch_layer24_offset0/rrr
+
+  - name: podcast_gpt2xl_l48
+    rrr_config: configs/rrr/gpt2-xl/cross_subject.yml
+    unit_dir: results/gpt2-xl-batch_layer48_offset0/rrr
+
+  - name: cars2_gpt2xl_l0
+    rrr_config: configs/brain_treebank/cars_2/rrr_gpt2xl_layer24.yml
+    unit_dir: results/gpt2-xl-batch_layer0_offset0/movie-cars-2/rrr
+
+  - name: cars2_gpt2xl_l24
+    rrr_config: configs/brain_treebank/cars_2/rrr_gpt2xl_layer24.yml
+    unit_dir: results/gpt2-xl-batch_layer24_offset0/movie-cars-2/rrr
+
+  - name: cars2_gpt2xl_l48
+    rrr_config: configs/brain_treebank/cars_2/rrr_gpt2xl_layer24.yml
+    unit_dir: results/gpt2-xl-batch_layer48_offset0/movie-cars-2/rrr
+
+  # PCA siblings are separate runs so the batch analysis writes RRR-to-PCA,
+  # PCA-to-RRR, and PCA-to-PCA comparisons in addition to RRR-to-RRR.
+  # - name: podcast_gpt2xl_l0_pca
+  #   rrr_config: configs/rrr/gpt2-xl/cross_subject.yml
+  #   unit_dir: results/gpt2-xl-batch_layer0_offset0/pca
+
+  # - name: podcast_gpt2xl_l24_pca
+  #   rrr_config: configs/rrr/gpt2-xl/cross_subject.yml
+  #   unit_dir: results/gpt2-xl-batch_layer24_offset0/pca
+
+  # - name: podcast_gpt2xl_l48_pca
+  #   rrr_config: configs/rrr/gpt2-xl/cross_subject.yml
+  #   unit_dir: results/gpt2-xl-batch_layer48_offset0/pca
+
+  # - name: cars2_gpt2xl_l0_pca
+  #   rrr_config: configs/brain_treebank/cars_2/rrr_gpt2xl_layer24.yml
+  #   unit_dir: results/gpt2-xl-batch_layer0_offset0/movie-cars-2/pca
+
+  # - name: cars2_gpt2xl_l24_pca
+  #   rrr_config: configs/brain_treebank/cars_2/rrr_gpt2xl_layer24.yml
+  #   unit_dir: results/gpt2-xl-batch_layer24_offset0/movie-cars-2/pca
+
+  # - name: cars2_gpt2xl_l48_pca
+  #   rrr_config: configs/brain_treebank/cars_2/rrr_gpt2xl_layer24.yml
+  #   unit_dir: results/gpt2-xl-batch_layer48_offset0/movie-cars-2/pca
