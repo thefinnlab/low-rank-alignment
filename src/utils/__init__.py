@@ -17,6 +17,7 @@ from src.core.config import (
     EncodingConfig,
     SignificanceConfig,
     RRRConfig,
+    GCCAEncodingConfig,
     ScriptMode,
     get_results_dir,
 )

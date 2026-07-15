@@ -316,6 +316,43 @@ class MaxvarGCCAConfig:
 
 
 @dataclass
+class GCCAEncodingConfig:
+    """Downstream neural encoding from saved fold-specific GCCA scores."""
+
+    gcca_dir: str = ""
+    run_name: str = ""
+    shared_dimensions: list[int] = field(default_factory=list)
+    refresh: bool = False
+    averaging_method: str = "contribution"
+    calibrated_scores: bool = True
+    ridge_alphas: list[float] | None = None
+    ridge_cv_folds: int = 5
+    ridge_solver_params: dict | None = None
+    ridge_y_in_cpu: bool | None = None
+    ridge_force_cpu: bool | None = None
+    alpha_grid: dict = field(default_factory=dict)
+    standardize_inputs: bool = True
+
+    def __post_init__(self):
+        self.validate()
+
+    def validate(self):
+        if not self.gcca_dir:
+            raise ValueError("gcca_dir must be non-empty")
+        if not self.run_name or any(ch in self.run_name for ch in "/\\"):
+            raise ValueError("run_name must be a non-empty directory name")
+        allowed = {"contribution", "equal", "inner_agreement", "inverse_error", "hybrid"}
+        if self.averaging_method not in allowed:
+            raise ValueError(f"averaging_method must be one of {sorted(allowed)}")
+        if self.shared_dimensions and any(int(k) < 1 for k in self.shared_dimensions):
+            raise ValueError("shared_dimensions must contain positive integers")
+        if self.ridge_alphas is not None and (
+            not self.ridge_alphas or any(float(a) < 0 for a in self.ridge_alphas)
+        ):
+            raise ValueError("ridge_alphas must contain non-negative values")
+
+
+@dataclass
 class GenerateEmbeddingsConfig:
     """Parameters for generating contextual embeddings from a HuggingFace model
     over a dataset transcript (used by scripts/utilities/generate_embeddings.py).

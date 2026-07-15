@@ -17,6 +17,7 @@ ENCODING_CONFIG ?= configs/encoding/encoding_mid.yml
 SIG_CONFIG      ?= configs/significance/significance_default.yml
 RRR_CONFIG      ?= configs/rrr/rrr_default.yml
 GCCA_CONFIG     ?= configs/gcca/maxvar_gcca.yml
+GCCA_ENCODING_CONFIG ?= configs/gcca/encoding.yml
 PRECOMPUTE_EPOCHS_CONFIG ?= configs/precompute_epochs/precompute_epochs_default.yml
 EMBED_CONFIG    ?= configs/embeddings/generate_gpt2_xl.yml
 RANDOM_EMBED_CONFIG ?= configs/embeddings/generate_random_gpt2_xl.yml
@@ -112,6 +113,11 @@ train:
 gcca:
 	mkdir -p logs
 	$(CMD) scripts/gcca/run_gcca.py --config $(GCCA_CONFIG) $(OVERRIDES)
+
+## Evaluate saved GCCA scores against the union of significant neural targets.
+gcca-encoding:
+	mkdir -p logs
+	$(CMD) scripts/gcca/run_encoding.py --config $(GCCA_ENCODING_CONFIG) $(OVERRIDES)
 
 ## Build dataset-scoped epoch caches used by downstream analysis.
 ## Usage:
