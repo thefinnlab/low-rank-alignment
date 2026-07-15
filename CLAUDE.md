@@ -4,4 +4,4 @@ See [docs/overview.md](docs/overview.md) for a broad overview of this repository
 
 See the other files in docs/ for more in-depth dives into specific topics to onboard quicker.
 
-For running python code use the conda env decoding_env.
+For running python code use uv run.
