@@ -121,13 +121,179 @@ class TestDatasetRegistry:
             data_root=str(tmp_path),
         )
         df = get_dataset_adapter("brain_treebank").load_word_table(
-            str(tmp_path), context
+            str(tmp_path),
+            context,
+            drop_untimed_words=True,
         )
 
         assert df["word"].tolist() == ["Hello", "world"]
         assert df["word_idx"].tolist() == [0, 1]
         assert df["source_word_idx"].tolist() == [10, 14]
         assert {"start", "end"} <= set(df.columns)
+
+    def test_brain_treebank_sentence_guided_transcript_merges_suffixes(
+        self, tmp_path
+    ):
+        _write_btb_transcript(
+            tmp_path,
+            "coraline",
+            [
+                {
+                    "text": "cover",
+                    "start": 1.0,
+                    "end": 1.2,
+                    "sentence": "cover's here.",
+                    "sentence_idx": 0,
+                    "word_idx": 10,
+                },
+                {
+                    "text": "'s",
+                    "start": None,
+                    "end": None,
+                    "sentence": "cover's here.",
+                    "sentence_idx": 0,
+                    "word_idx": 11,
+                },
+                {
+                    "text": "here",
+                    "start": 1.3,
+                    "end": 1.5,
+                    "sentence": "cover's here.",
+                    "sentence_idx": 0,
+                    "word_idx": 12,
+                },
+                {
+                    "text": "wo",
+                    "start": 2.0,
+                    "end": 2.2,
+                    "sentence": "won't stop",
+                    "sentence_idx": 1,
+                    "word_idx": 13,
+                },
+                {
+                    "text": "n't",
+                    "start": None,
+                    "end": None,
+                    "sentence": "won't stop",
+                    "sentence_idx": 1,
+                    "word_idx": 14,
+                },
+                {
+                    "text": "stop",
+                    "start": None,
+                    "end": None,
+                    "sentence": "won't stop",
+                    "sentence_idx": 1,
+                    "word_idx": 15,
+                },
+            ],
+        )
+
+        context = resolve_dataset_context(
+            dataset="brain_treebank",
+            per_dataset_config={"movie": "coraline"},
+            data_root=str(tmp_path),
+        )
+        adapter = get_dataset_adapter("brain_treebank")
+
+        df = adapter.load_word_table(str(tmp_path), context)
+
+        assert df["word"].tolist() == ["cover's", "here.", "won't", "stop"]
+        assert df["source_word_idxs"].tolist() == ["[10, 11]", "[12]", "[13, 14]", "[15]"]
+        assert df["start"].tolist()[:3] == [1.0, 1.3, 2.0]
+        assert pd.isna(df.loc[3, "start"])
+        assert df["word_idx"].tolist() == [0, 1, 2, 3]
+
+        timed = adapter.load_word_table(
+            str(tmp_path),
+            context,
+            drop_untimed_words=True,
+        )
+
+        assert timed["word"].tolist() == ["cover's", "here.", "won't"]
+        assert timed["word_idx"].tolist() == [0, 1, 2]
+
+    def test_brain_treebank_splits_sentence_word_when_multiple_timed_rows_map(
+        self, tmp_path
+    ):
+        _write_btb_transcript(
+            tmp_path,
+            "coraline",
+            [
+                {
+                    "text": "Baskin",
+                    "start": 1.0,
+                    "end": 1.4,
+                    "sentence": "Baskin-Robbins.",
+                    "sentence_idx": 0,
+                    "word_idx": 10,
+                },
+                {
+                    "text": "Robbins",
+                    "start": 1.5,
+                    "end": 1.9,
+                    "sentence": "Baskin-Robbins.",
+                    "sentence_idx": 0,
+                    "word_idx": 11,
+                },
+            ],
+        )
+
+        context = resolve_dataset_context(
+            dataset="brain_treebank",
+            per_dataset_config={"movie": "coraline"},
+            data_root=str(tmp_path),
+        )
+
+        df = get_dataset_adapter("brain_treebank").load_word_table(
+            str(tmp_path), context
+        )
+
+        assert df["word"].tolist() == ["Baskin", "Robbins"]
+        assert df["source_word_idx"].tolist() == [10, 11]
+        assert df["start"].tolist() == [1.0, 1.5]
+        assert df["end"].tolist() == [1.4, 1.9]
+
+    def test_brain_treebank_keeps_sentence_word_when_source_omits_suffix(
+        self, tmp_path
+    ):
+        _write_btb_transcript(
+            tmp_path,
+            "coraline",
+            [
+                {
+                    "text": "Isildur",
+                    "start": 1.0,
+                    "end": 1.4,
+                    "sentence": "Isildur's bane.",
+                    "sentence_idx": 0,
+                    "word_idx": 10,
+                },
+                {
+                    "text": "bane",
+                    "start": 1.5,
+                    "end": 1.9,
+                    "sentence": "Isildur's bane.",
+                    "sentence_idx": 0,
+                    "word_idx": 11,
+                },
+            ],
+        )
+
+        context = resolve_dataset_context(
+            dataset="brain_treebank",
+            per_dataset_config={"movie": "coraline"},
+            data_root=str(tmp_path),
+        )
+
+        df = get_dataset_adapter("brain_treebank").load_word_table(
+            str(tmp_path), context
+        )
+
+        assert df["word"].tolist() == ["Isildur's", "bane."]
+        assert df["source_word_idx"].tolist() == [10, 11]
+        assert df["start"].tolist() == [1.0, 1.5]
+        assert df["end"].tolist() == [1.4, 1.9]
 
     def test_brain_treebank_subject_word_table_aligns_movie_time_to_neural_samples(
         self, tmp_path

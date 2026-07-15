@@ -44,6 +44,7 @@ def _():
         maxvar_block_overlap,
         maxvar_component_blocks,
         maxvar_ambient_map,
+        extrinsic_mean_from_unit_dir,
         orthonormal_basis,
         parse_rank_list,
         principal_angles_from_bases,
@@ -98,6 +99,7 @@ def _():
         maxvar_ambient_map,
         maxvar_block_overlap,
         maxvar_component_blocks,
+        extrinsic_mean_from_unit_dir,
         mo,
         np,
         orthonormal_basis,
@@ -232,8 +234,15 @@ def _(mo, primary_source_options):
         value="Off",
         label="PCA overlay",
     )
-    mo.vstack([source_a_input, source_b_input, pca_overlay_input])
-    return pca_overlay_input, source_a_input, source_b_input
+    average_folds_input = mo.ui.checkbox(value=False, label="Average folds")
+    mo.vstack(
+        [
+            source_a_input,
+            source_b_input,
+            mo.hstack([pca_overlay_input, average_folds_input]),
+        ]
+    )
+    return average_folds_input, pca_overlay_input, source_a_input, source_b_input
 
 
 @app.cell(hide_code=True)
@@ -654,8 +663,12 @@ def _(plt):
 def _(np, orthonormal_basis, rank_a_input, rank_b_input, source_a, source_b):
     matrix_a = np.load(source_a.path, mmap_mode="r")
     matrix_b = np.load(source_b.path, mmap_mode="r")
-    basis_a = orthonormal_basis(matrix_a, int(rank_a_input.value))
-    basis_b = orthonormal_basis(matrix_b, int(rank_b_input.value))
+    if average_folds_input.value:
+        basis_a = extrinsic_mean_from_unit_dir(source_a.unit_dir, int(rank_a_input.value))
+        basis_b = extrinsic_mean_from_unit_dir(source_b.unit_dir, int(rank_b_input.value))
+    else:
+        basis_a = orthonormal_basis(matrix_a, int(rank_a_input.value))
+        basis_b = orthonormal_basis(matrix_b, int(rank_b_input.value))
     return basis_a, basis_b
 
 

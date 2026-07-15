@@ -28,6 +28,7 @@ def load_embeddings(
         embedding_getter_name = "gpt2xl"
 
     model_dir = kwargs.get("model_dir", "gpt2-xl")
+    drop_untimed_words = kwargs.pop("drop_untimed_words", True)
     context = dataset_context or resolve_dataset_context(
         dataset=dataset,
         subject_ids=kwargs.get("subject_ids"),
@@ -42,18 +43,23 @@ def load_embeddings(
             kwargs.setdefault("model_dir", model_dir)
         try:
             transcript_df = adapter.load_generated_transcript(
-                data_root, context, model_dir
+                data_root,
+                context,
+                model_dir,
+                drop_untimed_words=drop_untimed_words,
             )
         except FileNotFoundError:
             transcript_df = adapter.load_word_table(
                 data_root,
                 context,
+                drop_untimed_words=drop_untimed_words,
                 **kwargs,
             )
     else:
         transcript_df = adapter.load_word_table(
             data_root,
             context,
+            drop_untimed_words=drop_untimed_words,
             **kwargs,
         )
 

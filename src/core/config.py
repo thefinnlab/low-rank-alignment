@@ -10,6 +10,7 @@ class ScriptMode(str, Enum):
     """Which Script branch to run in analysis"""
 
     CROSS_SUBJECT = "cross_subject"
+    CROSS_DATASET = "cross_dataset"
     PER_SUBJECT = "per_subject"
     PER_REGION = "per_region"
     LEAVE_ONE_SUBJECT_OUT = "leave_one_subject_out"
@@ -171,6 +172,9 @@ class RRRConfig:
         None  # Override for RRR root subdir; default depends on mode
     )
     mode: ScriptMode = ScriptMode.CROSS_SUBJECT
+    cross_result_dir: str | None = (
+        None  # Source results run root for mode=cross_dataset.
+    )
 
     # Rank sweep
     rank_grid: list[int] = field(default_factory=lambda: [1, 2, 5, 10, 20, 50])
@@ -364,11 +368,12 @@ class GenerateEmbeddingsConfig:
 
     Generic sliding window: each forward pass processes ``context_window`` tokens and
     retains the last ``stride`` token positions (except the first window, which retains
-    all of its positions). Causal models enforce left-only context natively; for
-    bidirectional models use ``attention_mode='bidirectional_strict'`` with ``stride=1``
-    to ensure each target position sees only preceding tokens. Podcast-compatible
-    causal LM generation uses ``attention_mode='podcast_per_token'`` and builds one
-    ``context_window + 1`` row per target token.
+    all of its positions). All model types tokenize each word independently with the
+    space-prefixed convention from ``data/code/llm.py``. Causal models enforce left-only
+    context natively; for bidirectional models use ``attention_mode='bidirectional_strict'``
+    with ``stride=1`` to ensure each target position sees only preceding tokens.
+    Podcast-compatible causal LM generation uses ``attention_mode='podcast_per_token'``
+    and builds one ``context_window + 1`` row per target token.
     """
 
     hf_model_id: str = "openai-community/gpt2-xl"
@@ -423,6 +428,4 @@ class GenerateEmbeddingsConfig:
     tokenizer_name_or_path: str | None = (
         None  # None → use hf_model_id; can point to a local tokenizer dir
     )
-    add_prefix_space: bool = (
-        True  # required for GPT-2 / RoBERTa BPE with is_split_into_words
-    )
+    add_prefix_space: bool = True

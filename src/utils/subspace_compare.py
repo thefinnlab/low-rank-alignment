@@ -1172,3 +1172,73 @@ def summarize_cca_fold_results(results: list[dict]) -> dict[str, float]:
             np.nanmean([row["n_train_corr_ge_threshold"] for row in results])
         ),
     }
+def load_unit_subspace_matrices(unit_dir: str | Path) -> list[np.ndarray]:
+    """Load fold-level ``A.npy`` matrices directly under a unit directory."""
+    root = Path(unit_dir).expanduser()
+    if not root.exists():
+        raise FileNotFoundError(f"Subspace unit directory does not exist: {root}")
+
+    paths = sorted(
+        path
+        for path in root.glob("fold_*/A.npy")
+        if _parse_fold(path) is not None
+    )
+    if not paths:
+        raise FileNotFoundError(f"No fold_*/A.npy factors found under {root}")
+    return [np.load(path) for path in paths]
+
+
+def extrinsic_mean_basis(
+    matrices: list[np.ndarray],
+    rank: int,
+) -> np.ndarray:
+    """Compute the extrinsic Grassmann mean of leading matrix subspaces.
+
+    Each input matrix contributes the subspace spanned by its first ``rank``
+    columns. The returned columns are the top eigenvectors of the average
+    projection matrix.
+    """
+    if not matrices:
+        raise ValueError("At least one subspace matrix is required")
+    rank = int(rank)
+    if rank < 1:
+        raise ValueError("rank must be at least 1")
+
+    first = np.asarray(matrices[0])
+    if first.ndim != 2:
+        raise ValueError(f"Expected 2D matrices, got shape {first.shape}")
+    ambient_dim = first.shape[0]
+    if rank > first.shape[1]:
+        raise ValueError(
+            f"rank {rank} exceeds source matrix width {first.shape[1]}"
+        )
+
+    bases = []
+    for i, matrix in enumerate(matrices):
+        arr = np.asarray(matrix)
+        if arr.ndim != 2:
+            raise ValueError(f"Expected 2D matrix at index {i}, got shape {arr.shape}")
+        if arr.shape[0] != ambient_dim:
+            raise ValueError(
+                "All subspace matrices must share ambient dimension, got "
+                f"{ambient_dim} and {arr.shape[0]} at index {i}"
+            )
+        if rank > arr.shape[1]:
+            raise ValueError(
+                f"rank {rank} exceeds source matrix width {arr.shape[1]} at index {i}"
+            )
+        basis = orthonormal_basis(arr, rank)
+        if basis.shape[1] != rank:
+            raise ValueError(
+                f"Source matrix at index {i} is rank deficient for requested rank {rank}"
+            )
+        bases.append(basis)
+
+    concatenated = np.concatenate(bases, axis=1)
+    left_vectors, _, _ = np.linalg.svd(concatenated, full_matrices=False)
+    return left_vectors[:, :rank].astype(np.float32, copy=False)
+
+
+def extrinsic_mean_from_unit_dir(unit_dir: str | Path, rank: int) -> np.ndarray:
+    """Load fold factors from a unit directory and return their mean basis."""
+    return extrinsic_mean_basis(load_unit_subspace_matrices(unit_dir), rank=rank)

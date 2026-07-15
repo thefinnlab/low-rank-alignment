@@ -125,6 +125,7 @@ def main():
                 dataset_context,
                 sub_id,
                 df_word,
+                drop_untimed_words=True,
             )
             print(f"  Subject-aligned words: {len(subject_df_word)}")
 

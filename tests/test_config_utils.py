@@ -9,6 +9,7 @@ import yaml
 from src.core.config import (
     EncodingConfig,
     RRRConfig,
+    ScriptMode,
     SignificanceConfig,
     SubspaceComparisonConfig,
     SubspaceComparisonRun,
@@ -132,6 +133,20 @@ class TestDictToDataclass:
         config = dict_to_dataclass({"refresh": True, "rank_grid": [1, 2]}, RRRConfig)
         assert config.refresh is True
         assert config.rank_grid == [1, 2]
+
+    def test_rrr_cross_dataset_roundtrip(self):
+        config = dict_to_dataclass(
+            {
+                "mode": "cross_dataset",
+                "cross_result_dir": "results/gpt2-xl_layer24_offset0/movie-cars-2",
+            },
+            RRRConfig,
+        )
+        assert config.mode == ScriptMode.CROSS_DATASET
+        assert (
+            config.cross_result_dir
+            == "results/gpt2-xl_layer24_offset0/movie-cars-2"
+        )
 
     def test_alpha_grid_policy_roundtrip(self):
         config = dict_to_dataclass(

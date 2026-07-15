@@ -97,6 +97,27 @@ def _ensure_word_idx(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
+def _drop_untimed_word_rows(df: pd.DataFrame, reset_index: bool = True) -> pd.DataFrame:
+    start = pd.to_numeric(df["start"], errors="coerce")
+    end = pd.to_numeric(df["end"], errors="coerce")
+    dropped = df.loc[start.notna() & end.notna()].copy()
+    if reset_index:
+        dropped = dropped.reset_index(drop=True)
+    return dropped
+
+
+def _drop_untimed_generated_transcript(df: pd.DataFrame) -> pd.DataFrame:
+    dropped = _drop_untimed_word_rows(df, reset_index=False)
+    if "word_idx" not in dropped.columns:
+        return dropped
+    old_word_ids = dropped["word_idx"].drop_duplicates().tolist()
+    remap = {old: new for new, old in enumerate(old_word_ids)}
+    dropped = dropped.copy()
+    dropped["source_word_idx"] = dropped["word_idx"]
+    dropped["word_idx"] = dropped["word_idx"].map(remap).astype(int)
+    return dropped
+
+
 @register_dataset("podcast")
 class PodcastDatasetAdapter:
     name = "podcast"
@@ -115,11 +136,15 @@ class PodcastDatasetAdapter:
         data_root: str,
         context: DatasetContext,
         model_dir: str = "gpt2-xl",
+        drop_untimed_words: bool = False,
         **_: dict,
     ) -> pd.DataFrame:
         transcript_path = os.path.join(data_root, "stimuli", model_dir, "transcript.tsv")
         df = _load_tsv_or_csv(transcript_path, sep="\t")
-        return _ensure_word_idx(df)
+        df = _ensure_word_idx(df)
+        if drop_untimed_words and {"start", "end"} <= set(df.columns):
+            df = _drop_untimed_word_rows(df, reset_index=True)
+        return df
 
     def get_embedding_dir(
         self, data_root: str, context: DatasetContext, model_dir: str
@@ -127,13 +152,20 @@ class PodcastDatasetAdapter:
         return os.path.join(data_root, "stimuli", model_dir)
 
     def load_generated_transcript(
-        self, data_root: str, context: DatasetContext, model_dir: str
+        self,
+        data_root: str,
+        context: DatasetContext,
+        model_dir: str,
+        drop_untimed_words: bool = False,
     ) -> pd.DataFrame:
         transcript_path = os.path.join(
             self.get_embedding_dir(data_root, context, model_dir), "transcript.tsv"
         )
         df = _load_tsv_or_csv(transcript_path, sep="\t")
-        return _ensure_word_idx(df)
+        df = _ensure_word_idx(df)
+        if drop_untimed_words and {"start", "end"} <= set(df.columns):
+            df = _drop_untimed_generated_transcript(df)
+        return df
 
     def load_raw_recording(
         self,
@@ -334,6 +366,7 @@ class BrainTreebankDatasetAdapter:
         self,
         data_root: str,
         context: DatasetContext,
+        drop_untimed_words: bool = False,
         **_: dict,
     ) -> pd.DataFrame:
         path = os.path.join(
@@ -342,28 +375,31 @@ class BrainTreebankDatasetAdapter:
             context.stimulus_id,
             "features.csv",
         )
-        df = pd.read_csv(path)
+        df = pd.read_csv(path, keep_default_na=False)
         unnamed = [c for c in df.columns if str(c).startswith("Unnamed:")]
         if unnamed:
             df = df.drop(columns=unnamed)
         if "text" not in df.columns:
             raise ValueError(f"Brain Treebank transcript missing 'text' column: {path}")
-        valid_text = (
-            df["text"].notna()
-            & df["text"].map(lambda value: isinstance(value, str))
-            & df["text"].map(lambda value: isinstance(value, str) and value.strip() != "")
-        )
-        keep = (
-            valid_text
-            & df["start"].notna()
-            & df["end"].notna()
-            & pd.to_numeric(df["start"], errors="coerce").notna()
-            & pd.to_numeric(df["end"], errors="coerce").notna()
-        )
-        df = df.loc[keep].copy().reset_index(drop=True)
-        if "word_idx" in df.columns:
-            df["source_word_idx"] = df["word_idx"]
-        df = df.rename(columns={"text": "word"})
+        if "sentence" in df.columns:
+            df = df.loc[df["sentence"].map(lambda value: str(value).strip() != "")].copy()
+            df = df.reset_index(drop=True)
+            df = self._normalize_transcript_words_from_sentences(df)
+        else:
+            valid_text = (
+                df["text"].notna()
+                & df["text"].map(lambda value: isinstance(value, str))
+                & df["text"].map(lambda value: isinstance(value, str) and value.strip() != "")
+            )
+            df = df.loc[valid_text].copy().reset_index(drop=True)
+            if "word_idx" in df.columns:
+                df["source_word_idx"] = df["word_idx"]
+                df["source_word_idxs"] = df["word_idx"].map(lambda value: str([int(value)]))
+            df = df.rename(columns={"text": "word"})
+            df["start"] = pd.to_numeric(df["start"], errors="coerce")
+            df["end"] = pd.to_numeric(df["end"], errors="coerce")
+        if drop_untimed_words:
+            df = _drop_untimed_word_rows(df)
         df["word_idx"] = range(len(df))
         return df
 
@@ -373,16 +409,261 @@ class BrainTreebankDatasetAdapter:
         context: DatasetContext,
         subject_id: int,
         word_table: pd.DataFrame | None = None,
+        drop_untimed_words: bool = False,
     ) -> pd.DataFrame:
         """Return a word table aligned from movie time to subject neural time."""
         if word_table is None:
-            word_table = self.load_word_table(data_root, context)
+            word_table = self.load_word_table(
+                data_root,
+                context,
+                drop_untimed_words=drop_untimed_words,
+            )
+        elif drop_untimed_words:
+            word_table = _drop_untimed_word_rows(word_table, reset_index=False)
         metadata = context.subject_metadata.get(subject_id)
         if metadata is None:
             metadata = self._select_subject_movie_record(
                 data_root, subject_id, context.stimulus_id
             )
         return self._align_word_table_to_subject(word_table, metadata)
+
+    @staticmethod
+    def _canonical_transcript_text(value: object) -> str:
+        return str(value).replace("’", "'").replace("‘", "'").strip()
+
+    @classmethod
+    def _treebank_tokenizer(cls):
+        from nltk.tokenize import TreebankWordTokenizer
+
+        return TreebankWordTokenizer()
+
+    @classmethod
+    def _compact_token(cls, value: object) -> str:
+        return re.sub(r"[^\w]+", "", cls._canonical_transcript_text(value))
+
+    @classmethod
+    def _tokens_match(cls, source_token: str, sentence_token: str) -> bool:
+        source = cls._canonical_transcript_text(source_token)
+        sentence = cls._canonical_transcript_text(sentence_token)
+        if source == sentence:
+            return True
+        source_compact = cls._compact_token(source)
+        sentence_compact = cls._compact_token(sentence)
+        return bool(source_compact) and source_compact == sentence_compact
+
+    @classmethod
+    def _is_punctuation_token(cls, value: object) -> bool:
+        text = cls._canonical_transcript_text(value)
+        return bool(text) and cls._compact_token(text) == ""
+
+    @classmethod
+    def _sentence_word_spans(cls, sentence: object) -> list[dict]:
+        sentence = str(sentence)
+        spans = []
+        for match in re.finditer(r"[^ ]+", sentence):
+            spans.append(
+                {
+                    "word": match.group(0),
+                    "start": match.start(),
+                    "end": match.end(),
+                }
+            )
+        return spans
+
+    @classmethod
+    def _sentence_treebank_tokens(cls, sentence: object) -> list[dict]:
+        sentence = str(sentence)
+        word_spans = cls._sentence_word_spans(sentence)
+        tokens = []
+        for start, end in cls._treebank_tokenizer().span_tokenize(sentence):
+            token = sentence[start:end]
+            word_idx = None
+            for idx, word_span in enumerate(word_spans):
+                if start >= word_span["start"] and end <= word_span["end"]:
+                    word_idx = idx
+                    break
+            if word_idx is not None:
+                tokens.append(
+                    {
+                        "token": token,
+                        "word_idx": word_idx,
+                        "word": word_spans[word_idx]["word"],
+                    }
+                )
+        return tokens
+
+    def _normalize_transcript_words_from_sentences(self, df: pd.DataFrame) -> pd.DataFrame:
+        rows: list[dict] = []
+        if "sentence_idx" in df.columns:
+            group_keys = ["sentence_idx", "sentence"]
+        else:
+            group_keys = ["sentence"]
+
+        for key, group in df.groupby(group_keys, sort=False, dropna=False):
+            sentence = group["sentence"].dropna().iloc[0] if group["sentence"].notna().any() else ""
+            word_spans = self._sentence_word_spans(sentence)
+            sentence_tokens = self._sentence_treebank_tokens(sentence)
+            source_rows = list(group.iterrows())
+            token_pos = 0
+            partial_token_pos = None
+            partial_compact = ""
+            rows_by_word: dict[int, list[pd.Series]] = {}
+
+            for _, source in source_rows:
+                source_text = self._canonical_transcript_text(source["text"])
+                source_tokens = (
+                    self._treebank_tokenizer().tokenize(source_text)
+                    if source_text
+                    else []
+                )
+                # Some rows have timing but blank text while the sentence has
+                # the actual word, e.g. sentence word="None". Use the next
+                # non-punctuation Treebank token so the timed row is retained.
+                if not source_tokens:
+                    while (
+                        token_pos < len(sentence_tokens)
+                        and self._is_punctuation_token(sentence_tokens[token_pos]["token"])
+                    ):
+                        token_pos += 1
+                    if token_pos < len(sentence_tokens):
+                        source_tokens = [sentence_tokens[token_pos]["token"]]
+
+                matched_word_idxs = []
+                for source_token in source_tokens:
+                    if self._is_punctuation_token(source_token):
+                        if matched_word_idxs:
+                            matched_word_idxs.append(matched_word_idxs[-1])
+                        elif rows_by_word:
+                            matched_word_idxs.append(max(rows_by_word))
+                        continue
+
+                    source_compact = self._compact_token(source_token)
+                    if partial_token_pos is not None:
+                        sentence_token = sentence_tokens[partial_token_pos]
+                        sentence_compact = self._compact_token(sentence_token["token"])
+                        combined = partial_compact + source_compact
+                        if not sentence_compact.startswith(combined):
+                            sentence_idx = source.get("sentence_idx", key)
+                            raise ValueError(
+                                "Brain Treebank split source token does not match "
+                                f"sentence text at sentence_idx={sentence_idx!r}: "
+                                f"source token {source_token!r}, sentence token "
+                                f"{sentence_token['token']!r}."
+                            )
+                        matched_word_idxs.append(sentence_token["word_idx"])
+                        if combined == sentence_compact:
+                            token_pos = partial_token_pos + 1
+                            partial_token_pos = None
+                            partial_compact = ""
+                        else:
+                            partial_compact = combined
+                        continue
+
+                    while (
+                        token_pos < len(sentence_tokens)
+                        and not self._tokens_match(
+                            source_token,
+                            sentence_tokens[token_pos]["token"],
+                        )
+                    ):
+                        # Sentence punctuation often has no source row
+                        # (e.g. source text="Turbo", sentence word="Turbo.").
+                        if self._is_punctuation_token(sentence_tokens[token_pos]["token"]):
+                            token_pos += 1
+                            continue
+                        if sentence_tokens[token_pos]["word_idx"] in rows_by_word:
+                            # The sentence may contain Treebank suffix tokens
+                            # that are omitted from source rows, e.g.
+                            # sentence="Isildur's bane." with source rows
+                            # "Isildur" and "bane". The final word text still
+                            # comes from the sentence word ("Isildur's"), so skip
+                            # the unmatched suffix once that word has a source row.
+                            token_pos += 1
+                            continue
+                        sentence_compact = self._compact_token(
+                            sentence_tokens[token_pos]["token"]
+                        )
+                        if (
+                            source_compact
+                            and sentence_compact.startswith(source_compact)
+                        ):
+                            matched_word_idxs.append(
+                                sentence_tokens[token_pos]["word_idx"]
+                            )
+                            partial_token_pos = token_pos
+                            partial_compact = source_compact
+                            break
+                        sentence_idx = source.get("sentence_idx", key)
+                        raise ValueError(
+                            "Brain Treebank transcript token does not match sentence "
+                            f"text at sentence_idx={sentence_idx!r}: source token "
+                            f"{source_token!r}, sentence token "
+                            f"{sentence_tokens[token_pos]['token']!r}."
+                        )
+                    if partial_token_pos is not None:
+                        continue
+                    if token_pos >= len(sentence_tokens):
+                        sentence_idx = source.get("sentence_idx", key)
+                        raise ValueError(
+                            "Brain Treebank transcript ended before matching source "
+                            f"token at sentence_idx={sentence_idx!r}: {source_token!r}."
+                        )
+                    matched_word_idxs.append(sentence_tokens[token_pos]["word_idx"])
+                    token_pos += 1
+
+                for word_idx in sorted(set(matched_word_idxs)):
+                    rows_by_word.setdefault(word_idx, []).append(source)
+
+            for word_idx, piece_rows in sorted(rows_by_word.items()):
+                timed_piece_rows = [
+                    r
+                    for r in piece_rows
+                    if pd.notna(pd.to_numeric(r.get("start"), errors="coerce"))
+                    and pd.notna(pd.to_numeric(r.get("end"), errors="coerce"))
+                ]
+                if len(timed_piece_rows) > 1:
+                    # If multiple timed rows map to one whitespace sentence word,
+                    # the source has more timing detail than the sentence split.
+                    # Example: sentence word="Baskin-Robbins." with timed rows
+                    # text="Baskin" and text="Robbins". Emit one word row per
+                    # timed source row instead of merging both timings.
+                    for source in timed_piece_rows:
+                        row = source.copy()
+                        if "word_idx" in source and pd.notna(source["word_idx"]):
+                            row["source_word_idx"] = int(source["word_idx"])
+                            row["source_word_idxs"] = str([int(source["word_idx"])])
+                        row["word"] = self._canonical_transcript_text(source["text"])
+                        row["text"] = row["word"]
+                        row["start"] = pd.to_numeric(source.get("start"), errors="coerce")
+                        row["end"] = pd.to_numeric(source.get("end"), errors="coerce")
+                        rows.append(row.to_dict())
+                    continue
+
+                row = piece_rows[0].copy()
+                source_word_idxs = [
+                    int(r["word_idx"])
+                    for r in piece_rows
+                    if "word_idx" in r and pd.notna(r["word_idx"])
+                ]
+                starts = pd.to_numeric(
+                    pd.Series([r.get("start") for r in piece_rows]), errors="coerce"
+                ).dropna()
+                ends = pd.to_numeric(
+                    pd.Series([r.get("end") for r in piece_rows]), errors="coerce"
+                ).dropna()
+                row["word"] = word_spans[word_idx]["word"]
+                row["text"] = word_spans[word_idx]["word"]
+                row["start"] = float(starts.iloc[0]) if not starts.empty else np.nan
+                row["end"] = float(ends.iloc[-1]) if not ends.empty else np.nan
+                if source_word_idxs:
+                    row["source_word_idx"] = source_word_idxs[0]
+                    row["source_word_idxs"] = str(source_word_idxs)
+                rows.append(row.to_dict())
+
+        normalized = pd.DataFrame(rows)
+        if "text" in normalized.columns:
+            normalized = normalized.drop(columns=["text"])
+        return normalized.reset_index(drop=True)
 
     def _align_word_table_to_subject(
         self, word_table: pd.DataFrame, metadata: dict
@@ -459,13 +740,20 @@ class BrainTreebankDatasetAdapter:
         )
 
     def load_generated_transcript(
-        self, data_root: str, context: DatasetContext, model_dir: str
+        self,
+        data_root: str,
+        context: DatasetContext,
+        model_dir: str,
+        drop_untimed_words: bool = False,
     ) -> pd.DataFrame:
         transcript_path = os.path.join(
             self.get_embedding_dir(data_root, context, model_dir), "transcript.tsv"
         )
         df = _load_tsv_or_csv(transcript_path, sep="\t")
-        return _ensure_word_idx(df)
+        df = _ensure_word_idx(df)
+        if drop_untimed_words and {"start", "end"} <= set(df.columns):
+            df = _drop_untimed_generated_transcript(df)
+        return df
 
     def _load_electrode_labels(self, path: str) -> dict[int, str]:
         if not os.path.exists(path):

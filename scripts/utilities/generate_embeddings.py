@@ -8,12 +8,14 @@ Output (under ``{data_root}/stimuli/{output_name}/``):
   transcript.tsv   — per-token rows: word_idx, word, start, end, hftoken, token_id
   metadata.json    — generation parameters (for reproducibility)
 
-Generic causal generation processes ``context_window`` tokens and retains the
-hidden states for the last ``stride`` positions (or all positions, on the first
-window). For bidirectional models (RoBERTa), use ``attention_mode='bidirectional_strict'``
-with ``stride=1`` so each target sees only preceding tokens. Podcast-compatible
-causal LM generation uses ``attention_mode='podcast_per_token'`` and builds one
-left-padded context row per target token, matching ``data/code/llm.py``.
+Generation tokenizes each transcript word independently with the space-prefixed
+convention from ``data/code/llm.py`` for all model types, processes
+``context_window`` tokens, and retains the hidden states for the last ``stride``
+positions (or all positions, on the first window). For bidirectional models (RoBERTa), use
+``attention_mode='bidirectional_strict'`` with ``stride=1`` so each target sees only
+preceding tokens. Podcast-compatible causal LM generation uses
+``attention_mode='podcast_per_token'`` and builds one left-padded context row per
+target token.
 """
 
 import argparse
@@ -130,34 +132,12 @@ def _select_generation_model_class(attention_mode: str):
     return AutoModelForCausalLM if attention_mode == "podcast_per_token" else AutoModel
 
 
-def _tokenize_transcript(words: list[str], tokenizer):
-    """Tokenize the pre-split word list and return (input_ids, word_ids).
-
-    Uses ``is_split_into_words=True`` so every tokenizer family produces a canonical
-    subtoken→word alignment via ``encoding.word_ids()``.
-    """
-    enc = tokenizer(
-        words,
-        is_split_into_words=True,
-        add_special_tokens=False,
-        return_tensors=None,
-    )
-    input_ids = np.asarray(enc["input_ids"], dtype=np.int64)
-    word_ids = enc.word_ids()
-    assert len(input_ids) == len(word_ids), "input_ids and word_ids length mismatch"
-    mapped_words = {w for w in word_ids if w is not None}
-    missing = set(range(len(words))) - mapped_words
-    assert not missing, f"{len(missing)} words failed to tokenize: {sorted(missing)[:5]}..."
-    return input_ids, word_ids
-
-
-def _tokenize_transcript_podcast(words: list[str], tokenizer):
-    """Tokenize words with the legacy podcast convention.
+def _tokenize_transcript_per_word(words: list[str], tokenizer):
+    """Tokenize each transcript word independently with a leading space.
 
     ``data/code/llm.py`` tokenized each transcript word independently as
-    ``tokenizer.tokenize(" " + word)``. This differs from
-    ``is_split_into_words=True`` for GPT-style BPE tokenizers, so the parity
-    path keeps this behavior explicit.
+    ``tokenizer.tokenize(" " + word)``. All generation modes use this path so
+    tokenization is consistent across model types.
     """
     input_ids: list[int] = []
     word_ids: list[int] = []
@@ -174,6 +154,11 @@ def _tokenize_transcript_podcast(words: list[str], tokenizer):
         hftokens.extend(tokens)
 
     return np.asarray(input_ids, dtype=np.int64), word_ids, hftokens
+
+
+def _tokenize_for_attention_mode(words: list[str], tokenizer, attention_mode: str):
+    _ = attention_mode
+    return _tokenize_transcript_per_word(words, tokenizer)
 
 
 def _build_transcript_df(
@@ -221,7 +206,11 @@ def _load_generation_words(cfg: GenerateEmbeddingsConfig, output_name: str):
         words_df = pd.read_csv(cfg.transcript_path)
     else:
         print(f"Loading {context.dataset} transcript: {context.stimulus_id}")
-        words_df = adapter.load_word_table(cfg.data_root, context)
+        words_df = adapter.load_word_table(
+            cfg.data_root,
+            context,
+            drop_untimed_words=False,
+        )
 
     if "word" not in words_df.columns:
         raise ValueError("Transcript table must contain a 'word' column.")
@@ -452,11 +441,11 @@ def generate(cfg: GenerateEmbeddingsConfig):
 
     words_df, dataset_context, out_dir = _load_generation_words(cfg, output_name)
     words = words_df["word"].tolist()
-    if attention_mode == "podcast_per_token":
-        input_ids, word_ids, hftokens = _tokenize_transcript_podcast(words, tokenizer)
-    else:
-        input_ids, word_ids = _tokenize_transcript(words, tokenizer)
-        hftokens = None
+    input_ids, word_ids, hftokens = _tokenize_for_attention_mode(
+        words,
+        tokenizer,
+        attention_mode,
+    )
     T = input_ids.shape[0]
     hidden_dim = model.config.hidden_size
     num_hidden_states = model.config.num_hidden_layers + 1  # +1 for embedding layer
