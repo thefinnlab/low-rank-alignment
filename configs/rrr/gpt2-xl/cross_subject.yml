@@ -8,9 +8,9 @@ encoding:
   per_model_config:
     model_dir: gpt2-xl-batch
     layer:
-    # - 0
-    - 24
-    # - 48
+    - 0
+    # - 24
+    - 48
 output_dir: null
 sig_dir: null
 rrr_output_dir: null
@@ -30,7 +30,7 @@ rank_grid:
 - 1600
 refresh: true
 run_pca_baseline: true
-run_null_augmented: true
+run_null_augmented: false
 null_augmented_repeats: 50
 null_augmented_reference_rank: 1600
 null_augmented_min_shift: 50

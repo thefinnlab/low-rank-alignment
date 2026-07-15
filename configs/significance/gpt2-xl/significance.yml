@@ -9,9 +9,9 @@ encoding:
   per_model_config:
     model_dir: gpt2-xl-batch
     layer:
-    # - 0
-    - 24
-    # - 48
+      - 0
+      - 24
+      - 48
 output_dir: null
 blocks_per_fold: 3
 max_matching_distance: 3
