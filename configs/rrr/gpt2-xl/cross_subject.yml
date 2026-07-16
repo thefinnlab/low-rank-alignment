@@ -30,7 +30,7 @@ rank_grid:
 - 1600
 refresh: true
 run_pca_baseline: true
-run_null_augmented: true
+run_null_augmented: false
 null_augmented_repeats: 50
 null_augmented_reference_rank: 1600
 null_augmented_min_shift: 50

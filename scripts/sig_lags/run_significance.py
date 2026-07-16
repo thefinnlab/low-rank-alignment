@@ -204,7 +204,8 @@ def run_config(config: SignificanceConfig):
         )
         os.makedirs(alpha_dir, exist_ok=True)
         save_encoding_results(
-            {"test_idxs": test_idxs},
+            {"test_idxs": test_idxs,
+             "lags": actual_lag_sec,},
             os.path.join(alpha_dir, "encoding_results.joblib"),
         )
         if enc.log_alphas:
