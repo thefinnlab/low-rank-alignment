@@ -458,9 +458,6 @@ def build_per_fold_baselines(
                 "Y_hat_full_train": Y_hat_train,
                 "Y_hat_full_test": Y_hat_test,
                 "beta_full_raw": W.astype(np.float32),
-                "best_alphas": to_numpy(best_alphas),
-                "target_mean": y_scaler.mean_.astype(np.float64),
-                "target_scale": y_scaler.scale_.astype(np.float64),
             }
         )
 

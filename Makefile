@@ -114,7 +114,7 @@ gcca:
 	mkdir -p logs
 	$(CMD) scripts/gcca/run_gcca.py --config $(GCCA_CONFIG) $(OVERRIDES)
 
-## Evaluate saved GCCA scores against the union of significant neural targets.
+## Evaluate saved GCCA scores and compare matched targets with existing RRR results.
 gcca-encoding:
 	mkdir -p logs
 	$(CMD) scripts/gcca/run_encoding.py --config $(GCCA_ENCODING_CONFIG) $(OVERRIDES)

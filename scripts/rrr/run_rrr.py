@@ -65,7 +65,6 @@ from tqdm import tqdm
 
 from src.utils import (
     load_embeddings,
-    build_XY_from_subjects,
 )
 from src.utils.tensor_utils import to_numpy
 from src.utils.correlation import (
@@ -90,7 +89,6 @@ from src.utils.srrr import (
     save_rrr_factors,
     save_rrr_result,
 )
-from src.utils.analysis import build_sig_mask_flat_for_elecs
 from src.utils.rrr_utils import (
     add_sig_nonsig_corrs,
     make_sig_split_df,
@@ -100,6 +98,7 @@ from src.utils.subspace_utils import (
 )
 from src.utils.subspace_compare import extrinsic_mean_from_unit_dir
 from src.utils.alpha_grids import resolve_ridge_alphas, save_alpha_diagnostics
+from src.utils.decomposition import _get_decomposition_inputs
 from himalaya.scoring import correlation_score, r2_score
 
 # ---------------------------------------------------------------------------
@@ -1428,7 +1427,7 @@ def _run_pca_for_unit(
 # ---------------------------------------------------------------------------
 
 
-def _get_decomposition_inputs(
+def _build_rrr_decomposition_inputs(
     subject_ids,
     output_dir,
     sig_electrodes,
@@ -1442,51 +1441,25 @@ def _get_decomposition_inputs(
     alpha_cache_dir: str | None = None,
     shared_selection_metadata: "dict | None" = None,
 ):
-    enc_results = load_encoding_results(
-        os.path.join(
-            output_dir, "subjects", f"sub_{subject_ids[0]}", "encoding_results.joblib"
-        )
-    )
-    test_idxs = enc_results["test_idxs"]
-
-    subs_with_sig = [
-        s for s in subject_ids if s in sig_electrodes and sig_electrodes[s]
-    ]
-    if not subs_with_sig:
-        print("  No significant electrodes found; skipping.")
-        return None
-
-    X_raw, Y_full, _, _ = build_XY_from_subjects(
+    prepared = _get_decomposition_inputs(
         subject_ids,
-        encoding_config,
+        output_dir,
         sig_electrodes,
+        encoding_config,
         embeddings,
-        valid_rows=word_in_glove,
-        shared_selection=(
-            shared_selection_metadata["epoch_selection"]
-            if shared_selection_metadata is not None
-            else None
-        ),
+        compute_sig_nonsig=compute_sig_nonsig,
+        sig_dir=sig_dir,
+        word_in_glove=word_in_glove,
+        shared_selection_metadata=shared_selection_metadata,
     )
-    print(f"  X: {X_raw.shape}, Y: {Y_full.shape}")
-    if shared_selection_metadata is not None:
-        expected_n = len(shared_selection_metadata["analysis_selection"])
-        if X_raw.shape[0] != expected_n:
-            raise ValueError(
-                "Loaded RRR rows do not match saved shared word-selection metadata: "
-                f"X has {X_raw.shape[0]} rows, metadata has {expected_n} analysis rows."
-            )
-    max_test_idx = max(int(np.max(idx)) for idx in test_idxs if len(idx))
-    if max_test_idx >= X_raw.shape[0]:
-        raise ValueError(
-            "Saved fold indices are incompatible with loaded RRR rows: "
-            f"max test index {max_test_idx} for {X_raw.shape[0]} rows."
-        )
-
+    if prepared is None:
+        return None
+    X_raw = next(iter(prepared.embeddings.values()))
+    print(f"  X: {X_raw.shape}, Y: {prepared.targets.shape}")
     per_fold_baselines = build_per_fold_baselines(
         X_raw,
-        Y_full,
-        test_idxs,
+        prepared.targets,
+        prepared.test_idxs,
         alphas=(
             np.array(encoding_config.ridge_alphas, dtype=float)
             if encoding_config.ridge_alphas is not None
@@ -1507,16 +1480,7 @@ def _get_decomposition_inputs(
         folds_to_build=folds_to_build,
     )
 
-    sig_mask_flat = None
-    if compute_sig_nonsig:
-        sig_mask_flat = build_sig_mask_flat_for_elecs(
-            output_dir,
-            {s: sig_electrodes[s] for s in subs_with_sig},
-            enc_results,
-            sig_dir=sig_dir,
-        )
-
-    return X_raw, per_fold_baselines, test_idxs, sig_mask_flat
+    return X_raw, per_fold_baselines, prepared.test_idxs, prepared.sig_mask_flat
 
 
 # ---------------------------------------------------------------------------
@@ -1547,7 +1511,7 @@ def _run_cross_subject_rrr(
         )
         return
 
-    results = _get_decomposition_inputs(
+    results = _build_rrr_decomposition_inputs(
         subject_ids,
         output_dir,
         sig_electrodes,
@@ -1613,7 +1577,7 @@ def _run_per_subject_rrr(
             print("  Subject RRR/PCA outputs complete; skipping data/regression setup.")
             continue
 
-        results = _get_decomposition_inputs(
+        results = _build_rrr_decomposition_inputs(
             [sub_id],
             output_dir,
             {sub_id: sub_sig_elecs},
@@ -1697,7 +1661,7 @@ def _run_per_region_rrr(
             print("  Region RRR/PCA outputs complete; skipping data/regression setup.")
             continue
 
-        results = _get_decomposition_inputs(
+        results = _build_rrr_decomposition_inputs(
             subs_in_region,
             output_dir,
             per_subject_region_elecs,
@@ -1916,7 +1880,7 @@ def _run_leave_one_subject_out_rrr(
         train_resume_plan = _rrr_output_resume_plan(train_dir, config, n_folds)
         train_folds_to_build = train_resume_plan["folds_to_build"]
         if train_folds_to_build:
-            results_train = _get_decomposition_inputs(
+            results_train = _build_rrr_decomposition_inputs(
                 train_subs,
                 output_dir,
                 train_sig_elecs,
@@ -1974,7 +1938,7 @@ def _run_leave_one_subject_out_rrr(
             continue
 
         print(f"  Building held-out subject data...")
-        results_held = _get_decomposition_inputs(
+        results_held = _build_rrr_decomposition_inputs(
             [held_out_sub],
             output_dir,
             {held_out_sub: held_sig_elecs},
@@ -2249,7 +2213,7 @@ def _run_cross_dataset_rrr(
         )
         return
 
-    results = _get_decomposition_inputs(
+    results = _build_rrr_decomposition_inputs(
         subject_ids,
         output_dir,
         sig_electrodes,

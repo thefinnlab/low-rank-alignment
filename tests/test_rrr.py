@@ -674,7 +674,7 @@ class TestRunRRRForUnit:
 
         assert calls["n"] == len(test_idxs)
 
-    def test_decomposition_inputs_accept_slim_encoding_results(
+    def test_decomposition_inputs_accept_multiple_embeddings_and_slim_results(
         self, tmp_path, small_data, monkeypatch
     ):
         import run_rrr
@@ -715,9 +715,9 @@ class TestRunRRRForUnit:
         ):
             assert subject_ids == [1]
             assert sig_electrodes == {1: ["E1"]}
-            return X, Y, np.arange(n), ["E1"]
+            return X, Y, np.arange(n), [["E1"]]
 
-        monkeypatch.setattr(run_rrr, "build_XY_from_subjects", fake_build_xy)
+        monkeypatch.setattr("src.utils.decomposition.build_XY_from_subjects", fake_build_xy)
 
         enc = EncodingConfig(ridge_alphas=[1.0, 10.0], ridge_cv_folds=2)
         result = run_rrr._get_decomposition_inputs(
@@ -725,20 +725,15 @@ class TestRunRRRForUnit:
             str(output_dir),
             {1: ["E1"]},
             enc,
-            embeddings=X,
-            word_df=None,
-            folds_to_build={0, 1},
+            embeddings={"first": X, "second": X + 1},
         )
 
-        X_raw, per_fold_baselines, loaded_test_idxs, sig_mask_flat = result
-        np.testing.assert_array_equal(X_raw, X)
-        assert sig_mask_flat is None
-        assert len(per_fold_baselines) == 2
-        for baseline, expected_test_idx in zip(per_fold_baselines, test_idxs):
-            np.testing.assert_array_equal(baseline["test_idx"], expected_test_idx)
-            assert baseline["Y_train"].shape[1] == Y.shape[1]
-            assert baseline["beta_full_raw"].shape == (X.shape[1], Y.shape[1])
-        for got, expected in zip(loaded_test_idxs, test_idxs):
+        np.testing.assert_array_equal(result.embeddings["first"], X)
+        np.testing.assert_array_equal(result.embeddings["second"], X + 1)
+        np.testing.assert_array_equal(result.targets, Y)
+        assert result.sig_mask_flat is None
+        assert result.target_manifest[["subject", "electrode"]].drop_duplicates().values.tolist() == [[1, "E1"]]
+        for got, expected in zip(result.test_idxs, test_idxs):
             np.testing.assert_array_equal(got, expected)
 
     def test_shared_selection_metadata_requires_matching_subjects(self, tmp_path):

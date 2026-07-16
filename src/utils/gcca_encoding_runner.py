@@ -1,4 +1,4 @@
-"""End-to-end downstream encoding evaluation for a saved GCCA directory."""
+"""Five-stage downstream neural encoding evaluation for saved GCCA artifacts."""
 
 from __future__ import annotations
 
@@ -13,167 +13,474 @@ import torch
 from sklearn.preprocessing import StandardScaler
 
 from src.core.config import GCCAEncodingConfig, SubspaceComparisonRun
+from src.core.registry import resolve_dataset_context
+from src.utils.alpha_grids import resolve_ridge_alphas, save_alpha_diagnostics
 from src.utils.correlation import fisher_z_mean
-from src.utils.data_loaders import build_XY_from_subjects, load_sig_electrodes
-from src.utils.embeddings import load_embeddings
-from src.utils.encoding import build_per_fold_baselines
-from src.utils.gcca_encoding import (
-    ENCODING_SCHEMA_VERSION, atomic_replace_directory, baseline_fingerprint,
-    component_weights, deduplicate_embedding_runs, paired_improvements,
-    reconstruct_view_scores,
+from src.utils.data_loaders import load_sig_electrodes
+from src.utils.decomposition import (
+    _get_decomposition_inputs,
+    build_target_manifest,
 )
-from src.utils.subspace_io import load_base_comparison_data, load_peer_embeddings_on_base_rows, resolve_subspace_run, sanitize_name
+from src.utils.embeddings import get_glove_embeddings, load_embeddings
+from src.utils.encoding import load_encoding_results
+from src.utils.gcca_encoding import (
+    ENCODING_SCHEMA_VERSION,
+    atomic_replace_directory,
+    get_gcca_embeddings,
+)
+from src.utils.subspace_io import (
+    load_shared_selection_metadata,
+    resolve_subspace_run,
+    sanitize_name,
+)
 from src.utils.subspace_utils import evaluate_input_space
 
 
-def _json(path: Path):
-    with path.open() as handle: return json.load(handle)
+def _read_json(path: Path):
+    with path.open() as handle:
+        return json.load(handle)
 
 
 def _resolved_runs(metadata):
-    return {name: resolve_subspace_run(SubspaceComparisonRun(
-        name=name, rrr_config=run["rrr_config"], unit_dir=run["unit_dir"], kind=run.get("kind")
-    )) for name, run in metadata["runs"].items()}
+    return {
+        name: resolve_subspace_run(
+            SubspaceComparisonRun(
+                name=name,
+                rrr_config=run["rrr_config"],
+                unit_dir=run["unit_dir"],
+                kind=run.get("kind"),
+            )
+        )
+        for name, run in metadata["runs"].items()
+    }
 
 
-def _load_problem(gcca_dir: Path, metadata):
-    resolved = _resolved_runs(metadata); anchor = resolved[metadata["anchor"]]
-    base = load_base_comparison_data(anchor)
+# Stage 1
+def get_union_sig_elecs(metadata, resolved):
+    """Union significant electrodes across anchor-dataset GCCA member runs."""
+    anchor = resolved[metadata["anchor"]]
     anchor_key = tuple(anchor.dataset_key)
-    union = {subject: [] for subject in anchor.subject_ids}; provenance = []
-    for name, run in resolved.items():
-        if tuple(run.dataset_key) != anchor_key: continue
-        sig, frame = load_sig_electrodes(str(run.output_dir), run.subject_ids, sig_dir=str(run.sig_dir),
-            dataset=run.config.encoding.dataset, per_dataset_config=run.config.encoding.per_dataset_config,
-            data_root=run.config.encoding.data_root)
-        provenance.append(str(Path(run.sig_dir) / "all_subject_sig.csv"))
-        for subject, electrodes in sig.items():
-            if subject in union:
-                union[subject].extend(e for e in electrodes if e not in union[subject])
-    union = {subject: values for subject, values in union.items() if values}
+    union = {subject: [] for subject in anchor.subject_ids}
+    sources = []
+    comparison_runs = {}
+    for name in metadata["views"]:
+        run = resolved[name]
+        if tuple(run.dataset_key) != anchor_key:
+            continue
+        significant, _ = load_sig_electrodes(
+            str(run.output_dir),
+            run.subject_ids,
+            sig_dir=str(run.sig_dir),
+            dataset=run.config.encoding.dataset,
+            per_dataset_config=run.config.encoding.per_dataset_config,
+            data_root=run.config.encoding.data_root,
+        )
+        comparison_runs[name] = run
+        sources.append(str(Path(run.sig_dir) / "all_subject_sig.csv"))
+        for subject in anchor.subject_ids:
+            for electrode in significant.get(subject, []):
+                if electrode not in union[subject]:
+                    union[subject].append(electrode)
+    union = {subject: electrodes for subject, electrodes in union.items() if electrodes}
+    if not union:
+        raise ValueError("No significant electrodes were found for the GCCA anchor dataset")
+    return anchor, union, comparison_runs, sources
+
+
+# Stage 2
+def load_gcca_model_embeddings(metadata, resolved, anchor):
+    """Load every configured model over the anchor transcript and dataset context."""
+    anchor_enc = anchor.config.encoding
+    context = resolve_dataset_context(
+        dataset=anchor_enc.dataset,
+        subject_ids=anchor.subject_ids,
+        per_dataset_config=anchor_enc.per_dataset_config,
+        data_root=anchor_enc.data_root,
+    )
+    loaded = {}
+    word_df = None
+    cache = {}
+    for name in metadata["views"]:
+        run_enc = resolved[name].config.encoding
+        if int(run_enc.offset) != int(anchor_enc.offset):
+            raise ValueError(
+                f"GCCA view {name} uses offset {run_enc.offset}; anchor uses {anchor_enc.offset}"
+            )
+        identity = json.dumps(
+            {"model": run_enc.model, "per_model_config": run_enc.per_model_config},
+            sort_keys=True,
+        )
+        if identity not in cache:
+            cache[identity] = load_embeddings(
+                anchor_enc.data_root,
+                run_enc.model,
+                dataset=anchor_enc.dataset,
+                per_dataset_config=anchor_enc.per_dataset_config,
+                dataset_context=context,
+                **run_enc.per_model_config,
+            )
+        values, words = cache[identity]
+        if word_df is None:
+            word_df = words
+        elif len(words) != len(word_df):
+            raise ValueError(f"Embedding transcript length differs for GCCA view {name}")
+        loaded[name] = np.asarray(values)
+    return loaded, word_df
+
+
+# Stage 3
+def build_gcca_decomposition_inputs(anchor, union_sig_elecs, embeddings, word_df):
+    """Build one aligned multi-model input/target problem using the RRR helper."""
     enc = anchor.config.encoding
-    raw_anchor, _ = load_embeddings(enc.data_root, enc.model, dataset=enc.dataset,
-        per_dataset_config=enc.per_dataset_config, **enc.per_model_config)
-    X, Y, selection, electrode_groups = build_XY_from_subjects(anchor.subject_ids, enc, union, raw_anchor)
-    if not np.array_equal(np.asarray(selection), np.asarray(base.selection)) or X.shape[0] != base.word_count:
-        raise ValueError("Target-union rows do not match saved GCCA anchor rows")
-    n_per_electrode = Y.shape[1] // sum(map(len, electrode_groups))
-    targets = []
-    for subject, electrodes in zip([s for s in anchor.subject_ids if s in union], electrode_groups):
-        for electrode in electrodes:
-            for lag in range(n_per_electrode): targets.append({"subject": int(subject), "electrode": electrode, "lag_index": lag})
-    return resolved, anchor, base, np.asarray(Y), pd.DataFrame(targets), provenance
+    valid_rows = None
+    if enc.limit_to_glove or enc.model == "glove":
+        valid_rows = get_glove_embeddings(enc.data_root, word_df, **enc.per_model_config)[1][
+            "in_glove"
+        ]
+    shared = (
+        load_shared_selection_metadata(anchor.sig_dir, anchor.subject_ids)
+        if enc.shared_word_selection
+        else None
+    )
+    return _get_decomposition_inputs(
+        anchor.subject_ids,
+        str(anchor.output_dir),
+        union_sig_elecs,
+        enc,
+        embeddings,
+        word_in_glove=valid_rows,
+        shared_selection_metadata=shared,
+    )
 
 
-def _policy(config):
-    return {key: value for key, value in asdict(config).items() if key not in {
-        "gcca_dir", "run_name", "refresh", "averaging_method", "calibrated_scores", "shared_dimensions"
-    }}
-
-
-def _baseline_cache_complete(path: Path, identities, n_folds):
-    if not (path / "complete.json").exists(): return False
-    return all((path / f"fold_{fold}" / "targets.npz").exists() and
-               (path / f"fold_{fold}" / f"baseline_{identity}.npz").exists()
-               for identity in identities for fold in range(n_folds))
-
-
-def _build_baselines(path, *, unique, resolved, anchor, base, Y, targets, config, fingerprint, provenance):
-    anchor_enc = anchor.config.encoding; rows = []
-    for identity, run_meta in unique.items():
-        view = next(name for name in resolved if deduplicate_embedding_runs({name: run_meta})[1][name] == identity)
-        run = resolved[view]
-        X = base.X_base if view == anchor.name else load_peer_embeddings_on_base_rows(anchor, run, base)
-        folds = build_per_fold_baselines(X, Y, base.test_idxs,
-            alphas=np.asarray(config.ridge_alphas) if config.ridge_alphas is not None else None,
-            ridge_cv_folds=config.ridge_cv_folds, ridge_solver_params=config.ridge_solver_params,
-            ridge_y_in_cpu=config.ridge_y_in_cpu, ridge_force_cpu=config.ridge_force_cpu,
-            alpha_policy=config.alpha_grid)
-        for fold, item in enumerate(folds):
-            from himalaya.scoring import correlation_score, r2_score
-            corr = np.asarray(correlation_score(item["Y_test"], item["Y_hat_full_test"])); r2 = np.asarray(r2_score(item["Y_test"], item["Y_hat_full_test"]))
-            folder = path / f"fold_{fold}"; folder.mkdir(parents=True, exist_ok=True)
-            target_path = folder / "targets.npz"
-            if not target_path.exists():
-                np.savez_compressed(target_path, Y_test=item["Y_test"], test_idx=item["test_idx"],
-                    target_mean=item["target_mean"], target_scale=item["target_scale"])
-            np.savez_compressed(folder / f"baseline_{identity}.npz", predictions=item["Y_hat_full_test"],
-                corr_per_target=corr, r2_per_target=r2, selected_alphas=item["best_alphas"])
-            rows.append({"identity": identity, "fold": fold, "corr": float(fisher_z_mean(corr)), "r2": float(np.nanmean(r2))})
-    pd.DataFrame(rows).to_csv(path / "controlled_baselines.csv", index=False)
-    targets.to_csv(path / "target_manifest.csv", index=False)
-    np.savez_compressed(path / "folds.npz", **{f"test_{i}": x for i, x in enumerate(base.test_idxs)})
-    (path / "provenance.json").write_text(json.dumps({"fingerprint": fingerprint, "sources": provenance, "policy": _policy(config)}, indent=2))
-    (path / "complete.json").write_text(json.dumps({"schema": ENCODING_SCHEMA_VERSION, "completed_at": datetime.now(timezone.utc).isoformat()}))
+def _load_artifacts(gcca_dir, metadata, fold, dimension):
+    artifacts = {}
+    for view in metadata["views"]:
+        path = (
+            gcca_dir
+            / f"fold_{fold}"
+            / f"shared_dim_{dimension}"
+            / f"view_{sanitize_name(view)}.npz"
+        )
+        if not path.exists():
+            raise FileNotFoundError(f"Missing GCCA view artifact: {path}")
+        with np.load(path) as saved:
+            artifacts[view] = {key: saved[key] for key in saved.files}
+    return artifacts
 
 
 def _reliability(gcca_dir, fold, dimension, views, method):
-    if method in {"contribution", "equal"}: return None, None
+    if method in {"contribution", "equal"}:
+        return None, None
     frame = pd.read_csv(gcca_dir / "inner_reliability.csv")
-    frame = frame[(frame.outer_fold == fold) & (frame.shared_dimension == dimension)]
-    agree = frame.groupby(["view", "final_component"]).loo_corr.mean().unstack().reindex(views).to_numpy()
-    error = frame.groupby(["view", "final_component"]).validation_calibration_mse.mean().unstack().reindex(views).to_numpy()
-    return agree, error
+    frame = frame[
+        (frame.outer_fold == fold) & (frame.shared_dimension == dimension)
+    ]
+    agreement = (
+        frame.groupby(["view", "final_component"])
+        .loo_corr.mean()
+        .unstack()
+        .reindex(views)
+        .to_numpy()
+    )
+    error = (
+        frame.groupby(["view", "final_component"])
+        .validation_calibration_mse.mean()
+        .unstack()
+        .reindex(views)
+        .to_numpy()
+    )
+    return agreement, error
 
 
-def _build_run(path, *, gcca_dir, metadata, base, cache, identities, view_map, config):
+def _summary(frame):
+    rows = []
+    for dimension, group in frame.groupby("k", sort=True):
+        rows.append(
+            {
+                "k": int(dimension),
+                "gcca_corr": float(fisher_z_mean(group.gcca_corr.to_numpy())),
+                "gcca_r2": float(np.nanmean(group.gcca_r2)),
+                "effective_rank": float(np.nanmean(group.effective_rank)),
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+# Stage 4
+def evaluate_gcca_encoders(path, gcca_dir, metadata, prepared, config):
+    """Construct fold/rank GCCA coordinates and fit ridge neural encoders."""
     dimensions = config.shared_dimensions or metadata["shared_dimensions"]
     unavailable = sorted(set(dimensions) - set(metadata["shared_dimensions"]))
-    if unavailable: raise ValueError(f"Unavailable GCCA shared dimensions: {unavailable}")
-    grid, weight_rows, paired = [], [], []
-    for fold, (train, test) in enumerate(zip(base.train_idxs, base.test_idxs)):
-        baseline_arrays = {identity: np.load(cache / f"fold_{fold}" / f"baseline_{identity}.npz") for identity in identities}
-        Y_train = StandardScaler().fit_transform(np.zeros((1, 1))) if False else None
-        # Cached Y_test uses the authoritative fold-local target scaling. Recreate train scaling below from raw targets supplied in closure.
-        for k in dimensions:
-            scores, contributions, views = [], [], list(metadata["views"])
-            for view in views:
-                with np.load(gcca_dir / f"fold_{fold}" / f"shared_dim_{k}" / f"view_{sanitize_name(view)}.npz") as artifact:
-                    scores.append(reconstruct_view_scores(artifact, _build_run.embeddings[view], calibrated=config.calibrated_scores))
-                    contributions.append(np.asarray(artifact["contribution_share"]))
-            agreement, error = _reliability(gcca_dir, fold, k, views, config.averaging_method)
-            weights = component_weights(config.averaging_method, np.stack(contributions), inner_agreement=agreement, calibration_error=error)
-            combined = np.sum(np.stack(scores) * weights[:, None, :], axis=0)
-            scaler = StandardScaler().fit(_build_run.Y[train]); Y_train = scaler.transform(_build_run.Y[train]).astype("float32"); Y_test = scaler.transform(_build_run.Y[test]).astype("float32")
-            result = evaluate_input_space(combined[train], combined[test], Y_train, Y_test,
-                device="cuda" if torch.cuda.is_available() else "cpu", alphas=np.asarray(config.ridge_alphas) if config.ridge_alphas is not None else None,
-                ridge_cv_folds=config.ridge_cv_folds, standardize=config.standardize_inputs,
-                ridge_solver_params=config.ridge_solver_params, ridge_y_in_cpu=config.ridge_y_in_cpu,
-                ridge_force_cpu=config.ridge_force_cpu, return_alphas=True, subspace_name="nr")
-            baseline_corrs = {identity: np.asarray(artifact["corr_per_target"]) for identity, artifact in baseline_arrays.items()}
-            metrics = {key: value for key, value in result.items() if key != "nr_Y_hat"}
-            for identity, corr in baseline_corrs.items(): metrics[f"delta_{identity}_corr_per_target"] = result["nr_corr_per_target"] - corr
-            best = np.nanmax(np.stack(list(baseline_corrs.values())), axis=0); metrics["delta_best_baseline_corr_per_target"] = result["nr_corr_per_target"] - best
-            folder = path / f"k{k}" / f"fold_{fold}"; folder.mkdir(parents=True, exist_ok=True); np.savez_compressed(folder / "metrics.npz", **metrics)
-            row = {"fold": fold, "k": k, "effective_rank": int(np.linalg.matrix_rank(combined[train])), "nr_corr": result["nr_corr"], "nr_r2": result["nr_r2"]}
-            for identity, artifact in baseline_arrays.items(): row[f"baseline_{identity}_corr"] = float(fisher_z_mean(artifact["corr_per_target"])); row[f"baseline_{identity}_r2"] = float(np.nanmean(artifact["r2_per_target"]))
-            anchor_id = view_map[metadata["anchor"]]; row["full_corr"] = row[f"baseline_{anchor_id}_corr"]; row["full_r2"] = row[f"baseline_{anchor_id}_r2"]
-            grid.append(row); summary = paired_improvements(result["nr_corr_per_target"], baseline_corrs); summary.insert(0, "fold", fold); summary.insert(1, "k", k); paired.append(summary)
-            for vi, view in enumerate(views):
-                for component in range(k): weight_rows.append({"fold": fold, "k": k, "component": component + 1, "view": view, "weight": weights[vi, component], "method": config.averaging_method})
-    frame = pd.DataFrame(grid); frame.to_csv(path / "grid_results.csv", index=False); frame.groupby("k", as_index=False).mean(numeric_only=True).to_csv(path / "summary.csv", index=False)
-    pd.DataFrame(weight_rows).to_csv(path / "weights.csv", index=False); pd.concat(paired).to_csv(path / "paired_improvements.csv", index=False)
+    if unavailable:
+        raise ValueError(f"Unavailable GCCA shared dimensions: {unavailable}")
+    rows = []
+    weight_rows = []
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    all_rows = np.arange(prepared.targets.shape[0], dtype=int)
+    for fold, test_idx in enumerate(prepared.test_idxs):
+        shared_path = gcca_dir / f"fold_{fold}" / f"shared_dim_{dimensions[0]}" / "shared.npz"
+        with np.load(shared_path) as shared:
+            train_idx = np.asarray(shared["outer_train_idxs"], dtype=int)
+            saved_test = np.asarray(shared["outer_test_idxs"], dtype=int)
+        if not np.array_equal(saved_test, test_idx):
+            raise ValueError(f"GCCA fold {fold} test rows differ from anchor encoding folds")
+        if not np.array_equal(np.sort(np.concatenate([train_idx, test_idx])), all_rows):
+            raise ValueError(f"GCCA fold {fold} does not partition all analysis rows")
+        target_scaler = StandardScaler().fit(prepared.targets[train_idx])
+        Y_train = target_scaler.transform(prepared.targets[train_idx]).astype("float32")
+        Y_test = target_scaler.transform(prepared.targets[test_idx]).astype("float32")
+        for dimension in dimensions:
+            artifacts = _load_artifacts(gcca_dir, metadata, fold, dimension)
+            agreement, error = _reliability(
+                gcca_dir, fold, dimension, list(metadata["views"]), config.averaging_method
+            )
+            gcca_embeddings, weights = get_gcca_embeddings(
+                artifacts,
+                prepared.embeddings,
+                averaging_method=config.averaging_method,
+                inner_agreement=agreement,
+                calibration_error=error,
+            )
+            rank_dir = path / f"k{dimension}" / f"fold_{fold}"
+            alpha_dir = rank_dir / "gcca_alpha"
+            context = {
+                "script": "gcca_encoding",
+                "role": "gcca",
+                "fold": int(fold),
+                "k": int(dimension),
+                "n_features": int(gcca_embeddings.shape[1]),
+                "standardize": bool(config.standardize_inputs),
+            }
+            alphas = resolve_ridge_alphas(
+                config.ridge_alphas,
+                gcca_embeddings[train_idx],
+                standardize=config.standardize_inputs,
+                context=context,
+                cache_dir=str(alpha_dir),
+                policy=config.alpha_grid,
+            )
+            result = evaluate_input_space(
+                gcca_embeddings[train_idx],
+                gcca_embeddings[test_idx],
+                Y_train,
+                Y_test,
+                device=device,
+                alphas=alphas,
+                ridge_cv_folds=config.ridge_cv_folds,
+                standardize=config.standardize_inputs,
+                ridge_solver_params=config.ridge_solver_params,
+                ridge_y_in_cpu=config.ridge_y_in_cpu,
+                ridge_force_cpu=config.ridge_force_cpu,
+                return_alphas=True,
+                subspace_name="gcca",
+            )
+            rank_dir.mkdir(parents=True, exist_ok=True)
+            metrics = {key: value for key, value in result.items() if key != "gcca_Y_hat"}
+            np.savez_compressed(rank_dir / "metrics.npz", **metrics)
+            save_alpha_diagnostics(
+                str(alpha_dir),
+                alphas,
+                best_alphas=result["gcca_best_alphas"],
+                context=context,
+                policy=config.alpha_grid,
+            )
+            rows.append(
+                {
+                    "fold": fold,
+                    "k": dimension,
+                    "effective_rank": int(np.linalg.matrix_rank(gcca_embeddings[train_idx])),
+                    "gcca_corr": result["gcca_corr"],
+                    "gcca_r2": result["gcca_r2"],
+                }
+            )
+            for view_index, view in enumerate(metadata["views"]):
+                for component in range(dimension):
+                    weight_rows.append(
+                        {
+                            "fold": fold,
+                            "k": dimension,
+                            "component": component + 1,
+                            "view": view,
+                            "weight": weights[view_index, component],
+                            "method": config.averaging_method,
+                        }
+                    )
+    grid = pd.DataFrame(rows)
+    grid.to_csv(path / "grid_results.csv", index=False)
+    _summary(grid).to_csv(path / "summary.csv", index=False)
+    pd.DataFrame(weight_rows).to_csv(path / "weights.csv", index=False)
+    return grid
+
+
+def _run_target_manifest(run):
+    enc = run.config.encoding
+    significant, _ = load_sig_electrodes(
+        str(run.output_dir),
+        run.subject_ids,
+        sig_dir=str(run.sig_dir),
+        dataset=enc.dataset,
+        per_dataset_config=enc.per_dataset_config,
+        data_root=enc.data_root,
+    )
+    first_subject = next(subject for subject in run.subject_ids if significant.get(subject))
+    saved = load_encoding_results(
+        str(run.output_dir / "subjects" / f"sub_{first_subject}" / "encoding_results.joblib")
+    )
+    groups = [significant[subject] for subject in run.subject_ids if significant.get(subject)]
+    return build_target_manifest(run.subject_ids, significant, groups, saved["lags"])
+
+
+def _manifest_index(frame):
+    keys = list(zip(frame.subject.astype(int), frame.electrode.astype(str), frame.lag_index.astype(int)))
+    if len(keys) != len(set(keys)):
+        raise ValueError("Target manifest contains duplicate (subject, electrode, lag) identities")
+    return {key: index for index, key in enumerate(keys)}, keys
+
+
+def _rank_from_dir(path):
+    try:
+        return int(path.name[1:])
+    except ValueError:
+        return None
+
+
+def _comparison_for_run(path, prepared, run_name, run, dimensions):
+    run_manifest = _run_target_manifest(run)
+    union_index, _ = _manifest_index(prepared.target_manifest)
+    _, run_keys = _manifest_index(run_manifest)
+    missing = [key for key in run_keys if key not in union_index]
+    if missing:
+        raise ValueError(
+            f"RRR run {run_name} has {len(missing)} targets absent from union_sig_elecs"
+        )
+    gcca_columns = np.asarray([union_index[key] for key in run_keys], dtype=int)
+    rows = []
+    for fold in range(len(prepared.test_idxs)):
+        for dimension in dimensions:
+            with np.load(path / f"k{dimension}" / f"fold_{fold}" / "metrics.npz") as saved:
+                values = np.asarray(saved["gcca_corr_per_target"])[gcca_columns]
+            rows.append(
+                {"run": run_name, "source": "GCCA", "fold": fold, "k": dimension,
+                 "corr": float(fisher_z_mean(values)), "n_targets": len(values)}
+            )
+        for rank_dir in sorted(run.unit_dir.glob("k*"), key=lambda item: _rank_from_dir(item) or -1):
+            rank = _rank_from_dir(rank_dir)
+            metrics_path = rank_dir / f"fold_{fold}" / "metrics.npz"
+            if rank is None or not metrics_path.exists():
+                continue
+            with np.load(metrics_path) as saved:
+                if "nr_corr_per_target" not in saved:
+                    continue
+                values = np.asarray(saved["nr_corr_per_target"])
+            if len(values) != len(run_manifest):
+                raise ValueError(
+                    f"RRR run {run_name} rank {rank} fold {fold} has {len(values)} "
+                    f"correlations for {len(run_manifest)} target identities"
+                )
+            rows.append(
+                {"run": run_name, "source": "RRR NR", "fold": fold, "k": rank,
+                 "corr": float(fisher_z_mean(values)), "n_targets": len(values)}
+            )
+    curves = pd.DataFrame(rows)
+    summary_rows = []
+    for (source, rank), group in curves.groupby(["source", "k"], sort=True):
+        summary_rows.append(
+            {"run": run_name, "source": source, "k": rank,
+             "corr": float(fisher_z_mean(group["corr"].to_numpy())),
+             "n_targets": int(group.n_targets.iloc[0])}
+        )
+    summary = pd.DataFrame(summary_rows)
+    gcca = summary[summary.source == "GCCA"][["k", "corr"]].rename(columns={"corr": "gcca_corr"})
+    rrr = summary[summary.source == "RRR NR"][["k", "corr"]].rename(columns={"corr": "rrr_nr_corr"})
+    deltas = gcca.merge(rrr, on="k", how="inner")
+    deltas.insert(0, "run", run_name)
+    deltas["gcca_minus_rrr"] = deltas.gcca_corr - deltas.rrr_nr_corr
+
     import matplotlib.pyplot as plt
-    fig, ax = plt.subplots(); grouped = frame.groupby("k").nr_corr.mean(); ax.plot(grouped.index, grouped.values, marker="o"); ax.set(xlabel="Shared dimension", ylabel="Correlation", title="GCCA encoding"); fig.savefig(path / "rank_analysis.png", dpi=150); plt.close(fig)
+    fig, ax = plt.subplots(figsize=(7, 4.5))
+    colors = {"GCCA": "#7c3aed", "RRR NR": "#3b82f6"}
+    for source in ("RRR NR", "GCCA"):
+        subset = curves[curves.source == source]
+        for _, fold_frame in subset.groupby("fold"):
+            ax.semilogx(fold_frame.k, fold_frame["corr"], color=colors[source], alpha=.2, linewidth=.8)
+        mean = summary[summary.source == source]
+        ax.semilogx(mean.k, mean["corr"], marker="o", color=colors[source], label=source)
+    ax.axhline(0, color="black", linewidth=.5, linestyle=":")
+    ax.set(xlabel="Rank k", ylabel="Correlation", title=f"GCCA vs RRR NR: {run_name}")
+    ax.legend()
+    fig.tight_layout()
+    fig.savefig(path / f"comparison_{sanitize_name(run_name)}.png", dpi=150)
+    plt.close(fig)
+    return curves, summary, deltas
+
+
+# Stage 5
+def write_results_and_comparisons(
+    path, gcca_dir, metadata, prepared, comparison_runs, config
+):
+    """Evaluate, serialize, and compare against existing RRR result artifacts."""
+    evaluate_gcca_encoders(path, gcca_dir, metadata, prepared, config)
+    prepared.target_manifest.to_csv(path / "target_manifest.csv", index=False)
+    np.savez_compressed(
+        path / "folds.npz",
+        **{f"test_{fold}": indices for fold, indices in enumerate(prepared.test_idxs)},
+    )
+    dimensions = config.shared_dimensions or metadata["shared_dimensions"]
+    curve_frames, summary_frames, delta_frames = [], [], []
+    for run_name, run in comparison_runs.items():
+        curves, summary, deltas = _comparison_for_run(
+            path, prepared, run_name, run, dimensions
+        )
+        curve_frames.append(curves)
+        summary_frames.append(summary)
+        delta_frames.append(deltas)
+    pd.concat(curve_frames, ignore_index=True).to_csv(path / "comparison_curves.csv", index=False)
+    pd.concat(summary_frames, ignore_index=True).to_csv(path / "comparison_summary.csv", index=False)
+    pd.concat(delta_frames, ignore_index=True).to_csv(path / "comparison_deltas.csv", index=False)
 
 
 def run_gcca_encoding(config: GCCAEncodingConfig) -> Path:
-    config.validate(); gcca_dir = Path(config.gcca_dir); metadata = _json(gcca_dir / "metadata.json")
-    if metadata.get("artifact_schema_version") != 1: raise ValueError("Incompatible GCCA artifact schema")
-    resolved, anchor, base, Y, targets, provenance = _load_problem(gcca_dir, metadata)
-    unique, view_map = deduplicate_embedding_runs(metadata["runs"])
-    fingerprint = baseline_fingerprint(target_manifest=targets, selection=base.selection, folds=base.test_idxs,
-        embeddings=unique, evaluation_policy=_policy(config), source_paths=[gcca_dir, *provenance])
-    cache = gcca_dir / "encoding" / "baselines" / fingerprint; output = gcca_dir / "encoding" / "runs" / config.run_name
-    if output.exists() and not config.refresh: raise FileExistsError(f"Encoding run exists: {output}; set refresh=true to replace it")
-    if config.refresh:
-        atomic_replace_directory(cache, lambda path: _build_baselines(path, unique=unique, resolved=resolved, anchor=anchor, base=base, Y=Y, targets=targets, config=config, fingerprint=fingerprint, provenance=provenance))
-    elif not _baseline_cache_complete(cache, unique, len(base.test_idxs)):
-        raise FileNotFoundError(f"Compatible baseline cache is missing or stale at {cache}. Re-run with refresh=true to create it.")
-    embeddings = {name: (base.X_base if name == anchor.name else load_peer_embeddings_on_base_rows(anchor, run, base)) for name, run in resolved.items()}
-    _build_run.embeddings, _build_run.Y = embeddings, Y
+    config.validate()
+    gcca_dir = Path(config.gcca_dir)
+    metadata = _read_json(gcca_dir / "metadata.json")
+    if metadata.get("artifact_schema_version") != 1:
+        raise ValueError("Incompatible GCCA artifact schema")
+    output = gcca_dir / "encoding" / "runs" / config.run_name
+    if output.exists() and not config.refresh:
+        raise FileExistsError(
+            f"GCCA encoding run exists: {output}; set refresh=true to replace it"
+        )
+    resolved = _resolved_runs(metadata)
+    anchor, union, comparison_runs, sources = get_union_sig_elecs(metadata, resolved)
+    embeddings, word_df = load_gcca_model_embeddings(metadata, resolved, anchor)
+    prepared = build_gcca_decomposition_inputs(anchor, union, embeddings, word_df)
+    if prepared is None:
+        raise ValueError("The GCCA anchor dataset produced no neural targets")
+    if prepared.targets.shape[0] != int(metadata["word_count"]):
+        raise ValueError(
+            f"Prepared {prepared.targets.shape[0]} words; GCCA metadata expects {metadata['word_count']}"
+        )
+
     def build(path):
-        _build_run(path, gcca_dir=gcca_dir, metadata=metadata, base=base, cache=cache, identities=unique, view_map=view_map, config=config)
-        (path / "metadata.json").write_text(json.dumps({"schema": ENCODING_SCHEMA_VERSION, "source_gcca_schema": metadata["artifact_schema_version"], "baseline_fingerprint": fingerprint, "baseline_path": str(cache), "target_union_sources": provenance, "config": asdict(config)}, indent=2))
+        write_results_and_comparisons(
+            path, gcca_dir, metadata, prepared, comparison_runs, config
+        )
+        (path / "metadata.json").write_text(
+            json.dumps(
+                {
+                    "schema": ENCODING_SCHEMA_VERSION,
+                    "source_gcca_schema": metadata["artifact_schema_version"],
+                    "created_at": datetime.now(timezone.utc).isoformat(),
+                    "gcca_dir": str(gcca_dir.resolve()),
+                    "anchor": metadata["anchor"],
+                    "comparison_runs": list(comparison_runs),
+                    "target_union_sources": sources,
+                    "config": asdict(config),
+                },
+                indent=2,
+            )
+        )
+
     atomic_replace_directory(output, build)
     return output

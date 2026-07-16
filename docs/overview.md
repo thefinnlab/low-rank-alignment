@@ -10,7 +10,7 @@ The retained pipeline has three main analysis entrypoints:
 2. **Encoding model training** (`make train`) — trains ridge regression encoding models on significant electrodes. New `encoding_results.joblib` files are intentionally slim: they keep correlations, fold indices, target scalers, electrode names, run metadata, optional shared word-selection provenance, and optional arbitrary-baseline correlations, while avoiding fitted model and coefficient payloads.
 3. **RRR analysis** (`make rrr`) — fits raw-input reduced-rank regression from embeddings to neural targets, sweeps rank-k projections, and compares rank-k neural-relevance ridge predictions against fresh full-ridge fold baselines. The retained RRR script can also reuse shared word selections saved by significance/encoding runs, run a PCA subspace baseline when `RRRConfig.run_pca_baseline` is enabled, evaluate a `cross_dataset` mode from rank-specific source-run averaged RRR/PCA subspaces, plus an optional circular-shift null-augmented rank check when `RRRConfig.run_null_augmented` is enabled. RRR and PCA baselines save fold-level `A.npy` subspace factors for downstream comparison.
 
-Downstream pairwise subspace reproducibility analysis is available through `scripts/rrr/compare_subspaces.py`, which computes ordered CCA/RSA comparisons over configured saved RRR/PCA unit directories and writes reusable CSV/NPZ summaries plus quick-look plots under each base unit directory. Config-driven partial-support MAXVAR GCCA is available through `scripts/gcca/run_gcca.py`. It uses an explicitly configured anchor and independently ranked views, selects component-specific support and ridge values within the anchor folds, and saves calibrated per-view ambient maps, word-level scores, reliability sufficient statistics, and fold-stable axis/block diagnostics under a dataset-scoped directory. `scripts/gcca/run_encoding.py` reconstructs those fold-specific scores, contribution-weights them by default, and evaluates ridge encodings against a union of anchor-dataset significant targets while reusing independently fingerprinted raw-embedding baseline caches. The companion comparison notebook provides the interactive component explorer.
+Downstream pairwise subspace reproducibility analysis is available through `scripts/rrr/compare_subspaces.py`, which computes ordered CCA/RSA comparisons over configured saved RRR/PCA unit directories and writes reusable CSV/NPZ summaries plus quick-look plots under each base unit directory. Config-driven partial-support MAXVAR GCCA is available through `scripts/gcca/run_gcca.py`. It uses an explicitly configured anchor and independently ranked views, selects component-specific support and ridge values within the anchor folds, and saves calibrated per-view ambient maps, word-level scores, reliability sufficient statistics, and fold-stable axis/block diagnostics under a dataset-scoped directory. `scripts/gcca/run_encoding.py` evaluates calibrated fold-specific GCCA embeddings against the union of significant electrodes from anchor-dataset member runs. It does not refit raw-embedding baselines; instead it loads existing RRR per-target results, matches `(subject, electrode, lag)` identities, and writes direct correlation-versus-rank comparisons. The companion comparison notebook provides the interactive component explorer.
 
 The Makefile also provides batch targets for releasing multiple config runs:
 `make generate-embeddings-batch`, `make sig-batch`, and `make rrr-batch`. Random-init embedding runs can use `make generate-random-embeddings`, which wraps `scripts/utilities/generate_random_embeddings.py`.
@@ -48,7 +48,7 @@ Downstream configs can store list-valued `encoding.per_model_config.layer` entri
 | `configs/rrr/` | RRR configs, including optional embedded PCA baseline settings |
 | `configs/rrr/compare_subspaces.yml` | Example config for ordered pairwise CCA/RSA comparisons over saved RRR/PCA subspace factors |
 | `configs/gcca/maxvar_gcca.yml` | Example anchor/view configuration for partial-support MAXVAR GCCA and downstream score artifacts |
-| `configs/gcca/encoding.yml` | Contribution-weighted downstream GCCA encoding and reusable-baseline configuration |
+| `configs/gcca/encoding.yml` | Downstream calibrated GCCA encoding and saved-RRR comparison configuration |
 | `configs/embeddings/` | HuggingFace and random-init embedding generation configs |
 | `configs/precompute_epochs/` | Epoch-cache precompute configs |
 | `configs/brain_treebank/` | Brain Treebank scoped embedding, epoch, significance, training, and RRR configs |
@@ -62,7 +62,7 @@ Downstream configs can store list-valued `encoding.per_model_config.layer` entri
 | `scripts/rrr/run_rrr.py` | Raw-input RRR rank sweep with fresh full-ridge fold baselines and optional PCA baseline via `run_pca_baseline`, and cross-dataset evaluation from averaged source subspaces |
 | `scripts/rrr/compare_subspaces.py` | Pairwise saved-subspace reproducibility analysis; computes ordered CCA/RSA over configured RRR/PCA `A.npy` factors and saves tables, component artifacts, and plots |
 | `scripts/gcca/run_gcca.py` | Config-driven partial-support MAXVAR GCCA; saves fold models, calibrated word representations, support/reliability tables, and stability blocks |
-| `scripts/gcca/run_encoding.py` | Reconstruct fold-specific GCCA scores and evaluate contribution-weighted ridge encodings with fingerprinted controlled baselines |
+| `scripts/gcca/run_encoding.py` | Evaluate calibrated GCCA ridge encodings without rebuilding baselines and compare matched targets with saved RRR runs |
 | `scripts/utilities/generate_embeddings.py` | Generate contextual HuggingFace embeddings |
 | `scripts/utilities/export_transcript.py` | Export a dataset adapter's normalized transcript word table for review |
 | `scripts/utilities/generate_random_embeddings.py` | Generate random-init contextual embeddings |
@@ -95,6 +95,7 @@ Downstream configs can store list-valued `encoding.per_model_config.layer` entri
 | `src/utils/alpha_grids.py`, `constants.py` | Shared ridge alpha-grid policy and diagnostics |
 | `src/utils/srrr.py`, `rrr_utils.py`, `subspace_utils.py`, `subspace_compare.py`, `subspace_io.py` | RRR factor fitting, RRR result I/O, rank evaluation, saved-subspace discovery, comparison-run loading, and subspace CCA/RSA helpers |
 | `src/utils/gcca.py` | Config-driven partial-support GCCA orchestration, calibrated fold artifact serialization, and dataset-scoped output resolution |
+| `src/utils/decomposition.py` | Shared multi-embedding alignment, raw neural-target, fold, and target-manifest preparation used by RRR and GCCA encoding |
 | `src/utils/plotting.py` | Correlation, alpha, RRR/PCA rank, and utility plots |
 | `src/utils/atlas.py` | Atlas lookup and electrode-region grouping |
 

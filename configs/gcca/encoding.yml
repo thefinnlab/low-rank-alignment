@@ -1,8 +1,7 @@
-# First run for a baseline fingerprint must set refresh: true. Subsequent
-# averaging runs can use refresh: false and a different unique run_name.
+# Set refresh: true to atomically replace an existing run with the same name.
 gcca_dir: results/maxvar_gcca/podcast
 run_name: contribution
 shared_dimensions: [1, 2, 4, 8, 16, 32]
 averaging_method: contribution
-calibrated_scores: true
+standardize_inputs: false
 refresh: false

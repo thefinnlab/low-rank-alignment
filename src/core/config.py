@@ -328,14 +328,13 @@ class GCCAEncodingConfig:
     shared_dimensions: list[int] = field(default_factory=list)
     refresh: bool = False
     averaging_method: str = "contribution"
-    calibrated_scores: bool = True
     ridge_alphas: list[float] | None = None
     ridge_cv_folds: int = 5
     ridge_solver_params: dict | None = None
     ridge_y_in_cpu: bool | None = None
     ridge_force_cpu: bool | None = None
     alpha_grid: dict = field(default_factory=dict)
-    standardize_inputs: bool = True
+    standardize_inputs: bool = False
 
     def __post_init__(self):
         self.validate()
