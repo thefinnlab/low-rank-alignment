@@ -252,23 +252,19 @@ def fit_banded_ridge_baseline(
     y_in_cpu: bool | None = None,
     force_cpu: bool | None = None,
 ) -> BandedRidgeBaseline:
-    """Fit Himalaya banded ridge and recover its concatenated primal weights."""
-    from himalaya.kernel_ridge import MultipleKernelRidgeCV
+    """Fit Himalaya banded ridge directly in the grouped primal feature space."""
+    from himalaya.ridge import BandedRidgeCV
 
     if len(train_bands) != len(test_bands) or not train_bands:
         raise ValueError("Banded ridge requires matching non-empty train/test bands")
     n_train = Y_train.shape[0]
     if any(band.shape[0] != n_train for band in train_bands):
         raise ValueError("Every training band must share Y_train rows")
-    Ks_train = np.stack([band @ band.T for band in train_bands])
-    Ks_test = np.stack(
-        [test @ train.T for test, train in zip(test_bands, train_bands)]
-    )
     resolved_solver_params = dict(solver_params)
     random_state = resolved_solver_params.pop("random_state", 42)
     resolved_solver_params["alphas"] = np.asarray(alphas, dtype=float)
     kwargs = {
-        "kernels": "precomputed",
+        "groups": "input",
         "solver": "random_search",
         "cv": KFold(n_splits=ridge_cv_folds, shuffle=False),
         "random_state": random_state,
@@ -279,32 +275,26 @@ def fit_banded_ridge_baseline(
         kwargs["Y_in_cpu"] = y_in_cpu
     if force_cpu is not None:
         kwargs["force_cpu"] = force_cpu
-    model = MultipleKernelRidgeCV(**kwargs)
-    model.fit(Ks_train, Y_train)
-    Y_hat_train = to_numpy(model.predict(Ks_train))
-    Y_hat_test = to_numpy(model.predict(Ks_test))
-    dual = to_numpy(model.dual_coef_)
+    model = BandedRidgeCV(**kwargs)
+    model.fit(train_bands, Y_train)
+    Y_hat_train = to_numpy(model.predict(train_bands))
+    Y_hat_test = to_numpy(model.predict(test_bands))
+    beta = to_numpy(model.coef_)
     deltas = to_numpy(model.deltas_)
     intercept = to_numpy(model.intercept_)
-    weights = []
-    for band_index, band in enumerate(train_bands):
-        kernel_weights = np.exp(deltas[band_index])
-        weights.append((band.T @ dual) * kernel_weights[np.newaxis, :])
-    beta = np.concatenate(weights, axis=0)
     X_train = np.concatenate(train_bands, axis=1)
     X_test = np.concatenate(test_bands, axis=1)
     reconstructed_train = X_train @ beta + intercept
     reconstructed_test = X_test @ beta + intercept
     if not np.allclose(reconstructed_train, Y_hat_train, rtol=2e-4, atol=2e-4):
-        raise RuntimeError("Banded ridge primal weights do not reproduce train predictions")
+        raise RuntimeError("Banded ridge coefficients do not reproduce train predictions")
     if not np.allclose(reconstructed_test, Y_hat_test, rtol=2e-4, atol=2e-4):
-        raise RuntimeError("Banded ridge primal weights do not reproduce test predictions")
-    best_alphas = 1.0 / np.maximum(np.exp(deltas).sum(axis=0), 1e-30)
+        raise RuntimeError("Banded ridge coefficients do not reproduce test predictions")
     return BandedRidgeBaseline(
         Y_hat_train=np.asarray(Y_hat_train, dtype=np.float32),
         Y_hat_test=np.asarray(Y_hat_test, dtype=np.float32),
         beta_full_raw=np.asarray(beta, dtype=np.float32),
         intercept=np.asarray(intercept, dtype=np.float32),
-        best_alphas=np.asarray(best_alphas),
+        best_alphas=to_numpy(model.best_alphas_),
         deltas=np.asarray(deltas),
     )
