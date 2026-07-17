@@ -1,0 +1,50 @@
+encoding:
+  data_root: data/
+  dataset: podcast
+  model: transformer
+  offset: 0
+  subjects: null
+  per_model_config:
+    model_dir: gpt2-xl-batch
+    layer: 24
+
+mode: multi_view
+output_dir: null
+sig_dir: null
+rrr_output_dir: null
+refresh: false
+
+rank_grid: [1, 2, 4, 8, 16, 32, 64, 128, 144]
+banded_ridge_alphas: null
+banded_ridge_solver_params:
+  n_iter: 100
+  random_state: 42
+
+run_pca_baseline: false
+run_null_augmented: false
+
+views:
+  - name: podcast_gpt2xl_l0
+    rrr_config: configs/rrr/gpt2-xl/cross_subject.yml
+    unit_dir: results/gpt2-xl-batch_layer0_offset0/rrr
+    rank: 32
+  - name: podcast_gpt2xl_l24
+    rrr_config: configs/rrr/gpt2-xl/cross_subject.yml
+    unit_dir: results/gpt2-xl-batch_layer24_offset0/rrr
+    rank: 32
+  - name: podcast_gpt2xl_l48
+    rrr_config: configs/rrr/gpt2-xl/cross_subject.yml
+    unit_dir: results/gpt2-xl-batch_layer48_offset0/rrr
+    rank: 32
+  - name: cars2_gpt2xl_l0
+    rrr_config: configs/brain_treebank/cars_2/rrr_gpt2xl_layer24.yml
+    unit_dir: results/gpt2-xl-batch_layer0_offset0/movie-cars-2/rrr
+    rank: 16
+  - name: cars2_gpt2xl_l24
+    rrr_config: configs/brain_treebank/cars_2/rrr_gpt2xl_layer24.yml
+    unit_dir: results/gpt2-xl-batch_layer24_offset0/movie-cars-2/rrr
+    rank: 16
+  - name: cars2_gpt2xl_l48
+    rrr_config: configs/brain_treebank/cars_2/rrr_gpt2xl_layer24.yml
+    unit_dir: results/gpt2-xl-batch_layer48_offset0/movie-cars-2/rrr
+    rank: 16

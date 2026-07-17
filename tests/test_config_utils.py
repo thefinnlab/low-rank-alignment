@@ -9,6 +9,7 @@ import yaml
 from src.core.config import (
     EncodingConfig,
     RRRConfig,
+    RRRViewConfig,
     ScriptMode,
     SignificanceConfig,
     SubspaceComparisonConfig,
@@ -147,6 +148,42 @@ class TestDictToDataclass:
             config.cross_result_dir
             == "results/gpt2-xl_layer24_offset0/movie-cars-2"
         )
+
+    def test_rrr_multi_view_roundtrip(self):
+        config = dict_to_dataclass(
+            {
+                "mode": "multi_view",
+                "views": [
+                    {
+                        "name": "layer_24",
+                        "rrr_config": "configs/rrr/source.yml",
+                        "unit_dir": "results/source/rrr",
+                        "rank": 16,
+                    }
+                ],
+                "banded_ridge_solver_params": {"n_iter": 20, "random_state": 7},
+            },
+            RRRConfig,
+        )
+        assert config.mode == ScriptMode.MULTI_VIEW
+        assert config.views == [
+            RRRViewConfig(
+                name="layer_24",
+                rrr_config="configs/rrr/source.yml",
+                unit_dir="results/source/rrr",
+                rank=16,
+            )
+        ]
+        assert config.banded_ridge_solver_params["n_iter"] == 20
+
+    def test_rrr_multi_view_requires_views(self):
+        with pytest.raises(ValueError, match="at least one view"):
+            RRRConfig(mode=ScriptMode.MULTI_VIEW)
+
+    def test_rrr_multi_view_rejects_duplicate_names(self):
+        view = RRRViewConfig("same", "config.yml", "results/rrr", 2)
+        with pytest.raises(ValueError, match="Duplicate RRR view"):
+            RRRConfig(mode=ScriptMode.MULTI_VIEW, views=[view, view])
 
     def test_alpha_grid_policy_roundtrip(self):
         config = dict_to_dataclass(

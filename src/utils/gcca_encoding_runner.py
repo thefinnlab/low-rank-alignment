@@ -35,6 +35,7 @@ from src.utils.subspace_io import (
 )
 from src.utils.subspace_utils import evaluate_input_space
 from src.utils.srrr import fit_dense_rrr
+from src.utils.multiview_rrr import union_view_significance
 
 
 def _read_json(path: Path):
@@ -61,30 +62,16 @@ def get_union_sig_elecs(metadata, resolved):
     """Union significant electrodes across anchor-dataset GCCA member runs."""
     anchor = resolved[metadata["anchor"]]
     anchor_key = tuple(anchor.dataset_key)
-    union = {subject: [] for subject in anchor.subject_ids}
-    sources = []
-    comparison_runs = {}
-    for name in metadata["views"]:
-        run = resolved[name]
-        if tuple(run.dataset_key) != anchor_key:
-            continue
-        significant, _ = load_sig_electrodes(
-            str(run.output_dir),
-            run.subject_ids,
-            sig_dir=str(run.sig_dir),
-            dataset=run.config.encoding.dataset,
-            per_dataset_config=run.config.encoding.per_dataset_config,
-            data_root=run.config.encoding.data_root,
-        )
-        comparison_runs[name] = run
-        sources.append(str(Path(run.sig_dir) / "all_subject_sig.csv"))
-        for subject in anchor.subject_ids:
-            for electrode in significant.get(subject, []):
-                if electrode not in union[subject]:
-                    union[subject].append(electrode)
-    union = {subject: electrodes for subject, electrodes in union.items() if electrodes}
-    if not union:
-        raise ValueError("No significant electrodes were found for the GCCA anchor dataset")
+    union, _, sources = union_view_significance(
+        {name: resolved[name] for name in metadata["views"]},
+        anchor_key,
+        anchor.subject_ids,
+    )
+    comparison_runs = {
+        name: resolved[name]
+        for name in metadata["views"]
+        if tuple(resolved[name].dataset_key) == anchor_key
+    }
     return anchor, union, comparison_runs, sources
 
 

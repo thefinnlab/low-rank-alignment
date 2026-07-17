@@ -7,7 +7,7 @@ Sweeps over a configured rank grid. Optionally also runs PCA subspace analysis
 By default, completed rank outputs in an existing run directory are reused;
 set RRRConfig.refresh=True to recompute the full configured rank grid.
 
-Four modes controlled by RRRConfig.mode:
+Six modes controlled by RRRConfig.mode:
 
   cross_subject (default):
     Builds global Y across all subjects (significant electrodes).
@@ -18,6 +18,13 @@ Four modes controlled by RRRConfig.mode:
     into one source-dataset subspace, and evaluates rank-k NR ridge models on
     the configured target dataset folds.
     Writes to {output_dir}/cross_dataset_rrr/{source_name}/.
+
+  multi_view:
+    Projects configured saved RRR views at fixed ranks, using raw fold-matched
+    A matrices within the target dataset and one fold-aggregated SVD basis for
+    cross-dataset views. Fits a banded-ridge full model before the usual RRR
+    rank sweep.
+    Writes to {output_dir}/multi_view_rrr/.
 
   per_subject:
     Runs independently per subject.
@@ -56,6 +63,7 @@ Per-target arrays (only in metrics.npz, not in grid_results.csv):
     rrr_corr_per_target, nr_corr_per_target
 """
 
+import json
 import os
 import time
 
@@ -99,6 +107,16 @@ from src.utils.subspace_utils import (
 from src.utils.subspace_compare import extrinsic_mean_from_unit_dir
 from src.utils.alpha_grids import resolve_ridge_alphas, save_alpha_diagnostics
 from src.utils.decomposition import _get_decomposition_inputs
+from src.utils.multiview_rrr import (
+    fit_banded_ridge_baseline,
+    load_view_bases,
+    load_view_embeddings,
+    project_view_bands,
+    resolve_rrr_views,
+    target_dataset_key,
+    union_sig_mask,
+    union_view_significance,
+)
 from himalaya.scoring import correlation_score, r2_score
 
 # ---------------------------------------------------------------------------
@@ -131,6 +149,7 @@ def _save_full_model_metrics_once(
 def _resolve_pca_sibling_dir(rrr_unit_dir: str) -> str:
     """Return the PCA output dir that mirrors a given RRR unit dir."""
     for rrr_part, pca_part in [
+        ("multi_view_rrr", "multi_view_pca"),
         ("cross_dataset_rrr", "cross_dataset_pca"),
         ("per_subject_rrr", "per_subject_pca"),
         ("per_region_rrr", "per_region_pca"),
@@ -295,6 +314,11 @@ def _ranks_by_fold_to_run(
 
 def _folds_to_build_from_ranks(ranks_by_fold: dict[int, list[int]]) -> set[int]:
     return {fold_f for fold_f, ranks in ranks_by_fold.items() if ranks}
+
+
+def _X_for_fold(X_raw, fold_f: int) -> np.ndarray:
+    """Return one fold's design from a shared matrix or per-fold matrix list."""
+    return np.asarray(X_raw[fold_f] if isinstance(X_raw, list) else X_raw)
 
 
 def _unit_ranks_by_fold_to_run(
@@ -1036,7 +1060,7 @@ def _build_results(
 
 def _run_rrr_for_unit(
     rrr_unit_dir: str,
-    X_raw: np.ndarray,
+    X_raw: "np.ndarray | list[np.ndarray]",
     test_idxs: list,
     per_fold_baselines: list,
     config: RRRConfig,
@@ -1069,7 +1093,9 @@ def _run_rrr_for_unit(
     alphas = np.array(enc.ridge_alphas) if enc.ridge_alphas is not None else None
 
     n_folds = len(test_idxs)
-    n_embed = X_raw.shape[1]
+    n_embed = _X_for_fold(X_raw, 0).shape[1]
+    if any(_X_for_fold(X_raw, fold).shape[1] != n_embed for fold in range(n_folds)):
+        raise ValueError("All fold-specific RRR designs must share feature width")
     selected_idx = np.arange(n_embed)
 
     import torch
@@ -1145,7 +1171,8 @@ def _run_rrr_for_unit(
 
         baseline = per_fold_baselines[fold_f]
         train_idx = baseline["train_idx"]
-        X_train = X_raw[train_idx]
+        X_fold = _X_for_fold(X_raw, fold_f)
+        X_train = X_fold[train_idx]
         Y_train = baseline["Y_train"]
         Y_hat_ols_train = baseline["Y_hat_full_train"]
 
@@ -1193,7 +1220,7 @@ def _run_rrr_for_unit(
                 A_full=A_full,
                 B_full=B_full,
                 ranks_to_run=ranks_to_run,
-                X_raw=X_raw,
+                X_raw=X_fold,
                 baseline=baseline,
                 sig_mask_flat=sig_mask_flat,
                 fold_f=fold_f,
@@ -1255,7 +1282,7 @@ def _run_rrr_for_unit(
 
 def _run_pca_for_unit(
     pca_unit_dir: str,
-    X_raw: np.ndarray,
+    X_raw: "np.ndarray | list[np.ndarray]",
     test_idxs: list,
     per_fold_baselines: list,
     rank_grid: list,
@@ -1337,10 +1364,11 @@ def _run_pca_for_unit(
         print(f"\n[Fold {fold_f + 1}/{n_folds}]")
 
         baseline = per_fold_baselines[fold_f]
+        X_fold = _X_for_fold(X_raw, fold_f)
         train_idx = baseline["train_idx"]
         test_idx = baseline["test_idx"]
-        X_train = X_raw[train_idx]
-        X_test = X_raw[test_idx]
+        X_train = X_fold[train_idx]
+        X_test = X_fold[test_idx]
         Y_train = baseline["Y_train"]
         Y_test = baseline["Y_test"]
         Y_hat_full = baseline["Y_hat_full_test"]
@@ -1533,6 +1561,183 @@ def _run_cross_subject_rrr(
         X_raw=X_raw,
         test_idxs=test_idxs,
         per_fold_baselines=per_fold_baselines,
+        config=config,
+        sig_mask_flat=sig_mask_flat,
+        ranks_by_fold=resume_plan["rrr_ranks_by_fold"],
+        completed_pairs=resume_plan["rrr_completed_pairs"],
+        pca_ranks_by_fold=resume_plan["pca_ranks_by_fold"],
+        pca_completed_pairs=resume_plan["pca_completed_pairs"],
+    )
+
+
+# ---------------------------------------------------------------------------
+# Branch: multiview banded RRR
+# ---------------------------------------------------------------------------
+
+
+def _run_multi_view_rrr(
+    config: RRRConfig,
+    output_dir: str,
+    sig_dir: str,
+    rrr_dir: str,
+    subject_ids: list[int],
+) -> None:
+    """Fit banded ridge over saved RRR views, then run the standard RRR sweep."""
+    from sklearn.preprocessing import StandardScaler
+
+    resolved = resolve_rrr_views(config)
+    target_key = target_dataset_key(config, subject_ids)
+    union, detailed_frames, significance_sources = union_view_significance(
+        resolved, target_key, subject_ids
+    )
+    embeddings, word_df = load_view_embeddings(config, resolved, subject_ids)
+
+    enc = config.encoding
+    word_in_glove = None
+    if enc.limit_to_glove or enc.model == "glove":
+        word_in_glove = get_glove_embeddings(
+            enc.data_root, word_df, **enc.per_model_config
+        )[1]["in_glove"]
+    shared_selection_metadata = None
+    if enc.shared_word_selection:
+        shared_selection_metadata = _load_shared_word_selection_metadata(
+            sig_dir, subject_ids
+        )
+
+    prepared = _get_decomposition_inputs(
+        subject_ids,
+        output_dir,
+        union,
+        enc,
+        embeddings,
+        word_in_glove=word_in_glove,
+        shared_selection_metadata=shared_selection_metadata,
+    )
+    if prepared is None:
+        return
+    sig_mask_flat = (
+        union_sig_mask(prepared.target_manifest, detailed_frames)
+        if config.compute_sig_nonsig
+        else None
+    )
+    bases, basis_modes = load_view_bases(
+        config,
+        resolved,
+        target_key,
+        prepared.selection,
+        prepared.test_idxs,
+    )
+    view_names = [view.name for view in config.views]
+    n_words = prepared.targets.shape[0]
+    all_rows = np.arange(n_words, dtype=int)
+    widths = [int(view.rank) for view in config.views]
+    stops = np.cumsum(widths)
+    band_boundaries = list(zip([0, *stops[:-1].tolist()], stops.tolist()))
+    empty_design = np.empty((n_words, int(stops[-1])), dtype=np.float32)
+    fold_designs: list[np.ndarray] = [empty_design] * len(prepared.test_idxs)
+    baselines: list[dict | None] = [None] * len(prepared.test_idxs)
+    resume_plan = _rrr_output_resume_plan(
+        rrr_dir, config, len(prepared.test_idxs)
+    )
+    folds_to_build = resume_plan["folds_to_build"]
+    explicit_banded_alphas = (
+        np.asarray(config.banded_ridge_alphas, dtype=float)
+        if config.banded_ridge_alphas is not None
+        else None
+    )
+
+    for fold_f, test_idx in enumerate(prepared.test_idxs):
+        if fold_f not in folds_to_build:
+            continue
+        test_idx = np.asarray(test_idx, dtype=int)
+        train_idx = np.setdiff1d(all_rows, test_idx, assume_unique=False)
+        bands, boundaries = project_view_bands(
+            prepared.embeddings, bases, view_names, fold_f
+        )
+        if band_boundaries != boundaries:
+            raise ValueError("Multiview band boundaries differ across folds")
+        X_full = np.concatenate(bands, axis=1).astype(np.float32, copy=False)
+        fold_designs[fold_f] = X_full
+
+        target_scaler = StandardScaler().fit(prepared.targets[train_idx])
+        Y_train = target_scaler.transform(prepared.targets[train_idx]).astype(
+            np.float32
+        )
+        Y_test = target_scaler.transform(prepared.targets[test_idx]).astype(np.float32)
+        alpha_dir = os.path.join(rrr_dir, f"fold_{fold_f}", "banded_full_alpha")
+        alpha_context = {
+            "script": "run_rrr",
+            "role": "multi_view_banded_full",
+            "fold": int(fold_f),
+            "n_features": int(X_full.shape[1]),
+            "bands": view_names,
+            "standardize": False,
+        }
+        banded_alphas = resolve_ridge_alphas(
+            explicit_banded_alphas,
+            X_full[train_idx],
+            standardize=False,
+            context=alpha_context,
+            cache_dir=alpha_dir,
+            policy=enc.alpha_grid,
+        )
+        fitted = fit_banded_ridge_baseline(
+            [band[train_idx] for band in bands],
+            [band[test_idx] for band in bands],
+            Y_train,
+            alphas=banded_alphas,
+            ridge_cv_folds=enc.ridge_cv_folds,
+            solver_params=config.banded_ridge_solver_params,
+            y_in_cpu=enc.ridge_y_in_cpu,
+            force_cpu=enc.ridge_force_cpu,
+        )
+        save_alpha_diagnostics(
+            alpha_dir,
+            banded_alphas,
+            best_alphas=fitted.best_alphas,
+            context=alpha_context,
+            policy=enc.alpha_grid,
+        )
+        np.savez_compressed(
+            os.path.join(rrr_dir, f"fold_{fold_f}", "banded_ridge_diagnostics.npz"),
+            view_names=np.asarray(view_names),
+            band_boundaries=np.asarray(boundaries, dtype=int),
+            deltas=fitted.deltas,
+            kernel_weights=np.exp(fitted.deltas),
+            best_alphas=fitted.best_alphas,
+            intercept=fitted.intercept,
+        )
+        baselines[fold_f] = {
+            "train_idx": train_idx,
+            "test_idx": test_idx,
+            "Y_train": Y_train,
+            "Y_test": Y_test,
+            "Y_hat_full_train": fitted.Y_hat_train,
+            "Y_hat_full_test": fitted.Y_hat_test,
+            "beta_full_raw": fitted.beta_full_raw,
+        }
+
+    metadata = {
+        "mode": "multi_view",
+        "target_dataset_key": list(target_key),
+        "views": view_names,
+        "view_ranks": {view.name: int(view.rank) for view in config.views},
+        "basis_modes": basis_modes,
+        "band_boundaries": band_boundaries,
+        "significance_sources": significance_sources,
+    }
+    with open(os.path.join(rrr_dir, "multi_view_metadata.json"), "w") as handle:
+        json.dump(metadata, handle, indent=2)
+
+    print(
+        f"  Multiview X: {(n_words, int(stops[-1]))}, Y: {prepared.targets.shape}, "
+        f"bands: {dict(zip(view_names, [b - a for a, b in band_boundaries]))}"
+    )
+    _run_rrr_for_unit(
+        rrr_unit_dir=rrr_dir,
+        X_raw=fold_designs,
+        test_idxs=prepared.test_idxs,
+        per_fold_baselines=baselines,
         config=config,
         sig_mask_flat=sig_mask_flat,
         ranks_by_fold=resume_plan["rrr_ranks_by_fold"],
@@ -2303,6 +2508,8 @@ def run_config(config: RRRConfig):
         rrr_base_dir = os.path.join(output_dir, "loso_rrr")
     elif config.mode == ScriptMode.CROSS_DATASET:
         rrr_base_dir = os.path.join(output_dir, "cross_dataset_rrr")
+    elif config.mode == ScriptMode.MULTI_VIEW:
+        rrr_base_dir = os.path.join(output_dir, "multi_view_rrr")
     else:
         rrr_base_dir = os.path.join(output_dir, "rrr")
 
@@ -2324,8 +2531,19 @@ def run_config(config: RRRConfig):
     if config.run_pca_baseline:
         print(f"PCA baseline: enabled (results will mirror RRR dir with 'pca' in path)")
 
-    # Load significance CSV and build subject → electrode mapping
     sig_dir = config.sig_dir or output_dir
+    if config.mode == ScriptMode.MULTI_VIEW:
+        _run_multi_view_rrr(
+            config=config,
+            output_dir=output_dir,
+            sig_dir=sig_dir,
+            rrr_dir=rrr_dir,
+            subject_ids=subject_ids,
+        )
+        print("\nDone.")
+        return
+
+    # Load significance CSV and build subject → electrode mapping
     sig_electrodes, _ = load_sig_electrodes(
         output_dir,
         subject_ids,

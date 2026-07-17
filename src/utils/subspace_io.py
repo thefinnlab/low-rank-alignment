@@ -67,6 +67,8 @@ def resolve_rrr_output_dir(config: RRRConfig, output_dir: str | Path) -> Path:
         return Path(output_dir) / "per_subject_rrr"
     if config.mode == ScriptMode.LEAVE_ONE_SUBJECT_OUT:
         return Path(output_dir) / "loso_rrr"
+    if config.mode == ScriptMode.MULTI_VIEW:
+        return Path(output_dir) / "multi_view_rrr"
     return Path(output_dir) / "rrr"
 
 

@@ -14,6 +14,7 @@ class ScriptMode(str, Enum):
     PER_SUBJECT = "per_subject"
     PER_REGION = "per_region"
     LEAVE_ONE_SUBJECT_OUT = "leave_one_subject_out"
+    MULTI_VIEW = "multi_view"
 
 
 def gpt2_xl_results_dir(base_dir, offset, layer):
@@ -148,6 +149,17 @@ class SignificanceConfig:
 
 
 @dataclass
+class RRRViewConfig:
+    """One saved RRR subspace contributing a band to multiview RRR."""
+
+    name: str
+    rrr_config: str
+    unit_dir: str
+    rank: int
+    kind: str | None = None
+
+
+@dataclass
 class RRRConfig:
     """Parameters for raw-input Reduced Rank Regression analysis (run_rrr.py).
 
@@ -174,6 +186,13 @@ class RRRConfig:
     mode: ScriptMode = ScriptMode.CROSS_SUBJECT
     cross_result_dir: str | None = (
         None  # Source results run root for mode=cross_dataset.
+    )
+    views: list[RRRViewConfig] = field(default_factory=list)
+
+    # Full-model banded ridge used by mode=multi_view.
+    banded_ridge_alphas: list[float] | None = None
+    banded_ridge_solver_params: dict = field(
+        default_factory=lambda: {"n_iter": 100, "random_state": 42}
     )
 
     # Rank sweep
@@ -211,6 +230,28 @@ class RRRConfig:
         None  # Path to Destrieux 2009 .nii.gz; None = download via nilearn
     )
     atlas_region_groups: dict | None = None  # Required when mode=per_region
+
+    def __post_init__(self):
+        self.validate()
+
+    def validate(self):
+        if not self.rank_grid or any(int(rank) < 1 for rank in self.rank_grid):
+            raise ValueError("rank_grid must contain positive integers")
+        if self.banded_ridge_alphas is not None and (
+            not self.banded_ridge_alphas
+            or any(float(alpha) < 0 for alpha in self.banded_ridge_alphas)
+        ):
+            raise ValueError("banded_ridge_alphas must contain non-negative values")
+        if self.mode == ScriptMode.MULTI_VIEW and not self.views:
+            raise ValueError("RRRConfig.views must contain at least one view")
+        names = [view.name for view in self.views]
+        duplicates = sorted({name for name in names if names.count(name) > 1})
+        if duplicates:
+            raise ValueError(f"Duplicate RRR view name(s): {duplicates}")
+        if any(not view.name for view in self.views):
+            raise ValueError("Every RRR view name must be non-empty")
+        if any(int(view.rank) < 1 for view in self.views):
+            raise ValueError("Every RRR view rank must be positive")
 
 
 @dataclass
