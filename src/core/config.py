@@ -335,6 +335,7 @@ class GCCAEncodingConfig:
     ridge_force_cpu: bool | None = None
     alpha_grid: dict = field(default_factory=dict)
     standardize_inputs: bool = False
+    run_rrr: bool = False
 
     def __post_init__(self):
         self.validate()

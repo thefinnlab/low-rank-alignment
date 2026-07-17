@@ -29,6 +29,7 @@ def evaluate_input_space(
     ridge_y_in_cpu: bool | None = None,
     ridge_force_cpu: bool | None = None,
     return_alphas: bool = False,
+    return_weights: bool = False,
     subspace_name: str = "",
 ) -> dict:
     """Train ridge on X and evaluate correlation and R² against Y_test.
@@ -48,6 +49,7 @@ def evaluate_input_space(
         ridge_y_in_cpu: Optional Himalaya RidgeCV Y_in_cpu override.
         ridge_force_cpu: Optional Himalaya RidgeCV force_cpu override.
         return_alphas: Include per-target selected alphas in the result.
+        return_weights: Include the fitted input-space weights and intercept.
         subspace_name: Prefix for all returned keys (e.g. "nr", "complement", "pca").
 
     Returns:
@@ -92,6 +94,9 @@ def evaluate_input_space(
     }
     if return_alphas:
         result[f"{prefix}best_alphas"] = best_alphas
+    if return_weights:
+        result[f"{prefix}weights"] = to_numpy(W)
+        result[f"{prefix}intercept"] = to_numpy(b)
     return result
 
 

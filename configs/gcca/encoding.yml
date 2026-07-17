@@ -4,4 +4,6 @@ run_name: contribution
 shared_dimensions: [1, 2, 4, 8, 16, 32]
 averaging_method: contribution
 standardize_inputs: false
+# Fit fold-local RRR on each GCCA encoder before the final ridge model.
+run_rrr: false
 refresh: false

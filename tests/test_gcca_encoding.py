@@ -34,6 +34,7 @@ def test_default_config_uses_contribution_weighting():
     config = GCCAEncodingConfig(gcca_dir="gcca", run_name="weighted")
     assert config.averaging_method == "contribution"
     assert config.standardize_inputs == RRRConfig().standardize_subspace_inputs
+    assert config.run_rrr is False
 
 
 def test_rrr_and_gcca_transform_reproduce_saved_scores():

@@ -34,6 +34,7 @@ from src.utils.subspace_io import (
     sanitize_name,
 )
 from src.utils.subspace_utils import evaluate_input_space
+from src.utils.srrr import fit_dense_rrr
 
 
 def _read_json(path: Path):
@@ -243,7 +244,9 @@ def evaluate_gcca_encoders(path, gcca_dir, metadata, prepared, config):
                 calibration_error=error,
             )
             rank_dir = path / f"k{dimension}" / f"fold_{fold}"
-            alpha_dir = rank_dir / "gcca_alpha"
+            alpha_dir = rank_dir / (
+                "gcca_initial_alpha" if config.run_rrr else "gcca_alpha"
+            )
             context = {
                 "script": "gcca_encoding",
                 "role": "gcca",
@@ -273,15 +276,72 @@ def evaluate_gcca_encoders(path, gcca_dir, metadata, prepared, config):
                 ridge_y_in_cpu=config.ridge_y_in_cpu,
                 ridge_force_cpu=config.ridge_force_cpu,
                 return_alphas=True,
+                return_weights=config.run_rrr,
                 subspace_name="gcca",
             )
             rank_dir.mkdir(parents=True, exist_ok=True)
+            initial_best_alphas = result["gcca_best_alphas"]
+            evaluated_train = gcca_embeddings[train_idx]
+            if config.run_rrr:
+                rrr_result = fit_dense_rrr(
+                    gcca_embeddings[train_idx],
+                    Y_train,
+                    k=int(dimension),
+                    selected_idx=np.arange(gcca_embeddings.shape[1], dtype=int),
+                    precomputed_Y_hat_ols=(
+                        gcca_embeddings[train_idx] @ result["gcca_weights"]
+                        + result["gcca_intercept"]
+                    ),
+                    precomputed_beta_full=result["gcca_weights"],
+                    device=device,
+                )
+                A = rrr_result["A_dense"]
+                np.save(rank_dir / "A.npy", A)
+                aligned_train = gcca_embeddings[train_idx] @ A
+                aligned_test = gcca_embeddings[test_idx] @ A
+                evaluated_train = aligned_train
+                final_alpha_dir = rank_dir / "gcca_alpha"
+                final_context = {
+                    **context,
+                    "role": "gcca_rrr_aligned",
+                    "n_features": int(aligned_train.shape[1]),
+                }
+                final_alphas = resolve_ridge_alphas(
+                    config.ridge_alphas,
+                    aligned_train,
+                    standardize=config.standardize_inputs,
+                    context=final_context,
+                    cache_dir=str(final_alpha_dir),
+                    policy=config.alpha_grid,
+                )
+                result = evaluate_input_space(
+                    aligned_train,
+                    aligned_test,
+                    Y_train,
+                    Y_test,
+                    device=device,
+                    alphas=final_alphas,
+                    ridge_cv_folds=config.ridge_cv_folds,
+                    standardize=config.standardize_inputs,
+                    ridge_solver_params=config.ridge_solver_params,
+                    ridge_y_in_cpu=config.ridge_y_in_cpu,
+                    ridge_force_cpu=config.ridge_force_cpu,
+                    return_alphas=True,
+                    subspace_name="gcca",
+                )
+                save_alpha_diagnostics(
+                    str(final_alpha_dir),
+                    final_alphas,
+                    best_alphas=result["gcca_best_alphas"],
+                    context=final_context,
+                    policy=config.alpha_grid,
+                )
             metrics = {key: value for key, value in result.items() if key != "gcca_Y_hat"}
             np.savez_compressed(rank_dir / "metrics.npz", **metrics)
             save_alpha_diagnostics(
                 str(alpha_dir),
                 alphas,
-                best_alphas=result["gcca_best_alphas"],
+                best_alphas=initial_best_alphas,
                 context=context,
                 policy=config.alpha_grid,
             )
@@ -289,7 +349,7 @@ def evaluate_gcca_encoders(path, gcca_dir, metadata, prepared, config):
                 {
                     "fold": fold,
                     "k": dimension,
-                    "effective_rank": int(np.linalg.matrix_rank(gcca_embeddings[train_idx])),
+                    "effective_rank": int(np.linalg.matrix_rank(evaluated_train)),
                     "gcca_corr": result["gcca_corr"],
                     "gcca_r2": result["gcca_r2"],
                 }
