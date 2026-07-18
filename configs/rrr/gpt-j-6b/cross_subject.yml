@@ -5,15 +5,12 @@ encoding:
   subjects: null
   run_name: null
   batch: false
-  alpha_grid:
-      strategy: legacy
-      low_dim_threshold: 50
   per_model_config:
     model_dir: gpt-j-6b
     layer:
     - 0
     - 14
-    # - 28
+    - 28
 output_dir: null
 sig_dir: null
 rrr_output_dir: null
@@ -33,4 +30,9 @@ rank_grid:
 - 2048
 - 4096
 refresh: true
-run_pca_baseline: false
+run_pca_baseline: true
+run_null_augmented: false
+null_augmented_repeats: 50
+null_augmented_reference_rank: 4096
+null_augmented_min_shift: 50
+null_augmented_seed: 42

@@ -28,5 +28,10 @@ rank_grid:
 - 512
 - 1024
 - 1280
-refresh: false
+refresh: true
 run_pca_baseline: true
+run_null_augmented: false
+null_augmented_repeats: 50
+null_augmented_reference_rank: 1280
+null_augmented_min_shift: 50
+null_augmented_seed: 42

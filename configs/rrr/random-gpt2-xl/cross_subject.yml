@@ -5,14 +5,6 @@ encoding:
   subjects: null
   run_name: null
   batch: false
-  log_alphas: true
-  ridge_cv_folds: 3
-  alpha_grid:
-    max_points: 26
-    points_per_decade: 4
-  ridge_solver_params:
-    n_alphas_batch: 13
-    n_targets_batch: 512
   per_model_config:
     model_dir: random-gpt2-xl
     layer:
@@ -38,3 +30,8 @@ rank_grid:
 - 1600
 refresh: true
 run_pca_baseline: true
+run_null_augmented: false
+null_augmented_repeats: 50
+null_augmented_reference_rank: 1600
+null_augmented_min_shift: 50
+null_augmented_seed: 42

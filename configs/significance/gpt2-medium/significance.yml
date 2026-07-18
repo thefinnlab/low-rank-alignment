@@ -13,11 +13,11 @@ encoding:
     - 12
     - 24
 output_dir: null
-blocks_per_fold: 5
+blocks_per_fold: 3
 max_matching_distance: 3
 positive_fraction: 0.8
 mean_corr_threshold: 0.0
-minimal_shift: 500
+minimal_shift: 50
 shift_step: 1
 num_null_shifts: 10000
 null_seed: 42
