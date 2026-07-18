@@ -715,24 +715,25 @@ def save_rrr_factors(
     output_dir: str,
     fold: int,
     A: np.ndarray,
-    B: np.ndarray,
+    B: "np.ndarray | None" = None,
 ) -> None:
     """Save full-rank RRR factor matrices for one fold.
 
     Writes to {output_dir}/fold_{fold}/:
         A.npy  (n_embed, max_k)
-        B.npy  (n_targets, max_k)
+        B.npy  (n_targets, max_k; only when B is provided)
 
     Args:
         output_dir: Root RRR output directory.
         fold: Fold index.
         A: (n_embed, max_k) full-rank direction factor matrix.
-        B: (n_targets, max_k) full-rank output factor matrix.
+        B: Optional (n_targets, max_k) full-rank output factor matrix.
     """
     fold_dir = os.path.join(output_dir, f"fold_{fold}")
     os.makedirs(fold_dir, exist_ok=True)
     np.save(os.path.join(fold_dir, "A.npy"), A)
-    np.save(os.path.join(fold_dir, "B.npy"), B)
+    if B is not None:
+        np.save(os.path.join(fold_dir, "B.npy"), B)
 
 
 def save_rrr_result(

@@ -127,7 +127,29 @@ class TestRunRRRForUnit:
         config = RRRConfig()
         config.rank_grid = rank_grid
         config.refresh = refresh
+        config.save_b_matrices = True
         return config
+
+    def test_b_matrices_and_raw_rrr_metrics_disabled_by_default(
+        self, tmp_path, small_data
+    ):
+        from run_rrr import _run_rrr_for_unit
+        from src.core.config import RRRConfig
+
+        X, Y = small_data
+        test_idxs = [np.arange(X.shape[0] // 2, X.shape[0])]
+        config = RRRConfig(rank_grid=[1])
+        per_fold_baselines = _make_baselines(X, Y, test_idxs)
+
+        _run_rrr_for_unit(str(tmp_path), X, test_idxs, per_fold_baselines, config)
+
+        assert (tmp_path / "fold_0" / "A.npy").exists()
+        assert not (tmp_path / "fold_0" / "B.npy").exists()
+        metrics = np.load(tmp_path / "k1" / "fold_0" / "metrics.npz")
+        assert not any(key.startswith("rrr_") for key in metrics.files)
+        df = pd.read_csv(tmp_path / "grid_results.csv")
+        assert "rrr_corr" not in df.columns
+        assert "rrr_r2" not in df.columns
 
     def test_null_shift_sampler_enforces_minimum_and_seed(self):
         from run_rrr import _sample_valid_circular_shift
@@ -426,8 +448,44 @@ class TestRunRRRForUnit:
 
         metrics = np.load(os.path.join(str(tmp_path), "k2", "fold_0", "metrics.npz"))
         assert "nr_corr_per_target" in metrics.files
+        assert "rrr_corr_per_target" not in metrics.files
         assert "nr_best_alphas" in metrics.files
         assert "complement_corr" not in metrics.files
+
+    def test_per_target_corr_save_flags(self, tmp_path, small_data):
+        from run_rrr import _run_rrr_for_unit
+
+        X, Y = small_data
+        test_idxs = [np.arange(X.shape[0] // 2, X.shape[0])]
+        config = self._make_config(rank_grid=[1])
+        config.save_nr_corr_per_target = False
+        config.save_rrr_corr_per_target = True
+        per_fold_baselines = _make_baselines(X, Y, test_idxs)
+
+        _run_rrr_for_unit(str(tmp_path), X, test_idxs, per_fold_baselines, config)
+
+        metrics = np.load(os.path.join(str(tmp_path), "k1", "fold_0", "metrics.npz"))
+        assert "nr_corr_per_target" not in metrics.files
+        assert "rrr_corr_per_target" in metrics.files
+
+    def test_refresh_without_b_removes_stale_b(self, tmp_path, small_data):
+        from run_rrr import _run_rrr_for_unit
+
+        X, Y = small_data
+        test_idxs = [np.arange(X.shape[0] // 2, X.shape[0])]
+        per_fold_baselines = _make_baselines(X, Y, test_idxs)
+        config = self._make_config(rank_grid=[1])
+        _run_rrr_for_unit(str(tmp_path), X, test_idxs, per_fold_baselines, config)
+        assert (tmp_path / "fold_0" / "B.npy").exists()
+
+        config.save_b_matrices = False
+        config.save_rrr_corr_per_target = False
+        config.refresh = True
+        _run_rrr_for_unit(str(tmp_path), X, test_idxs, per_fold_baselines, config)
+
+        assert not (tmp_path / "fold_0" / "B.npy").exists()
+        metrics = np.load(tmp_path / "k1" / "fold_0" / "metrics.npz")
+        assert not any(key.startswith("rrr_") for key in metrics.files)
 
     def test_nr_r2_increases_with_rank(self, tmp_path, rng):
         """For low-rank ground truth data, NR R² should increase monotonically with rank."""

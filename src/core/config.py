@@ -205,6 +205,11 @@ class RRRConfig:
     compute_sig_nonsig: bool = True
     compute_joint_ridge: bool = False  # Deprecated; ignored by RRR/PCA rank sweeps.
 
+    # Per-target correlation artifacts saved in each rank/fold metrics.npz.
+    save_nr_corr_per_target: bool = True
+    save_rrr_corr_per_target: bool = False
+    save_b_matrices: bool = False
+
     # Alpha diagnostics
     log_alphas: bool = False  # Save per-rank alpha diagnostics in RRR output
     standardize_subspace_inputs: bool = (
@@ -235,6 +240,10 @@ class RRRConfig:
         self.validate()
 
     def validate(self):
+        if self.save_rrr_corr_per_target and not self.save_b_matrices:
+            raise ValueError(
+                "save_rrr_corr_per_target=True requires save_b_matrices=True"
+            )
         if not self.rank_grid or any(int(rank) < 1 for rank in self.rank_grid):
             raise ValueError("rank_grid must contain positive integers")
         if self.banded_ridge_alphas is not None and (

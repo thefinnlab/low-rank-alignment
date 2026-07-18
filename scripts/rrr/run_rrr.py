@@ -46,7 +46,8 @@ Output layout per unit:
         summary.csv
         rank_analysis.png
         fold_{f}/
-            A.npy, B.npy              (RRR only; full-rank factor matrices)
+            A.npy                     (RRR only; full-rank input factors)
+            B.npy                     (optional full-rank target factors)
             full_model_metrics.npz    (full ridge baseline, saved once per fold)
         k{k}/fold_{f}/
             metrics.npz               (per-rank metrics including *_per_target arrays)
@@ -59,8 +60,9 @@ Metrics (per k, per fold in grid_results.csv):
 Full model (saved once per fold, not duplicated across k):
     full_corr, full_r2, full_corr_per_target  → fold_{f}/full_model_metrics.npz
 
-Per-target arrays (only in metrics.npz, not in grid_results.csv):
-    rrr_corr_per_target, nr_corr_per_target
+Optional per-target correlation arrays (only in metrics.npz):
+    nr_corr_per_target  (RRRConfig.save_nr_corr_per_target=True by default)
+    rrr_corr_per_target (RRRConfig.save_rrr_corr_per_target=False by default)
 """
 
 import json
@@ -263,6 +265,7 @@ def _completed_pairs_from_artifacts(
     rank_grid: list[int],
     n_folds: int,
     require_factors: bool = False,
+    require_b: bool = True,
     required_metric_keys: "set[str] | None" = None,
 ) -> set[tuple[int, int]]:
     """Completed (k, fold) pairs based on artifact files, not grid_results.csv."""
@@ -273,7 +276,7 @@ def _completed_pairs_from_artifacts(
             if not os.path.exists(metrics_path):
                 continue
             if require_factors and not _fold_factors_exist(
-                unit_dir, fold_f, require_b=True
+                unit_dir, fold_f, require_b=require_b
             ):
                 continue
             if required_metric_keys:
@@ -293,6 +296,7 @@ def _ranks_by_fold_to_run(
     n_folds: int,
     refresh: bool,
     require_factors: bool = False,
+    require_b: bool = True,
     required_metric_keys: "set[str] | None" = None,
 ) -> tuple[dict[int, list[int]], set[tuple[int, int]]]:
     """Return per-fold ranks to compute plus (k, fold) pairs reusable from disk."""
@@ -303,6 +307,7 @@ def _ranks_by_fold_to_run(
         rank_grid,
         n_folds,
         require_factors=require_factors,
+        require_b=require_b,
         required_metric_keys=required_metric_keys,
     )
     ranks_by_fold = {
@@ -327,6 +332,7 @@ def _unit_ranks_by_fold_to_run(
     n_folds: int,
     refresh: bool,
     require_factors: bool,
+    require_b: bool = True,
     required_metric_keys: "set[str] | None" = None,
 ) -> tuple[dict[int, list[int]], set[tuple[int, int]]]:
     return _ranks_by_fold_to_run(
@@ -335,6 +341,7 @@ def _unit_ranks_by_fold_to_run(
         n_folds,
         refresh=refresh,
         require_factors=require_factors,
+        require_b=require_b,
         required_metric_keys=required_metric_keys,
     )
 
@@ -350,6 +357,7 @@ def _rrr_output_resume_plan(
         n_folds,
         refresh=config.refresh,
         require_factors=True,
+        require_b=config.save_b_matrices,
         required_metric_keys=(
             {"null_aug_corr_per_target", "null_aug_r2_per_target"}
             if config.run_null_augmented
@@ -424,7 +432,7 @@ def _row_from_metrics_file(
     metrics = dict(np.load(_metrics_path(unit_dir, k, fold_f), allow_pickle=True))
     row = {"fold": fold_f, "k": k}
 
-    if include_effective_rank and _fold_factors_exist(unit_dir, fold_f, require_b=True):
+    if include_effective_rank and _fold_factors_exist(unit_dir, fold_f, require_b=False):
         A_full = np.load(os.path.join(unit_dir, f"fold_{fold_f}", "A.npy"))
         A_k = A_full[:, :k]
         sv = np.linalg.svd(A_k, compute_uv=False)
@@ -559,6 +567,7 @@ def _run_common_subspace_fold_k(
     primary_label: str,
     full_corr_per_target: "np.ndarray | None" = None,
     null_augmented_config: "RRRConfig | None" = None,
+    save_primary_corr_per_target: bool = True,
 ) -> dict:
     """Shared evaluation for one (fold, k) projected subspace.
 
@@ -617,10 +626,13 @@ def _run_common_subspace_fold_k(
     metrics = {
         f"{primary_label}_corr": result[f"{primary_label}_corr"],
         f"{primary_label}_r2": result[f"{primary_label}_r2"],
-        f"{primary_label}_corr_per_target": result[f"{primary_label}_corr_per_target"],
         f"{primary_label}_r2_per_target": result[f"{primary_label}_r2_per_target"],
         f"{primary_label}_best_alphas": result[f"{primary_label}_best_alphas"],
     }
+    if save_primary_corr_per_target:
+        metrics[f"{primary_label}_corr_per_target"] = result[
+            f"{primary_label}_corr_per_target"
+        ]
     if null_augmented_config is not None and null_augmented_config.run_null_augmented:
         if full_corr_per_target is None:
             raise ValueError(
@@ -682,6 +694,8 @@ def _run_subspace_rank_loop_for_fold(
     progress_desc: str,
     B_full: "np.ndarray | None" = None,
     null_augmented_config: "RRRConfig | None" = None,
+    save_primary_corr_per_target: bool = True,
+    save_rrr_corr_per_target: bool = False,
 ) -> list[dict]:
     """Evaluate rank-k projected ridge models for one fold from a known A matrix.
 
@@ -736,6 +750,7 @@ def _run_subspace_rank_loop_for_fold(
             primary_label=primary_label,
             full_corr_per_target=full_corr_per_target,
             null_augmented_config=null_augmented_config,
+            save_primary_corr_per_target=save_primary_corr_per_target,
         )
 
         metrics_path = os.path.join(unit_dir, f"k{k}", f"fold_{fold_f}", "metrics.npz")
@@ -758,21 +773,29 @@ def _run_subspace_rank_loop_for_fold(
             Y_hat_rrr = Y_hat_full @ B_k @ B_k.T
             rrr_corr_arr = to_numpy(correlation_score(Y_test, Y_hat_rrr))
             rrr_r2_arr = to_numpy(r2_score(Y_test, Y_hat_rrr))
-            existing["rrr_corr_per_target"] = rrr_corr_arr
+            rrr_corr = float(fisher_z_mean(rrr_corr_arr))
+            existing["rrr_corr"] = rrr_corr
+            if save_rrr_corr_per_target:
+                existing["rrr_corr_per_target"] = rrr_corr_arr
             existing["rrr_r2_per_target"] = rrr_r2_arr
-            row["rrr_corr"] = float(fisher_z_mean(rrr_corr_arr))
-            row["rrr_r2"] = float(rrr_r2_arr.mean())
+            existing["rrr_r2"] = float(rrr_r2_arr.mean())
+            row["rrr_corr"] = rrr_corr
+            row["rrr_r2"] = float(existing["rrr_r2"])
             if sig_mask_flat is not None:
-                row["rrr_corr_sig"] = (
+                rrr_corr_sig = (
                     float(fisher_z_mean(rrr_corr_arr[sig_mask_flat]))
                     if sig_mask_flat.any()
                     else float("nan")
                 )
-                row["rrr_corr_nonsig"] = (
+                rrr_corr_nonsig = (
                     float(fisher_z_mean(rrr_corr_arr[~sig_mask_flat]))
                     if (~sig_mask_flat).any()
                     else float("nan")
                 )
+                existing["rrr_corr_sig"] = rrr_corr_sig
+                existing["rrr_corr_nonsig"] = rrr_corr_nonsig
+                row["rrr_corr_sig"] = rrr_corr_sig
+                row["rrr_corr_nonsig"] = rrr_corr_nonsig
 
         np.savez(metrics_path, **existing)
         rows.append(row)
@@ -1110,6 +1133,7 @@ def _run_rrr_for_unit(
             n_folds,
             refresh=config.refresh,
             require_factors=True,
+            require_b=config.save_b_matrices,
             required_metric_keys=(
                 {"null_aug_corr_per_target", "null_aug_r2_per_target"}
                 if config.run_null_augmented
@@ -1181,12 +1205,16 @@ def _run_rrr_for_unit(
         fold_dir = os.path.join(rrr_unit_dir, f"fold_{fold_f}")
         a_path = os.path.join(fold_dir, "A.npy")
         b_path = os.path.join(fold_dir, "B.npy")
-        if not config.refresh and _fold_factors_exist(
-            rrr_unit_dir, fold_f, require_b=True
-        ):
+        required_factors_exist = _fold_factors_exist(
+            rrr_unit_dir, fold_f, require_b=config.save_b_matrices
+        )
+        if not config.refresh and required_factors_exist:
             A_full = np.load(a_path)
-            B_full = np.load(b_path)
-            if A_full.shape[1] < max_k or B_full.shape[1] < max_k:
+            B_full = np.load(b_path) if config.save_b_matrices else None
+            factors_too_small = A_full.shape[1] < max_k or (
+                B_full is not None and B_full.shape[1] < max_k
+            )
+            if factors_too_small:
                 print("  Existing factors do not cover max rank; refitting")
                 rrr_result = fit_dense_rrr(
                     X_train,
@@ -1197,7 +1225,9 @@ def _run_rrr_for_unit(
                     precomputed_beta_full=baseline["beta_full_raw"],
                 )
                 A_full = rrr_result["A_dense"]
-                B_full = rrr_result["B_dense"]
+                B_full = (
+                    rrr_result["B_dense"] if config.save_b_matrices else None
+                )
                 save_rrr_factors(rrr_unit_dir, fold=fold_f, A=A_full, B=B_full)
             else:
                 print("  Loaded existing fold factors")
@@ -1211,7 +1241,9 @@ def _run_rrr_for_unit(
                 precomputed_beta_full=baseline["beta_full_raw"],
             )
             A_full = rrr_result["A_dense"]
-            B_full = rrr_result["B_dense"]
+            B_full = rrr_result["B_dense"] if config.save_b_matrices else None
+            if config.refresh and not config.save_b_matrices and os.path.exists(b_path):
+                os.remove(b_path)
             save_rrr_factors(rrr_unit_dir, fold=fold_f, A=A_full, B=B_full)
 
         all_rows.extend(
@@ -1235,6 +1267,8 @@ def _run_rrr_for_unit(
                 primary_label="nr",
                 progress_desc=f"  fold {fold_f}",
                 null_augmented_config=config,
+                save_primary_corr_per_target=config.save_nr_corr_per_target,
+                save_rrr_corr_per_target=config.save_rrr_corr_per_target,
             )
         )
 

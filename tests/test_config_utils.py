@@ -223,6 +223,13 @@ class TestDictToDataclass:
     def test_rrr_subspace_standardization_defaults_false(self):
         assert RRRConfig().standardize_subspace_inputs is False
 
+    def test_rrr_b_matrices_default_false(self):
+        assert RRRConfig().save_b_matrices is False
+
+    def test_rrr_per_target_corr_requires_b_matrices(self):
+        with pytest.raises(ValueError, match="requires save_b_matrices=True"):
+            RRRConfig(save_rrr_corr_per_target=True)
+
     def test_subspace_comparison_config_converts_run_dicts(self):
         config = dict_to_dataclass(
             {
