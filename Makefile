@@ -9,6 +9,7 @@ JOB_NAME ?= "$(PREFIX)-$(USR)-$(DT)"
 # Flip to `python` to run locally instead of submitting to Slurm
 CMD = sbatch --job-name=$(JOB_NAME) submit.sh
 # CMD = python
+SBATCH ?= sbatch
 
 export PYTHONPATH := $(CURDIR)
 
@@ -21,6 +22,10 @@ GCCA_ENCODING_CONFIG ?= configs/gcca/encoding.yml
 PRECOMPUTE_EPOCHS_CONFIG ?= configs/precompute_epochs/precompute_epochs_default.yml
 EMBED_CONFIG    ?= configs/embeddings/generate_gpt2_xl.yml
 RANDOM_EMBED_CONFIG ?= configs/embeddings/generate_random_gpt2_xl.yml
+PIPELINE_MODELS ?= gpt-j-6b gpt2-xl llama3-8b roberta-large random-gpt2-xl gpt2 glove
+DATASET         ?= podcast
+SIG_OVERRIDES   ?=
+RRR_OVERRIDES   ?=
 RUN_DIR         ?=   # required for plots: RUN_DIR=results/my_run
 DATA_ROOT       ?= data
 ATLAS_PATH      ?= atlases/destrieux_2009/destrieux2009_rois_lateralized.nii.gz
@@ -183,6 +188,69 @@ rrr:
 rrr-batch:
 	$(call run_config_list,RRR_CONFIGS,rrr,scripts/rrr/run_rrr.py)
 
+## Submit paired significance and cross-subject RRR jobs for each model.
+## Each RRR job starts only after its model's significance job succeeds.
+## Usage:
+##   make sig-rrr-batch
+##   make sig-rrr-batch PIPELINE_MODELS="gpt2 gpt2-xl" DATASET=podcast
+##   make sig-rrr-batch PIPELINE_MODELS="gpt2-xl" DATASET=cars-2 \
+##       SIG_OVERRIDES="--n_permutations=100" RRR_OVERRIDES="--refresh=false"
+sig-rrr-batch:
+	@set -eu; \
+	mkdir -p logs; \
+	case "$(DATASET)" in \
+		podcast) \
+			sig_root="configs/significance"; \
+			rrr_root="configs/rrr"; \
+			;; \
+		cars-2) \
+			sig_root="configs/brain_treebank/cars_2/significance"; \
+			rrr_root="configs/brain_treebank/cars_2/rrr"; \
+			;; \
+		*) \
+			echo "Unsupported DATASET '$(DATASET)'; expected podcast or cars-2" >&2; \
+			exit 2; \
+			;; \
+	esac; \
+	if [ -z "$(strip $(PIPELINE_MODELS))" ]; then \
+		echo "PIPELINE_MODELS must contain at least one model" >&2; \
+		exit 2; \
+	fi; \
+	for model in $(PIPELINE_MODELS); do \
+		sig_config="$$sig_root/$$model/significance.yml"; \
+		rrr_config="$$rrr_root/$$model/cross_subject.yml"; \
+		if [ ! -f "$$sig_config" ]; then \
+			echo "Missing significance config: $$sig_config" >&2; \
+			exit 2; \
+		fi; \
+		if [ ! -f "$$rrr_config" ]; then \
+			echo "Missing RRR config: $$rrr_config" >&2; \
+			exit 2; \
+		fi; \
+	done; \
+	for model in $(PIPELINE_MODELS); do \
+		sig_config="$$sig_root/$$model/significance.yml"; \
+		rrr_config="$$rrr_root/$$model/cross_subject.yml"; \
+		sig_submission="$$( $(SBATCH) --parsable --job-name="significance-$(USR)-$$model-$(DT)" submit.sh scripts/sig_lags/run_significance.py --config "$$sig_config" $(SIG_OVERRIDES) )"; \
+		sig_job_id="$${sig_submission%%;*}"; \
+		case "$$sig_job_id" in \
+			''|*[!0-9]*) \
+				echo "Could not parse significance job ID from: $$sig_submission" >&2; \
+				exit 2; \
+				;; \
+		esac; \
+		echo "Submitted significance for $$model: $$sig_job_id"; \
+		rrr_submission="$$( $(SBATCH) --parsable --dependency="afterok:$$sig_job_id" --job-name="rrr-cross-subject-$(USR)-$$model-$(DT)" submit.sh scripts/rrr/run_rrr.py --config "$$rrr_config" $(RRR_OVERRIDES) )"; \
+		rrr_job_id="$${rrr_submission%%;*}"; \
+		case "$$rrr_job_id" in \
+			''|*[!0-9]*) \
+				echo "Could not parse RRR job ID from: $$rrr_submission" >&2; \
+				exit 2; \
+				;; \
+		esac; \
+		echo "Submitted cross-subject RRR for $$model: $$rrr_job_id (afterok:$$sig_job_id)"; \
+	done
+
 ## Print out regions where electrode in data are located according to an atlas
 ## Usage:
 ## make print-regions DATA_ROOT=data RUN_DIR=results/my_run
@@ -197,4 +265,4 @@ sig-test:
 test:
 	python -m pytest tests/ -v
 
-.PHONY: sig sig-batch train plots rrr rrr-batch sig-test test generate-embeddings generate-embeddings-batch generate-random-embeddings download-models precompute-epochs print-atlas-regions
+.PHONY: sig sig-batch train plots rrr rrr-batch sig-rrr-batch sig-test test generate-embeddings generate-embeddings-batch generate-random-embeddings download-models precompute-epochs print-atlas-regions
