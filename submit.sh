@@ -8,7 +8,6 @@
 #SBATCH --output='./logs/%x.out'
 #SBATCH --error='./logs/%x.err'
 #SBATCH --constraint=gpu80
-SBATCH --dependency=afterok:10754870:10754905
 
 module purge
 source align_env/bin/activate

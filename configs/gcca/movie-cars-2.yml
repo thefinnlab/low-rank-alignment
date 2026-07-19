@@ -23,14 +23,14 @@ views:
     unit_dir: results/gpt2-xl-batch_layer48_offset0/rrr
     rank: 32
   - name: cars2_gpt2xl_l0
-    rrr_config: configs/brain_treebank/cars_2/rrr_gpt2xl_layer24.yml
+    rrr_config: configs/brain_treebank/cars_2/rrr/gpt2-xl/cross_subject.yml
     unit_dir: results/gpt2-xl-batch_layer0_offset0/movie-cars-2/rrr
     rank: 16
   - name: cars2_gpt2xl_l24
-    rrr_config: configs/brain_treebank/cars_2/rrr_gpt2xl_layer24.yml
+    rrr_config: configs/brain_treebank/cars_2/rrr/gpt2-xl/cross_subject.yml
     unit_dir: results/gpt2-xl-batch_layer24_offset0/movie-cars-2/rrr
     rank: 16
   - name: cars2_gpt2xl_l48
-    rrr_config: configs/brain_treebank/cars_2/rrr_gpt2xl_layer24.yml
+    rrr_config: configs/brain_treebank/cars_2/rrr/gpt2-xl/cross_subject.yml
     unit_dir: results/gpt2-xl-batch_layer48_offset0/movie-cars-2/rrr
     rank: 16

@@ -189,6 +189,8 @@ pca/
 !scripts/rrr/compare_subspaces.py
 !configs/rrr/
 !configs/rrr/compare_subspaces.yml
+!configs/brain_treebank/cars_2/rrr/
+!configs/brain_treebank/cars_2/rrr/**
 *.pdf
 *.csv
 processed_data/regions.txt
