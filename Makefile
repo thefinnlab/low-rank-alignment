@@ -17,6 +17,7 @@ export PYTHONPATH := $(CURDIR)
 ENCODING_CONFIG ?= configs/encoding/encoding_mid.yml
 SIG_CONFIG      ?= configs/significance/significance_default.yml
 RRR_CONFIG      ?= configs/rrr/rrr_default.yml
+LANGUAGE_DECODING_CONFIG ?= configs/rrr/language_decoding.yml
 GCCA_CONFIG     ?= configs/gcca/maxvar_gcca.yml
 GCCA_ENCODING_CONFIG ?= configs/gcca/encoding.yml
 PRECOMPUTE_EPOCHS_CONFIG ?= configs/precompute_epochs/precompute_epochs_default.yml
@@ -180,6 +181,14 @@ plots:
 rrr:
 	mkdir -p logs
 	$(CMD) scripts/rrr/run_rrr.py --config $(RRR_CONFIG) $(OVERRIDES)
+
+## Decode linguistic targets from saved RRR input subspaces
+## Usage:
+##   make language-decoding CMD=python
+##   make language-decoding LANGUAGE_DECODING_CONFIG=configs/rrr/language_decoding.yml
+language-decoding:
+	mkdir -p logs
+	$(CMD) scripts/rrr/run_language_decoding.py --config $(LANGUAGE_DECODING_CONFIG) $(OVERRIDES)
 
 ## Release RRR runs for a list of configs
 ## Usage:

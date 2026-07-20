@@ -12,7 +12,9 @@ The retained pipeline has three main analysis entrypoints:
 
 Downstream pairwise subspace reproducibility analysis is available through `scripts/rrr/compare_subspaces.py`, which computes ordered CCA/RSA comparisons over configured saved RRR/PCA unit directories and writes reusable CSV/NPZ summaries plus quick-look plots under each base unit directory. Config-driven partial-support MAXVAR GCCA is available through `scripts/gcca/run_gcca.py`. It uses an explicitly configured anchor and independently ranked views, selects component-specific support and ridge values within the anchor folds, and saves calibrated per-view ambient maps, word-level scores, reliability sufficient statistics, and fold-stable axis/block diagnostics under a dataset-scoped directory. `scripts/gcca/run_encoding.py` evaluates calibrated fold-specific GCCA embeddings against the union of significant electrodes from anchor-dataset member runs. Its optional `run_rrr` mode fits fold-local RRR to each shared-dimension GCCA encoder, saves the full rank-k input factor `A`, transforms the GCCA embeddings through it, and uses a fresh ridge encoder for the final GCCA metrics. It does not refit raw-embedding baselines; instead it loads existing RRR per-target results, matches `(subject, electrode, lag)` identities, and writes direct correlation-versus-rank comparisons. The companion comparison notebook provides the interactive component explorer.
 
-The Makefile also provides batch targets for releasing multiple config runs:
+Saved RRR input subspaces can also be probed with `scripts/rrr/run_language_decoding.py`. The config-driven podcast analysis projects word embeddings through within-dataset fold-matched or cross-dataset fold-averaged `A` factors, then fits fold-safe linear decoders for lexical, syntactic, predictability, sentence, and intonation-unit targets. It saves reduced and ambient embedding-space decoder weights at every task/rank/fold, full-embedding references, alignment provenance, reusable tables, and a multi-panel performance-versus-rank plot. New targets are registered as word-aligned getter functions in `src/utils/language_tasks.py`.
+
+The Makefile exposes the language probe as `make language-decoding` and also provides batch targets for releasing multiple config runs:
 `make generate-embeddings-batch`, `make sig-batch`, and `make rrr-batch`. `make sig-rrr-batch` submits paired significance and cross-subject RRR jobs for each model in `PIPELINE_MODELS`; `DATASET` selects `podcast` or `cars-2`, and each RRR job receives an `afterok` dependency on its matching significance job. Random-init embedding runs can use `make generate-random-embeddings`, which wraps `scripts/utilities/generate_random_embeddings.py`.
 
 ## Generating Embeddings
@@ -35,7 +37,7 @@ Downstream configs can store list-valued `encoding.per_model_config.layer` entri
 
 | File | Purpose |
 |------|---------|
-| `Makefile` | Targets for retained pipeline stages and utilities: significance, encoding training, RRR, plots, embedding generation, random embeddings, epoch precompute, atlas printing, and tests |
+| `Makefile` | Targets for retained pipeline stages and utilities: significance, encoding training, RRR, language decoding, plots, embedding generation, random embeddings, epoch precompute, atlas printing, and tests |
 | `submit.sh` | SLURM job submission script |
 | `pytest.ini` | Pytest config |
 
@@ -46,6 +48,7 @@ Downstream configs can store list-valued `encoding.per_model_config.layer` entri
 | `configs/encoding/` | Encoding training configs |
 | `configs/significance/` | Lag-cluster significance configs |
 | `configs/rrr/` | RRR configs, including optional embedded PCA settings and an example saved-view banded RRR analysis in `multi_view.yml` |
+| `configs/rrr/language_decoding.yml` | Example podcast language-feature decoding sweep over saved RRR input factors |
 | `configs/rrr/compare_subspaces.yml` | Example config for ordered pairwise CCA/RSA comparisons over saved RRR/PCA subspace factors |
 | `configs/gcca/maxvar_gcca.yml` | Example anchor/view configuration for partial-support MAXVAR GCCA and downstream score artifacts |
 | `configs/gcca/encoding.yml` | Downstream calibrated GCCA encoding and saved-RRR comparison configuration |
@@ -61,6 +64,7 @@ Downstream configs can store list-valued `encoding.per_model_config.layer` entri
 | `scripts/encoding/train_encoding_models.py` | Ridge encoding training entrypoint; writes slim per-subject `encoding_results.joblib`, `corrs.npy`, optional `arbitrary_corrs.npy`, plots, and alpha diagnostics |
 | `scripts/rrr/run_rrr.py` | Raw-input RRR rank sweep with full-ridge baselines, cross-dataset evaluation, and multiview banded-ridge analysis over saved RRR subspaces |
 | `scripts/rrr/compare_subspaces.py` | Pairwise saved-subspace reproducibility analysis; computes ordered CCA/RSA over configured RRR/PCA `A.npy` factors and saves tables, component artifacts, and plots |
+| `scripts/rrr/run_language_decoding.py` | Decode registered word-level language targets across a saved RRR rank sweep with leakage-safe within- or cross-dataset folds |
 | `scripts/gcca/run_gcca.py` | Config-driven partial-support MAXVAR GCCA; saves fold models, calibrated word representations, support/reliability tables, and stability blocks |
 | `scripts/gcca/run_encoding.py` | Evaluate calibrated GCCA ridge encodings without rebuilding baselines and compare matched targets with saved RRR runs |
 | `scripts/utilities/generate_embeddings.py` | Generate contextual HuggingFace embeddings |
@@ -96,6 +100,7 @@ Downstream configs can store list-valued `encoding.per_model_config.layer` entri
 | `src/utils/srrr.py`, `rrr_utils.py`, `subspace_utils.py`, `subspace_compare.py`, `subspace_io.py` | RRR factor fitting, RRR result I/O, rank evaluation, saved-subspace discovery, comparison-run loading, and subspace CCA/RSA helpers |
 | `src/utils/gcca.py`, `multiview_rrr.py` | Config-driven partial-support GCCA orchestration and shared saved-view preparation/banded-ridge utilities for multiview RRR |
 | `src/utils/decomposition.py` | Shared multi-embedding alignment, raw neural-target, fold, and target-manifest preparation used by RRR and GCCA encoding |
+| `src/utils/language_tasks.py`, `language_decoding.py` | Extensible podcast language-target registry plus saved-RRR projection, linear decoding, artifact, and plot orchestration |
 | `src/utils/plotting.py` | Correlation, alpha, RRR/PCA rank, and utility plots |
 | `src/utils/atlas.py` | Atlas lookup and electrode-region grouping |
 

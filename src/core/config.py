@@ -17,6 +17,13 @@ class ScriptMode(str, Enum):
     MULTI_VIEW = "multi_view"
 
 
+class LanguageDecodingMode(str, Enum):
+    """Relationship between the decoding dataset and saved RRR factors."""
+
+    WITHIN_DATASET = "within_dataset"
+    CROSS_DATASET = "cross_dataset"
+
+
 def gpt2_xl_results_dir(base_dir, offset, layer):
     return os.path.join(base_dir, f"gpt2xl_layer{layer}_offset{offset}")
 
@@ -261,6 +268,62 @@ class RRRConfig:
             raise ValueError("Every RRR view name must be non-empty")
         if any(int(view.rank) < 1 for view in self.views):
             raise ValueError("Every RRR view rank must be positive")
+
+
+@dataclass
+class LanguageDecodingConfig:
+    """Decode word-aligned linguistic targets from saved RRR input subspaces."""
+
+    encoding: EncodingConfig = field(default_factory=EncodingConfig)
+    rrr_run_path: str | None = None
+    mode: LanguageDecodingMode = LanguageDecodingMode.WITHIN_DATASET
+    source_name: str | None = None
+    fold_results_dir: str | None = None
+    output_dir: str | None = None
+    rank_grid: list[int] = field(default_factory=lambda: [1, 2, 5, 10, 20, 50])
+    tasks: list[str] = field(
+        default_factory=lambda: [
+            "part_of_speech",
+            "content_word",
+            "surprisal",
+            "entropy",
+            "sentence_onset",
+            "iu_onset",
+            "sentence_position",
+            "iu_position",
+            "word_duration",
+            "word_length",
+            "word_zipf_frequency",
+        ]
+    )
+    task_data: dict = field(
+        default_factory=lambda: {
+            "word_annotations": "processed_data/df_word_onset_with_pos_class.csv",
+            "sentence_annotations": "processed_data/all_sentences_podcast.csv",
+            "iu_annotations": "processed_data/iu_boundaries.csv",
+        }
+    )
+    logistic_cs: list[float] = field(
+        default_factory=lambda: [1e-4, 1e-3, 1e-2, 1e-1, 1.0, 10.0, 100.0]
+    )
+    refresh: bool = False
+
+    def __post_init__(self):
+        self.validate()
+
+    def validate(self):
+        if not self.rrr_run_path:
+            raise ValueError("LanguageDecodingConfig.rrr_run_path is required")
+        if not self.rank_grid or any(int(rank) < 1 for rank in self.rank_grid):
+            raise ValueError("rank_grid must contain positive integers")
+        if len(set(int(rank) for rank in self.rank_grid)) != len(self.rank_grid):
+            raise ValueError("rank_grid must not contain duplicate ranks")
+        if not self.tasks or any(not str(task).strip() for task in self.tasks):
+            raise ValueError("tasks must contain at least one non-empty task name")
+        if len(set(self.tasks)) != len(self.tasks):
+            raise ValueError("tasks must not contain duplicate names")
+        if not self.logistic_cs or any(float(value) <= 0 for value in self.logistic_cs):
+            raise ValueError("logistic_cs must contain positive values")
 
 
 @dataclass

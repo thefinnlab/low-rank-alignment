@@ -1,0 +1,40 @@
+encoding:
+  data_root: data/
+  dataset: podcast
+  model: transformer
+  offset: 0
+  subjects: null
+  num_folds: 5
+  ridge_cv_folds: 5
+  per_model_config:
+    model_dir: gpt2-xl-batch
+    layer: 24
+
+# May point directly to a unit containing fold_*/A.npy or to its parent run root.
+rrr_run_path: results/gpt2-xl-batch_layer24_offset0/rrr
+mode: within_dataset
+source_name: podcast_gpt2-xl-batch_layer24
+fold_results_dir: null
+output_dir: null
+
+rank_grid: [1, 2, 5, 10, 20, 40, 100, 200, 400, 800, 1600]
+tasks:
+  - part_of_speech
+  - content_word
+  - surprisal
+  - entropy
+  - sentence_onset
+  - iu_onset
+  - sentence_position
+  - iu_position
+  - word_duration
+  - word_length
+  - word_zipf_frequency
+
+task_data:
+  word_annotations: processed_data/df_word_onset_with_pos_class.csv
+  sentence_annotations: processed_data/all_sentences_podcast.csv
+  iu_annotations: processed_data/iu_boundaries.csv
+
+logistic_cs: [0.0001, 0.001, 0.01, 0.1, 1.0, 10.0, 100.0]
+refresh: false
