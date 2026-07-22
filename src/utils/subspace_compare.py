@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import json
 from pathlib import Path
 
 import numpy as np
@@ -1239,6 +1240,112 @@ def extrinsic_mean_basis(
     return left_vectors[:, :rank].astype(np.float32, copy=False)
 
 
+def unnormalized_mean_basis(
+    matrices: list[np.ndarray],
+    rank: int,
+) -> np.ndarray:
+    """Aggregate leading factors without normalizing their column spaces.
+
+    The returned basis contains the leading left singular vectors of the raw
+    ``matrix[:, :rank]`` blocks concatenated across inputs.  Consequently both
+    between-matrix scale and within-matrix singular-value structure contribute
+    to the result.
+    """
+    if not matrices:
+        raise ValueError("At least one subspace matrix is required")
+    rank = int(rank)
+    if rank < 1:
+        raise ValueError("rank must be at least 1")
+
+    first = np.asarray(matrices[0])
+    if first.ndim != 2:
+        raise ValueError(f"Expected 2D matrices, got shape {first.shape}")
+    ambient_dim = first.shape[0]
+    blocks = []
+    for i, matrix in enumerate(matrices):
+        arr = np.asarray(matrix)
+        if arr.ndim != 2:
+            raise ValueError(f"Expected 2D matrix at index {i}, got shape {arr.shape}")
+        if arr.shape[0] != ambient_dim:
+            raise ValueError(
+                "All subspace matrices must share ambient dimension, got "
+                f"{ambient_dim} and {arr.shape[0]} at index {i}"
+            )
+        if rank > arr.shape[1]:
+            raise ValueError(
+                f"rank {rank} exceeds source matrix width {arr.shape[1]} at index {i}"
+            )
+        blocks.append(arr[:, :rank])
+
+    concatenated = np.concatenate(blocks, axis=1)
+    left_vectors, singular_values, _ = np.linalg.svd(
+        concatenated, full_matrices=False
+    )
+    if (
+        np.count_nonzero(singular_values > np.finfo(singular_values.dtype).eps)
+        < rank
+    ):
+        raise ValueError(
+            f"Aggregated source matrices are rank deficient for rank {rank}"
+        )
+    return left_vectors[:, :rank].astype(np.float32, copy=False)
+
+
+def aggregate_subspace_basis(
+    matrices: list[np.ndarray],
+    rank: int,
+    method: str = "extrinsic",
+) -> np.ndarray:
+    """Aggregate matrices into a rank-k basis using the requested method."""
+    if method == "extrinsic":
+        return extrinsic_mean_basis(matrices, rank=rank)
+    if method == "unnormalized":
+        return unnormalized_mean_basis(matrices, rank=rank)
+    raise ValueError(
+        "method must be 'extrinsic' or 'unnormalized', " f"got {method!r}"
+    )
+
+
+def aggregate_subspace_from_unit_dir(
+    unit_dir: str | Path,
+    rank: int,
+    method: str = "extrinsic",
+) -> np.ndarray:
+    """Load fold factors from a unit directory and aggregate them."""
+    return aggregate_subspace_basis(
+        load_unit_subspace_matrices(unit_dir), rank=rank, method=method
+    )
+
+
+def validate_aggregation_cache(
+    output_dir: str | Path,
+    method: str,
+    *,
+    refresh: bool = False,
+) -> None:
+    """Record aggregation provenance and reject incompatible cached outputs."""
+    if method not in {"extrinsic", "unnormalized"}:
+        raise ValueError(f"Unsupported subspace aggregation method: {method!r}")
+    root = Path(output_dir)
+    marker = root / "subspace_aggregation.json"
+    if marker.exists():
+        existing = json.loads(marker.read_text()).get("method", "extrinsic")
+        if existing != method and not refresh:
+            raise ValueError(
+                f"Existing results in {root} use subspace aggregation {existing!r}, "
+                f"but {method!r} was requested. Set refresh=true or use another "
+                "output directory."
+            )
+    elif method != "extrinsic" and root.exists() and any(root.iterdir()) and not refresh:
+        raise ValueError(
+            f"Existing legacy results in {root} are assumed to use 'extrinsic'; "
+            f"cannot reuse them with {method!r}. Set refresh=true or use another "
+            "output directory."
+        )
+    root.mkdir(parents=True, exist_ok=True)
+    marker.write_text(json.dumps({"method": method}, indent=2))
+
+
 def extrinsic_mean_from_unit_dir(unit_dir: str | Path, rank: int) -> np.ndarray:
     """Load fold factors from a unit directory and return their mean basis."""
-    return extrinsic_mean_basis(load_unit_subspace_matrices(unit_dir), rank=rank)
+    return aggregate_subspace_from_unit_dir(unit_dir, rank=rank, method="extrinsic")

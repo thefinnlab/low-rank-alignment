@@ -1,6 +1,8 @@
 import numpy as np
+import pytest
 
 from src.utils.subspace_compare import (
+    aggregate_subspace_basis,
     cca_shared_dimensionality,
     default_cross_rank_text,
     discover_subspace_sources,
@@ -29,6 +31,7 @@ from src.utils.subspace_compare import (
     summarize_procrustes_fold_results,
     select_maxvar_alpha,
     transform_maxvar_gcca_view,
+    validate_aggregation_cache,
     validate_matching_fold_indices,
 )
 
@@ -630,3 +633,35 @@ def test_extrinsic_mean_basis_rejects_mismatched_ambient_dimensions():
 def test_extrinsic_mean_basis_rejects_insufficient_source_rank():
     with np.testing.assert_raises_regex(ValueError, "exceeds source matrix width"):
         extrinsic_mean_basis([np.eye(5, 2)], rank=3)
+
+
+def test_unnormalized_aggregation_preserves_factor_energy():
+    e1 = np.array([[10.0], [0.0]])
+    e2 = np.array([[0.0], [1.0]])
+    matrices = [e1, e2, e2]
+
+    extrinsic = aggregate_subspace_basis(matrices, rank=1, method="extrinsic")
+    unnormalized = aggregate_subspace_basis(
+        matrices, rank=1, method="unnormalized"
+    )
+
+    assert abs(float(extrinsic[:, 0] @ np.array([0.0, 1.0]))) > 0.999
+    assert abs(float(unnormalized[:, 0] @ np.array([1.0, 0.0]))) > 0.999
+
+
+def test_aggregate_subspace_basis_rejects_unknown_method():
+    with np.testing.assert_raises_regex(ValueError, "method must"):
+        aggregate_subspace_basis([np.eye(3, 1)], rank=1, method="weighted")
+
+
+def test_aggregation_cache_rejects_incompatible_reuse(tmp_path):
+    validate_aggregation_cache(tmp_path, "extrinsic")
+    with pytest.raises(ValueError, match="use subspace aggregation"):
+        validate_aggregation_cache(tmp_path, "unnormalized")
+
+
+def test_aggregation_cache_treats_legacy_outputs_as_extrinsic(tmp_path):
+    (tmp_path / "metrics.npz").write_bytes(b"legacy")
+    with pytest.raises(ValueError, match="legacy results"):
+        validate_aggregation_cache(tmp_path, "unnormalized")
+    validate_aggregation_cache(tmp_path, "extrinsic")

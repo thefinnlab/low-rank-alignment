@@ -13,8 +13,10 @@ encoding:
 # May point directly to a unit containing fold_*/A.npy or to its parent run root.
 rrr_run_path: results/gpt2-xl-batch_layer24_offset0/rrr
 # Optional PCA comparison source with the same saved fold_*/A.npy layout.
-pca_run_path: null
+pca_run_path: results/gpt2-xl-batch_layer24_offset0/pca
 mode: within_dataset
+# Used only in cross_dataset mode when averaging saved source folds.
+subspace_aggregation: extrinsic
 source_name: podcast_gpt2-xl-batch_layer24
 fold_results_dir: null
 output_dir: null
@@ -43,9 +45,9 @@ tasks:
   - word_zipf_frequency
 
 task_data:
-  word_annotations: processed_data/df_word_onset_with_pos_class.csv
-  sentence_annotations: processed_data/all_sentences_podcast.csv
-  iu_annotations: processed_data/iu_boundaries.csv
+  word_annotations: ../processed_data/df_word_onset_with_pos_class.csv
+  sentence_annotations: ../processed_data/all_sentences_podcast.csv
+  iu_annotations: ../processed_data/iu_boundaries.csv
 
 logistic_cs: [0.0001, 0.001, 0.01, 0.1, 1.0, 10.0, 100.0]
 refresh: false

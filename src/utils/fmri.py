@@ -29,6 +29,7 @@ class PreparedFMRI:
     """Concatenated story matrices plus row boundaries."""
 
     stimulus: np.ndarray
+    pre_fir_stimulus: np.ndarray
     responses: np.ndarray | None
     story_slices: dict[str, slice]
 
@@ -225,6 +226,7 @@ def prepare_fmri_data(
     lanczosinterp2D, _, _ = _toolbox_modules(fmri_repo_root)
     frames, sequences = load_story_word_data(fmri_repo_root, stories)
     stimulus_parts = []
+    pre_fir_parts = []
     response_parts = []
     story_slices = {}
     cursor = 0
@@ -241,7 +243,9 @@ def prepare_fmri_data(
         )
         stop = -int(trim) if trim else None
         trimmed = downsampled[5 + int(trim) : stop]
-        delayed = make_delayed(_zscore_columns(trimmed), ndelays).astype(np.float32)
+        pre_fir = _zscore_columns(trimmed).astype(np.float32)
+        delayed = make_delayed(pre_fir, ndelays).astype(np.float32)
+        pre_fir_parts.append(pre_fir)
         stimulus_parts.append(delayed)
         story_slices[story] = slice(cursor, cursor + len(delayed))
         cursor += len(delayed)
@@ -263,6 +267,7 @@ def prepare_fmri_data(
             response_parts.append(combined)
     return PreparedFMRI(
         stimulus=np.vstack(stimulus_parts),
+        pre_fir_stimulus=np.vstack(pre_fir_parts),
         responses=np.vstack(response_parts) if response_parts else None,
         story_slices=story_slices,
     )

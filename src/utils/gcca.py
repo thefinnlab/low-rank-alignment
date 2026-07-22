@@ -32,6 +32,7 @@ from src.utils.subspace_io import (
     run_metadata,
     sanitize_name,
 )
+from src.utils.subspace_compare import aggregate_subspace_from_unit_dir
 
 SCHEMA_VERSION = 1
 
@@ -210,11 +211,11 @@ def _run_into(config, resolved, anchor, output: Path) -> None:
                 raise ValueError(f"View {name} fold indices differ from anchor")
             bases[name], modes[name] = fold_bases, "matching_anchor_fold"
         else:
-            stacked = np.concatenate([fold_bases[key] for key in sorted(fold_bases)], axis=1)
-            left, _, _ = np.linalg.svd(stacked, full_matrices=False)
-            mean_basis = left[:, :rank]
+            mean_basis = aggregate_subspace_from_unit_dir(
+                run.unit_dir, rank=rank, method=config.subspace_aggregation
+            )
             bases[name] = {fold: mean_basis for fold in range(len(base.test_idxs))}
-            modes[name] = "cross_dataset_fold_mean"
+            modes[name] = f"cross_dataset_fold_{config.subspace_aggregation}"
 
     summary_rows, view_rows, component_rows, pair_rows = [], [], [], []
     inner_grid_rows, inner_rows, inner_alignment_rows = [], [], []
@@ -453,6 +454,7 @@ def _run_into(config, resolved, anchor, output: Path) -> None:
         "created_at": datetime.now(timezone.utc).isoformat(), "anchor": anchor.name,
         "output_dir": str(resolve_gcca_output_dir(config, anchor)),
         "views": list(names), "view_ranks": ranks, "basis_modes": modes,
+        "subspace_aggregation": config.subspace_aggregation,
         "shared_dimensions": dimensions, "ridge_alphas": list(map(float, config.ridge_alphas)),
         "support_cumulative_mass": config.support_cumulative_mass,
         "axis_match_correlation_threshold": config.axis_match_correlation_threshold,

@@ -14,7 +14,7 @@ from src.core.config import RRRConfig, SubspaceComparisonRun
 from src.core.registry import resolve_dataset_context
 from src.utils.data_loaders import load_sig_electrodes
 from src.utils.embeddings import load_embeddings
-from src.utils.subspace_compare import extrinsic_mean_from_unit_dir
+from src.utils.subspace_compare import aggregate_subspace_from_unit_dir
 from src.utils.subspace_io import (
     ResolvedSubspaceRun,
     load_base_comparison_data,
@@ -209,11 +209,15 @@ def load_view_bases(
             bases[view.name] = fold_bases
             modes[view.name] = "matching_target_fold_raw"
         else:
-            mean_basis = extrinsic_mean_from_unit_dir(run.unit_dir, rank=rank)
+            mean_basis = aggregate_subspace_from_unit_dir(
+                run.unit_dir, rank=rank, method=config.subspace_aggregation
+            )
             bases[view.name] = {
                 fold: mean_basis for fold in range(len(test_idxs))
             }
-            modes[view.name] = "cross_dataset_fold_svd"
+            modes[view.name] = (
+                f"cross_dataset_fold_{config.subspace_aggregation}"
+            )
     return bases, modes
 
 

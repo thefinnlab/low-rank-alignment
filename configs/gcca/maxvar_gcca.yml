@@ -2,6 +2,8 @@ anchor: podcast_gpt2xl_l0
 output_root: results/maxvar_gcca
 output_dir: null
 refresh: false
+# Used for views whose factors come from another dataset/stimulus.
+subspace_aggregation: extrinsic
 
 shared_dimensions: [1, 2, 4, 8, 16, 32]
 ridge_alphas: [0.0, 1.0e-6, 1.0e-4, 1.0e-2, 1.0e-1, 1.0]

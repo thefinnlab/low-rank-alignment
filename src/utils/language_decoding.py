@@ -33,7 +33,10 @@ from src.utils.data_loaders import (
 )
 from src.utils.embeddings import load_embeddings
 from src.utils.language_tasks import PodcastTaskContext, get_language_task
-from src.utils.subspace_compare import extrinsic_mean_basis
+from src.utils.subspace_compare import (
+    aggregate_subspace_basis,
+    validate_aggregation_cache,
+)
 
 
 def resolve_subspace_unit_dir(run_path: str, kind: str = "subspace") -> Path:
@@ -450,7 +453,11 @@ def _run_subspace_decoding(
     else:
         source_matrices = list(matrices_by_fold.values())
         mean_factors = {
-            rank: extrinsic_mean_basis(source_matrices, rank=int(rank))
+            rank: aggregate_subspace_basis(
+                source_matrices,
+                rank=int(rank),
+                method=config.subspace_aggregation,
+            )
             for rank in config.rank_grid
         }
 
@@ -540,6 +547,9 @@ def run_language_decoding(config: LanguageDecodingConfig) -> Path:
         Path(target_root) / "language_decoding" / config.mode.value / source_identity
     )
     output_dir.mkdir(parents=True, exist_ok=True)
+    validate_aggregation_cache(
+        output_dir, config.subspace_aggregation, refresh=config.refresh
+    )
 
     context = PodcastTaskContext(word_df, enc.data_root, config.task_data)
     task_targets = {

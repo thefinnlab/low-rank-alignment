@@ -9,6 +9,8 @@ encoding:
     layer: 24
 
 mode: multi_view
+# Used for views whose factors come from another dataset/stimulus.
+subspace_aggregation: extrinsic
 output_dir: null
 sig_dir: null
 rrr_output_dir: null
