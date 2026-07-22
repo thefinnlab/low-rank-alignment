@@ -225,6 +225,39 @@ def _normalize_surface(value) -> str:
     return re.sub(r"^[^\w]+|[^\w]+$", "", str(value).lower())
 
 
+def _sentence_groups(context: PodcastTaskContext) -> list[np.ndarray]:
+    sentence_ids = context.words["sentence_idx"].to_numpy(dtype=int)
+    return [
+        np.flatnonzero(sentence_ids == sentence_id)
+        for sentence_id in np.unique(sentence_ids[sentence_ids >= 0])
+    ]
+
+
+def _iu_groups(context: PodcastTaskContext) -> list[np.ndarray]:
+    starts = np.flatnonzero(context.iu_alignment()[0])
+    stops = np.r_[starts[1:], len(context.words)]
+    return [np.arange(start, stop) for start, stop in zip(starts, stops)]
+
+
+def _unit_end_target(
+    n_words: int, groups: list[np.ndarray], *, unlabeled_value: float = 0.0
+) -> np.ndarray:
+    target = np.full(n_words, unlabeled_value, dtype=np.float64)
+    for indices in groups:
+        target[indices[:-1]] = 0.0
+        target[indices[-1]] = 1.0
+    return target
+
+
+def _unit_length_target(
+    n_words: int, groups: list[np.ndarray], *, unlabeled_value: float = np.nan
+) -> np.ndarray:
+    target = np.full(n_words, unlabeled_value, dtype=np.float64)
+    for indices in groups:
+        target[indices] = len(indices)
+    return target
+
+
 @register_language_task("part_of_speech", "Part of speech", "categorical", 0.2)
 def part_of_speech_target(context: PodcastTaskContext) -> np.ndarray:
     return context.words["pos_class"].to_numpy(dtype=np.int64)
@@ -243,6 +276,46 @@ def surprisal_target(context: PodcastTaskContext) -> np.ndarray:
 @register_language_task("entropy", "Entropy", "continuous", 0.0)
 def entropy_target(context: PodcastTaskContext) -> np.ndarray:
     return context.words["entropy"].to_numpy(dtype=np.float64)
+
+
+@register_language_task("story_position", "Position in story (words)", "continuous", 0.0)
+def story_position_target(context: PodcastTaskContext) -> np.ndarray:
+    n_words = len(context.words)
+    if n_words <= 1:
+        return np.zeros(n_words, dtype=np.float64)
+    return np.linspace(0.0, 1.0, n_words, dtype=np.float64)
+
+
+@register_language_task(
+    "story_time_position", "Position in story (time)", "continuous", 0.0
+)
+def story_time_position_target(context: PodcastTaskContext) -> np.ndarray:
+    onsets = context.words["onset"].to_numpy(dtype=np.float64)
+    if len(onsets) <= 1:
+        return np.zeros(len(onsets), dtype=np.float64)
+    duration = onsets[-1] - onsets[0]
+    if duration <= 0:
+        raise ValueError("Story time position requires the final onset after the first")
+    return (onsets - onsets[0]) / duration
+
+
+@register_language_task(
+    "fine_part_of_speech", "Fine-grained part of speech", "categorical"
+)
+def fine_part_of_speech_target(context: PodcastTaskContext) -> np.ndarray:
+    tags = context.words["pos"]
+    if tags.isna().any():
+        raise ValueError("Fine-grained part-of-speech annotations contain missing tags")
+    string_tags = tags.astype(str).to_numpy()
+    tag_ids = {tag: index for index, tag in enumerate(sorted(set(string_tags)))}
+    return np.array([tag_ids[tag] for tag in string_tags], dtype=np.int64)
+
+
+@register_language_task(
+    "surprisal_class", "Surprisal class", "categorical", 1.0 / 3.0
+)
+def surprisal_class_target(context: PodcastTaskContext) -> np.ndarray:
+    return context.words["surprise_class"].to_numpy(dtype=np.int64)
 
 
 @register_language_task("sentence_onset", "Sentence onset", "categorical", 0.5)
@@ -267,9 +340,7 @@ def iu_onset_target(context: PodcastTaskContext) -> np.ndarray:
 @register_language_task("sentence_position", "Position in sentence", "continuous", 0.0)
 def sentence_position_target(context: PodcastTaskContext) -> np.ndarray:
     target = np.full(len(context.words), np.nan, dtype=np.float64)
-    sentence_ids = context.words["sentence_idx"].to_numpy(dtype=int)
-    for sentence_id in np.unique(sentence_ids[sentence_ids >= 0]):
-        indices = np.flatnonzero(sentence_ids == sentence_id)
+    for indices in _sentence_groups(context):
         if len(indices) == 1:
             target[indices] = 0.0
         else:
@@ -280,6 +351,37 @@ def sentence_position_target(context: PodcastTaskContext) -> np.ndarray:
 @register_language_task("iu_position", "Position in IU", "continuous", 0.0)
 def iu_position_target(context: PodcastTaskContext) -> np.ndarray:
     return context.iu_alignment()[1].copy()
+
+
+@register_language_task("sentence_end", "Sentence end", "categorical", 0.5)
+def sentence_end_target(context: PodcastTaskContext) -> np.ndarray:
+    return _unit_end_target(
+        len(context.words), _sentence_groups(context), unlabeled_value=np.nan
+    )
+
+
+@register_language_task("iu_end", "IU end", "categorical", 0.5)
+def iu_end_target(context: PodcastTaskContext) -> np.ndarray:
+    return _unit_end_target(len(context.words), _iu_groups(context))
+
+
+@register_language_task("sentence_length", "Sentence length", "continuous", 0.0)
+def sentence_length_target(context: PodcastTaskContext) -> np.ndarray:
+    return _unit_length_target(len(context.words), _sentence_groups(context))
+
+
+@register_language_task("iu_length", "IU length", "continuous", 0.0)
+def iu_length_target(context: PodcastTaskContext) -> np.ndarray:
+    return _unit_length_target(len(context.words), _iu_groups(context))
+
+
+@register_language_task("pre_word_pause", "Pause before word", "continuous", 0.0)
+def pre_word_pause_target(context: PodcastTaskContext) -> np.ndarray:
+    onsets = context.words["onset"].to_numpy(dtype=np.float64)
+    offsets = context.words["offset"].to_numpy(dtype=np.float64)
+    target = np.full(len(context.words), np.nan, dtype=np.float64)
+    target[1:] = np.maximum(0.0, onsets[1:] - offsets[:-1])
+    return target
 
 
 @register_language_task("word_duration", "Word duration", "continuous", 0.0)

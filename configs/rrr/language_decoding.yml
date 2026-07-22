@@ -23,10 +23,19 @@ tasks:
   - content_word
   - surprisal
   - entropy
+  - surprisal_class
+  - story_position
+  - story_time_position
   - sentence_onset
+  - sentence_end
   - iu_onset
+  - iu_end
   - sentence_position
+  - sentence_length
   - iu_position
+  - iu_length
+  - pre_word_pause
+  - fine_part_of_speech
   - word_duration
   - word_length
   - word_zipf_frequency

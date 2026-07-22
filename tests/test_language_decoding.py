@@ -23,7 +23,7 @@ def _task_context(tmp_path):
             "word_idx": np.arange(6),
             "word": ["Hello,", "small", "world!", "Run", "very", "fast."],
             "start": [0.0, 0.2, 0.4, 1.0, 1.2, 1.4],
-            "end": [0.1, 0.3, 0.5, 1.1, 1.3, 1.5],
+            "end": [0.1, 0.45, 0.5, 1.1, 1.3, 1.5],
         }
     ).set_index("word_idx")
     annotations = pd.DataFrame(
@@ -33,16 +33,18 @@ def _task_context(tmp_path):
             "onset": word_df["start"].to_numpy(),
             "offset": word_df["end"].to_numpy(),
             "pos_class": [0, 2, 0, 1, 3, 3],
+            "pos": ["UH", "JJ", "NN", "VB", "RB", "RB"],
             "is_content": [1, 1, 1, 1, 0, 1],
             "surprise": [1, 2, 3, 4, 5, 6],
+            "surprise_class": [0, 0, 1, 1, 2, 2],
             "entropy": [6, 5, 4, 3, 2, 1],
-            "sentence_idx": [-1, 0, 0, 1, 1, 1],
+            "sentence_idx": [-1, 0, 0, 1, 2, 2],
         }
     )
     sentences = pd.DataFrame({"sentence_onset": [0.2, 1.0]})
     iu = pd.DataFrame(
         {
-            "time": [0.35, 1.15],
+            "time": [0.35, 1.35],
             "prev_word": ["small", "missing"],
             "next_word": ["world", "also-missing"],
         }
@@ -75,10 +77,19 @@ def test_task_getters_are_word_aligned_and_positions_are_normalized(tmp_path, mo
         "content_word",
         "surprisal",
         "entropy",
+        "story_position",
+        "story_time_position",
+        "fine_part_of_speech",
+        "surprisal_class",
         "sentence_onset",
         "iu_onset",
         "sentence_position",
         "iu_position",
+        "sentence_end",
+        "iu_end",
+        "sentence_length",
+        "iu_length",
+        "pre_word_pause",
         "word_duration",
         "word_length",
         "word_zipf_frequency",
@@ -88,20 +99,65 @@ def test_task_getters_are_word_aligned_and_positions_are_normalized(tmp_path, mo
 
     np.testing.assert_allclose(
         get_language_task("sentence_position").getter(context),
-        [np.nan, 0.0, 1.0, 0.0, 0.5, 1.0],
+        [np.nan, 0.0, 1.0, 0.0, 0.0, 1.0],
         equal_nan=True,
+    )
+    np.testing.assert_allclose(
+        get_language_task("story_position").getter(context),
+        [0.0, 0.2, 0.4, 0.6, 0.8, 1.0],
+    )
+    np.testing.assert_allclose(
+        get_language_task("story_time_position").getter(context),
+        [0.0, 1 / 7, 2 / 7, 5 / 7, 6 / 7, 1.0],
     )
     np.testing.assert_array_equal(
         get_language_task("sentence_onset").getter(context), [0, 1, 0, 1, 0, 0]
     )
     np.testing.assert_array_equal(
-        get_language_task("iu_onset").getter(context), [1, 0, 1, 0, 1, 0]
+        get_language_task("iu_onset").getter(context), [1, 0, 1, 0, 0, 1]
+    )
+    np.testing.assert_allclose(
+        get_language_task("sentence_end").getter(context),
+        [np.nan, 0, 1, 1, 0, 1],
+        equal_nan=True,
+    )
+    np.testing.assert_array_equal(
+        get_language_task("iu_end").getter(context), [0, 1, 0, 0, 1, 1]
+    )
+    np.testing.assert_allclose(
+        get_language_task("sentence_length").getter(context),
+        [np.nan, 2, 2, 1, 2, 2],
+        equal_nan=True,
+    )
+    np.testing.assert_array_equal(
+        get_language_task("iu_length").getter(context), [2, 2, 3, 3, 3, 1]
+    )
+    np.testing.assert_allclose(
+        get_language_task("pre_word_pause").getter(context),
+        [np.nan, 0.1, 0.0, 0.5, 0.1, 0.1],
+        equal_nan=True,
+    )
+    np.testing.assert_array_equal(
+        get_language_task("fine_part_of_speech").getter(context), [3, 0, 1, 4, 2, 2]
+    )
+    np.testing.assert_array_equal(
+        get_language_task("surprisal_class").getter(context), [0, 0, 1, 1, 2, 2]
     )
     provenance = context.iu_alignment()[2]
     assert provenance["method"].tolist() == ["exact_pair", "time_fallback"]
     np.testing.assert_allclose(
         get_language_task("word_length").getter(context), [5, 5, 5, 3, 4, 4]
     )
+
+
+def test_fine_part_of_speech_rejects_missing_tags(tmp_path):
+    context = _task_context(tmp_path)
+    words = context.words.copy()
+    words.loc[0, "pos"] = np.nan
+    context._cache["words"] = words
+
+    with pytest.raises(ValueError, match="missing tags"):
+        get_language_task("fine_part_of_speech").getter(context)
 
 
 def test_saved_raw_weights_reproduce_continuous_pipeline_decisions():
