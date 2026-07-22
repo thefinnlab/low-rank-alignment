@@ -20,5 +20,9 @@ pooling: mean
 significance_dir: results/fmri/gpt2-xl_layer24/significance
 source_rrr_unit_dir: results/gpt2-xl_layer24_offset0/rrr
 output_dir: results/fmri/gpt2-xl_layer24/cross_dataset_rrr
+# cross_dataset loads saved fold factors; within_fmri learns FIR RRR and PCA here.
+source_mode: cross_dataset
+# extrinsic normalizes each factor; unnormalized preserves factor magnitudes.
+subspace_aggregation: extrinsic
 rank_grid: [1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 1600]
 refresh: false

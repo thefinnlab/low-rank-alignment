@@ -8,6 +8,7 @@ import yaml
 
 from src.core.config import (
     EncodingConfig,
+    FMRICrossDatasetRRRConfig,
     RRRConfig,
     RRRViewConfig,
     ScriptMode,
@@ -320,6 +321,18 @@ class TestApplyOverrides:
         result = apply_overrides(config, {"refresh": True})
         assert result.refresh is True
         assert config.refresh is False
+
+    def test_subspace_aggregation_defaults_and_validation(self):
+        assert RRRConfig().subspace_aggregation == "extrinsic"
+        assert FMRICrossDatasetRRRConfig().subspace_aggregation == "extrinsic"
+        with pytest.raises(ValueError, match="subspace_aggregation"):
+            RRRConfig(subspace_aggregation="weighted")
+
+    def test_within_fmri_does_not_require_cross_dataset_source(self):
+        config = FMRICrossDatasetRRRConfig(
+            source_mode="within_fmri", source_rrr_unit_dir=""
+        )
+        assert config.source_mode == "within_fmri"
 
 
 # ---------------------------------------------------------------------------

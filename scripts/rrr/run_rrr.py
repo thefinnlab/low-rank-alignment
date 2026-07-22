@@ -106,7 +106,10 @@ from src.utils.rrr_utils import (
 from src.utils.subspace_utils import (
     evaluate_input_space,
 )
-from src.utils.subspace_compare import extrinsic_mean_from_unit_dir
+from src.utils.subspace_compare import (
+    aggregate_subspace_from_unit_dir,
+    validate_aggregation_cache,
+)
 from src.utils.alpha_grids import resolve_ridge_alphas, save_alpha_diagnostics
 from src.utils.decomposition import _get_decomposition_inputs
 from src.utils.multiview_rrr import (
@@ -1619,6 +1622,9 @@ def _run_multi_view_rrr(
     """Fit banded ridge over saved RRR views, then run the standard RRR sweep."""
     from sklearn.preprocessing import StandardScaler
 
+    validate_aggregation_cache(
+        rrr_dir, config.subspace_aggregation, refresh=config.refresh
+    )
     resolved = resolve_rrr_views(config)
     target_key = target_dataset_key(config, subject_ids)
     union, detailed_frames, significance_sources = union_view_significance(
@@ -1757,6 +1763,7 @@ def _run_multi_view_rrr(
         "views": view_names,
         "view_ranks": {view.name: int(view.rank) for view in config.views},
         "basis_modes": basis_modes,
+        "subspace_aggregation": config.subspace_aggregation,
         "band_boundaries": band_boundaries,
         "significance_sources": significance_sources,
     }
@@ -2250,13 +2257,16 @@ def _load_cross_dataset_A_by_rank(
     cross_result_dir: str,
     kind: str,
     ranks: list[int],
+    aggregation: str = "extrinsic",
 ) -> dict[int, np.ndarray]:
     """Load rank-specific averaged source fold A matrices for cross-dataset evaluation."""
     unit_dir = _cross_dataset_source_unit_dir(cross_result_dir, kind)
     averaged = {}
     for rank in sorted(set(int(k) for k in ranks)):
         try:
-            averaged[rank] = extrinsic_mean_from_unit_dir(unit_dir, rank=rank)
+            averaged[rank] = aggregate_subspace_from_unit_dir(
+                unit_dir, rank=rank, method=aggregation
+            )
         except FileNotFoundError as exc:
             raise FileNotFoundError(
                 f"Could not load cross-dataset {kind.upper()} source factors from "
@@ -2414,6 +2424,10 @@ def _run_cross_dataset_rrr(
     if not config.cross_result_dir:
         raise ValueError("RRRConfig.cross_result_dir is required for mode=cross_dataset")
 
+    validate_aggregation_cache(
+        rrr_dir, config.subspace_aggregation, refresh=config.refresh
+    )
+
     print(
         "Loading rank-specific cross-dataset source RRR subspaces from "
         f"{config.cross_result_dir}"
@@ -2422,6 +2436,7 @@ def _run_cross_dataset_rrr(
         config.cross_result_dir,
         kind="rrr",
         ranks=config.rank_grid,
+        aggregation=config.subspace_aggregation,
     )
 
     A_pca_by_rank = None
@@ -2436,8 +2451,12 @@ def _run_cross_dataset_rrr(
             config.cross_result_dir,
             kind="pca",
             ranks=config.rank_grid,
+            aggregation=config.subspace_aggregation,
         )
         pca_dir = _resolve_pca_sibling_dir(rrr_dir)
+        validate_aggregation_cache(
+            pca_dir, config.subspace_aggregation, refresh=config.refresh
+        )
 
     n_folds = len(_load_reference_test_idxs(output_dir, subject_ids))
     rrr_resume_plan = _transfer_output_resume_plan(rrr_dir, config, n_folds)

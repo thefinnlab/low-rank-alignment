@@ -24,6 +24,17 @@ class LanguageDecodingMode(str, Enum):
     CROSS_DATASET = "cross_dataset"
 
 
+SUBSPACE_AGGREGATION_METHODS = {"extrinsic", "unnormalized"}
+
+
+def _validate_subspace_aggregation(value: str) -> None:
+    if value not in SUBSPACE_AGGREGATION_METHODS:
+        raise ValueError(
+            "subspace_aggregation must be one of "
+            f"{sorted(SUBSPACE_AGGREGATION_METHODS)}, got {value!r}"
+        )
+
+
 def gpt2_xl_results_dir(base_dir, offset, layer):
     return os.path.join(base_dir, f"gpt2xl_layer{layer}_offset{offset}")
 
@@ -195,6 +206,7 @@ class RRRConfig:
         None  # Source results run root for mode=cross_dataset.
     )
     views: list[RRRViewConfig] = field(default_factory=list)
+    subspace_aggregation: str = "extrinsic"
 
     # Full-model banded ridge used by mode=multi_view.
     banded_ridge_alphas: list[float] | None = None
@@ -247,6 +259,7 @@ class RRRConfig:
         self.validate()
 
     def validate(self):
+        _validate_subspace_aggregation(self.subspace_aggregation)
         if self.save_rrr_corr_per_target and not self.save_b_matrices:
             raise ValueError(
                 "save_rrr_corr_per_target=True requires save_b_matrices=True"
@@ -282,6 +295,7 @@ class LanguageDecodingConfig:
     fold_results_dir: str | None = None
     output_dir: str | None = None
     rank_grid: list[int] = field(default_factory=lambda: [1, 2, 5, 10, 20, 50])
+    subspace_aggregation: str = "extrinsic"
     tasks: list[str] = field(
         default_factory=lambda: [
             "part_of_speech",
@@ -313,6 +327,7 @@ class LanguageDecodingConfig:
         self.validate()
 
     def validate(self):
+        _validate_subspace_aggregation(self.subspace_aggregation)
         if not self.rrr_run_path:
             raise ValueError("LanguageDecodingConfig.rrr_run_path is required")
         if not self.rank_grid or any(int(rank) < 1 for rank in self.rank_grid):
@@ -398,12 +413,14 @@ class MaxvarGCCAConfig:
     relative_neighboring_eigengap_threshold: float = 0.05
     output_root: str = "results/maxvar_gcca"
     output_dir: str | None = None
+    subspace_aggregation: str = "extrinsic"
     refresh: bool = False
 
     def __post_init__(self):
         self.validate()
 
     def validate(self):
+        _validate_subspace_aggregation(self.subspace_aggregation)
         if len(self.views) < 2:
             raise ValueError("MaxvarGCCAConfig.views must contain at least two views")
         names = [view.name for view in self.views]
@@ -622,19 +639,27 @@ class FMRICrossDatasetRRRConfig:
     significance_dir: str = "results/fmri/gpt2-xl_layer24/significance"
     source_rrr_unit_dir: str = "results/gpt2-xl_layer24_offset0/rrr"
     output_dir: str = "results/fmri/gpt2-xl_layer24/cross_dataset_rrr"
+    source_mode: str = "cross_dataset"
+    subspace_aggregation: str = "extrinsic"
     rank_grid: list[int] = field(
         default_factory=lambda: [1, 2, 4, 8, 16, 32, 64, 128]
     )
     refresh: bool = False
 
     def validate(self):
+        _validate_subspace_aggregation(self.subspace_aggregation)
+        if self.source_mode not in {"cross_dataset", "within_fmri"}:
+            raise ValueError(
+                "source_mode must be 'cross_dataset' or 'within_fmri', "
+                f"got {self.source_mode!r}"
+            )
         if not self.fmri.subjects:
             raise ValueError("At least one fMRI subject is required")
         if not self.rank_grid or any(int(rank) < 1 for rank in self.rank_grid):
             raise ValueError("rank_grid must contain positive integers")
         if len(set(map(int, self.rank_grid))) != len(self.rank_grid):
             raise ValueError("rank_grid must not contain duplicates")
-        if not self.source_rrr_unit_dir:
+        if self.source_mode == "cross_dataset" and not self.source_rrr_unit_dir:
             raise ValueError("source_rrr_unit_dir is required")
 
     def __post_init__(self):

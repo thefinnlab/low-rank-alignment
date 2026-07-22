@@ -1,6 +1,7 @@
 import numpy as np
 import pandas as pd
 import h5py
+from types import SimpleNamespace
 
 from src.utils import fmri
 
@@ -86,6 +87,7 @@ def test_prepare_uses_fixed_leading_five_plus_symmetric_trim(monkeypatch):
         "unused", ["story"], embeddings, trim=5, ndelays=1
     )
     assert prepared.stimulus.shape == (5, 2)
+    assert prepared.pre_fir_stimulus.shape == (5, 2)
     assert prepared.story_slices == {"story": slice(0, 5)}
 
 
@@ -178,3 +180,47 @@ def test_pca_sibling_resolution():
         fmri.resolve_pca_sibling("results/model/cross_dataset_rrr/source")
         == "results/model/cross_dataset_pca/source"
     )
+
+
+def test_within_fmri_bases_save_fir_blocks_rank_bases_and_pre_fir_pca(
+    tmp_path, monkeypatch
+):
+    from scripts.fmri import run_cross_dataset_rrr as runner
+
+    pre_fir = np.column_stack(
+        [np.arange(8, dtype=float), np.zeros(8), np.zeros(8)]
+    ).astype(np.float32)
+    prepared = fmri.PreparedFMRI(
+        stimulus=np.zeros((8, 6), dtype=np.float32),
+        pre_fir_stimulus=pre_fir,
+        responses=np.zeros((8, 3), dtype=np.float32),
+        story_slices={"story": slice(0, 8)},
+    )
+    fir_a = np.array([[10.0], [0.0], [0.0], [0.0], [1.0], [0.0]], dtype=np.float32)
+    monkeypatch.setattr(
+        runner,
+        "fit_dense_rrr",
+        lambda *args, **kwargs: {"A_dense": fir_a},
+    )
+    config = SimpleNamespace(
+        rank_grid=[1],
+        subspace_aggregation="unnormalized",
+        fmri=SimpleNamespace(ndelays=2),
+    )
+    ridge_fit = runner.FinalRidgeFit(
+        test_prediction=np.zeros((2, 3), dtype=np.float32),
+        train_prediction=np.zeros((8, 3), dtype=np.float32),
+        coefficients=np.zeros((6, 3), dtype=np.float32),
+        best_alphas=np.ones(3),
+    )
+
+    bases, metadata = runner._fit_within_fmri_bases(
+        prepared, ridge_fit, ambient_dim=3, config=config, output_dir=tmp_path
+    )
+
+    np.testing.assert_array_equal(np.load(metadata["rrr"]), fir_a)
+    assert len(metadata["rrr_delay_blocks"]) == 2
+    assert abs(float(bases["rrr"][1][:, 0] @ np.array([1.0, 0.0, 0.0]))) > 0.999
+    assert abs(float(bases["pca"][1][:, 0] @ np.array([1.0, 0.0, 0.0]))) > 0.999
+    assert (tmp_path / "rrr/k1/A.npy").exists()
+    assert (tmp_path / "pca/k1/A.npy").exists()

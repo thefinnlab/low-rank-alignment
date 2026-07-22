@@ -160,7 +160,7 @@ fmri-sig:
 	mkdir -p logs
 	$(CMD) scripts/fmri/run_significance.py --config $(FMRI_SIG_CONFIG) $(OVERRIDES)
 
-## Evaluate saved iEEG RRR and optional PCA axes on significant fMRI voxels.
+## Evaluate cross-dataset factors or learn fMRI FIR-RRR/PCA axes on significant voxels.
 fmri-rrr:
 	mkdir -p logs
 	$(CMD) scripts/fmri/run_cross_dataset_rrr.py --config $(FMRI_RRR_CONFIG) $(OVERRIDES)
