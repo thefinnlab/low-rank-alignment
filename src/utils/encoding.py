@@ -137,6 +137,8 @@ def get_ridge_model_constructor(
     solver_params: dict | None = None,
     y_in_cpu: bool | None = None,
     force_cpu: bool | None = None,
+    cv=None,
+    standardize: bool = True,
 ):
     """
     Return a factory function for StandardScaler + RidgeCV pipelines.
@@ -155,6 +157,9 @@ def get_ridge_model_constructor(
             sklearn fallback.
         force_cpu: Optional Himalaya RidgeCV force_cpu override. Ignored by
             sklearn fallback.
+        cv: Optional explicit CV splitter or split iterable. When omitted,
+            contiguous K-fold CV is used as before.
+        standardize: Whether to prepend a StandardScaler to the ridge model.
     """
     from src.utils.constants import RIDGE_ALPHAS
 
@@ -172,7 +177,7 @@ def get_ridge_model_constructor(
 
     if alphas is None:
         alphas = RIDGE_ALPHAS
-    inner_cv = KFold(n_splits=ridge_cv_folds, shuffle=False)
+    inner_cv = cv if cv is not None else KFold(n_splits=ridge_cv_folds, shuffle=False)
 
     def create_model(_):
         ridge_kwargs = {"fit_intercept": True, "cv": inner_cv}
@@ -183,10 +188,8 @@ def get_ridge_model_constructor(
                 ridge_kwargs["Y_in_cpu"] = y_in_cpu
             if force_cpu is not None:
                 ridge_kwargs["force_cpu"] = force_cpu
-        return make_pipeline(
-            StandardScaler(),
-            RidgeCV(alphas, **ridge_kwargs),
-        )
+        ridge = RidgeCV(alphas, **ridge_kwargs)
+        return make_pipeline(StandardScaler(), ridge) if standardize else make_pipeline(ridge)
 
     return create_model
 

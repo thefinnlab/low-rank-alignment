@@ -22,6 +22,9 @@ GCCA_CONFIG     ?= configs/gcca/maxvar_gcca.yml
 GCCA_ENCODING_CONFIG ?= configs/gcca/encoding.yml
 PRECOMPUTE_EPOCHS_CONFIG ?= configs/precompute_epochs/precompute_epochs_default.yml
 EMBED_CONFIG    ?= configs/embeddings/generate_gpt2_xl.yml
+FMRI_EMBED_CONFIG ?= configs/fmri/generate_gpt2_xl.yml
+FMRI_SIG_CONFIG ?= configs/fmri/significance_gpt2_xl_layer24.yml
+FMRI_RRR_CONFIG ?= configs/fmri/cross_dataset_rrr_gpt2_xl_layer24.yml
 RANDOM_EMBED_CONFIG ?= configs/embeddings/generate_random_gpt2_xl.yml
 PIPELINE_MODELS ?= gpt-j-6b gpt2-xl llama3-8b roberta-large random-gpt2-xl gpt2 glove
 DATASET         ?= podcast
@@ -146,6 +149,21 @@ precompute-epochs:
 generate-embeddings:
 	mkdir -p logs
 	$(CMD) scripts/utilities/generate_embeddings.py $(foreach c,$(EMBED_CONFIG),--config $(c)) $(OVERRIDES)
+
+## Generate contextual embeddings independently for each configured fMRI story.
+fmri-generate-embeddings:
+	mkdir -p logs
+	$(CMD) scripts/fmri/generate_embeddings.py --config $(FMRI_EMBED_CONFIG) $(OVERRIDES)
+
+## Find significant fMRI voxels from session-held-out full-embedding models.
+fmri-sig:
+	mkdir -p logs
+	$(CMD) scripts/fmri/run_significance.py --config $(FMRI_SIG_CONFIG) $(OVERRIDES)
+
+## Evaluate saved iEEG RRR and optional PCA axes on significant fMRI voxels.
+fmri-rrr:
+	mkdir -p logs
+	$(CMD) scripts/fmri/run_cross_dataset_rrr.py --config $(FMRI_RRR_CONFIG) $(OVERRIDES)
 
 ## Release embedding-generation runs for a list of configs
 ## Usage:

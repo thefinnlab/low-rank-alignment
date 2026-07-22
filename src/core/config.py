@@ -542,3 +542,99 @@ class GenerateEmbeddingsConfig:
         None  # None → use hf_model_id; can point to a local tokenizer dir
     )
     add_prefix_space: bool = True
+
+
+@dataclass
+class FMRIDataConfig:
+    """Paths and preprocessing shared by the deep-fMRI-dataset analyses."""
+
+    fmri_repo_root: str = "data/deep-fMRI-dataset"
+    embedding_root: str = "data/fmri/stimuli"
+    sessions: list[int] = field(default_factory=lambda: [1, 2, 3, 4, 5])
+    subjects: list[str] = field(default_factory=lambda: ["UTS03"])
+    trim: int = 5
+    ndelays: int = 4
+
+
+@dataclass
+class FMRIGenerateEmbeddingsConfig:
+    """Generate one set of contextual embeddings per fMRI story."""
+
+    generation: GenerateEmbeddingsConfig = field(default_factory=GenerateEmbeddingsConfig)
+    fmri: FMRIDataConfig = field(default_factory=FMRIDataConfig)
+
+
+@dataclass
+class FMRIRidgeConfig:
+    """Himalaya ridge settings shared by fMRI significance and rank sweeps."""
+
+    alphas: list[float] | None = None
+    alpha_grid: dict = field(default_factory=dict)
+    solver_params: dict | None = None
+    y_in_cpu: bool | None = None
+    force_cpu: bool | None = None
+    log_alphas: bool = False
+
+
+@dataclass
+class FMRISignificanceConfig:
+    """Session-held-out voxel significance for deep-fMRI-dataset."""
+
+    fmri: FMRIDataConfig = field(default_factory=FMRIDataConfig)
+    ridge: FMRIRidgeConfig = field(default_factory=FMRIRidgeConfig)
+    model_dir: str = "gpt2-xl"
+    layer: int = 24
+    pooling: str = "mean"
+    output_dir: str = "results/fmri/gpt2-xl_layer24/significance"
+    batch_subjects: bool = False
+    num_null_shifts: int = 10000
+    null_seed: int = 42
+    null_batch_size: int = 1024
+    minimal_shift: int = 10
+    fdr_q: float = 0.05
+
+    def validate(self):
+        if len(self.fmri.sessions) < 2:
+            raise ValueError("fMRI significance requires at least two sessions")
+        if not self.fmri.subjects:
+            raise ValueError("At least one fMRI subject is required")
+        if self.num_null_shifts < 1 or self.null_batch_size < 1:
+            raise ValueError("Null counts and batch size must be positive")
+        if self.minimal_shift < 1:
+            raise ValueError("minimal_shift must be positive")
+        if not 0 < self.fdr_q < 1:
+            raise ValueError("fdr_q must lie in (0, 1)")
+
+    def __post_init__(self):
+        self.validate()
+
+
+@dataclass
+class FMRICrossDatasetRRRConfig:
+    """Evaluate saved iEEG RRR/PCA input spaces on fMRI responses."""
+
+    fmri: FMRIDataConfig = field(default_factory=FMRIDataConfig)
+    ridge: FMRIRidgeConfig = field(default_factory=FMRIRidgeConfig)
+    model_dir: str = "gpt2-xl"
+    layer: int = 24
+    pooling: str = "mean"
+    significance_dir: str = "results/fmri/gpt2-xl_layer24/significance"
+    source_rrr_unit_dir: str = "results/gpt2-xl_layer24_offset0/rrr"
+    output_dir: str = "results/fmri/gpt2-xl_layer24/cross_dataset_rrr"
+    rank_grid: list[int] = field(
+        default_factory=lambda: [1, 2, 4, 8, 16, 32, 64, 128]
+    )
+    refresh: bool = False
+
+    def validate(self):
+        if not self.fmri.subjects:
+            raise ValueError("At least one fMRI subject is required")
+        if not self.rank_grid or any(int(rank) < 1 for rank in self.rank_grid):
+            raise ValueError("rank_grid must contain positive integers")
+        if len(set(map(int, self.rank_grid))) != len(self.rank_grid):
+            raise ValueError("rank_grid must not contain duplicates")
+        if not self.source_rrr_unit_dir:
+            raise ValueError("source_rrr_unit_dir is required")
+
+    def __post_init__(self):
+        self.validate()
