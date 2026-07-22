@@ -1,4 +1,4 @@
-"""Decode word-aligned language features from saved RRR input subspaces."""
+"""Decode word-aligned language features from saved RRR/PCA input subspaces."""
 
 from src.core.config import LanguageDecodingConfig
 from src.utils.config_utils import (
@@ -10,7 +10,7 @@ from src.utils.language_decoding import run_language_decoding
 
 
 def main():
-    args, overrides = parse_args("Decode linguistic features from RRR subspaces")
+    args, overrides = parse_args("Decode linguistic features from RRR/PCA subspaces")
     config = load_config(args.config, overrides, LanguageDecodingConfig)
     configs = expand_per_model_layer_configs(config)
     for layer_config in configs:

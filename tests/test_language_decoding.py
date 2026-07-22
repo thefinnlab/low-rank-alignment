@@ -10,8 +10,11 @@ from src.utils.config_utils import dict_to_dataclass
 from src.utils.language_decoding import (
     _decoder_metrics,
     _fit_decoder,
+    _run_subspace_decoding,
     _weight_payload,
+    plot_language_decoding,
     resolve_rrr_unit_dir,
+    resolve_subspace_unit_dir,
     summarize_language_decoding,
 )
 from src.utils.language_tasks import PodcastTaskContext, get_language_task
@@ -199,10 +202,21 @@ def test_resolve_rrr_unit_and_config_enum(tmp_path):
     assert config.mode == LanguageDecodingMode.CROSS_DATASET
 
 
+def test_resolve_pca_unit_from_run_root(tmp_path):
+    unit = tmp_path / "run" / "pca" / "fold_0"
+    unit.mkdir(parents=True)
+    np.save(unit / "A.npy", np.eye(3))
+    assert (
+        resolve_subspace_unit_dir(str(tmp_path / "run"), "pca")
+        == unit.parent.resolve()
+    )
+
+
 def test_nested_language_decoding_config_roundtrip():
     config = dict_to_dataclass(
         {
             "rrr_run_path": "results/example",
+            "pca_run_path": "results/example/pca",
             "mode": "cross_dataset",
             "encoding": {
                 "dataset": "podcast",
@@ -214,6 +228,7 @@ def test_nested_language_decoding_config_roundtrip():
         LanguageDecodingConfig,
     )
     assert config.mode == LanguageDecodingMode.CROSS_DATASET
+    assert config.pca_run_path == "results/example/pca"
     assert config.encoding.num_folds == 7
     assert config.tasks == ["surprisal"]
 
@@ -221,10 +236,48 @@ def test_nested_language_decoding_config_roundtrip():
 def test_summary_uses_task_specific_primary_metrics():
     results = pd.DataFrame(
         [
-            {"task": "surprisal", "kind": "continuous", "space": "rank", "k": 1, "primary_score": 0.2, "correlation": 0.2, "r2": 0.0},
-            {"task": "surprisal", "kind": "continuous", "space": "rank", "k": 1, "primary_score": 0.4, "correlation": 0.4, "r2": 0.1},
-            {"task": "content_word", "kind": "categorical", "space": "full", "k": None, "primary_score": 0.6, "balanced_accuracy": 0.6, "macro_f1": 0.5, "accuracy": 0.7},
-            {"task": "content_word", "kind": "categorical", "space": "full", "k": None, "primary_score": 0.8, "balanced_accuracy": 0.8, "macro_f1": 0.7, "accuracy": 0.8},
+            {
+                "task": "surprisal",
+                "kind": "continuous",
+                "space": "rank",
+                "subspace": "rrr",
+                "k": 1,
+                "primary_score": 0.2,
+                "correlation": 0.2,
+                "r2": 0.0,
+            },
+            {
+                "task": "surprisal",
+                "kind": "continuous",
+                "space": "rank",
+                "subspace": "rrr",
+                "k": 1,
+                "primary_score": 0.4,
+                "correlation": 0.4,
+                "r2": 0.1,
+            },
+            {
+                "task": "content_word",
+                "kind": "categorical",
+                "space": "full",
+                "subspace": "full",
+                "k": None,
+                "primary_score": 0.6,
+                "balanced_accuracy": 0.6,
+                "macro_f1": 0.5,
+                "accuracy": 0.7,
+            },
+            {
+                "task": "content_word",
+                "kind": "categorical",
+                "space": "full",
+                "subspace": "full",
+                "k": None,
+                "primary_score": 0.8,
+                "balanced_accuracy": 0.8,
+                "macro_f1": 0.7,
+                "accuracy": 0.8,
+            },
         ]
     )
     summary = summarize_language_decoding(results)
@@ -232,3 +285,114 @@ def test_summary_uses_task_specific_primary_metrics():
     categorical = summary[summary.task == "content_word"].iloc[0]
     assert categorical.primary_score == pytest.approx(0.7)
     assert categorical.n_folds == 2
+
+
+def test_summary_keeps_rrr_and_pca_rank_rows_separate():
+    rows = []
+    for subspace, score in (("rrr", 0.4), ("pca", 0.2)):
+        for fold in range(2):
+            rows.append(
+                {
+                    "task": "surprisal",
+                    "kind": "continuous",
+                    "space": "rank",
+                    "subspace": subspace,
+                    "k": 2,
+                    "primary_score": score,
+                    "correlation": score,
+                    "r2": 0.0,
+                    "fold": fold,
+                }
+            )
+    summary = summarize_language_decoding(pd.DataFrame(rows))
+    assert set(summary["subspace"]) == {"rrr", "pca"}
+    assert len(summary) == 2
+
+
+def test_plot_overlays_rrr_and_pca(tmp_path):
+    summary = pd.DataFrame(
+        [
+            {
+                "task": "surprisal",
+                "kind": "continuous",
+                "space": "full",
+                "subspace": "full",
+                "k": np.nan,
+                "primary_score": 0.5,
+                "sem_lower": 0.01,
+                "sem_upper": 0.01,
+            },
+            *[
+                {
+                    "task": "surprisal",
+                    "kind": "continuous",
+                    "space": "rank",
+                    "subspace": subspace,
+                    "k": rank,
+                    "primary_score": score,
+                    "sem_lower": 0.02,
+                    "sem_upper": 0.02,
+                }
+                for subspace, rank, score in (
+                    ("rrr", 1, 0.2),
+                    ("rrr", 2, 0.3),
+                    ("pca", 1, 0.1),
+                    ("pca", 2, 0.15),
+                )
+            ],
+        ]
+    )
+    output = tmp_path / "rank_analysis.png"
+    plot_language_decoding(summary, output)
+    assert output.exists()
+
+
+def test_run_subspace_decoding_loads_paths_and_validates_fold_set(
+    tmp_path, monkeypatch
+):
+    unit = tmp_path / "pca"
+    for fold in (0, 1):
+        fold_dir = unit / f"fold_{fold}"
+        fold_dir.mkdir(parents=True)
+        np.save(fold_dir / "A.npy", np.eye(4))
+    config = LanguageDecodingConfig(
+        rrr_run_path="unused", rank_grid=[1, 3], tasks=["surprisal"]
+    )
+    seen_shapes = []
+
+    def capture_fit(*args):
+        seen_shapes.append((args[4], args[5].shape, args[-1]))
+        return {"fold": args[3], "k": args[4], "subspace": args[-1]}
+
+    monkeypatch.setattr("src.utils.language_decoding._run_one_fit", capture_fit)
+    folds = [
+        (np.array([2, 3]), np.array([0, 1])),
+        (np.array([0, 1]), np.array([2, 3])),
+    ]
+    rows = _run_subspace_decoding(
+        output_dir=tmp_path / "output",
+        subspace="pca",
+        factor_paths=sorted(unit.glob("fold_*/A.npy")),
+        folds=folds,
+        X=np.eye(4),
+        task_targets={"surprisal": np.arange(4, dtype=float)},
+        config=config,
+    )
+    assert len(rows) == 4
+    assert seen_shapes == [
+        (1, (4, 1), "pca"),
+        (3, (4, 3), "pca"),
+        (1, (4, 1), "pca"),
+        (3, (4, 3), "pca"),
+    ]
+
+    with pytest.raises(ValueError, match="do not match decoding folds"):
+        _run_subspace_decoding(
+            output_dir=tmp_path / "output",
+            subspace="pca",
+            factor_paths=sorted(unit.glob("fold_*/A.npy")),
+            folds=[*folds, (np.array([0, 1]), np.array([2, 3]))],
+            X=np.eye(4),
+            task_targets={"surprisal": np.arange(4, dtype=float)},
+            config=config,
+        )

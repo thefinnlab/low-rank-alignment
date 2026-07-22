@@ -272,10 +272,11 @@ class RRRConfig:
 
 @dataclass
 class LanguageDecodingConfig:
-    """Decode word-aligned linguistic targets from saved RRR input subspaces."""
+    """Decode word-aligned linguistic targets from saved RRR/PCA subspaces."""
 
     encoding: EncodingConfig = field(default_factory=EncodingConfig)
     rrr_run_path: str | None = None
+    pca_run_path: str | None = None
     mode: LanguageDecodingMode = LanguageDecodingMode.WITHIN_DATASET
     source_name: str | None = None
     fold_results_dir: str | None = None
