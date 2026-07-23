@@ -9,7 +9,10 @@ from src.utils.language_decoding import (
     _decoder_metrics,
     _fit_decoder,
     _run_subspace_decoding,
+    _prepare_multiview_subspaces,
+    _prepare_single_view_subspaces,
     _weight_payload,
+    compose_multiview_factor,
     plot_language_decoding,
     resolve_rrr_unit_dir,
     resolve_subspace_unit_dir,
@@ -415,12 +418,18 @@ def test_run_subspace_decoding_loads_paths_and_validates_fold_set(
         (np.array([2, 3]), np.array([0, 1])),
         (np.array([0, 1]), np.array([2, 3])),
     ]
-    rows = _run_subspace_decoding(
-        output_dir=tmp_path / "output",
+    prepared = _prepare_single_view_subspaces(
         subspace="pca",
         factor_paths=sorted(unit.glob("fold_*/A.npy")),
         folds=folds,
         X=np.eye(4),
+        config=config,
+    )
+    rows = _run_subspace_decoding(
+        output_dir=tmp_path / "output",
+        subspace="pca",
+        prepared=prepared,
+        folds=folds,
         task_targets={"surprisal": np.arange(4, dtype=float)},
         config=config,
     )
@@ -433,12 +442,83 @@ def test_run_subspace_decoding_loads_paths_and_validates_fold_set(
     ]
 
     with pytest.raises(ValueError, match="do not match decoding folds"):
-        _run_subspace_decoding(
-            output_dir=tmp_path / "output",
+        _prepare_single_view_subspaces(
             subspace="pca",
             factor_paths=sorted(unit.glob("fold_*/A.npy")),
             folds=[*folds, (np.array([0, 1]), np.array([2, 3]))],
             X=np.eye(4),
-            task_targets={"surprisal": np.arange(4, dtype=float)},
             config=config,
         )
+
+
+def test_compose_multiview_factor_preserves_separate_raw_blocks():
+    view_a = np.array([[1.0, 0.0], [0.0, 1.0]])
+    view_b = np.array([[2.0], [3.0], [4.0]])
+    final = np.array([[1.0], [2.0], [5.0]])
+    composed = compose_multiview_factor([view_a, view_b], final)
+    np.testing.assert_allclose(composed[:, 0], [1.0, 2.0, 10.0, 15.0, 20.0])
+
+
+def test_compose_before_fold_average_retains_canceling_signs():
+    component_folds = [np.array([[1.0], [0.0]]), np.array([[-1.0], [0.0]])]
+    final_folds = [np.array([[1.0]]), np.array([[-1.0]])]
+    composed = [
+        compose_multiview_factor([component], final)
+        for component, final in zip(component_folds, final_folds)
+    ]
+    np.testing.assert_allclose(composed[0], composed[1])
+    np.testing.assert_allclose(np.mean(composed, axis=0), [[1.0], [0.0]])
+    np.testing.assert_allclose(np.mean(final_folds, axis=0), [[0.0]])
+
+
+def test_cross_multiview_decoding_composes_before_aggregation(tmp_path, monkeypatch):
+    paths = []
+    for fold, value in enumerate((1.0, -1.0)):
+        folder = tmp_path / f"fold_{fold}"
+        folder.mkdir()
+        path = folder / "A.npy"
+        np.save(path, np.array([[value]]))
+        paths.append(path)
+    component_bases = {
+        "view": {
+            0: np.array([[1.0], [0.0]]),
+            1: np.array([[-1.0], [0.0]]),
+        }
+    }
+    captured = []
+
+    def capture_fit(*args):
+        captured.append((args[5].copy(), args[-2].copy()))
+        return {"fold": args[3], "k": args[4], "subspace": args[-1]}
+
+    monkeypatch.setattr("src.utils.language_decoding._run_one_fit", capture_fit)
+    config = LanguageDecodingConfig(
+        rrr_run_path="unused",
+        mode=LanguageDecodingMode.CROSS_DATASET,
+        rank_grid=[1],
+        tasks=["surprisal"],
+    )
+    embeddings = {"view": np.array([[1.0, 2.0], [3.0, 4.0]])}
+    folds = [(np.array([1]), np.array([0])), (np.array([0]), np.array([1]))]
+    prepared = _prepare_multiview_subspaces(
+        subspace="rrr",
+        final_factor_paths=paths,
+        component_bases=component_bases,
+        embeddings=embeddings,
+        view_names=["view"],
+        selection=np.arange(2),
+        folds=folds,
+        config=config,
+    )
+    rows = _run_subspace_decoding(
+        output_dir=tmp_path / "output",
+        subspace="rrr",
+        prepared=prepared,
+        folds=folds,
+        task_targets={"surprisal": np.array([0.0, 1.0])},
+        config=config,
+    )
+    assert len(rows) == 2
+    for design, factor in captured:
+        np.testing.assert_allclose(np.abs(factor), [[1.0], [0.0]], atol=1e-6)
+        np.testing.assert_allclose(np.abs(design[:, 0]), [1.0, 3.0], atol=1e-6)

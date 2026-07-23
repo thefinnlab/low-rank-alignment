@@ -20,7 +20,7 @@ import pandas as pd
 from tqdm import tqdm
 
 from src.core.config import SubspaceComparisonConfig
-from src.utils.config_utils import load_config, parse_args
+from src.utils.config_utils import load_config, parse_args, save_effective_config
 from src.utils.subspace_compare import (
     score_projected_cca_alignment,
     score_projected_rsa_alignment,
@@ -344,6 +344,8 @@ def run_config(config: SubspaceComparisonConfig) -> None:
     runs = [resolve_subspace_run(run) for run in config.runs]
     heatmap_rows_by_base = {run.name: [] for run in runs}
     for base in runs:
+        base_output_dir = base.unit_dir / config.output_name
+        save_effective_config(config, base_output_dir)
         for peer in runs:
             if base.name == peer.name and not config.include_self:
                 continue
@@ -355,7 +357,6 @@ def run_config(config: SubspaceComparisonConfig) -> None:
                 how="outer",
             )
             heatmap_rows_by_base[base.name].extend(merged.to_dict("records"))
-        base_output_dir = base.unit_dir / config.output_name
         _plot_base_heatmaps(base.name, heatmap_rows_by_base[base.name], base_output_dir)
 
 

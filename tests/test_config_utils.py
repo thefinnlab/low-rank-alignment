@@ -24,6 +24,7 @@ from src.utils.config_utils import (
     apply_overrides,
     load_config,
     expand_per_model_layer_configs,
+    save_effective_config,
 )
 
 # ---------------------------------------------------------------------------
@@ -529,3 +530,29 @@ class TestLoadConfig:
         config = load_config(None, {}, EncodingConfig)
         assert config.per_model_config == {"layer": 24}
         assert config.offset == 0
+
+
+def test_effective_config_provenance_resume_and_refresh(tmp_path):
+    output = tmp_path / "artifact"
+    original = RRRConfig(rank_grid=[1, 2], refresh=False)
+    path = save_effective_config(original, output)
+    saved = yaml.safe_load(path.read_text())
+    assert saved["mode"] == "cross_subject"
+
+    resumed = RRRConfig(rank_grid=[1, 2], refresh=True)
+    save_effective_config(resumed, output)
+
+    with pytest.raises(ValueError, match="differs"):
+        save_effective_config(RRRConfig(rank_grid=[1, 3]), output)
+
+    replaced = RRRConfig(rank_grid=[1, 3], refresh=True)
+    save_effective_config(replaced, output)
+    assert yaml.safe_load(path.read_text())["rank_grid"] == [1, 3]
+
+
+def test_effective_config_redacts_credentials(tmp_path):
+    from src.core.config import GenerateEmbeddingsConfig
+
+    config = GenerateEmbeddingsConfig(hf_token="secret")
+    path = save_effective_config(config, tmp_path)
+    assert yaml.safe_load(path.read_text())["hf_token"] == "<redacted>"

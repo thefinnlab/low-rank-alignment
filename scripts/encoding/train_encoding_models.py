@@ -39,6 +39,7 @@ from src.utils.config_utils import (
     parse_args,
     load_config,
     expand_per_model_layer_configs,
+    save_effective_config,
 )
 from src.utils.constants import check_alpha_grid_boundaries
 from src.utils.alpha_grids import resolve_ridge_alphas, save_alpha_diagnostics
@@ -428,6 +429,7 @@ def run_config(config: EncodingConfig):
         print("CUDA not available, using CPU.")
 
     print(f"Results directory: {run_name}")
+    save_effective_config(config, os.path.join(run_name, "encoding"))
 
     sig_dir = config.sig_dir or run_name
     sig_elec_path = os.path.join(sig_dir, "all_subject_sig.csv")

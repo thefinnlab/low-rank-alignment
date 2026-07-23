@@ -124,8 +124,9 @@ def _resolve_config_for_unit(config_path: Path, unit_dir: Path) -> RRRConfig:
 
 def resolve_subspace_run(run: SubspaceComparisonRun) -> ResolvedSubspaceRun:
     """Resolve one configured comparison run."""
-    config_path = Path(run.rrr_config)
     unit_dir = Path(run.unit_dir)
+    saved_config_path = unit_dir / "config.yml"
+    config_path = saved_config_path if saved_config_path.exists() else Path(run.rrr_config)
     if not config_path.exists():
         raise FileNotFoundError(f"RRR config not found for run {run.name}: {config_path}")
     if not unit_dir.exists():

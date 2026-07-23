@@ -1336,7 +1336,12 @@ def validate_aggregation_cache(
                 f"but {method!r} was requested. Set refresh=true or use another "
                 "output directory."
             )
-    elif method != "extrinsic" and root.exists() and any(root.iterdir()) and not refresh:
+    elif (
+        method != "extrinsic"
+        and root.exists()
+        and any(path.name != "config.yml" for path in root.iterdir())
+        and not refresh
+    ):
         raise ValueError(
             f"Existing legacy results in {root} are assumed to use 'extrinsic'; "
             f"cannot reuse them with {method!r}. Set refresh=true or use another "

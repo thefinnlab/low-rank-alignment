@@ -11,6 +11,8 @@ encoding:
     layer: 24
 
 # May point directly to a unit containing fold_*/A.npy or to its parent run root.
+# A saved mode=multi_view config.yml in that unit automatically reconstructs the
+# configured fixed-rank view embeddings before applying the final multiview A.
 rrr_run_path: results/gpt2-xl-batch_layer24_offset0/rrr
 # Optional PCA comparison source with the same saved fold_*/A.npy layout.
 pca_run_path: results/gpt2-xl-batch_layer24_offset0/pca

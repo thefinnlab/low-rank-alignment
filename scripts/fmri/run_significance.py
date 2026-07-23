@@ -12,7 +12,7 @@ from himalaya.backend import set_backend
 
 from src.core.config import FMRISignificanceConfig
 from src.utils.alpha_grids import resolve_ridge_alphas, save_alpha_diagnostics
-from src.utils.config_utils import load_config, parse_args
+from src.utils.config_utils import load_config, parse_args, save_effective_config
 from src.utils.encoding import extract_best_alphas, get_ridge_model_constructor
 from src.utils.fmri import (
     bh_fdr,
@@ -138,6 +138,7 @@ def run_config(config: FMRISignificanceConfig) -> None:
         set_backend("torch_cuda")
     output_dir = Path(config.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
+    save_effective_config(config, output_dir)
     train_stories, test_stories, groups = resolve_fmri_stories(
         config.fmri.fmri_repo_root, config.fmri.sessions
     )

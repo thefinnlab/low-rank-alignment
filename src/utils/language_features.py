@@ -17,6 +17,7 @@ import pandas as pd
 
 from src.core.config import LanguageFeatureGenerationConfig
 from src.core.registry import get_dataset_adapter, resolve_dataset_context
+from src.utils.config_utils import save_effective_config
 
 
 SCHEMA_VERSION = 1
@@ -455,6 +456,7 @@ def generate_language_features(config: LanguageFeatureGenerationConfig) -> Path:
     if manifest_path.exists() and not config.refresh:
         previous = json.loads(manifest_path.read_text())
         if previous.get("input_fingerprint") == fingerprint:
+            save_effective_config(config, output)
             return output
         raise ValueError(
             f"Existing feature artifact at {output} has different inputs; set refresh=true"
@@ -528,6 +530,7 @@ def generate_language_features(config: LanguageFeatureGenerationConfig) -> Path:
     if temporary.exists():
         shutil.rmtree(temporary)
     temporary.mkdir(parents=True)
+    save_effective_config(config, temporary)
     token_table.to_csv(temporary / "tokens.tsv", sep="\t", index=False)
     for filename, tables in (
         ("spans.tsv", span_tables),

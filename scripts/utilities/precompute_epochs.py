@@ -18,6 +18,7 @@ The .h5 contains:
 
 import argparse
 import gc
+import os
 
 from tqdm import tqdm
 
@@ -26,10 +27,11 @@ from src.utils import (
     load_embeddings,
     build_aligned_epoch_data,
     save_precomputed_epochs,
+    get_precomputed_epochs_path,
 )
 from src.core.config import EncodingConfig
 from src.core.registry import get_dataset_adapter, resolve_dataset_context
-from src.utils.config_utils import parse_args, load_config
+from src.utils.config_utils import parse_args, load_config, save_effective_config
 
 _TARGET_SFREQ = 32.0
 _TMIN = -2.0
@@ -102,6 +104,14 @@ def main():
     dataset_adapter = get_dataset_adapter(config.dataset)
 
     for sub_id in tqdm(subject_ids, desc="Subjects"):
+        cache_path = get_precomputed_epochs_path(
+            sub_id,
+            config.data_root,
+            dataset=config.dataset,
+            per_dataset_config=config.per_dataset_config,
+            dataset_context=dataset_context,
+        )
+        save_effective_config(config, os.path.dirname(cache_path))
         print(f"\n{'='*60}")
         print(f"Subject {sub_id}")
         print(f"{'='*60}")
@@ -145,7 +155,6 @@ def main():
             per_dataset_config=config.per_dataset_config,
             dataset_context=dataset_context,
         )
-
         del raws, raw, epoch_data
         gc.collect()
 

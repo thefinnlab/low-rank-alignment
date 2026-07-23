@@ -2,13 +2,88 @@
 
 import argparse
 import enum
+from dataclasses import asdict
 from copy import deepcopy
 from dataclasses import fields, is_dataclass
+from pathlib import Path
 from typing import get_type_hints, get_origin, get_args, Union
 
 import yaml
 
 from src.core.config import EncodingConfig, SignificanceConfig
+
+
+_REDACTED_CONFIG_KEYS = {"hf_token", "token", "api_key", "access_token"}
+
+
+def _config_value(value, *, redact: bool = True):
+    """Convert a config value into stable, safe YAML primitives."""
+    if is_dataclass(value):
+        value = asdict(value)
+    if isinstance(value, enum.Enum):
+        return value.value
+    if isinstance(value, Path):
+        return str(value)
+    if isinstance(value, dict):
+        return {
+            str(key): (
+                "<redacted>"
+                if redact and str(key).lower() in _REDACTED_CONFIG_KEYS and item
+                else _config_value(item, redact=redact)
+            )
+            for key, item in value.items()
+        }
+    if isinstance(value, (list, tuple)):
+        return [_config_value(item, redact=redact) for item in value]
+    return value
+
+
+def effective_config_dict(config, *, redact: bool = True) -> dict:
+    """Return the effective dataclass configuration as YAML-safe primitives."""
+    value = _config_value(config, redact=redact)
+    if not isinstance(value, dict):
+        raise TypeError(f"Expected a dataclass or mapping config, got {type(config)}")
+    return value
+
+
+def _artifact_config(value):
+    """Remove operational refresh switches before provenance comparison."""
+    if isinstance(value, dict):
+        return {
+            key: _artifact_config(item)
+            for key, item in value.items()
+            if key != "refresh"
+        }
+    if isinstance(value, list):
+        return [_artifact_config(item) for item in value]
+    return value
+
+
+def save_effective_config(config, output_dir, filename: str = "config.yml") -> Path:
+    """Save effective config, rejecting incompatible reuse unless refresh is true.
+
+    ``refresh`` is deliberately ignored for equality because it controls execution,
+    not the artifact contract. Credentials are redacted both on disk and during the
+    comparison.
+    """
+    output = Path(output_dir)
+    output.mkdir(parents=True, exist_ok=True)
+    path = output / filename
+    current = effective_config_dict(config)
+    if path.exists():
+        saved = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+        if _artifact_config(saved) != _artifact_config(current) and not bool(
+            getattr(config, "refresh", False)
+        ):
+            raise ValueError(
+                f"Existing artifact config differs at {path}; set refresh=true "
+                "to replace artifacts or use a different output directory."
+            )
+    path.write_text(
+        yaml.safe_dump(current, sort_keys=False, allow_unicode=True),
+        encoding="utf-8",
+    )
+    return path
 
 
 def parse_override_args(unknown_args: list[str]) -> dict:
