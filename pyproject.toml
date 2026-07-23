@@ -23,6 +23,8 @@ dependencies = [
     "himalaya>=0.4.11",
     "scikit-learn==1.8.0",
     "wordfreq>=3.1.1",
+    "nltk>=3.9.2",
+    "stanza>=1.10.1",
 ]
 
 [[tool.uv.index]]
