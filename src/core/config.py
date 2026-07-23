@@ -296,6 +296,7 @@ class LanguageDecodingConfig:
     source_name: str | None = None
     fold_results_dir: str | None = None
     output_dir: str | None = None
+    device: str = "auto"
     rank_grid: list[int] = field(default_factory=lambda: [1, 2, 5, 10, 20, 50])
     subspace_aggregation: str = "extrinsic"
     tasks: list[str] = field(
@@ -331,6 +332,8 @@ class LanguageDecodingConfig:
 
     def validate(self):
         _validate_subspace_aggregation(self.subspace_aggregation)
+        if self.device not in {"auto", "cuda", "cpu"}:
+            raise ValueError("device must be one of ['auto', 'cpu', 'cuda']")
         if not self.rrr_run_path:
             raise ValueError("LanguageDecodingConfig.rrr_run_path is required")
         if not self.rank_grid or any(int(rank) < 1 for rank in self.rank_grid):

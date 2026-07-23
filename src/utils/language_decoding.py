@@ -13,7 +13,9 @@ from pathlib import Path
 import joblib
 import numpy as np
 import pandas as pd
-from sklearn.linear_model import LogisticRegressionCV, RidgeCV
+from himalaya.backend import set_backend
+from himalaya.ridge import RidgeCV
+from sklearn.linear_model import LogisticRegressionCV
 from sklearn.metrics import accuracy_score, balanced_accuracy_score, f1_score, r2_score
 from sklearn.model_selection import KFold
 from sklearn.pipeline import make_pipeline
@@ -49,6 +51,7 @@ from src.utils.subspace_compare import (
     aggregate_subspace_basis,
     validate_aggregation_cache,
 )
+from src.utils.tensor_utils import to_numpy
 
 
 def resolve_subspace_unit_dir(run_path: str, kind: str = "subspace") -> Path:
@@ -191,6 +194,19 @@ def _inner_cv(n_rows: int, requested: int) -> KFold:
     return KFold(n_splits=n_splits, shuffle=False)
 
 
+def _configure_decoder_backend(device: str) -> str:
+    """Configure Himalaya and return the effective continuous-decoder device."""
+    import torch
+
+    if device not in {"auto", "cuda", "cpu"}:
+        raise ValueError("device must be one of ['auto', 'cpu', 'cuda']")
+    use_cuda = device == "cuda" or (device == "auto" and torch.cuda.is_available())
+    if device == "cuda" and not torch.cuda.is_available():
+        raise RuntimeError("Language decoding requested CUDA, but CUDA is unavailable")
+    set_backend("torch_cuda" if use_cuda else "numpy")
+    return "cuda" if use_cuda else "cpu"
+
+
 def _fit_decoder(
     X_train: np.ndarray,
     y_train: np.ndarray,
@@ -199,9 +215,14 @@ def _fit_decoder(
 ):
     scaler = StandardScaler()
     if kind == "continuous":
+        _configure_decoder_backend(config.device)
         model = RidgeCV(
             alphas=np.asarray(config.encoding.ridge_alphas or RIDGE_ALPHAS),
             cv=_inner_cv(len(y_train), config.encoding.ridge_cv_folds),
+            fit_intercept=True,
+            solver_params=config.encoding.ridge_solver_params,
+            Y_in_cpu=bool(config.encoding.ridge_y_in_cpu or False),
+            force_cpu=False,
         )
     else:
         classes = np.unique(y_train)
@@ -240,14 +261,28 @@ def _decoder_metrics(kind: str, y_true, y_pred) -> dict[str, float]:
     }
 
 
-def _weight_payload(pipeline, A: np.ndarray | None) -> dict:
+def _weight_payload(
+    pipeline, A: np.ndarray | None, target_index: int | None = None
+) -> dict:
     scaler = pipeline[0]
     estimator = pipeline[-1]
-    coefficient = np.asarray(estimator.coef_, dtype=float)
-    if coefficient.ndim == 1:
-        coefficient = coefficient[None, :]
-    intercept = np.atleast_1d(np.asarray(estimator.intercept_, dtype=float))
-    reduced_weights = (coefficient / scaler.scale_[None, :]).T
+    coefficient = np.asarray(to_numpy(estimator.coef_), dtype=float)
+    intercept = np.atleast_1d(
+        np.asarray(to_numpy(estimator.intercept_), dtype=float)
+    )
+    if hasattr(estimator, "classes_"):
+        if coefficient.ndim == 1:
+            coefficient = coefficient[None, :]
+        reduced_weights = (coefficient / scaler.scale_[None, :]).T
+    else:
+        if coefficient.ndim == 1:
+            coefficient = coefficient[:, None]
+        elif coefficient.shape[0] != len(scaler.scale_):
+            coefficient = coefficient.T
+        reduced_weights = coefficient / scaler.scale_[:, None]
+        if target_index is not None:
+            reduced_weights = reduced_weights[:, [target_index]]
+            intercept = intercept[[target_index]]
     corrected_intercept = intercept - scaler.mean_ @ reduced_weights
     embedding_weights = (
         reduced_weights if A is None else np.asarray(A, dtype=float) @ reduced_weights
@@ -264,9 +299,12 @@ def _weight_payload(pipeline, A: np.ndarray | None) -> dict:
         payload["selected_regularization"] = np.asarray(estimator.C_, dtype=float)
     else:
         payload["classes"] = np.array([], dtype=float)
-        payload["selected_regularization"] = np.atleast_1d(
-            np.asarray(estimator.alpha_, dtype=float)
+        selected = np.atleast_1d(
+            np.asarray(to_numpy(estimator.best_alphas_), dtype=float)
         )
+        if target_index is not None:
+            selected = selected[[target_index]]
+        payload["selected_regularization"] = selected
     return payload
 
 
@@ -280,6 +318,43 @@ def _artifact_dir(
     if rank is None:
         return output_dir / "tasks" / task / "full" / f"fold_{fold}"
     return output_dir / "tasks" / task / subspace / f"k{rank}" / f"fold_{fold}"
+
+
+def _load_cached_fit(
+    output_dir: Path,
+    task_name: str,
+    fold: int,
+    rank: int | None,
+    subspace: str,
+    refresh: bool,
+) -> dict | None:
+    artifact_dir = _artifact_dir(output_dir, task_name, fold, rank, subspace)
+    metrics_path = artifact_dir / "metrics.json"
+    weights_path = artifact_dir / "weights.npz"
+    if refresh or not metrics_path.exists() or not weights_path.exists():
+        return None
+    metrics = json.loads(metrics_path.read_text())
+    if metrics.get("subspace") != subspace:
+        metrics["subspace"] = subspace
+        metrics_path.write_text(json.dumps(metrics, indent=2, allow_nan=True))
+    return metrics
+
+
+def _fit_indices(
+    task_name: str,
+    y: np.ndarray,
+    train_idx: np.ndarray,
+    test_idx: np.ndarray,
+    fold: int,
+) -> tuple[np.ndarray, np.ndarray]:
+    valid = np.isfinite(y)
+    task_train = train_idx[valid[train_idx]]
+    task_test = test_idx[valid[test_idx]]
+    if not len(task_train) or not len(task_test):
+        raise ValueError(
+            f"Task {task_name} has an empty train or test set in fold {fold}"
+        )
+    return task_train, task_test
 
 
 def _run_one_fit(
@@ -296,23 +371,20 @@ def _run_one_fit(
     A: np.ndarray | None,
     subspace: str,
 ) -> dict:
+    cached = _load_cached_fit(
+        output_dir, task_name, fold, rank, subspace, config.refresh
+    )
+    if cached is not None:
+        return cached
+
     artifact_dir = _artifact_dir(output_dir, task_name, fold, rank, subspace)
     metrics_path = artifact_dir / "metrics.json"
     weights_path = artifact_dir / "weights.npz"
-    if not config.refresh and metrics_path.exists() and weights_path.exists():
-        metrics = json.loads(metrics_path.read_text())
-        if metrics.get("subspace") != subspace:
-            metrics["subspace"] = subspace
-            metrics_path.write_text(json.dumps(metrics, indent=2, allow_nan=True))
-        return metrics
-
-    valid = np.isfinite(y)
-    task_train = train_idx[valid[train_idx]]
-    task_test = test_idx[valid[test_idx]]
-    if not len(task_train) or not len(task_test):
-        raise ValueError(f"Task {task_name} has an empty train or test set in fold {fold}")
+    task_train, task_test = _fit_indices(
+        task_name, y, train_idx, test_idx, fold
+    )
     pipeline = _fit_decoder(X[task_train], y[task_train], task_kind, config)
-    prediction = pipeline.predict(X[task_test])
+    prediction = to_numpy(pipeline.predict(X[task_test]))
     metrics = {
         "task": task_name,
         "kind": task_kind,
@@ -328,6 +400,111 @@ def _run_one_fit(
     np.savez(weights_path, **_weight_payload(pipeline, A))
     metrics_path.write_text(json.dumps(metrics, indent=2, allow_nan=True))
     return metrics
+
+
+def _run_task_decoding(
+    *,
+    output_dir: Path,
+    fold: int,
+    rank: int | None,
+    X: np.ndarray,
+    task_targets: dict[str, np.ndarray],
+    train_idx: np.ndarray,
+    test_idx: np.ndarray,
+    config: LanguageDecodingConfig,
+    A: np.ndarray | None,
+    subspace: str,
+) -> list[dict]:
+    """Fit one design, batching continuous targets with identical valid rows."""
+    results: dict[str, dict] = {}
+    continuous_groups: dict[tuple[tuple[int, ...], tuple[int, ...]], list[str]] = {}
+
+    for task_name in config.tasks:
+        spec = get_language_task(task_name)
+        if spec.kind != "continuous":
+            results[task_name] = _run_one_fit(
+                output_dir,
+                task_name,
+                spec.kind,
+                fold,
+                rank,
+                X,
+                task_targets[task_name],
+                train_idx,
+                test_idx,
+                config,
+                A,
+                subspace,
+            )
+            continue
+        cached = _load_cached_fit(
+            output_dir, task_name, fold, rank, subspace, config.refresh
+        )
+        if cached is not None:
+            results[task_name] = cached
+            continue
+        task_train, task_test = _fit_indices(
+            task_name, task_targets[task_name], train_idx, test_idx, fold
+        )
+        key = (tuple(task_train.tolist()), tuple(task_test.tolist()))
+        continuous_groups.setdefault(key, []).append(task_name)
+
+    for (train_key, test_key), task_names in continuous_groups.items():
+        task_train = np.asarray(train_key, dtype=int)
+        task_test = np.asarray(test_key, dtype=int)
+        if len(task_names) == 1:
+            task_name = task_names[0]
+            results[task_name] = _run_one_fit(
+                output_dir,
+                task_name,
+                "continuous",
+                fold,
+                rank,
+                X,
+                task_targets[task_name],
+                train_idx,
+                test_idx,
+                config,
+                A,
+                subspace,
+            )
+            continue
+        targets = np.column_stack(
+            [task_targets[task_name][task_train] for task_name in task_names]
+        )
+        pipeline = _fit_decoder(X[task_train], targets, "continuous", config)
+        predictions = np.asarray(to_numpy(pipeline.predict(X[task_test])))
+        if predictions.ndim == 1:
+            predictions = predictions[:, None]
+        for target_index, task_name in enumerate(task_names):
+            y = task_targets[task_name]
+            metrics = {
+                "task": task_name,
+                "kind": "continuous",
+                "fold": int(fold),
+                "space": "full" if rank is None else "rank",
+                "subspace": subspace,
+                "k": None if rank is None else int(rank),
+                "n_train": int(len(task_train)),
+                "n_test": int(len(task_test)),
+                **_decoder_metrics(
+                    "continuous", y[task_test], predictions[:, target_index]
+                ),
+            }
+            artifact_dir = _artifact_dir(
+                output_dir, task_name, fold, rank, subspace
+            )
+            artifact_dir.mkdir(parents=True, exist_ok=True)
+            np.savez(
+                artifact_dir / "weights.npz",
+                **_weight_payload(pipeline, A, target_index=target_index),
+            )
+            (artifact_dir / "metrics.json").write_text(
+                json.dumps(metrics, indent=2, allow_nan=True)
+            )
+            results[task_name] = metrics
+
+    return [results[task_name] for task_name in config.tasks]
 
 
 def summarize_language_decoding(results: pd.DataFrame) -> pd.DataFrame:
@@ -637,29 +814,30 @@ def _run_subspace_decoding(
                 raise ValueError(
                     f"Missing prepared {subspace} input for fold={fold}, rank={rank}"
                 ) from exc
-            for task_name in config.tasks:
-                spec = get_language_task(task_name)
-                rows.append(
-                    _run_one_fit(
-                        output_dir,
-                        task_name,
-                        spec.kind,
-                        fold,
-                        rank,
-                        X_rank,
-                        task_targets[task_name],
-                        np.asarray(train_idx),
-                        np.asarray(test_idx),
-                        config,
-                        ambient_factor,
-                        subspace,
-                    )
+            rows.extend(
+                _run_task_decoding(
+                    output_dir=output_dir,
+                    fold=fold,
+                    rank=rank,
+                    X=X_rank,
+                    task_targets=task_targets,
+                    train_idx=np.asarray(train_idx),
+                    test_idx=np.asarray(test_idx),
+                    config=config,
+                    A=ambient_factor,
+                    subspace=subspace,
                 )
+            )
     return rows
 
 
 def run_language_decoding(config: LanguageDecodingConfig) -> Path:
     """Run the configured task/rank sweep and return its output directory."""
+    effective_device = _configure_decoder_backend(config.device)
+    print(
+        "Decoder backends: "
+        f"continuous=himalaya/{effective_device}, categorical=scikit-learn/cpu"
+    )
     enc = config.encoding
     if enc.dataset != "podcast":
         raise ValueError("Language decoding currently supports dataset='podcast' only")
@@ -884,6 +1062,12 @@ def run_language_decoding(config: LanguageDecodingConfig) -> Path:
             else None
         ),
         "analysis_rows": int(len(selection)),
+        "decoder_backends": {
+            "continuous": "himalaya",
+            "categorical": "scikit-learn",
+        },
+        "requested_device": config.device,
+        "effective_continuous_device": effective_device,
     }
     (output_dir / "run_metadata.json").write_text(
         json.dumps(metadata, indent=2, default=str)
@@ -895,28 +1079,24 @@ def run_language_decoding(config: LanguageDecodingConfig) -> Path:
         print(f"  [fold {fold}]")
         train_idx = np.asarray(train_idx)
         test_idx = np.asarray(test_idx)
-        for task_name in config.tasks:
-            spec = get_language_task(task_name)
-            X_full = X[fold] if isinstance(X, list) else X
-            full_projection = (
-                full_projections[fold] if multiview_config is not None else None
+        X_full = X[fold] if isinstance(X, list) else X
+        full_projection = (
+            full_projections[fold] if multiview_config is not None else None
+        )
+        rows.extend(
+            _run_task_decoding(
+                output_dir=output_dir,
+                fold=fold,
+                rank=None,
+                X=X_full,
+                task_targets=task_targets,
+                train_idx=train_idx,
+                test_idx=test_idx,
+                config=config,
+                A=full_projection,
+                subspace="full",
             )
-            rows.append(
-                _run_one_fit(
-                    output_dir,
-                    task_name,
-                    spec.kind,
-                    fold,
-                    None,
-                    X_full,
-                    task_targets[task_name],
-                    train_idx,
-                    test_idx,
-                    config,
-                    full_projection,
-                    "full",
-                )
-            )
+        )
 
     if multiview_config is None:
         rrr_prepared = _prepare_single_view_subspaces(

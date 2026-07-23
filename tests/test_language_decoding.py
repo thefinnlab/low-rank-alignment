@@ -6,9 +6,11 @@ import yaml
 from src.core.config import LanguageDecodingConfig, LanguageDecodingMode
 from src.utils.config_utils import dict_to_dataclass
 from src.utils.language_decoding import (
+    _configure_decoder_backend,
     _decoder_metrics,
     _fit_decoder,
     _run_subspace_decoding,
+    _run_task_decoding,
     _prepare_multiview_subspaces,
     _prepare_single_view_subspaces,
     _weight_payload,
@@ -280,6 +282,59 @@ def test_nested_language_decoding_config_roundtrip():
     assert config.pca_run_path == "results/example/pca"
     assert config.encoding.num_folds == 7
     assert config.tasks == ["surprisal"]
+
+
+def test_language_decoding_device_validation_and_cpu_backend(monkeypatch):
+    with pytest.raises(ValueError, match="device must be one of"):
+        LanguageDecodingConfig(rrr_run_path="unused", device="tpu")
+
+    monkeypatch.setattr("torch.cuda.is_available", lambda: False)
+    assert _configure_decoder_backend("auto") == "cpu"
+    assert _configure_decoder_backend("cpu") == "cpu"
+    with pytest.raises(RuntimeError, match="CUDA is unavailable"):
+        _configure_decoder_backend("cuda")
+
+
+def test_batched_continuous_fits_preserve_per_task_predictions(tmp_path):
+    rng = np.random.default_rng(12)
+    X = rng.normal(size=(90, 6))
+    targets = {
+        "surprisal": X @ np.array([1.0, 0.0, -0.5, 0.2, 0.0, 0.1]),
+        "entropy": X @ np.array([0.0, -1.0, 0.3, 0.0, 0.5, 0.0]),
+    }
+    train_idx = np.arange(70)
+    test_idx = np.arange(70, 90)
+    config = LanguageDecodingConfig(
+        rrr_run_path="unused",
+        rank_grid=[2],
+        tasks=list(targets),
+        device="cpu",
+    )
+    rows = _run_task_decoding(
+        output_dir=tmp_path,
+        fold=0,
+        rank=None,
+        X=X,
+        task_targets=targets,
+        train_idx=train_idx,
+        test_idx=test_idx,
+        config=config,
+        A=None,
+        subspace="full",
+    )
+    assert [row["task"] for row in rows] == list(targets)
+
+    for task_name, y in targets.items():
+        weights = np.load(
+            tmp_path / "tasks" / task_name / "full" / "fold_0" / "weights.npz"
+        )
+        reconstructed = (
+            X[test_idx] @ weights["embedding_weights"] + weights["intercept"]
+        )[:, 0]
+        independent = _fit_decoder(
+            X[train_idx], y[train_idx], "continuous", config
+        ).predict(X[test_idx])
+        np.testing.assert_allclose(reconstructed, independent, rtol=1e-5, atol=1e-5)
 
 
 def test_summary_uses_task_specific_primary_metrics():
