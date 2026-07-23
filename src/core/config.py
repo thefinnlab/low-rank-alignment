@@ -115,6 +115,7 @@ class EncodingConfig:
     # Per model type config. Used when generating embeddings in load_embeddings.
     per_model_config: dict = field(default_factory=lambda: {"layer": 24})
     per_dataset_config: dict = field(default_factory=dict)
+    refresh: bool = False
 
 
 @dataclass
@@ -140,6 +141,7 @@ class SignificanceConfig:
     fdr_mode: str = "electrode"
     save_weights: bool = False
     min_cluster_size: int = 1  # Heuristic significance: minimum generated cluster size.
+    refresh: bool = False
 
     def __post_init__(self):
         self.validate()
@@ -294,6 +296,7 @@ class LanguageDecodingConfig:
     source_name: str | None = None
     fold_results_dir: str | None = None
     output_dir: str | None = None
+    device: str = "auto"
     rank_grid: list[int] = field(default_factory=lambda: [1, 2, 5, 10, 20, 50])
     subspace_aggregation: str = "extrinsic"
     tasks: list[str] = field(
@@ -329,6 +332,8 @@ class LanguageDecodingConfig:
 
     def validate(self):
         _validate_subspace_aggregation(self.subspace_aggregation)
+        if self.device not in {"auto", "cuda", "cpu"}:
+            raise ValueError("device must be one of ['auto', 'cpu', 'cuda']")
         if not self.rrr_run_path:
             raise ValueError("LanguageDecodingConfig.rrr_run_path is required")
         if not self.rank_grid or any(int(rank) < 1 for rank in self.rank_grid):
@@ -595,6 +600,7 @@ class GenerateEmbeddingsConfig:
         None  # None → use hf_model_id; can point to a local tokenizer dir
     )
     add_prefix_space: bool = True
+    refresh: bool = False
 
 
 @dataclass
@@ -615,6 +621,7 @@ class FMRIGenerateEmbeddingsConfig:
 
     generation: GenerateEmbeddingsConfig = field(default_factory=GenerateEmbeddingsConfig)
     fmri: FMRIDataConfig = field(default_factory=FMRIDataConfig)
+    refresh: bool = False
 
 
 @dataclass
@@ -645,6 +652,7 @@ class FMRISignificanceConfig:
     null_batch_size: int = 1024
     minimal_shift: int = 10
     fdr_q: float = 0.05
+    refresh: bool = False
 
     def validate(self):
         if len(self.fmri.sessions) < 2:

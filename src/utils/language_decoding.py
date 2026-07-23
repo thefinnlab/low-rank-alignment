@@ -7,12 +7,15 @@ import json
 import os
 import re
 from dataclasses import asdict
+from copy import deepcopy
 from pathlib import Path
 
 import joblib
 import numpy as np
 import pandas as pd
-from sklearn.linear_model import LogisticRegressionCV, RidgeCV
+from himalaya.backend import set_backend
+from himalaya.ridge import RidgeCV
+from sklearn.linear_model import LogisticRegressionCV
 from sklearn.metrics import accuracy_score, balanced_accuracy_score, f1_score, r2_score
 from sklearn.model_selection import KFold
 from sklearn.pipeline import make_pipeline
@@ -21,6 +24,8 @@ from sklearn.preprocessing import StandardScaler
 from src.core.config import (
     LanguageDecodingConfig,
     LanguageDecodingMode,
+    RRRConfig,
+    ScriptMode,
     get_results_dir,
 )
 from src.core.registry import resolve_dataset_context
@@ -32,11 +37,21 @@ from src.utils.data_loaders import (
     selection_after_offset,
 )
 from src.utils.embeddings import load_embeddings
+from src.utils.config_utils import load_config, save_effective_config
 from src.utils.language_tasks import PodcastTaskContext, get_language_task
+from src.utils.multiview_rrr import (
+    load_view_bases,
+    load_view_embeddings,
+    project_view_bands,
+    resolve_rrr_views,
+    target_dataset_key,
+)
+from src.utils.subspace_io import load_base_comparison_data
 from src.utils.subspace_compare import (
     aggregate_subspace_basis,
     validate_aggregation_cache,
 )
+from src.utils.tensor_utils import to_numpy
 
 
 def resolve_subspace_unit_dir(run_path: str, kind: str = "subspace") -> Path:
@@ -179,6 +194,19 @@ def _inner_cv(n_rows: int, requested: int) -> KFold:
     return KFold(n_splits=n_splits, shuffle=False)
 
 
+def _configure_decoder_backend(device: str) -> str:
+    """Configure Himalaya and return the effective continuous-decoder device."""
+    import torch
+
+    if device not in {"auto", "cuda", "cpu"}:
+        raise ValueError("device must be one of ['auto', 'cpu', 'cuda']")
+    use_cuda = device == "cuda" or (device == "auto" and torch.cuda.is_available())
+    if device == "cuda" and not torch.cuda.is_available():
+        raise RuntimeError("Language decoding requested CUDA, but CUDA is unavailable")
+    set_backend("torch_cuda" if use_cuda else "numpy")
+    return "cuda" if use_cuda else "cpu"
+
+
 def _fit_decoder(
     X_train: np.ndarray,
     y_train: np.ndarray,
@@ -187,9 +215,14 @@ def _fit_decoder(
 ):
     scaler = StandardScaler()
     if kind == "continuous":
+        _configure_decoder_backend(config.device)
         model = RidgeCV(
             alphas=np.asarray(config.encoding.ridge_alphas or RIDGE_ALPHAS),
             cv=_inner_cv(len(y_train), config.encoding.ridge_cv_folds),
+            fit_intercept=True,
+            solver_params=config.encoding.ridge_solver_params,
+            Y_in_cpu=bool(config.encoding.ridge_y_in_cpu or False),
+            force_cpu=False,
         )
     else:
         classes = np.unique(y_train)
@@ -228,14 +261,28 @@ def _decoder_metrics(kind: str, y_true, y_pred) -> dict[str, float]:
     }
 
 
-def _weight_payload(pipeline, A: np.ndarray | None) -> dict:
+def _weight_payload(
+    pipeline, A: np.ndarray | None, target_index: int | None = None
+) -> dict:
     scaler = pipeline[0]
     estimator = pipeline[-1]
-    coefficient = np.asarray(estimator.coef_, dtype=float)
-    if coefficient.ndim == 1:
-        coefficient = coefficient[None, :]
-    intercept = np.atleast_1d(np.asarray(estimator.intercept_, dtype=float))
-    reduced_weights = (coefficient / scaler.scale_[None, :]).T
+    coefficient = np.asarray(to_numpy(estimator.coef_), dtype=float)
+    intercept = np.atleast_1d(
+        np.asarray(to_numpy(estimator.intercept_), dtype=float)
+    )
+    if hasattr(estimator, "classes_"):
+        if coefficient.ndim == 1:
+            coefficient = coefficient[None, :]
+        reduced_weights = (coefficient / scaler.scale_[None, :]).T
+    else:
+        if coefficient.ndim == 1:
+            coefficient = coefficient[:, None]
+        elif coefficient.shape[0] != len(scaler.scale_):
+            coefficient = coefficient.T
+        reduced_weights = coefficient / scaler.scale_[:, None]
+        if target_index is not None:
+            reduced_weights = reduced_weights[:, [target_index]]
+            intercept = intercept[[target_index]]
     corrected_intercept = intercept - scaler.mean_ @ reduced_weights
     embedding_weights = (
         reduced_weights if A is None else np.asarray(A, dtype=float) @ reduced_weights
@@ -252,9 +299,12 @@ def _weight_payload(pipeline, A: np.ndarray | None) -> dict:
         payload["selected_regularization"] = np.asarray(estimator.C_, dtype=float)
     else:
         payload["classes"] = np.array([], dtype=float)
-        payload["selected_regularization"] = np.atleast_1d(
-            np.asarray(estimator.alpha_, dtype=float)
+        selected = np.atleast_1d(
+            np.asarray(to_numpy(estimator.best_alphas_), dtype=float)
         )
+        if target_index is not None:
+            selected = selected[[target_index]]
+        payload["selected_regularization"] = selected
     return payload
 
 
@@ -268,6 +318,43 @@ def _artifact_dir(
     if rank is None:
         return output_dir / "tasks" / task / "full" / f"fold_{fold}"
     return output_dir / "tasks" / task / subspace / f"k{rank}" / f"fold_{fold}"
+
+
+def _load_cached_fit(
+    output_dir: Path,
+    task_name: str,
+    fold: int,
+    rank: int | None,
+    subspace: str,
+    refresh: bool,
+) -> dict | None:
+    artifact_dir = _artifact_dir(output_dir, task_name, fold, rank, subspace)
+    metrics_path = artifact_dir / "metrics.json"
+    weights_path = artifact_dir / "weights.npz"
+    if refresh or not metrics_path.exists() or not weights_path.exists():
+        return None
+    metrics = json.loads(metrics_path.read_text())
+    if metrics.get("subspace") != subspace:
+        metrics["subspace"] = subspace
+        metrics_path.write_text(json.dumps(metrics, indent=2, allow_nan=True))
+    return metrics
+
+
+def _fit_indices(
+    task_name: str,
+    y: np.ndarray,
+    train_idx: np.ndarray,
+    test_idx: np.ndarray,
+    fold: int,
+) -> tuple[np.ndarray, np.ndarray]:
+    valid = np.isfinite(y)
+    task_train = train_idx[valid[train_idx]]
+    task_test = test_idx[valid[test_idx]]
+    if not len(task_train) or not len(task_test):
+        raise ValueError(
+            f"Task {task_name} has an empty train or test set in fold {fold}"
+        )
+    return task_train, task_test
 
 
 def _run_one_fit(
@@ -284,23 +371,20 @@ def _run_one_fit(
     A: np.ndarray | None,
     subspace: str,
 ) -> dict:
+    cached = _load_cached_fit(
+        output_dir, task_name, fold, rank, subspace, config.refresh
+    )
+    if cached is not None:
+        return cached
+
     artifact_dir = _artifact_dir(output_dir, task_name, fold, rank, subspace)
     metrics_path = artifact_dir / "metrics.json"
     weights_path = artifact_dir / "weights.npz"
-    if not config.refresh and metrics_path.exists() and weights_path.exists():
-        metrics = json.loads(metrics_path.read_text())
-        if metrics.get("subspace") != subspace:
-            metrics["subspace"] = subspace
-            metrics_path.write_text(json.dumps(metrics, indent=2, allow_nan=True))
-        return metrics
-
-    valid = np.isfinite(y)
-    task_train = train_idx[valid[train_idx]]
-    task_test = test_idx[valid[test_idx]]
-    if not len(task_train) or not len(task_test):
-        raise ValueError(f"Task {task_name} has an empty train or test set in fold {fold}")
+    task_train, task_test = _fit_indices(
+        task_name, y, train_idx, test_idx, fold
+    )
     pipeline = _fit_decoder(X[task_train], y[task_train], task_kind, config)
-    prediction = pipeline.predict(X[task_test])
+    prediction = to_numpy(pipeline.predict(X[task_test]))
     metrics = {
         "task": task_name,
         "kind": task_kind,
@@ -316,6 +400,111 @@ def _run_one_fit(
     np.savez(weights_path, **_weight_payload(pipeline, A))
     metrics_path.write_text(json.dumps(metrics, indent=2, allow_nan=True))
     return metrics
+
+
+def _run_task_decoding(
+    *,
+    output_dir: Path,
+    fold: int,
+    rank: int | None,
+    X: np.ndarray,
+    task_targets: dict[str, np.ndarray],
+    train_idx: np.ndarray,
+    test_idx: np.ndarray,
+    config: LanguageDecodingConfig,
+    A: np.ndarray | None,
+    subspace: str,
+) -> list[dict]:
+    """Fit one design, batching continuous targets with identical valid rows."""
+    results: dict[str, dict] = {}
+    continuous_groups: dict[tuple[tuple[int, ...], tuple[int, ...]], list[str]] = {}
+
+    for task_name in config.tasks:
+        spec = get_language_task(task_name)
+        if spec.kind != "continuous":
+            results[task_name] = _run_one_fit(
+                output_dir,
+                task_name,
+                spec.kind,
+                fold,
+                rank,
+                X,
+                task_targets[task_name],
+                train_idx,
+                test_idx,
+                config,
+                A,
+                subspace,
+            )
+            continue
+        cached = _load_cached_fit(
+            output_dir, task_name, fold, rank, subspace, config.refresh
+        )
+        if cached is not None:
+            results[task_name] = cached
+            continue
+        task_train, task_test = _fit_indices(
+            task_name, task_targets[task_name], train_idx, test_idx, fold
+        )
+        key = (tuple(task_train.tolist()), tuple(task_test.tolist()))
+        continuous_groups.setdefault(key, []).append(task_name)
+
+    for (train_key, test_key), task_names in continuous_groups.items():
+        task_train = np.asarray(train_key, dtype=int)
+        task_test = np.asarray(test_key, dtype=int)
+        if len(task_names) == 1:
+            task_name = task_names[0]
+            results[task_name] = _run_one_fit(
+                output_dir,
+                task_name,
+                "continuous",
+                fold,
+                rank,
+                X,
+                task_targets[task_name],
+                train_idx,
+                test_idx,
+                config,
+                A,
+                subspace,
+            )
+            continue
+        targets = np.column_stack(
+            [task_targets[task_name][task_train] for task_name in task_names]
+        )
+        pipeline = _fit_decoder(X[task_train], targets, "continuous", config)
+        predictions = np.asarray(to_numpy(pipeline.predict(X[task_test])))
+        if predictions.ndim == 1:
+            predictions = predictions[:, None]
+        for target_index, task_name in enumerate(task_names):
+            y = task_targets[task_name]
+            metrics = {
+                "task": task_name,
+                "kind": "continuous",
+                "fold": int(fold),
+                "space": "full" if rank is None else "rank",
+                "subspace": subspace,
+                "k": None if rank is None else int(rank),
+                "n_train": int(len(task_train)),
+                "n_test": int(len(task_test)),
+                **_decoder_metrics(
+                    "continuous", y[task_test], predictions[:, target_index]
+                ),
+            }
+            artifact_dir = _artifact_dir(
+                output_dir, task_name, fold, rank, subspace
+            )
+            artifact_dir.mkdir(parents=True, exist_ok=True)
+            np.savez(
+                artifact_dir / "weights.npz",
+                **_weight_payload(pipeline, A, target_index=target_index),
+            )
+            (artifact_dir / "metrics.json").write_text(
+                json.dumps(metrics, indent=2, allow_nan=True)
+            )
+            results[task_name] = metrics
+
+    return [results[task_name] for task_name in config.tasks]
 
 
 def summarize_language_decoding(results: pd.DataFrame) -> pd.DataFrame:
@@ -427,17 +616,143 @@ def _validate_factor_paths(
         )
 
 
-def _run_subspace_decoding(
+def _block_diagonal(matrices: list[np.ndarray]) -> np.ndarray:
+    """Construct a block-diagonal map without conflating distinct model spaces."""
+    rows = sum(int(matrix.shape[0]) for matrix in matrices)
+    cols = sum(int(matrix.shape[1]) for matrix in matrices)
+    result = np.zeros((rows, cols), dtype=np.float32)
+    row = col = 0
+    for matrix in matrices:
+        matrix = np.asarray(matrix, dtype=np.float32)
+        result[row : row + matrix.shape[0], col : col + matrix.shape[1]] = matrix
+        row += matrix.shape[0]
+        col += matrix.shape[1]
+    return result
+
+
+def compose_multiview_factor(
+    component_factors: list[np.ndarray], final_factor: np.ndarray
+) -> np.ndarray:
+    """Compose separate raw view factors with one final multiview factor."""
+    block = _block_diagonal(component_factors)
+    final_factor = np.asarray(final_factor, dtype=np.float32)
+    if block.shape[1] != final_factor.shape[0]:
+        raise ValueError(
+            "Multiview component widths do not match the final A ambient dimension: "
+            f"{block.shape[1]} vs {final_factor.shape[0]}"
+        )
+    return np.asarray(block @ final_factor, dtype=np.float32)
+
+
+def _load_saved_multiview_config(unit_dir: Path) -> RRRConfig | None:
+    path = unit_dir / "config.yml"
+    if not path.exists():
+        if "multi_view_rrr" in unit_dir.parts:
+            raise FileNotFoundError(
+                f"Multiview language decoding requires the effective RRR config at {path}. "
+                "Re-run multiview RRR with config provenance enabled."
+            )
+        return None
+    saved = load_config(str(path), {}, RRRConfig)
+    return saved if saved.mode == ScriptMode.MULTI_VIEW else None
+
+
+def _raw_embedding_slices(
+    embeddings: dict[str, np.ndarray], view_names: list[str]
+) -> dict[str, slice]:
+    result = {}
+    start = 0
+    for name in view_names:
+        stop = start + int(embeddings[name].shape[1])
+        result[name] = slice(start, stop)
+        start = stop
+    return result
+
+
+def _apply_raw_factor(
+    embeddings: dict[str, np.ndarray],
+    view_names: list[str],
+    factor: np.ndarray,
+    selection: np.ndarray,
+) -> np.ndarray:
+    """Apply a factor over concatenated raw spaces without materializing the concat."""
+    slices = _raw_embedding_slices(embeddings, view_names)
+    projected = None
+    for name in view_names:
+        value = np.asarray(embeddings[name])[selection] @ factor[slices[name]]
+        projected = value if projected is None else projected + value
+    return np.asarray(projected, dtype=np.float32)
+
+
+def _prepare_multiview_subspaces(
     *,
-    output_dir: Path,
+    subspace: str,
+    final_factor_paths: list[Path],
+    component_bases: dict[str, dict[int, np.ndarray]],
+    embeddings: dict[str, np.ndarray],
+    view_names: list[str],
+    selection: np.ndarray,
+    folds: list[tuple[np.ndarray, np.ndarray]],
+    config: LanguageDecodingConfig,
+) -> dict[tuple[int, int], tuple[np.ndarray, np.ndarray]]:
+    """Prepare projected embeddings and ambient factors for a multiview source."""
+    final_by_fold = {
+        int(path.parent.name.removeprefix("fold_")): np.load(path)
+        for path in final_factor_paths
+    }
+    source_folds = sorted(final_by_fold)
+    if not source_folds:
+        raise FileNotFoundError(f"No {subspace.upper()} fold A matrices found")
+    for name in view_names:
+        if set(component_bases[name]) != set(source_folds):
+            raise ValueError(
+                f"View {name} component folds do not match final {subspace} folds"
+            )
+
+    within = config.mode == LanguageDecodingMode.WITHIN_DATASET
+    if within and set(source_folds) != set(range(len(folds))):
+        raise ValueError(
+            f"{subspace.upper()} A-matrix folds {source_folds} do not match "
+            f"decoding folds {list(range(len(folds)))}"
+        )
+
+    prepared: dict[tuple[int, int], tuple[np.ndarray, np.ndarray]] = {}
+    for rank in map(int, config.rank_grid):
+        composed = []
+        for source_fold in source_folds:
+            final = np.asarray(final_by_fold[source_fold])
+            if final.shape[1] < rank:
+                raise ValueError(
+                    f"Fold {source_fold} {subspace.upper()} A has insufficient "
+                    f"width for rank {rank}"
+                )
+            components = [component_bases[name][source_fold] for name in view_names]
+            composed.append(compose_multiview_factor(components, final[:, :rank]))
+        if within:
+            for fold, factor in zip(source_folds, composed):
+                prepared[(fold, rank)] = (
+                    _apply_raw_factor(embeddings, view_names, factor, selection),
+                    factor,
+                )
+        else:
+            factor = aggregate_subspace_basis(
+                composed, rank=rank, method=config.subspace_aggregation
+            )
+            design = _apply_raw_factor(embeddings, view_names, factor, selection)
+            for fold in range(len(folds)):
+                prepared[(fold, rank)] = (design, factor)
+    return prepared
+
+
+def _prepare_single_view_subspaces(
+    *,
     subspace: str,
     factor_paths: list[Path],
     folds: list[tuple[np.ndarray, np.ndarray]],
     X: np.ndarray,
-    task_targets: dict[str, np.ndarray],
     config: LanguageDecodingConfig,
-) -> list[dict]:
-    """Load one source's A matrices and run its complete decoding sweep."""
+) -> dict[tuple[int, int], tuple[np.ndarray, np.ndarray]]:
+    """Prepare projected embeddings and ambient factors for one embedding space."""
     matrices_by_fold = {
         int(path.parent.name.removeprefix("fold_")): np.load(path)
         for path in factor_paths
@@ -461,12 +776,8 @@ def _run_subspace_decoding(
             for rank in config.rank_grid
         }
 
-    rows = []
-    print(f"\n[{subspace.upper()} subspace]")
+    prepared = {}
     for fold, (train_idx, test_idx) in enumerate(folds):
-        print(f"  [fold {fold}]")
-        train_idx = np.asarray(train_idx)
-        test_idx = np.asarray(test_idx)
         for rank in config.rank_grid:
             A = (
                 matrices_by_fold[fold][:, :rank]
@@ -478,30 +789,55 @@ def _run_subspace_decoding(
                     f"Fold {fold} {subspace.upper()} A has insufficient width for "
                     f"rank {rank}"
                 )
-            X_rank = X @ A
-            for task_name in config.tasks:
-                spec = get_language_task(task_name)
-                rows.append(
-                    _run_one_fit(
-                        output_dir,
-                        task_name,
-                        spec.kind,
-                        fold,
-                        int(rank),
-                        X_rank,
-                        task_targets[task_name],
-                        train_idx,
-                        test_idx,
-                        config,
-                        A,
-                        subspace,
-                    )
+            prepared[(fold, int(rank))] = (np.asarray(X @ A), np.asarray(A))
+    return prepared
+
+
+def _run_subspace_decoding(
+    *,
+    output_dir: Path,
+    subspace: str,
+    prepared: dict[tuple[int, int], tuple[np.ndarray, np.ndarray]],
+    folds: list[tuple[np.ndarray, np.ndarray]],
+    task_targets: dict[str, np.ndarray],
+    config: LanguageDecodingConfig,
+) -> list[dict]:
+    """Run one shared task/rank/fold sweep over prepared subspace inputs."""
+    rows = []
+    print(f"\n[{subspace.upper()} subspace]")
+    for fold, (train_idx, test_idx) in enumerate(folds):
+        print(f"  [fold {fold}]")
+        for rank in map(int, config.rank_grid):
+            try:
+                X_rank, ambient_factor = prepared[(fold, rank)]
+            except KeyError as exc:
+                raise ValueError(
+                    f"Missing prepared {subspace} input for fold={fold}, rank={rank}"
+                ) from exc
+            rows.extend(
+                _run_task_decoding(
+                    output_dir=output_dir,
+                    fold=fold,
+                    rank=rank,
+                    X=X_rank,
+                    task_targets=task_targets,
+                    train_idx=np.asarray(train_idx),
+                    test_idx=np.asarray(test_idx),
+                    config=config,
+                    A=ambient_factor,
+                    subspace=subspace,
                 )
+            )
     return rows
 
 
 def run_language_decoding(config: LanguageDecodingConfig) -> Path:
     """Run the configured task/rank sweep and return its output directory."""
+    effective_device = _configure_decoder_backend(config.device)
+    print(
+        "Decoder backends: "
+        f"continuous=himalaya/{effective_device}, categorical=scikit-learn/cpu"
+    )
     enc = config.encoding
     if enc.dataset != "podcast":
         raise ValueError("Language decoding currently supports dataset='podcast' only")
@@ -509,16 +845,55 @@ def run_language_decoding(config: LanguageDecodingConfig) -> Path:
     dataset_context = resolve_dataset_context(
         enc.dataset, subject_ids, enc.per_dataset_config, enc.data_root
     )
-    embeddings, word_df = load_embeddings(
-        enc.data_root,
-        enc.model,
-        dataset=enc.dataset,
-        per_dataset_config=enc.per_dataset_config,
-        dataset_context=dataset_context,
-        **enc.per_model_config,
-    )
-    embeddings = np.asarray(embeddings, dtype=np.float32)
     rrr_unit_dir = resolve_subspace_unit_dir(config.rrr_run_path, "rrr")
+    multiview_config = _load_saved_multiview_config(rrr_unit_dir)
+    multiview_embeddings = None
+    component_bases = None
+    source_test_idxs = None
+    source_selection = None
+    view_names: list[str] = []
+    if multiview_config is None:
+        embeddings, word_df = load_embeddings(
+            enc.data_root,
+            enc.model,
+            dataset=enc.dataset,
+            per_dataset_config=enc.per_dataset_config,
+            dataset_context=dataset_context,
+            **enc.per_model_config,
+        )
+        embeddings = np.asarray(embeddings, dtype=np.float32)
+    else:
+        source_subjects = multiview_config.encoding.subjects or list(range(1, 10))
+        resolved_views = resolve_rrr_views(multiview_config)
+        source_key = target_dataset_key(multiview_config, source_subjects)
+        matching_runs = [
+            run for run in resolved_views.values() if run.dataset_key == source_key
+        ]
+        if not matching_runs:
+            raise ValueError(
+                "Saved multiview config has no component from its target dataset"
+            )
+        source_data = load_base_comparison_data(matching_runs[0])
+        source_selection = np.asarray(source_data.selection, dtype=int)
+        source_test_idxs = [np.asarray(idx, dtype=int) for idx in source_data.test_idxs]
+        component_bases, _ = load_view_bases(
+            multiview_config,
+            resolved_views,
+            source_key,
+            source_selection,
+            source_test_idxs,
+        )
+        target_view_config = deepcopy(multiview_config)
+        target_view_config.encoding = deepcopy(enc)
+        multiview_embeddings, word_df = load_view_embeddings(
+            target_view_config, resolved_views, subject_ids
+        )
+        multiview_embeddings = {
+            name: np.asarray(values, dtype=np.float32)
+            for name, values in multiview_embeddings.items()
+        }
+        view_names = [view.name for view in multiview_config.views]
+        embeddings = None
     pca_unit_dir = (
         resolve_subspace_unit_dir(config.pca_run_path, "pca")
         if config.pca_run_path
@@ -530,9 +905,15 @@ def run_language_decoding(config: LanguageDecodingConfig) -> Path:
         if pca_unit_dir is not None
         else []
     )
-    _validate_factor_paths(rrr_factor_paths, embeddings.shape[1], "rrr")
-    if pca_factor_paths:
-        _validate_factor_paths(pca_factor_paths, embeddings.shape[1], "pca")
+    if multiview_config is None:
+        _validate_factor_paths(rrr_factor_paths, embeddings.shape[1], "rrr")
+        if pca_factor_paths:
+            _validate_factor_paths(pca_factor_paths, embeddings.shape[1], "pca")
+    else:
+        stacked_dim = sum(int(view.rank) for view in multiview_config.views)
+        _validate_factor_paths(rrr_factor_paths, stacked_dim, "rrr")
+        if pca_factor_paths:
+            _validate_factor_paths(pca_factor_paths, stacked_dim, "pca")
 
     target_root = config.output_dir or get_results_dir(
         enc.model,
@@ -547,6 +928,7 @@ def run_language_decoding(config: LanguageDecodingConfig) -> Path:
         Path(target_root) / "language_decoding" / config.mode.value / source_identity
     )
     output_dir.mkdir(parents=True, exist_ok=True)
+    save_effective_config(config, output_dir)
     validate_aggregation_cache(
         output_dir, config.subspace_aggregation, refresh=config.refresh
     )
@@ -565,16 +947,70 @@ def run_language_decoding(config: LanguageDecodingConfig) -> Path:
         test_idxs, selection, fold_root = _load_within_folds_and_selection(
             config, rrr_unit_dir, word_df
         )
-        X = embeddings[selection]
+        if multiview_config is not None:
+            if not np.array_equal(selection, source_selection):
+                raise ValueError(
+                    "Language-decoding selection differs from the saved multiview run"
+                )
+            if len(test_idxs) != len(source_test_idxs) or any(
+                not np.array_equal(left, right)
+                for left, right in zip(test_idxs, source_test_idxs)
+            ):
+                raise ValueError(
+                    "Language-decoding folds differ from the saved multiview run"
+                )
+        X = None if embeddings is None else embeddings[selection]
         task_targets = {name: target[selection] for name, target in task_targets.items()}
-        folds = _outer_folds(test_idxs, len(X))
+        folds = _outer_folds(test_idxs, len(selection))
     else:
         selection = np.arange(len(word_df), dtype=int)
         X = embeddings
         fold_root = None
         folds = list(
-            KFold(n_splits=enc.num_folds, shuffle=False).split(np.arange(len(X)))
+            KFold(n_splits=enc.num_folds, shuffle=False).split(
+                np.arange(len(selection))
+            )
         )
+
+    if multiview_config is not None:
+        if config.mode == LanguageDecodingMode.WITHIN_DATASET:
+            full_designs = []
+            full_projections = []
+            for fold in range(len(folds)):
+                bands, _ = project_view_bands(
+                    multiview_embeddings, component_bases, view_names, fold
+                )
+                full_designs.append(
+                    np.concatenate([band[selection] for band in bands], axis=1)
+                )
+                full_projections.append(
+                    _block_diagonal(
+                        [component_bases[name][fold] for name in view_names]
+                    )
+                )
+        else:
+            aggregated_components = {
+                name: aggregate_subspace_basis(
+                    [component_bases[name][fold] for fold in sorted(component_bases[name])],
+                    rank=int(next(v.rank for v in multiview_config.views if v.name == name)),
+                    method=config.subspace_aggregation,
+                )
+                for name in view_names
+            }
+            full_design = np.concatenate(
+                [
+                    multiview_embeddings[name][selection]
+                    @ aggregated_components[name]
+                    for name in view_names
+                ],
+                axis=1,
+            )
+            full_designs = [full_design] * len(folds)
+            full_projection = _block_diagonal(
+                [aggregated_components[name] for name in view_names]
+            )
+            full_projections = [full_projection] * len(folds)
+        X = full_designs
 
     if "iu_alignment" in context._cache:
         context.iu_alignment()[2].to_csv(output_dir / "iu_alignment.csv", index=False)
@@ -594,8 +1030,44 @@ def run_language_decoding(config: LanguageDecodingConfig) -> Path:
         "pca_unit_dir": None if pca_unit_dir is None else str(pca_unit_dir),
         "fold_results_dir": None if fold_root is None else str(fold_root),
         "output_dir": str(output_dir),
-        "embedding_shape": list(embeddings.shape),
-        "analysis_rows": int(len(X)),
+        "embedding_shape": (
+            list(embeddings.shape)
+            if multiview_embeddings is None
+            else {name: list(values.shape) for name, values in multiview_embeddings.items()}
+        ),
+        "multiview": multiview_config is not None,
+        "view_names": view_names,
+        "multiview_source_config": (
+            None if multiview_config is None else str(rrr_unit_dir / "config.yml")
+        ),
+        "view_ranks": (
+            {}
+            if multiview_config is None
+            else {view.name: int(view.rank) for view in multiview_config.views}
+        ),
+        "raw_embedding_boundaries": (
+            {}
+            if multiview_embeddings is None
+            else {
+                name: [bounds.start, bounds.stop]
+                for name, bounds in _raw_embedding_slices(
+                    multiview_embeddings, view_names
+                ).items()
+            }
+        ),
+        "cross_dataset_factor_strategy": (
+            "compose_component_and_final_factors_then_aggregate"
+            if multiview_config is not None
+            and config.mode == LanguageDecodingMode.CROSS_DATASET
+            else None
+        ),
+        "analysis_rows": int(len(selection)),
+        "decoder_backends": {
+            "continuous": "himalaya",
+            "categorical": "scikit-learn",
+        },
+        "requested_device": config.device,
+        "effective_continuous_device": effective_device,
     }
     (output_dir / "run_metadata.json").write_text(
         json.dumps(metadata, indent=2, default=str)
@@ -607,48 +1079,80 @@ def run_language_decoding(config: LanguageDecodingConfig) -> Path:
         print(f"  [fold {fold}]")
         train_idx = np.asarray(train_idx)
         test_idx = np.asarray(test_idx)
-        for task_name in config.tasks:
-            spec = get_language_task(task_name)
-            rows.append(
-                _run_one_fit(
-                    output_dir,
-                    task_name,
-                    spec.kind,
-                    fold,
-                    None,
-                    X,
-                    task_targets[task_name],
-                    train_idx,
-                    test_idx,
-                    config,
-                    None,
-                    "full",
-                )
+        X_full = X[fold] if isinstance(X, list) else X
+        full_projection = (
+            full_projections[fold] if multiview_config is not None else None
+        )
+        rows.extend(
+            _run_task_decoding(
+                output_dir=output_dir,
+                fold=fold,
+                rank=None,
+                X=X_full,
+                task_targets=task_targets,
+                train_idx=train_idx,
+                test_idx=test_idx,
+                config=config,
+                A=full_projection,
+                subspace="full",
             )
+        )
 
-    rows.extend(
-        _run_subspace_decoding(
-            output_dir=output_dir,
+    if multiview_config is None:
+        rrr_prepared = _prepare_single_view_subspaces(
             subspace="rrr",
             factor_paths=rrr_factor_paths,
             folds=folds,
             X=X,
-            task_targets=task_targets,
             config=config,
         )
-    )
+    else:
+        rrr_prepared = _prepare_multiview_subspaces(
+            subspace="rrr",
+            final_factor_paths=rrr_factor_paths,
+            component_bases=component_bases,
+            embeddings=multiview_embeddings,
+            view_names=view_names,
+            selection=selection,
+            folds=folds,
+            config=config,
+        )
+    rows.extend(_run_subspace_decoding(
+        output_dir=output_dir,
+        subspace="rrr",
+        prepared=rrr_prepared,
+        folds=folds,
+        task_targets=task_targets,
+        config=config,
+    ))
     if pca_factor_paths:
-        rows.extend(
-            _run_subspace_decoding(
-                output_dir=output_dir,
+        if multiview_config is None:
+            pca_prepared = _prepare_single_view_subspaces(
                 subspace="pca",
                 factor_paths=pca_factor_paths,
                 folds=folds,
                 X=X,
-                task_targets=task_targets,
                 config=config,
             )
-        )
+        else:
+            pca_prepared = _prepare_multiview_subspaces(
+                subspace="pca",
+                final_factor_paths=pca_factor_paths,
+                component_bases=component_bases,
+                embeddings=multiview_embeddings,
+                view_names=view_names,
+                selection=selection,
+                folds=folds,
+                config=config,
+            )
+        rows.extend(_run_subspace_decoding(
+            output_dir=output_dir,
+            subspace="pca",
+            prepared=pca_prepared,
+            folds=folds,
+            task_targets=task_targets,
+            config=config,
+        ))
 
     results = pd.DataFrame(rows)
     results.to_csv(output_dir / "grid_results.csv", index=False)

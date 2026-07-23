@@ -25,6 +25,7 @@ from src.utils.config_utils import (
     parse_args,
     load_config,
     expand_per_model_layer_configs,
+    save_effective_config,
 )
 from src.utils.encoding import (
     extract_best_alphas,
@@ -85,6 +86,7 @@ def run_config(config: SignificanceConfig):
         print("CUDA not available, using CPU.")
 
     os.makedirs(output_dir, exist_ok=True)
+    save_effective_config(config, os.path.join(output_dir, "significance"))
     print(f"Results directory: {output_dir}")
 
     # Load embeddings once — shared across all subjects

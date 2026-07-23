@@ -32,7 +32,7 @@ from transformers import AutoConfig, AutoModel, AutoModelForCausalLM, AutoTokeni
 
 from src.core.config import GenerateEmbeddingsConfig
 from src.core.registry import get_dataset_adapter, resolve_dataset_context
-from src.utils.config_utils import load_config, parse_override_args
+from src.utils.config_utils import load_config, parse_override_args, save_effective_config
 
 
 _CAUSAL_MODEL_TYPES = {
@@ -476,6 +476,7 @@ def generate(cfg: GenerateEmbeddingsConfig):
         transcript_df = pd.concat([transcript_df, performance_df], axis=1)
 
     os.makedirs(out_dir, exist_ok=True)
+    save_effective_config(cfg, out_dir)
     features_path = os.path.join(out_dir, "features.hdf5")
     print(f"Writing {features_path}")
     _write_features_hdf5(features_path, layers, out)

@@ -23,7 +23,7 @@ from scripts.utilities.generate_embeddings import (
     _write_features_hdf5,
 )
 from src.core.config import FMRIGenerateEmbeddingsConfig
-from src.utils.config_utils import load_config, parse_args
+from src.utils.config_utils import load_config, parse_args, save_effective_config
 from src.utils.fmri import (
     load_story_word_data,
     resolve_fmri_stories,
@@ -58,6 +58,7 @@ def run_config(config: FMRIGenerateEmbeddingsConfig) -> None:
     stories = train_stories + [story for story in test_stories if story not in train_stories]
     frames, _ = load_story_word_data(config.fmri.fmri_repo_root, stories)
     output_root = Path(config.fmri.embedding_root) / output_name
+    save_effective_config(config, output_root)
 
     for story in stories:
         words_df = frames[story]

@@ -88,6 +88,7 @@ from src.utils.config_utils import (
     parse_args,
     load_config,
     expand_per_model_layer_configs,
+    save_effective_config,
 )
 from src.utils.embeddings import get_glove_embeddings
 from src.utils.encoding import (
@@ -2578,6 +2579,9 @@ def run_config(config: RRRConfig):
         rrr_dir = rrr_base_dir
 
     os.makedirs(rrr_dir, exist_ok=True)
+    save_effective_config(config, rrr_dir)
+    if config.run_pca_baseline:
+        save_effective_config(config, _resolve_pca_sibling_dir(rrr_dir))
     print(f"Output dir:  {output_dir}")
     print(f"RRR dir:     {rrr_dir}")
     print(f"Mode:        {config.mode.value}")

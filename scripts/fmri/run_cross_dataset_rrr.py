@@ -12,7 +12,7 @@ from himalaya.backend import set_backend
 
 from src.core.config import FMRICrossDatasetRRRConfig
 from src.utils.alpha_grids import resolve_ridge_alphas, save_alpha_diagnostics
-from src.utils.config_utils import load_config, parse_args
+from src.utils.config_utils import load_config, parse_args, save_effective_config
 from src.utils.encoding import extract_best_alphas, get_ridge_model_constructor
 from src.utils.fmri import (
     columnwise_correlation,
@@ -139,7 +139,9 @@ def _validate_cache_contract(output_dir: Path, config) -> None:
     if config.refresh:
         return
     if not path.exists():
-        if config.subspace_aggregation != "extrinsic" and any(output_dir.iterdir()):
+        if config.subspace_aggregation != "extrinsic" and any(
+            item.name != "config.yml" for item in output_dir.iterdir()
+        ):
             raise ValueError(
                 f"Existing legacy results in {output_dir} are assumed to use "
                 "'extrinsic'; set refresh=true or use a different output_dir."
@@ -286,6 +288,7 @@ def run_config(config: FMRICrossDatasetRRRConfig) -> None:
         set_backend("torch_cuda")
     output_dir = Path(config.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
+    save_effective_config(config, output_dir)
     _validate_cache_contract(output_dir, config)
     source_unit_dirs = {}
     pca_dir = None

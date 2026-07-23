@@ -165,8 +165,11 @@ def load_view_embeddings(
         values, words = cache[identity]
         if reference_words is None:
             reference_words = words
-        elif len(words) != len(reference_words):
-            raise ValueError(f"Embedding transcript length differs for view {view.name}")
+        elif len(words) != len(reference_words) or not np.array_equal(
+            words["word"].astype(str).to_numpy(),
+            reference_words["word"].astype(str).to_numpy(),
+        ):
+            raise ValueError(f"Embedding transcript differs for view {view.name}")
         loaded[view.name] = np.asarray(values)
     if reference_words is None:
         raise ValueError("No multiview embeddings were loaded")

@@ -36,6 +36,7 @@ from src.utils.subspace_io import (
 from src.utils.subspace_utils import evaluate_input_space
 from src.utils.srrr import fit_dense_rrr
 from src.utils.multiview_rrr import union_view_significance
+from src.utils.config_utils import save_effective_config
 
 
 def _read_json(path: Path):
@@ -510,6 +511,7 @@ def run_gcca_encoding(config: GCCAEncodingConfig) -> Path:
         )
 
     def build(path):
+        save_effective_config(config, path)
         write_results_and_comparisons(
             path, gcca_dir, metadata, prepared, comparison_runs, config
         )

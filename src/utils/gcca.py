@@ -33,6 +33,7 @@ from src.utils.subspace_io import (
     sanitize_name,
 )
 from src.utils.subspace_compare import aggregate_subspace_from_unit_dir
+from src.utils.config_utils import save_effective_config
 
 SCHEMA_VERSION = 1
 
@@ -180,6 +181,7 @@ def run_gcca(config: MaxvarGCCAConfig) -> Path:
         shutil.rmtree(temporary)
     temporary.mkdir(parents=True)
     try:
+        save_effective_config(config, temporary)
         _run_into(config, resolved, anchor, temporary)
         if output.exists():
             shutil.rmtree(output)
