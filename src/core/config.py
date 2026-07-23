@@ -313,9 +313,10 @@ class LanguageDecodingConfig:
     )
     task_data: dict = field(
         default_factory=lambda: {
+            "language_features": (
+                "processed_data/language_features/podcast/podcast/tokens.tsv"
+            ),
             "word_annotations": "processed_data/df_word_onset_with_pos_class.csv",
-            "sentence_annotations": "processed_data/all_sentences_podcast.csv",
-            "iu_annotations": "processed_data/iu_boundaries.csv",
         }
     )
     logistic_cs: list[float] = field(
@@ -340,6 +341,40 @@ class LanguageDecodingConfig:
             raise ValueError("tasks must not contain duplicate names")
         if not self.logistic_cs or any(float(value) <= 0 for value in self.logistic_cs):
             raise ValueError("logistic_cs must contain positive values")
+
+
+@dataclass
+class LanguageFeatureGenerationConfig:
+    """Generate reusable, stimulus-aligned language annotation artifacts."""
+
+    dataset: str = "podcast"
+    data_root: str = "data/"
+    per_dataset_config: dict = field(default_factory=dict)
+    model_dir: str = "gpt2-xl"
+    output_dir: str = "processed_data/language_features"
+    resource_dir: str = "data/language_resources"
+    providers: list[str] = field(
+        default_factory=lambda: ["native", "ud", "lexical_norms", "swow", "wordnet"]
+    )
+    dataset_options: dict = field(default_factory=dict)
+    provider_options: dict = field(default_factory=dict)
+    resources: dict = field(default_factory=dict)
+    refresh: bool = False
+
+    def __post_init__(self):
+        self.validate()
+
+    def validate(self):
+        if not self.dataset.strip():
+            raise ValueError("dataset must be non-empty")
+        if not self.providers or any(not str(name).strip() for name in self.providers):
+            raise ValueError("providers must contain at least one non-empty name")
+        if len(set(self.providers)) != len(self.providers):
+            raise ValueError("providers must not contain duplicate names")
+        if not self.output_dir:
+            raise ValueError("output_dir must be non-empty")
+        if not self.resource_dir:
+            raise ValueError("resource_dir must be non-empty")
 
 
 @dataclass

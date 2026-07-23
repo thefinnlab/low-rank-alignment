@@ -19,6 +19,7 @@ from src.core.config import (
     RRRConfig,
     LanguageDecodingConfig,
     LanguageDecodingMode,
+    LanguageFeatureGenerationConfig,
     GCCAEncodingConfig,
     ScriptMode,
     get_results_dir,

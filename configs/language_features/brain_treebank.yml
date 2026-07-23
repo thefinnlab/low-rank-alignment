@@ -1,0 +1,25 @@
+dataset: brain_treebank
+data_root: data/brain-treebank
+per_dataset_config:
+  movie: cars-2
+output_dir: processed_data/language_features
+resource_dir: data/language_resources
+
+providers:
+  - native
+  - ud
+
+provider_options:
+  ud:
+    language: en
+    package: ewt
+    model_resource: stanza_ewt
+    use_gpu: false
+
+resources:
+  stanza_ewt:
+    type: stanza_model
+    path: stanza
+    language: en
+    package: ewt
+refresh: false

@@ -1,9 +1,7 @@
-import sys
-import types
-
 import numpy as np
 import pandas as pd
 import pytest
+import yaml
 
 from src.core.config import LanguageDecodingConfig, LanguageDecodingMode
 from src.utils.config_utils import dict_to_dataclass
@@ -17,7 +15,7 @@ from src.utils.language_decoding import (
     resolve_subspace_unit_dir,
     summarize_language_decoding,
 )
-from src.utils.language_tasks import PodcastTaskContext, get_language_task
+from src.utils.language_tasks import TASK_REGISTRY, PodcastTaskContext, get_language_task
 
 
 def _task_context(tmp_path):
@@ -44,61 +42,70 @@ def _task_context(tmp_path):
             "sentence_idx": [-1, 0, 0, 1, 2, 2],
         }
     )
-    sentences = pd.DataFrame({"sentence_onset": [0.2, 1.0]})
-    iu = pd.DataFrame(
+    features = pd.DataFrame(
         {
-            "time": [0.35, 1.35],
-            "prev_word": ["small", "missing"],
-            "next_word": ["world", "also-missing"],
+            "token_id": np.arange(6),
+            "word": word_df["word"].to_numpy(),
+            "start": word_df["start"].to_numpy(),
+            "end": word_df["end"].to_numpy(),
         }
     )
+    for name, task in TASK_REGISTRY.items():
+        if name == "surprisal_class":
+            continue
+        features[name] = (
+            np.arange(1, 7, dtype=float)
+            if task.kind == "continuous"
+            else ["z", "a", "z", "b", "a", "b"]
+        )
+    features["part_of_speech"] = ["INTJ", "ADJ", "NOUN", "VERB", "ADV", "ADV"]
+    features["fine_part_of_speech"] = ["UH", "JJ", "NN", "VB", "RB", "RB"]
+    features["content_word"] = [True, True, True, True, False, True]
+    features["sentence_position"] = [np.nan, 0, 1, 0, 0, 1]
+    features["sentence_onset"] = [np.nan, True, False, True, False, False]
+    features["sentence_end"] = [np.nan, False, True, True, False, True]
+    features["sentence_length"] = [np.nan, 2, 2, 1, 2, 2]
+    features["iu_position"] = [0, 1, 0, 0.5, 1, 0]
+    features["iu_onset"] = [True, False, True, False, False, True]
+    features["iu_end"] = [False, True, False, False, True, True]
+    features["iu_length"] = [2, 2, 3, 3, 3, 1]
+    features["pre_word_pause"] = [np.nan, 0.1, 0, 0.5, 0.1, 0.1]
+    features["story_position"] = np.linspace(0, 1, 6)
+    features["story_time_position"] = [0, 1 / 7, 2 / 7, 5 / 7, 6 / 7, 1]
+    features["word_length"] = [5, 5, 5, 3, 4, 4]
+    features["sense_count"] = [5, np.nan, 2, np.nan, 1, 3]
+    features["wordnet_lexname_mfs"] = [
+        "noun.person",
+        np.nan,
+        "noun.object",
+        np.nan,
+        "noun.person",
+        "verb.motion",
+    ]
     word_path = tmp_path / "words.csv"
-    sentence_path = tmp_path / "sentences.csv"
-    iu_path = tmp_path / "iu.csv"
+    feature_path = tmp_path / "tokens.tsv"
     annotations.to_csv(word_path)
-    sentences.to_csv(sentence_path, index=False)
-    iu.to_csv(iu_path, index=False)
+    features.to_csv(feature_path, sep="\t", index=False)
     return PodcastTaskContext(
         word_df,
         paths={
             "word_annotations": str(word_path),
-            "sentence_annotations": str(sentence_path),
-            "iu_annotations": str(iu_path),
+            "language_features": str(feature_path),
         },
     )
 
 
-def test_task_getters_are_word_aligned_and_positions_are_normalized(tmp_path, monkeypatch):
-    fake_wordfreq = types.SimpleNamespace(
-        zipf_frequency=lambda word, language, minimum: float(len(word))
-    )
-    monkeypatch.setitem(sys.modules, "wordfreq", fake_wordfreq)
+def test_configured_task_getters_are_registered_aligned_and_nonempty(tmp_path):
     context = _task_context(tmp_path)
+    configured = yaml.safe_load(
+        open("configs/rrr/language_decoding.yml", encoding="utf-8")
+    )["tasks"]
+    assert set(configured) == set(TASK_REGISTRY)
 
-    for name in (
-        "part_of_speech",
-        "content_word",
-        "surprisal",
-        "entropy",
-        "story_position",
-        "story_time_position",
-        "fine_part_of_speech",
-        "surprisal_class",
-        "sentence_onset",
-        "iu_onset",
-        "sentence_position",
-        "iu_position",
-        "sentence_end",
-        "iu_end",
-        "sentence_length",
-        "iu_length",
-        "pre_word_pause",
-        "word_duration",
-        "word_length",
-        "word_zipf_frequency",
-    ):
+    for name in configured:
         target = get_language_task(name).getter(context)
         assert target.shape == (6,)
+        assert np.isfinite(target).any(), name
 
     np.testing.assert_allclose(
         get_language_task("sentence_position").getter(context),
@@ -113,8 +120,10 @@ def test_task_getters_are_word_aligned_and_positions_are_normalized(tmp_path, mo
         get_language_task("story_time_position").getter(context),
         [0.0, 1 / 7, 2 / 7, 5 / 7, 6 / 7, 1.0],
     )
-    np.testing.assert_array_equal(
-        get_language_task("sentence_onset").getter(context), [0, 1, 0, 1, 0, 0]
+    np.testing.assert_allclose(
+        get_language_task("sentence_onset").getter(context),
+        [np.nan, 1, 0, 1, 0, 0],
+        equal_nan=True,
     )
     np.testing.assert_array_equal(
         get_language_task("iu_onset").getter(context), [1, 0, 1, 0, 0, 1]
@@ -146,21 +155,58 @@ def test_task_getters_are_word_aligned_and_positions_are_normalized(tmp_path, mo
     np.testing.assert_array_equal(
         get_language_task("surprisal_class").getter(context), [0, 0, 1, 1, 2, 2]
     )
-    provenance = context.iu_alignment()[2]
-    assert provenance["method"].tolist() == ["exact_pair", "time_fallback"]
     np.testing.assert_allclose(
         get_language_task("word_length").getter(context), [5, 5, 5, 3, 4, 4]
     )
+    np.testing.assert_allclose(
+        get_language_task("sense_count").getter(context),
+        [5, np.nan, 2, np.nan, 1, 3],
+        equal_nan=True,
+    )
+    assert np.isnan(get_language_task("wordnet_lexname_mfs").getter(context)[1])
+    assert get_language_task("part_of_speech").chance is None
 
 
-def test_fine_part_of_speech_rejects_missing_tags(tmp_path):
+def test_categorical_targets_are_alphabetical_and_preserve_missingness(tmp_path):
     context = _task_context(tmp_path)
-    words = context.words.copy()
-    words.loc[0, "pos"] = np.nan
-    context._cache["words"] = words
+    features = context.language_features.copy()
+    features["fine_part_of_speech"] = ["z", "a", np.nan, "z", "b", "a"]
+    context._cache["language_features"] = features
+    np.testing.assert_allclose(
+        get_language_task("fine_part_of_speech").getter(context),
+        [2, 0, np.nan, 2, 1, 0],
+        equal_nan=True,
+    )
 
-    with pytest.raises(ValueError, match="missing tags"):
-        get_language_task("fine_part_of_speech").getter(context)
+
+@pytest.mark.parametrize(
+    ("mutation", "message"),
+    [
+        (lambda table: table.iloc[:-1], "lengths differ"),
+        (lambda table: table.assign(token_id=[0, 1, 2, 4, 4, 5]), "contiguous"),
+        (lambda table: table.assign(word=["wrong"] + table.word.tolist()[1:]), "word text"),
+        (lambda table: table.assign(start=table.start + 0.01), "timing"),
+        (lambda table: table.assign(end=table.end + 0.01), "timing"),
+    ],
+)
+def test_artifact_alignment_failures(tmp_path, mutation, message):
+    context = _task_context(tmp_path)
+    table = pd.read_csv(context.paths["language_features"], sep="\t")
+    mutation(table).to_csv(context.paths["language_features"], sep="\t", index=False)
+    with pytest.raises(ValueError, match=message):
+        _ = context.language_features
+
+
+def test_artifact_preserves_literal_none_word_and_empty_missing_field(tmp_path):
+    context = _task_context(tmp_path)
+    table = pd.read_csv(context.paths["language_features"], sep="\t")
+    table.loc[0, "word"] = "None"
+    table.loc[0, "concreteness"] = np.nan
+    table.to_csv(context.paths["language_features"], sep="\t", index=False)
+    context.word_df.loc[0, "word"] = "None"
+
+    assert context.language_features.loc[0, "word"] == "None"
+    assert np.isnan(context.language_features.loc[0, "concreteness"])
 
 
 def test_saved_raw_weights_reproduce_continuous_pipeline_decisions():

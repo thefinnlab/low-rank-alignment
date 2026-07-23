@@ -18,6 +18,7 @@ ENCODING_CONFIG ?= configs/encoding/encoding_mid.yml
 SIG_CONFIG      ?= configs/significance/significance_default.yml
 RRR_CONFIG      ?= configs/rrr/rrr_default.yml
 LANGUAGE_DECODING_CONFIG ?= configs/rrr/language_decoding.yml
+LANGUAGE_FEATURE_CONFIG ?= configs/language_features/podcast.yml
 GCCA_CONFIG     ?= configs/gcca/maxvar_gcca.yml
 GCCA_ENCODING_CONFIG ?= configs/gcca/encoding.yml
 PRECOMPUTE_EPOCHS_CONFIG ?= configs/precompute_epochs/precompute_epochs_default.yml
@@ -207,6 +208,18 @@ rrr:
 language-decoding:
 	mkdir -p logs
 	$(CMD) scripts/rrr/run_language_decoding.py --config $(LANGUAGE_DECODING_CONFIG) $(OVERRIDES)
+
+## Generate reusable word-level language annotations and structured sidecars
+## Usage:
+##   make language-features CMD=python
+##   make language-features LANGUAGE_FEATURE_CONFIG=configs/language_features/podcast.yml
+language-features:
+	mkdir -p logs
+	$(CMD) scripts/utilities/generate_language_features.py --config $(LANGUAGE_FEATURE_CONFIG) $(OVERRIDES)
+
+## Explicitly download/validate resources without running annotation providers
+stage-language-resources:
+	$(CMD) scripts/utilities/generate_language_features.py --config $(LANGUAGE_FEATURE_CONFIG) --stage-resources $(OVERRIDES)
 
 ## Release RRR runs for a list of configs
 ## Usage:

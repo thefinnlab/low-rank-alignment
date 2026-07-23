@@ -18,6 +18,8 @@ Downstream pairwise subspace reproducibility analysis is available through `scri
 
 Saved RRR input subspaces can also be probed with `scripts/rrr/run_language_decoding.py`. The config-driven podcast analysis projects word embeddings through within-dataset fold-matched or cross-dataset fold-averaged `A` factors, then fits fold-safe linear decoders for lexical, syntactic, predictability, sentence, intonation-unit, and narrative-progress targets. An optional PCA run path evaluates saved PCA factors through the same folds, tasks, ranks, and decoders, producing combined RRR/PCA tables and performance plots against one shared full-embedding reference. It saves reduced and ambient embedding-space decoder weights at every task/subspace/rank/fold, alignment provenance, and reusable tables. New targets are registered as word-aligned getter functions in `src/utils/language_tasks.py`.
 
+Reusable word-level annotations can be generated independently with `scripts/utilities/generate_language_features.py` (`make language-features`). Podcast and Brain Treebank loaders produce one standardized stimulus document, and resource-bundled providers emit a word table plus span/relation/parser-token sidecars and a checksummed provenance manifest. The initial providers cover native controls, lexical norms, Lancaster/VAD derivatives, SWOW associations, explicit WordNet MFS variants, and a common Stanza UD parse. The Podcast language-decoding task registry consumes the standardized token artifact after validating it against the embedding transcript; only the legacy three-way surprisal class still comes from its original CSV. See `docs/language_feature_generation.md` for the artifact contract, decoding-task inventory, resource staging, provider extension points, and feasibility catalog.
+
 The Makefile exposes the language probe as `make language-decoding` and also provides batch targets for releasing multiple config runs:
 `make generate-embeddings-batch`, `make sig-batch`, and `make rrr-batch`. `make sig-rrr-batch` submits paired significance and cross-subject RRR jobs for each model in `PIPELINE_MODELS`; `DATASET` selects `podcast` or `cars-2`, and each RRR job receives an `afterok` dependency on its matching significance job. Random-init embedding runs can use `make generate-random-embeddings`, which wraps `scripts/utilities/generate_random_embeddings.py`.
 
@@ -53,6 +55,7 @@ Downstream configs can store list-valued `encoding.per_model_config.layer` entri
 | `configs/significance/` | Lag-cluster significance configs |
 | `configs/rrr/` | RRR configs, including optional embedded PCA settings and an example saved-view banded RRR analysis in `multi_view.yml` |
 | `configs/rrr/language_decoding.yml` | Example podcast language-feature decoding sweep over saved RRR and optional PCA input factors |
+| `configs/language_features/` | Podcast and Brain Treebank annotation-generation and explicit resource-staging configs |
 | `configs/rrr/compare_subspaces.yml` | Example config for ordered pairwise CCA/RSA comparisons over saved RRR/PCA subspace factors |
 | `configs/gcca/maxvar_gcca.yml` | Example anchor/view configuration for partial-support MAXVAR GCCA and downstream score artifacts |
 | `configs/gcca/encoding.yml` | Downstream calibrated GCCA encoding and saved-RRR comparison configuration |
@@ -74,6 +77,7 @@ Downstream configs can store list-valued `encoding.per_model_config.layer` entri
 | `scripts/gcca/run_encoding.py` | Evaluate calibrated GCCA ridge encodings without rebuilding baselines and compare matched targets with saved RRR runs |
 | `scripts/utilities/generate_embeddings.py` | Generate contextual HuggingFace embeddings |
 | `scripts/utilities/export_transcript.py` | Export a dataset adapter's normalized transcript word table for review |
+| `scripts/utilities/generate_language_features.py` | Stage pinned annotation resources and generate dataset-standard token/span/relation artifacts |
 | `scripts/utilities/generate_random_embeddings.py` | Generate random-init contextual embeddings |
 | `scripts/utilities/precompute_epochs.py` | Build dataset-scoped, word-aligned 32 Hz epoch-tensor caches |
 | `scripts/utilities/generate_plots.py` | Regenerate correlation plots from existing encoding results |
@@ -108,6 +112,7 @@ Downstream configs can store list-valued `encoding.per_model_config.layer` entri
 | `src/utils/srrr.py`, `rrr_utils.py`, `subspace_utils.py`, `subspace_compare.py`, `subspace_io.py` | RRR factor fitting, RRR result I/O, rank evaluation, saved-subspace discovery, comparison-run loading, and subspace CCA/RSA helpers |
 | `src/utils/gcca.py`, `multiview_rrr.py` | Config-driven partial-support GCCA orchestration and shared saved-view preparation/banded-ridge utilities for multiview RRR |
 | `src/utils/decomposition.py` | Shared multi-embedding alignment, raw neural-target, fold, and target-manifest preparation used by RRR and GCCA encoding |
+| `src/utils/language_features.py`, `language_feature_providers.py` | Standardized stimulus documents, resource staging, provider orchestration, and reusable native/lexical/WordNet/UD annotation artifacts |
 | `src/utils/language_tasks.py`, `language_decoding.py` | Extensible podcast language-target registry plus saved-RRR projection, linear decoding, artifact, and plot orchestration |
 | `src/utils/plotting.py` | Correlation, alpha, RRR/PCA rank, and utility plots |
 | `src/utils/atlas.py` | Atlas lookup and electrode-region grouping |

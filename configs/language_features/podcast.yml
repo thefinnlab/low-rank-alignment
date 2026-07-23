@@ -1,0 +1,123 @@
+dataset: podcast
+data_root: data/
+model_dir: gpt2-xl
+output_dir: processed_data/language_features
+resource_dir: data/language_resources
+
+dataset_options:
+  word_annotations: processed_data/df_word_onset_with_pos_class.csv
+  iu_annotations: processed_data/iu_boundaries.csv
+  audio: data/stimuli/podcast.wav
+
+providers:
+  - native
+  - ud
+  - lexical_norms
+  - swow
+  - wordnet
+
+provider_options:
+  ud:
+    language: en
+    package: ewt
+    model_resource: stanza_ewt
+    use_gpu: false
+  lexical_norms:
+    resources:
+      - concreteness
+      - lancaster
+      - nrc_vad
+      - age_of_acquisition
+      - word_prevalence
+      - semantic_diversity
+      - socialness
+  swow:
+    resource: swow
+  wordnet:
+    model_resource: wordnet
+
+# Published resources are intentionally staged explicitly. Replace checksums with
+# those of the exact releases used for an analysis. "manual: true" prevents a
+# generation run from silently downloading a license- or click-through resource.
+resources:
+  stanza_ewt:
+    type: stanza_model
+    path: stanza
+    language: en
+    package: ewt
+  wordnet:
+    type: nltk_corpus
+    path: nltk_data
+    corpus: wordnet
+  concreteness:
+    type: lexical_norm
+    path: concreteness.csv
+    manual: true
+    key_column: Word
+    columns:
+      concreteness: Conc.M
+  lancaster:
+    type: lexical_norm
+    path: lancaster.csv
+    manual: true
+    key_column: Word
+    columns:
+      visual_strength: Visual.mean
+      auditory_strength: Auditory.mean
+      haptic_strength: Haptic.mean
+      olfactory_strength: Olfactory.mean
+      gustatory_strength: Gustatory.mean
+      interoceptive_strength: Interoceptive.mean
+      hand_arm_action_strength: Hand_arm.mean
+      mouth_throat_action_strength: Mouth.mean
+      foot_leg_action_strength: Foot_leg.mean
+      head_action_strength: Head.mean
+      torso_action_strength: Torso.mean
+  nrc_vad:
+    type: lexical_norm
+    path: nrc-vad-v2.tsv
+    manual: true
+    separator: "\t"
+    key_column: term
+    columns:
+      valence: valence
+      arousal: arousal
+      dominance: dominance
+  age_of_acquisition:
+    type: lexical_norm
+    path: age-of-acquisition.csv
+    manual: true
+    key_column: Word
+    columns:
+      age_of_acquisition: Rating.Mean
+  word_prevalence:
+    type: lexical_norm
+    path: word-prevalence.csv
+    manual: true
+    key_column: Word
+    columns:
+      word_prevalence: Prevalence
+  semantic_diversity:
+    type: lexical_norm
+    path: semantic-diversity.csv
+    manual: true
+    key_column: Word
+    columns:
+      semantic_diversity: SemD
+  socialness:
+    type: lexical_norm
+    path: socialness.csv
+    manual: true
+    key_column: Word
+    columns:
+      socialness: Mean
+  swow:
+    type: association
+    path: swow.csv
+    manual: true
+    separator: "\t"
+    cue_column: cue
+    response_column: response
+    weight_column: R123.Strength
+
+refresh: false
