@@ -18,7 +18,7 @@ model_dir: gpt2-xl
 layer: 24
 pooling: mean
 significance_dir: results/fmri/gpt2-xl_layer24/significance
-source_rrr_unit_dir: results/gpt2-xl_layer24_offset0/rrr
+source_rrr_unit_dir: results/gpt2-xl-batch_layer24_offset0/rrr
 output_dir: results/fmri/gpt2-xl_layer24/cross_dataset_rrr
 # cross_dataset loads saved fold factors; within_fmri learns FIR RRR and PCA here.
 source_mode: cross_dataset
