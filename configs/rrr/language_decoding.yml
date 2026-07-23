@@ -84,7 +84,7 @@ tasks:
   - dependency_relation
   - tense
   - mood
-  - voice
+    # - voice
   - grammatical_person
   - number
   - definiteness
@@ -99,8 +99,8 @@ tasks:
   - dependency_locality_cost
 
 task_data:
-  language_features: ../processed_data/language_features/podcast/podcast/tokens.tsv
-  word_annotations: ../processed_data/df_word_onset_with_pos_class.csv
+  language_features: processed_data/language_features/podcast/podcast/tokens.tsv
+  word_annotations: processed_data/df_word_onset_with_pos_class.csv
 
 logistic_cs: [0.0001, 0.001, 0.01, 0.1, 1.0, 10.0, 100.0]
-refresh: false
+refresh: true

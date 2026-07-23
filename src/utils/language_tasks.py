@@ -30,7 +30,7 @@ class PodcastTaskContext:
     """Lazy Podcast annotations aligned to a model's word-level transcript."""
 
     word_df: pd.DataFrame
-    data_root: str = "data/"
+    data_root: str = ""
     paths: dict = field(default_factory=dict)
     _cache: dict = field(default_factory=dict, init=False, repr=False)
 
