@@ -405,14 +405,7 @@ def fit_dense_rrr(
         Y_hat_ols = X @ beta_ols
 
     # Step 2: Training-set predictions and their rank-k SVD
-    try:
-        _, _, Vh = torch.linalg.svd(Y_hat_ols, full_matrices=False)
-    except Exception:
-        return {
-            "A_dense": np.zeros((n_selected, k), dtype=np.float32),
-            "B_dense": np.zeros((n_targets, k), dtype=np.float32),
-            "selected_idx": selected_idx,
-        }
+    _, _, Vh = torch.linalg.svd(Y_hat_ols, full_matrices=False)
 
     actual_k = min(k, Vh.shape[0])
     Vh_k = Vh[:actual_k, :]  # (actual_k, n_targets)
