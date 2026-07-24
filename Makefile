@@ -18,6 +18,8 @@ ENCODING_CONFIG ?= configs/encoding/encoding_mid.yml
 SIG_CONFIG      ?= configs/significance/significance_default.yml
 RRR_CONFIG      ?= configs/rrr/rrr_default.yml
 LANGUAGE_DECODING_CONFIG ?= configs/rrr/language_decoding.yml
+LANGUAGE_RECONSTRUCTION_CONFIG ?= configs/rrr/language_reconstruction.yml
+LANGUAGE_AXIS_ENCODING_CONFIG ?= configs/rrr/language_axis_encoding.yml
 LANGUAGE_FEATURE_CONFIG ?= configs/language_features/podcast.yml
 GCCA_CONFIG     ?= configs/gcca/maxvar_gcca.yml
 GCCA_ENCODING_CONFIG ?= configs/gcca/encoding.yml
@@ -208,6 +210,17 @@ rrr:
 language-decoding:
 	mkdir -p logs
 	$(CMD) scripts/rrr/run_language_decoding.py --config $(LANGUAGE_DECODING_CONFIG) $(OVERRIDES)
+
+## Predict matched-rank RRR/PCA spaces from configured language-task variables.
+## Use CMD="uv run python" for a local run.
+language-reconstruction:
+	mkdir -p logs
+	$(CMD) scripts/rrr/run_language_reconstruction.py --config $(LANGUAGE_RECONSTRUCTION_CONFIG) $(OVERRIDES)
+
+## Test neural sufficiency/removal of saved language-decoder axes.
+language-axis-encoding:
+	mkdir -p logs
+	$(CMD) scripts/rrr/run_language_axis_encoding.py --config $(LANGUAGE_AXIS_ENCODING_CONFIG) $(OVERRIDES)
 
 ## Generate reusable word-level language annotations and structured sidecars
 ## Usage:

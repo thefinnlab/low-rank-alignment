@@ -15,6 +15,8 @@ providers:
   - lexical_norms
   - swow
   - wordnet
+  - disfluency
+  - entity_coreference
 
 provider_options:
   ud:
@@ -35,6 +37,15 @@ provider_options:
     resource: swow
   wordnet:
     model_resource: wordnet
+  disfluency:
+    max_repeated_phrase_words: 5
+  entity_coreference:
+    language: en
+    model_resource: stanza_semantics
+    ner_package: ontonotes-ww-multi_charlm
+    coref_package: gum-nospeakers_roberta-large-lora
+    foundation_resource: roberta_large
+    use_gpu: false
 
 # Published resources are intentionally staged explicitly. Replace checksums with
 # those of the exact releases used for an analysis. "manual: true" prevents a
@@ -45,6 +56,34 @@ resources:
     path: stanza
     language: en
     package: ewt
+  stanza_semantics:
+    type: stanza_model
+    path: stanza
+    language: en
+    package: ewt
+    processors:
+      ner: ontonotes-ww-multi_charlm
+      coref: gum-nospeakers_roberta-large-lora
+    required_models:
+      - en/ner/ontonotes-ww-multi_charlm.pt
+      - en/coref/gum-nospeakers_roberta-large-lora.pt
+  roberta_large:
+    type: huggingface_model
+    path: transformers/roberta-large
+    repo_id: FacebookAI/roberta-large
+    revision: main
+    allow_patterns:
+      - config.json
+      - model.safetensors
+      - merges.txt
+      - vocab.json
+      - tokenizer.json
+      - tokenizer_config.json
+    required_files:
+      - config.json
+      - model.safetensors
+      - merges.txt
+      - vocab.json
   wordnet:
     type: nltk_corpus
     path: nltk_data

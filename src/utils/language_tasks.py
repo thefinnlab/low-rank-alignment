@@ -268,6 +268,11 @@ _CONTINUOUS_TASKS = {
     "right_dependents": "Right dependents",
     "open_dependencies": "Open dependencies",
     "dependency_locality_cost": "Dependency locality cost",
+    "prior_word_count": "Prior occurrence count",
+    "distance_from_previous_occurrence": "Distance from previous occurrence",
+    "coreference_mention_order": "Coreference mention order",
+    "coreference_chain_size": "Coreference chain size",
+    "coreference_antecedent_distance_words": "Coreference antecedent distance",
 }
 
 _CATEGORICAL_TASKS = {
@@ -294,6 +299,18 @@ _CATEGORICAL_TASKS = {
     "number": ("UD number", None),
     "definiteness": ("UD definiteness", None),
     "head_direction": ("Dependency head direction", None),
+    "filled_pause": ("Filled pause", 0.5),
+    "immediate_word_repetition": ("Immediate word repetition", 0.5),
+    "repeated_phrase": ("Repeated phrase", 0.5),
+    "discourse_marker": ("Discourse marker", 0.5),
+    "discourse_marker_type": ("Discourse marker type", None),
+    "word_seen_before": ("Word seen previously", 0.5),
+    "word_in_previous_5": ("Word in previous five tokens", 0.5),
+    "is_named_entity": ("Named-entity membership", 0.5),
+    "named_entity_type": ("Named-entity type", None),
+    "is_coreference_mention": ("Coreference-mention membership", 0.5),
+    "coreference_newness": ("Coreference mention newness", 0.5),
+    "coreference_mention_form": ("Coreference mention form", None),
 }
 
 for _name, _display_name in _CONTINUOUS_TASKS.items():

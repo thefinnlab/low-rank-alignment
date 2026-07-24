@@ -29,6 +29,9 @@ LANCASTER_COLUMNS = (
     "torso_action_strength",
 )
 CONTENT_POS = {"ADJ", "ADV", "NOUN", "PROPN", "VERB"}
+FILLED_PAUSES = {"uh", "um", "er", "erm", "hm", "hmm"}
+MULTIWORD_DISCOURSE_MARKERS = {("you", "know"), ("i", "mean")}
+CONTEXTUAL_DISCOURSE_MARKERS = {"well", "so", "anyway"}
 
 
 def _surface(value: object) -> str:
@@ -39,6 +42,124 @@ def _surface(value: object) -> str:
 
 def _empty_features(token_table: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame({"token_id": token_table["token_id"].to_numpy()})
+
+
+@register_annotation_provider("disfluency", version="1", requires=("ud",))
+def disfluency_provider(document, token_table, options, resources) -> AnnotationResult:
+    """Generate conservative transcript-based disfluency and recurrence labels."""
+    del document, resources
+    normalized = token_table["word"].map(_surface).tolist()
+    n_tokens = len(token_table)
+    output = _empty_features(token_table)
+    output["filled_pause"] = [int(word in FILLED_PAUSES) for word in normalized]
+
+    immediate = np.zeros(n_tokens, dtype=int)
+    seen_before = np.zeros(n_tokens, dtype=int)
+    prior_count = np.zeros(n_tokens, dtype=float)
+    previous_distance = np.full(n_tokens, np.nan)
+    in_previous_five = np.zeros(n_tokens, dtype=int)
+    occurrences: dict[str, list[int]] = defaultdict(list)
+    for index, word in enumerate(normalized):
+        if not word:
+            continue
+        prior = occurrences[word]
+        if prior:
+            seen_before[index] = 1
+            prior_count[index] = len(prior)
+            previous_distance[index] = index - prior[-1]
+            immediate[index] = int(prior[-1] == index - 1)
+            in_previous_five[index] = int(prior[-1] >= index - 5)
+        occurrences[word].append(index)
+    output["immediate_word_repetition"] = immediate
+    output["word_seen_before"] = seen_before
+    output["prior_word_count"] = prior_count
+    output["distance_from_previous_occurrence"] = previous_distance
+    output["word_in_previous_5"] = in_previous_five
+
+    repeated_phrase = np.zeros(n_tokens, dtype=int)
+    marker = np.zeros(n_tokens, dtype=int)
+    marker_type = np.full(n_tokens, pd.NA, dtype=object)
+    spans = []
+    span_number = 0
+    max_phrase_words = int(options.get("max_repeated_phrase_words", 5))
+    for _, group in token_table.groupby("sentence_id", sort=False):
+        indices = group.index.to_numpy(dtype=int)
+        sentence_words = [normalized[index] for index in indices]
+        position = 0
+        while position < len(indices):
+            best = 0
+            for width in range(2, min(max_phrase_words, position, len(indices) - position) + 1):
+                if (
+                    all(sentence_words[position : position + width])
+                    and sentence_words[position - width : position]
+                    == sentence_words[position : position + width]
+                ):
+                    best = width
+            if best:
+                selected = indices[position : position + best]
+                repeated_phrase[selected] = 1
+                spans.append(
+                    {
+                        "span_id": f"repeated_phrase_{span_number}",
+                        "start_token_id": int(selected[0]),
+                        "end_token_id": int(selected[-1]),
+                        "label": "repeated_phrase",
+                        "span_type": "disfluency",
+                    }
+                )
+                span_number += 1
+                position += best
+            else:
+                position += 1
+
+        for local, index in enumerate(indices):
+            discourse_label = None
+            for phrase in MULTIWORD_DISCOURSE_MARKERS:
+                if tuple(sentence_words[local : local + len(phrase)]) == phrase:
+                    discourse_label = "_".join(phrase)
+                    selected = indices[local : local + len(phrase)]
+                    marker[selected] = 1
+                    marker_type[selected] = discourse_label
+                    spans.append(
+                        {
+                            "span_id": f"discourse_marker_{span_number}",
+                            "start_token_id": int(selected[0]),
+                            "end_token_id": int(selected[-1]),
+                            "label": discourse_label,
+                            "span_type": "discourse_marker",
+                        }
+                    )
+                    span_number += 1
+                    break
+            word = sentence_words[local]
+            is_interjection = str(token_table.loc[index].get("part_of_speech", "")) == "INTJ"
+            if discourse_label is None and word in CONTEXTUAL_DISCOURSE_MARKERS and (
+                local == 0 or is_interjection
+            ):
+                marker[index] = 1
+                marker_type[index] = word
+                spans.append(
+                    {
+                        "span_id": f"discourse_marker_{span_number}",
+                        "start_token_id": int(index),
+                        "end_token_id": int(index),
+                        "label": word,
+                        "span_type": "discourse_marker",
+                    }
+                )
+                span_number += 1
+    output["repeated_phrase"] = repeated_phrase
+    output["discourse_marker"] = marker
+    output["discourse_marker_type"] = marker_type
+    return AnnotationResult(
+        output,
+        spans=pd.DataFrame(spans),
+        metadata={
+            "normalization": "lowercase_strip_surrounding_punctuation",
+            "filled_pause_inventory": sorted(FILLED_PAUSES),
+            "max_repeated_phrase_words": max_phrase_words,
+        },
+    )
 
 
 @register_annotation_provider("native", version="1")
@@ -676,5 +797,236 @@ def stanza_ud_provider(document, token_table, options, resources) -> AnnotationR
             "language": options.get("language", "en"),
             "package": options.get("package", "ewt"),
             "tokenization": "parser_native_with_character_alignment",
+        },
+    )
+
+
+def _ner_spans_from_tags(tags: list[str], canonical_ids: np.ndarray) -> list[tuple[int, int, str]]:
+    """Convert Stanza BIOES tags into inclusive canonical-token spans."""
+    spans = []
+    start = None
+    label = None
+    for position, raw_tag in enumerate([*tags, "O"]):
+        tag = raw_tag or "O"
+        prefix, _, current_label = tag.partition("-")
+        if start is not None and (prefix in {"O", "B", "S"} or current_label != label):
+            spans.append((int(canonical_ids[start]), int(canonical_ids[position - 1]), str(label)))
+            start = None
+            label = None
+        if prefix == "S":
+            spans.append((int(canonical_ids[position]), int(canonical_ids[position]), current_label))
+        elif prefix == "B":
+            start, label = position, current_label
+        elif prefix in {"I", "E"} and start is None:
+            start, label = position, current_label
+        if prefix == "E" and start is not None:
+            spans.append((int(canonical_ids[start]), int(canonical_ids[position]), str(label)))
+            start = None
+            label = None
+    return spans
+
+
+def _coreference_mention_form(token_table: pd.DataFrame, start: int, end: int) -> str:
+    parts = set(token_table.loc[start:end, "part_of_speech"].dropna().astype(str))
+    if "PROPN" in parts:
+        return "proper"
+    if "PRON" in parts:
+        return "pronominal"
+    return "nominal"
+
+
+@register_annotation_provider("entity_coreference", version="1", requires=("ud",))
+def entity_coreference_provider(document, token_table, options, resources) -> AnnotationResult:
+    """Generate Stanza NER and document-level coreference annotations."""
+    del document
+    try:
+        import stanza
+    except ImportError as exc:
+        raise ImportError("The entity/coreference provider requires 'stanza'") from exc
+
+    model_dir = options.get("model_dir")
+    if options.get("model_resource"):
+        model_dir = resources[options["model_resource"]]["path"]
+    packages = {
+        "ner": options.get("ner_package", "ontonotes-ww-multi_charlm"),
+        "coref": options.get("coref_package", "gum-nospeakers_roberta-large-lora"),
+    }
+    pipeline_kwargs = dict(
+        lang=options.get("language", "en"),
+        processors="tokenize,ner,coref",
+        package=packages,
+        tokenize_pretokenized=True,
+        download_method=None,
+        use_gpu=bool(options.get("use_gpu", False)),
+        verbose=False,
+    )
+    if model_dir:
+        pipeline_kwargs["dir"] = model_dir
+    foundation_resource = options.get("foundation_resource")
+    temporary_coref_path = None
+    if foundation_resource:
+        import tempfile
+        import torch
+
+        foundation_path = resources[foundation_resource]["path"]
+        coref_path = (
+            Path(model_dir)
+            / options.get("language", "en")
+            / "coref"
+            / f"{packages['coref']}.pt"
+        )
+        state = torch.load(coref_path, map_location="cpu", weights_only=True)
+        state["config"] = dict(state["config"])
+        state["config"]["bert_model"] = foundation_path
+        with tempfile.NamedTemporaryFile(suffix=".pt", delete=False) as temporary:
+            temporary_coref_path = temporary.name
+        torch.save(state, temporary_coref_path)
+        pipeline_kwargs["coref_model_path"] = temporary_coref_path
+    try:
+        pipeline = stanza.Pipeline(**pipeline_kwargs)
+    finally:
+        if temporary_coref_path:
+            Path(temporary_coref_path).unlink(missing_ok=True)
+
+    sentence_groups = [
+        group.index.to_numpy(dtype=int)
+        for _, group in token_table.groupby("sentence_id", sort=False)
+    ]
+    parsed = pipeline(
+        [token_table.loc[indices, "word"].astype(str).tolist() for indices in sentence_groups]
+    )
+    if len(parsed.sentences) != len(sentence_groups):
+        raise ValueError(
+            "Stanza changed the configured sentence segmentation: "
+            f"{len(parsed.sentences)} vs {len(sentence_groups)}"
+        )
+
+    output = _empty_features(token_table)
+    output["is_named_entity"] = 0
+    output["named_entity_type"] = pd.NA
+    spans = []
+    for sentence_index, (sentence, canonical_ids) in enumerate(
+        zip(parsed.sentences, sentence_groups)
+    ):
+        if len(sentence.words) != len(canonical_ids) or len(sentence.tokens) != len(canonical_ids):
+            raise ValueError(
+                f"Stanza word alignment changed in sentence {sentence_index}: "
+                f"{len(sentence.words)} vs {len(canonical_ids)}"
+            )
+        tags = [getattr(token, "ner", "O") or "O" for token in sentence.tokens]
+        for entity_index, (start, end, label) in enumerate(
+            _ner_spans_from_tags(tags, canonical_ids)
+        ):
+            output.loc[start:end, "is_named_entity"] = 1
+            output.loc[start:end, "named_entity_type"] = label
+            spans.append(
+                {
+                    "span_id": f"entity_{sentence_index}_{entity_index}",
+                    "start_token_id": start,
+                    "end_token_id": end,
+                    "label": label,
+                    "span_type": "named_entity",
+                }
+            )
+
+    output["is_coreference_mention"] = 0
+    output["coreference_newness"] = pd.NA
+    output["coreference_mention_form"] = pd.NA
+    output["coreference_mention_order"] = np.nan
+    output["coreference_chain_size"] = np.nan
+    output["coreference_antecedent_distance_words"] = np.nan
+    output["coreference_chain_id"] = pd.NA
+    output["coreference_mention_id"] = pd.NA
+    mention_records = []
+    relations = []
+    for chain in parsed.coref:
+        previous_start = None
+        previous_span_id = None
+        surface_mentions = []
+        for mention in chain.mentions:
+            if not isinstance(mention.start_word, int) or not isinstance(mention.end_word, int):
+                continue
+            canonical_ids = sentence_groups[mention.sentence]
+            if mention.start_word < 0 or mention.end_word > len(canonical_ids):
+                raise ValueError(f"Stanza returned invalid coreference mention {mention}")
+            surface_mentions.append(
+                (
+                    int(canonical_ids[mention.start_word]),
+                    int(canonical_ids[mention.end_word - 1]),
+                )
+            )
+        surface_mentions.sort()
+        chain_size = len(surface_mentions)
+        for mention_order, (start, end) in enumerate(surface_mentions, start=1):
+            span_id = f"coreference_{chain.index}_{mention_order}"
+            record = {
+                "chain_id": int(chain.index),
+                "mention_id": span_id,
+                "mention_order": mention_order,
+                "chain_size": chain_size,
+                "start": start,
+                "end": end,
+                "newness": "first" if mention_order == 1 else "subsequent",
+                "form": _coreference_mention_form(token_table, start, end),
+                "antecedent_distance": (
+                    np.nan if previous_start is None else start - previous_start
+                ),
+            }
+            mention_records.append(record)
+            spans.append(
+                {
+                    "span_id": span_id,
+                    "start_token_id": start,
+                    "end_token_id": end,
+                    "label": record["newness"],
+                    "span_type": "coreference_mention",
+                }
+            )
+            if previous_span_id is not None:
+                relations.append(
+                    {
+                        "relation_id": f"antecedent_{chain.index}_{mention_order}",
+                        "source_span_id": previous_span_id,
+                        "target_span_id": span_id,
+                        "label": "precedes_in_chain",
+                    }
+                )
+            previous_start = start
+            previous_span_id = span_id
+
+    # Sidecars preserve every overlapping mention. Token columns use the shortest
+    # mention, then the earliest chain/order, for one deterministic scalar label.
+    for record in sorted(
+        mention_records,
+        key=lambda item: (
+            item["end"] - item["start"],
+            item["chain_id"],
+            item["mention_order"],
+        ),
+        reverse=True,
+    ):
+        selected = slice(record["start"], record["end"])
+        output.loc[selected, "is_coreference_mention"] = 1
+        output.loc[selected, "coreference_newness"] = record["newness"]
+        output.loc[selected, "coreference_mention_form"] = record["form"]
+        output.loc[selected, "coreference_mention_order"] = record["mention_order"]
+        output.loc[selected, "coreference_chain_size"] = record["chain_size"]
+        output.loc[selected, "coreference_antecedent_distance_words"] = record[
+            "antecedent_distance"
+        ]
+        output.loc[selected, "coreference_chain_id"] = record["chain_id"]
+        output.loc[selected, "coreference_mention_id"] = record["mention_id"]
+
+    return AnnotationResult(
+        output,
+        spans=pd.DataFrame(spans),
+        relations=pd.DataFrame(relations),
+        metadata={
+            "backend": "stanza",
+            "language": options.get("language", "en"),
+            "ner_package": packages["ner"],
+            "coref_package": packages["coref"],
+            "tokenization": "canonical_pretokenized_sentences",
+            "overlap_policy": "shortest_then_earliest_chain_and_mention",
         },
     )

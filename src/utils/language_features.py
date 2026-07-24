@@ -344,7 +344,15 @@ def stage_language_resources(
         resource_type = spec.get("type")
         needs_staging = not path.exists()
         if resource_type == "stanza_model" and path.is_dir():
-            needs_staging = not any(path.rglob("*.pt"))
+            required_models = spec.get("required_models", [])
+            needs_staging = (
+                any(not (path / model).exists() for model in required_models)
+                if required_models
+                else not any(path.rglob("*.pt"))
+            )
+        elif resource_type == "huggingface_model" and path.is_dir():
+            required_files = spec.get("required_files", ["config.json"])
+            needs_staging = any(not (path / filename).exists() for filename in required_files)
         elif resource_type == "nltk_corpus" and path.is_dir():
             corpus = spec.get("corpus", name)
             needs_staging = not (
@@ -364,7 +372,22 @@ def stage_language_resources(
                 stanza.download(
                     spec.get("language", "en"),
                     package=spec.get("package", "ewt"),
+                    processors=spec.get("processors", {}),
                     model_dir=str(path),
+                )
+            elif download and resource_type == "huggingface_model":
+                try:
+                    from huggingface_hub import snapshot_download
+                except ImportError as exc:
+                    raise ImportError(
+                        "Staging Hugging Face models requires 'huggingface_hub'"
+                    ) from exc
+                path.mkdir(parents=True, exist_ok=True)
+                snapshot_download(
+                    repo_id=spec["repo_id"],
+                    revision=spec.get("revision"),
+                    local_dir=str(path),
+                    allow_patterns=spec.get("allow_patterns"),
                 )
             elif download and resource_type == "nltk_corpus":
                 try:
