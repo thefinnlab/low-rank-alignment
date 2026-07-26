@@ -684,6 +684,7 @@ class FMRICrossDatasetRRRConfig:
     output_dir: str = "results/fmri/gpt2-xl_layer24/cross_dataset_rrr"
     source_mode: str = "cross_dataset"
     subspace_aggregation: str = "extrinsic"
+    rrr_svd_on_cpu: bool = False
     rank_grid: list[int] = field(
         default_factory=lambda: [1, 2, 4, 8, 16, 32, 64, 128]
     )

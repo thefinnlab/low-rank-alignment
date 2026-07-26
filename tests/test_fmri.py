@@ -197,14 +197,21 @@ def test_within_fmri_bases_save_fir_blocks_rank_bases_and_pre_fir_pca(
         story_slices={"story": slice(0, 8)},
     )
     fir_a = np.array([[10.0], [0.0], [0.0], [0.0], [1.0], [0.0]], dtype=np.float32)
+    fit_kwargs = {}
+
+    def fake_fit_dense_rrr(*args, **kwargs):
+        fit_kwargs.update(kwargs)
+        return {"A_dense": fir_a}
+
     monkeypatch.setattr(
         runner,
         "fit_dense_rrr",
-        lambda *args, **kwargs: {"A_dense": fir_a},
+        fake_fit_dense_rrr,
     )
     config = SimpleNamespace(
         rank_grid=[1],
         subspace_aggregation="unnormalized",
+        rrr_svd_on_cpu=True,
         fmri=SimpleNamespace(ndelays=2),
     )
     ridge_fit = runner.FinalRidgeFit(
@@ -224,3 +231,4 @@ def test_within_fmri_bases_save_fir_blocks_rank_bases_and_pre_fir_pca(
     assert abs(float(bases["pca"][1][:, 0] @ np.array([1.0, 0.0, 0.0]))) > 0.999
     assert (tmp_path / "rrr/k1/A.npy").exists()
     assert (tmp_path / "pca/k1/A.npy").exists()
+    assert fit_kwargs["svd_on_cpu"] is True
