@@ -130,6 +130,63 @@ class TestRunRRRForUnit:
         config.save_b_matrices = True
         return config
 
+    def test_rank_specific_a_is_orthonormalized_before_ridge(
+        self, tmp_path, small_data, monkeypatch
+    ):
+        import run_rrr
+
+        X, Y = small_data
+        A_full = np.array(
+            [[2.0, 1.0], [0.0, 3.0]] + [[0.0, 0.0]] * (X.shape[1] - 2),
+            dtype=np.float32,
+        )
+        captured = []
+
+        def capture_evaluation(X_train, X_test, *args, **kwargs):
+            captured.append((X_train.copy(), X_test.copy()))
+            n_targets = args[1].shape[1]
+            return {
+                "nr_corr": 0.0,
+                "nr_r2": 0.0,
+                "nr_corr_per_target": np.zeros(n_targets),
+                "nr_r2_per_target": np.zeros(n_targets),
+                "nr_best_alphas": np.ones(n_targets),
+            }
+
+        monkeypatch.setattr(run_rrr, "evaluate_input_space", capture_evaluation)
+        monkeypatch.setattr(
+            run_rrr, "resolve_ridge_alphas", lambda *a, **k: np.array([1.0])
+        )
+        monkeypatch.setattr(run_rrr, "save_alpha_diagnostics", lambda *a, **k: None)
+
+        train_idx = np.arange(0, X.shape[0] // 2)
+        test_idx = np.arange(X.shape[0] // 2, X.shape[0])
+        run_rrr._run_common_subspace_fold_k(
+            A_full,
+            2,
+            X[train_idx],
+            X[test_idx],
+            Y[train_idx],
+            Y[test_idx],
+            None,
+            0,
+            np.array([1.0]),
+            None,
+            False,
+            2,
+            None,
+            None,
+            None,
+            "cpu",
+            str(tmp_path),
+            "nr",
+            orthonormalize_a_per_rank=True,
+        )
+
+        Q = np.linalg.qr(A_full[:, :2], mode="reduced")[0]
+        np.testing.assert_allclose(captured[0][0], X[train_idx] @ Q)
+        np.testing.assert_allclose(Q.T @ Q, np.eye(2), atol=1e-6)
+
     def test_b_matrices_and_raw_rrr_metrics_disabled_by_default(
         self, tmp_path, small_data
     ):

@@ -236,6 +236,9 @@ class RRRConfig:
     standardize_subspace_inputs: bool = (
         False  # Preserve RRR/PCA subspace coordinate scales by default.
     )
+    orthonormalize_a_per_rank: bool = (
+        False  # QR-orthonormalize A[:, :k] before each projected ridge fit.
+    )
 
     # Arbitrary embedding seed for null baseline
     arbitrary_seed: int = 42
