@@ -326,6 +326,7 @@ class TestApplyOverrides:
     def test_subspace_aggregation_defaults_and_validation(self):
         assert RRRConfig().subspace_aggregation == "extrinsic"
         assert FMRICrossDatasetRRRConfig().subspace_aggregation == "extrinsic"
+        assert FMRICrossDatasetRRRConfig().rrr_svd_on_cpu is False
         with pytest.raises(ValueError, match="subspace_aggregation"):
             RRRConfig(subspace_aggregation="weighted")
 

@@ -29,6 +29,9 @@ source_mode: within_fmri
 # unnormalized to preserve the magnitude of each raw delay-specific factor.
 subspace_aggregation: extrinsic
 
+# Run the dense-RRR SVD on CPU in float64 for numerical robustness.
+rrr_svd_on_cpu: true
+
 # Not used by source_mode=within_fmri, but retained as null to make that explicit.
 source_rrr_unit_dir: null
 output_dir: results/fmri/gpt2-xl_layer24/within_fmri_rrr
