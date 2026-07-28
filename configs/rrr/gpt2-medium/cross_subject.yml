@@ -27,6 +27,9 @@ rank_grid:
 - 256
 - 512
 - 1024
+# Sanity check: QR-orthonormalize each A[:, :k] after rank selection and before
+# fitting its neural-relevance ridge model.
+orthonormalize_a_per_rank: false
 refresh: true
 run_pca_baseline: true
 run_null_augmented: false

@@ -190,6 +190,7 @@ def _fit_within_fmri_bases(full_train, ridge_fit, ambient_dim, config, output_di
         selected_idx=np.arange(expected_width),
         precomputed_Y_hat_ols=ridge_fit.train_prediction,
         precomputed_beta_full=ridge_fit.coefficients,
+        svd_on_cpu=config.rrr_svd_on_cpu,
     )
     fir_a = np.asarray(rrr_result["A_dense"], dtype=np.float32)
     delay_blocks = list(np.split(fir_a, ndelays, axis=0))
@@ -472,6 +473,7 @@ def run_config(config: FMRICrossDatasetRRRConfig) -> None:
         "source_factors": factor_metadata,
         "source_mode": config.source_mode,
         "subspace_aggregation": config.subspace_aggregation,
+        "rrr_svd_on_cpu": config.rrr_svd_on_cpu,
         "pca_available": "pca" in bases_by_method,
         "pca_training_representation": (
             "tr_aligned_trimmed_story_zscored_pre_fir"

@@ -217,13 +217,18 @@ class TestDictToDataclass:
 
     def test_rrr_subspace_standardization_roundtrip(self):
         config = dict_to_dataclass(
-            {"standardize_subspace_inputs": False},
+            {
+                "standardize_subspace_inputs": False,
+                "orthonormalize_a_per_rank": True,
+            },
             RRRConfig,
         )
         assert config.standardize_subspace_inputs is False
+        assert config.orthonormalize_a_per_rank is True
 
     def test_rrr_subspace_standardization_defaults_false(self):
         assert RRRConfig().standardize_subspace_inputs is False
+        assert RRRConfig().orthonormalize_a_per_rank is False
 
     def test_rrr_b_matrices_default_false(self):
         assert RRRConfig().save_b_matrices is False
@@ -326,6 +331,7 @@ class TestApplyOverrides:
     def test_subspace_aggregation_defaults_and_validation(self):
         assert RRRConfig().subspace_aggregation == "extrinsic"
         assert FMRICrossDatasetRRRConfig().subspace_aggregation == "extrinsic"
+        assert FMRICrossDatasetRRRConfig().rrr_svd_on_cpu is False
         with pytest.raises(ValueError, match="subspace_aggregation"):
             RRRConfig(subspace_aggregation="weighted")
 

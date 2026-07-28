@@ -34,9 +34,9 @@ def _fit_oof(X, Y, story_slices, groups, config, output_dir):
     outer_folds = session_cv_splits(story_slices, groups)
     explicit = np.asarray(config.ridge.alphas) if config.ridge.alphas else None
     sessions = list(groups)
-    for fold, ((train_idx, test_idx), held_out_session) in enumerate(
+    for fold, ((train_idx, test_idx), held_out_session) in tqdm(enumerate(
         zip(outer_folds, sessions)
-    ):
+    ), desc="folds"):
         fold_dir = Path(output_dir) / f"fold_{fold}"
         context = {
             "script": "fmri_significance",

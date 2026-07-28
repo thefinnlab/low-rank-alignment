@@ -312,6 +312,7 @@ def fit_dense_rrr(
     device: str | None = None,
     precomputed_Y_hat_ols: np.ndarray | None = None,
     precomputed_beta_full: np.ndarray | None = None,
+    svd_on_cpu: bool = False,
 ) -> dict:
     """Fit dense (non-sparse) Reduced Rank Regression on the selected direction subset.
 
@@ -344,6 +345,9 @@ def fit_dense_rrr(
         precomputed_beta_full: Optional (n_dirs, n_targets) array of unscaled
             coefficients in the input feature space. Rows are indexed by direction;
             selected_idx is applied to slice the relevant subset.
+        svd_on_cpu: If True, run the SVD on CPU in float64 for improved numerical
+            robustness. The resulting singular vectors are converted back to the
+            coefficient tensor's device and dtype before constructing the factors.
 
     Returns:
         dict with keys:
@@ -404,18 +408,18 @@ def fit_dense_rrr(
         beta_ols = torch.linalg.solve(gram, X.T @ Y)  # (n_selected, n_targets)
         Y_hat_ols = X @ beta_ols
 
-    # Step 2: Training-set predictions and their rank-k SVD
-    try:
-        _, _, Vh = torch.linalg.svd(Y_hat_ols, full_matrices=False)
-    except Exception:
-        return {
-            "A_dense": np.zeros((n_selected, k), dtype=np.float32),
-            "B_dense": np.zeros((n_targets, k), dtype=np.float32),
-            "selected_idx": selected_idx,
-        }
+    # Step 2: Training-set predictions and their rank-k SVD. CPU mode promotes
+    # only the decomposition input to float64; the returned factors retain the
+    # existing coefficient dtype/device contract.
+    svd_input = (
+        Y_hat_ols.to(device="cpu", dtype=torch.float64)
+        if svd_on_cpu
+        else Y_hat_ols
+    )
+    _, _, Vh = torch.linalg.svd(svd_input, full_matrices=False)
 
     actual_k = min(k, Vh.shape[0])
-    Vh_k = Vh[:actual_k, :]  # (actual_k, n_targets)
+    Vh_k = Vh[:actual_k, :].to(device=beta_ols.device, dtype=beta_ols.dtype)
 
     # Step 3: Factor matrices
     # A = beta_ols @ Vh_k^T  (n_selected, actual_k)

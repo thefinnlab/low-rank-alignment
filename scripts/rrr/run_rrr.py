@@ -572,6 +572,7 @@ def _run_common_subspace_fold_k(
     full_corr_per_target: "np.ndarray | None" = None,
     null_augmented_config: "RRRConfig | None" = None,
     save_primary_corr_per_target: bool = True,
+    orthonormalize_a_per_rank: bool = False,
 ) -> dict:
     """Shared evaluation for one (fold, k) projected subspace.
 
@@ -584,6 +585,8 @@ def _run_common_subspace_fold_k(
     Returns a metrics dict with per-target arrays stripped (for grid_results.csv).
     """
     A_k = A_full[:, :k]
+    if orthonormalize_a_per_rank:
+        A_k = np.linalg.qr(A_k, mode="reduced")[0]
 
     X_proj_train = X_train @ A_k
     X_proj_test = X_test @ A_k
@@ -700,6 +703,7 @@ def _run_subspace_rank_loop_for_fold(
     null_augmented_config: "RRRConfig | None" = None,
     save_primary_corr_per_target: bool = True,
     save_rrr_corr_per_target: bool = False,
+    orthonormalize_a_per_rank: bool = False,
 ) -> list[dict]:
     """Evaluate rank-k projected ridge models for one fold from a known A matrix.
 
@@ -755,6 +759,7 @@ def _run_subspace_rank_loop_for_fold(
             full_corr_per_target=full_corr_per_target,
             null_augmented_config=null_augmented_config,
             save_primary_corr_per_target=save_primary_corr_per_target,
+            orthonormalize_a_per_rank=orthonormalize_a_per_rank,
         )
 
         metrics_path = os.path.join(unit_dir, f"k{k}", f"fold_{fold_f}", "metrics.npz")
@@ -1273,6 +1278,7 @@ def _run_rrr_for_unit(
                 null_augmented_config=config,
                 save_primary_corr_per_target=config.save_nr_corr_per_target,
                 save_rrr_corr_per_target=config.save_rrr_corr_per_target,
+                orthonormalize_a_per_rank=config.orthonormalize_a_per_rank,
             )
         )
 
@@ -2388,6 +2394,7 @@ def _run_cross_dataset_subspace_for_unit(
                     device=device,
                     primary_label=primary_label,
                     progress_desc=f"  cross-dataset fold {fold_f}",
+                    orthonormalize_a_per_rank=config.orthonormalize_a_per_rank,
                 )
             )
 

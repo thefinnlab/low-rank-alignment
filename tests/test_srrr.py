@@ -570,3 +570,36 @@ class TestFitDenseRRRPrecomputed:
 
         assert result["A_dense"].shape == (X.shape[1], k)
         assert result["B_dense"].shape == (Y.shape[1], k)
+
+    @pytest.mark.parametrize(
+        ("svd_on_cpu", "expected_dtype"),
+        [(False, torch.float32), (True, torch.float64)],
+    )
+    def test_svd_cpu_mode_controls_decomposition_dtype(
+        self, fitted_model_and_data, monkeypatch, svd_on_cpu, expected_dtype
+    ):
+        """CPU mode promotes only the decomposition while outputs stay float32."""
+        _, X_train, Y_train, beta_full, Y_hat_ols, n_dirs, _ = fitted_model_and_data
+        original_svd = torch.linalg.svd
+        observed = {}
+
+        def recording_svd(value, *args, **kwargs):
+            observed["device"] = value.device.type
+            observed["dtype"] = value.dtype
+            return original_svd(value, *args, **kwargs)
+
+        monkeypatch.setattr(torch.linalg, "svd", recording_svd)
+        result = fit_dense_rrr(
+            X_train,
+            Y_train,
+            k=2,
+            selected_idx=np.arange(n_dirs),
+            precomputed_Y_hat_ols=Y_hat_ols,
+            precomputed_beta_full=beta_full,
+            device="cpu",
+            svd_on_cpu=svd_on_cpu,
+        )
+
+        assert observed == {"device": "cpu", "dtype": expected_dtype}
+        assert result["A_dense"].dtype == np.float32
+        assert result["B_dense"].dtype == np.float32
