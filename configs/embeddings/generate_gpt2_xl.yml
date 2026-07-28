@@ -1,18 +1,15 @@
-hf_model_id: openai-community/gpt2-xl # model_cache/models/gpt2-xl
-tokenizer_name_or_path: openai-community/gpt2-xl # model_cache/models/gpt2-xl
+hf_model_id: model_cache/models/gpt2-xl
+tokenizer_name_or_path: model_cache/models/gpt2-xl
 output_name: gpt2-xl-batch
 data_root: data/
 context_window: 1023
 stride: 512
-layers:
-# - 0
-- 24
-# - 48
+layers: all
 pooling: mean
 attention_mode: auto
 dtype: float32
 output_dtype: float32
 device: cuda
 batch_size: 1
-local_files_only: false
+local_files_only: true
 add_prefix_space: true

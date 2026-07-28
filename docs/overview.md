@@ -33,6 +33,8 @@ The Makefile exposes the language probe as `make language-decoding` and also pro
 
 `make generate-embeddings EMBED_CONFIG=configs/embeddings/generate_<model>.yml` runs `scripts/utilities/generate_embeddings.py`, which loads HuggingFace models through `transformers`, loads words through the active dataset adapter, and writes per-token contextual embeddings.
 
+For the repository's default `PIPELINE_MODELS`, `scripts/utilities/cache_pipeline_models.py` downloads the five required Hugging Face snapshots (the random GPT-2 XL control reuses GPT-2 XL and GloVe needs no Hugging Face assets) into the local paths used by the embedding configs. `scripts/fmri/generate_pipeline_embeddings.py` applies those same flat model configs to every story selected by the fMRI template, so model, tokenizer, layer, attention, dtype, and output-name settings remain shared across the Cars 2 and fMRI embedding runs. The GPT-2 XL config saves all hidden-state layers under `gpt2-xl-batch`.
+
 HuggingFace generation tokenizes each transcript word independently with the same space-prefixed convention as `data/code/llm.py` for all model types, then uses a sliding window controlled by `context_window` and `stride`. Causal models use native causal attention; bidirectional models use `attention_mode=bidirectional_strict` so each target sees only preceding tokens. Set `random_init_model: true` to use a model id as the tokenizer and architecture source while initializing fresh random weights.
 
 Outputs use the existing layout:
@@ -88,6 +90,7 @@ Downstream configs can store list-valued `encoding.per_model_config.layer` entri
 | `scripts/gcca/run_gcca.py` | Config-driven partial-support MAXVAR GCCA; saves fold models, calibrated word representations, support/reliability tables, and stability blocks |
 | `scripts/gcca/run_encoding.py` | Evaluate calibrated GCCA ridge encodings without rebuilding baselines and compare matched targets with saved RRR runs |
 | `scripts/utilities/generate_embeddings.py` | Generate contextual HuggingFace embeddings |
+| `scripts/utilities/cache_pipeline_models.py` | Cache model and tokenizer snapshots required by the default `PIPELINE_MODELS` for offline generation |
 | `scripts/utilities/export_transcript.py` | Export a dataset adapter's normalized transcript word table for review |
 | `scripts/utilities/generate_language_features.py` | Stage pinned annotation resources and generate dataset-standard token/span/relation artifacts |
 | `scripts/utilities/generate_random_embeddings.py` | Generate random-init contextual embeddings |
@@ -97,6 +100,7 @@ Downstream configs can store list-valued `encoding.per_model_config.layer` entri
 | `scripts/utilities/print_atlas_regions.py` | Print atlas region labels for electrodes |
 | `scripts/utilities/download_model.py`, `download_tokenizer.py` | Cache HuggingFace model/tokenizer assets |
 | `scripts/fmri/generate_embeddings.py` | Generate contextual embeddings independently for each configured fMRI story |
+| `scripts/fmri/generate_pipeline_embeddings.py` | Generate fMRI story embeddings using the ordinary flat model configs and shared fMRI dataset settings |
 | `scripts/fmri/run_significance.py` | Session-held-out voxel significance with within-story circular-shift nulls and per-subject FDR |
 | `scripts/fmri/run_cross_dataset_rrr.py` | Evaluate aggregated cross-dataset factors or learn FIR-aware fMRI RRR and pre-FIR PCA axes on significant voxels |
 
