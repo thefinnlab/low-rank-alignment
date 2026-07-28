@@ -20,7 +20,7 @@ from src.core.registry import get_dataset_adapter, resolve_dataset_context
 from src.utils.config_utils import save_effective_config
 
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 EMPTY_SIDECAR_COLUMNS = {
     "spans.tsv": [
         "provider",
@@ -43,6 +43,14 @@ EMPTY_SIDECAR_COLUMNS = {
         "sentence_id",
         "token_id",
         "text",
+    ],
+    "segments.tsv": [
+        "provider",
+        "segment_id",
+        "start",
+        "end",
+        "label",
+        "segment_type",
     ],
 }
 
@@ -83,6 +91,7 @@ class AnnotationResult:
     spans: pd.DataFrame = field(default_factory=pd.DataFrame)
     relations: pd.DataFrame = field(default_factory=pd.DataFrame)
     provider_tokens: pd.DataFrame = field(default_factory=pd.DataFrame)
+    segments: pd.DataFrame = field(default_factory=pd.DataFrame)
     metadata: dict = field(default_factory=dict)
 
 
@@ -344,7 +353,15 @@ def stage_language_resources(
         resource_type = spec.get("type")
         needs_staging = not path.exists()
         if resource_type == "stanza_model" and path.is_dir():
-            needs_staging = not any(path.rglob("*.pt"))
+            required_models = spec.get("required_models", [])
+            needs_staging = (
+                any(not (path / model).exists() for model in required_models)
+                if required_models
+                else not any(path.rglob("*.pt"))
+            )
+        elif resource_type == "huggingface_model" and path.is_dir():
+            required_files = spec.get("required_files", ["config.json"])
+            needs_staging = any(not (path / filename).exists() for filename in required_files)
         elif resource_type == "nltk_corpus" and path.is_dir():
             corpus = spec.get("corpus", name)
             needs_staging = not (
@@ -364,7 +381,22 @@ def stage_language_resources(
                 stanza.download(
                     spec.get("language", "en"),
                     package=spec.get("package", "ewt"),
+                    processors=spec.get("processors", {}),
                     model_dir=str(path),
+                )
+            elif download and resource_type == "huggingface_model":
+                try:
+                    from huggingface_hub import snapshot_download
+                except ImportError as exc:
+                    raise ImportError(
+                        "Staging Hugging Face models requires 'huggingface_hub'"
+                    ) from exc
+                path.mkdir(parents=True, exist_ok=True)
+                snapshot_download(
+                    repo_id=spec["repo_id"],
+                    revision=spec.get("revision"),
+                    local_dir=str(path),
+                    allow_patterns=spec.get("allow_patterns"),
                 )
             elif download and resource_type == "nltk_corpus":
                 try:
@@ -466,6 +498,7 @@ def generate_language_features(config: LanguageFeatureGenerationConfig) -> Path:
     span_tables = []
     relation_tables = []
     provider_token_tables = []
+    segment_tables = []
     provider_metadata = {}
     feature_providers: dict[str, str] = {}
     for name in _provider_order(config.providers):
@@ -499,6 +532,7 @@ def generate_language_features(config: LanguageFeatureGenerationConfig) -> Path:
             (result.spans, span_tables),
             (result.relations, relation_tables),
             (result.provider_tokens, provider_token_tables),
+            (result.segments, segment_tables),
         ):
             if not table.empty:
                 tagged = table.copy()
@@ -520,6 +554,22 @@ def generate_language_features(config: LanguageFeatureGenerationConfig) -> Path:
                     ids = tagged["token_id"].to_numpy(dtype=int)
                     if np.any(ids < 0) or np.any(ids >= len(token_table)):
                         raise ValueError(f"Provider {name} returned invalid crosswalk token IDs")
+                if collection is segment_tables:
+                    required = {"segment_id", "start", "end", "label", "segment_type"}
+                    missing = required - set(tagged)
+                    if missing:
+                        raise ValueError(
+                            f"Provider {name} segment table is missing {sorted(missing)}"
+                        )
+                    starts = pd.to_numeric(tagged["start"], errors="coerce").to_numpy()
+                    ends = pd.to_numeric(tagged["end"], errors="coerce").to_numpy()
+                    if (
+                        not np.isfinite(starts).all()
+                        or not np.isfinite(ends).all()
+                        or np.any(starts < 0)
+                        or np.any(ends <= starts)
+                    ):
+                        raise ValueError(f"Provider {name} returned invalid timed segments")
                 collection.append(tagged)
         provider_metadata[name] = {
             "version": spec.version,
@@ -536,6 +586,7 @@ def generate_language_features(config: LanguageFeatureGenerationConfig) -> Path:
         ("spans.tsv", span_tables),
         ("relations.tsv", relation_tables),
         ("provider_tokens.tsv", provider_token_tables),
+        ("segments.tsv", segment_tables),
     ):
         table = (
             pd.concat(tables, ignore_index=True)

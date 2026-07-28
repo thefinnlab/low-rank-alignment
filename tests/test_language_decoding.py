@@ -9,6 +9,7 @@ from src.utils.language_decoding import (
     _configure_decoder_backend,
     _decoder_metrics,
     _fit_decoder,
+    _matched_score_correlation,
     _run_subspace_decoding,
     _run_task_decoding,
     _prepare_multiview_subspaces,
@@ -19,6 +20,7 @@ from src.utils.language_decoding import (
     resolve_rrr_unit_dir,
     resolve_subspace_unit_dir,
     summarize_language_decoding,
+    summarize_prediction_agreement,
 )
 from src.utils.language_tasks import TASK_REGISTRY, PodcastTaskContext, get_language_task
 
@@ -447,8 +449,64 @@ def test_plot_overlays_rrr_and_pca(tmp_path):
         ]
     )
     output = tmp_path / "rank_analysis.png"
-    plot_language_decoding(summary, output)
+    agreement = pd.DataFrame(
+        [
+            {
+                "task": "surprisal",
+                "kind": "continuous",
+                "k": rank,
+                "prediction_correlation": prediction,
+                "prediction_correlation_sem_lower": 0.02,
+                "prediction_correlation_sem_upper": 0.02,
+                "error_correlation": error,
+                "error_correlation_sem_lower": 0.03,
+                "error_correlation_sem_upper": 0.03,
+            }
+            for rank, prediction, error in ((1, 0.4, 0.2), (2, 0.7, 0.5))
+        ]
+    )
+    plot_language_decoding(summary, output, agreement=agreement)
     assert output.exists()
+
+
+def test_matched_score_correlation_fisher_averages_multiclass_columns():
+    rng = np.random.default_rng(18)
+    left = rng.normal(size=(200, 3))
+    right = np.column_stack(
+        [
+            left[:, 0] + 0.1 * rng.normal(size=200),
+            left[:, 1] + 0.5 * rng.normal(size=200),
+            left[:, 2] + rng.normal(size=200),
+        ]
+    )
+    correlation, n_columns = _matched_score_correlation(left, right)
+    individual = [np.corrcoef(left[:, index], right[:, index])[0, 1] for index in range(3)]
+    expected = np.tanh(np.mean(np.arctanh(individual)))
+    assert correlation == pytest.approx(expected)
+    assert n_columns == 3
+
+
+def test_prediction_agreement_summary_fisher_averages_folds_and_keeps_errors():
+    results = pd.DataFrame(
+        [
+            {
+                "task": "surprisal",
+                "kind": "continuous",
+                "k": 2,
+                "fold": fold,
+                "prediction_correlation": prediction,
+                "error_correlation": error,
+            }
+            for fold, prediction, error in ((0, 0.2, -0.1), (1, 0.6, 0.3))
+        ]
+    )
+    summary = summarize_prediction_agreement(results).iloc[0]
+    assert summary.prediction_correlation == pytest.approx(
+        np.tanh(np.mean(np.arctanh([0.2, 0.6])))
+    )
+    assert summary.error_correlation == pytest.approx(
+        np.tanh(np.mean(np.arctanh([-0.1, 0.3])))
+    )
 
 
 def test_run_subspace_decoding_loads_paths_and_validates_fold_set(

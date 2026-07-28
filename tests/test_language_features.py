@@ -1,4 +1,5 @@
 import json
+import wave
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -9,10 +10,15 @@ import pytest
 from src.core.config import LanguageFeatureGenerationConfig
 from src.utils.language_feature_providers import (
     LANCASTER_COLUMNS,
+    _assign_speakers_to_words,
+    _canonicalize_speaker_turns,
     _choose_parser_component,
     _dependency_derivatives,
+    disfluency_provider,
+    entity_coreference_provider,
     lexical_norms_provider,
     native_provider,
+    speaker_diarization_provider,
     swow_provider,
 )
 from src.utils.language_features import (
@@ -83,6 +89,172 @@ def test_native_controls_are_word_aligned_and_non_destructive():
         result.token_features["pre_word_pause"], [np.nan, 0.1, 0.1, 0.1], equal_nan=True
     )
     assert "lemma" not in result.token_features
+
+
+def test_speaker_turns_are_canonicalized_and_words_use_largest_overlap():
+    turns = _canonicalize_speaker_turns(
+        [
+            (SimpleNamespace(start=0.0, end=0.5), "raw_b"),
+            (SimpleNamespace(start=0.5, end=1.0), "raw_a"),
+            (SimpleNamespace(start=1.2, end=1.5), "raw_b"),
+        ]
+    )
+    assert turns["label"].tolist() == [
+        "SPEAKER_00",
+        "SPEAKER_01",
+        "SPEAKER_00",
+    ]
+    tokens = pd.DataFrame(
+        {
+            "start": [0.1, 0.4, 0.8, 1.05, 1.2],
+            "end": [0.2, 0.6, 0.95, 1.1, 1.2],
+        }
+    )
+    labels = _assign_speakers_to_words(tokens, turns)
+    assert labels.iloc[:3].tolist() == [
+        "SPEAKER_00",
+        "SPEAKER_00",  # equal overlap resolves to the earlier turn
+        "SPEAKER_01",
+    ]
+    assert labels.iloc[3:].isna().all()
+
+
+def test_speaker_provider_uses_local_exclusive_diarization(tmp_path, monkeypatch):
+    audio = tmp_path / "audio.wav"
+    with wave.open(str(audio), "wb") as stream:
+        stream.setnchannels(1)
+        stream.setsampwidth(2)
+        stream.setframerate(16_000)
+        stream.writeframes(np.zeros(16_000, dtype=np.int16).tobytes())
+    model = tmp_path / "model"
+    model.mkdir()
+    document = _document()
+    document.media["audio"] = str(audio)
+    calls = {}
+
+    class FakePipeline:
+        def to(self, device):
+            calls["device"] = str(device)
+
+        def __call__(self, payload, **kwargs):
+            calls["inference"] = (payload, kwargs)
+            return SimpleNamespace(
+                exclusive_speaker_diarization=[
+                    (SimpleNamespace(start=0.0, end=0.5), "cluster_9"),
+                    (SimpleNamespace(start=0.5, end=1.1), "cluster_2"),
+                ]
+            )
+
+    def fake_from_pretrained(path):
+        calls["model"] = path
+        return FakePipeline()
+
+    monkeypatch.setattr("pyannote.audio.Pipeline.from_pretrained", fake_from_pretrained)
+    monkeypatch.setattr("torch.cuda.is_available", lambda: False)
+
+    result = speaker_diarization_provider(
+        document,
+        document.tokens,
+        {"device": "auto", "min_speakers": 2, "max_speakers": 4},
+        {"pyannote_community_1": {"path": str(model)}},
+    )
+
+    assert calls["model"] == str(model)
+    assert calls["device"] == "cpu"
+    payload, kwargs = calls["inference"]
+    assert payload["sample_rate"] == 16_000
+    assert tuple(payload["waveform"].shape) == (1, 16_000)
+    assert kwargs == {"min_speakers": 2, "max_speakers": 4}
+    assert result.token_features["speaker_identity"].tolist() == [
+        "SPEAKER_00",
+        "SPEAKER_00",
+        "SPEAKER_01",
+        "SPEAKER_01",
+    ]
+    assert result.metadata["detected_speaker_count"] == 2
+    assert result.metadata["unmatched_word_count"] == 0
+
+
+def test_disfluency_provider_generates_conservative_recurrence_features():
+    words = [
+        "So", "I", "mean", "uh", "go", "go", "back", "home", "back", "home",
+        "and", "go", "now", "go",
+    ]
+    tokens = pd.DataFrame(
+        {
+            "token_id": range(len(words)),
+            "word": words,
+            "sentence_id": [0] * 10 + [1] * 4,
+            "part_of_speech": ["ADV", "PRON", "VERB", "INTJ"] + ["VERB"] * 10,
+        }
+    )
+    result = disfluency_provider(None, tokens, {}, {})
+    features = result.token_features
+
+    assert features.loc[3, "filled_pause"] == 1
+    assert features.loc[5, "immediate_word_repetition"] == 1
+    assert features.loc[8:9, "repeated_phrase"].tolist() == [1, 1]
+    assert features.loc[0, "discourse_marker"] == 1
+    assert features.loc[1:2, "discourse_marker_type"].tolist() == ["i_mean", "i_mean"]
+    assert features.loc[11, "word_seen_before"] == 1
+    assert features.loc[11, "prior_word_count"] == 2
+    assert features.loc[11, "distance_from_previous_occurrence"] == 6
+    assert features.loc[11, "word_in_previous_5"] == 0
+    assert features.loc[13, "word_in_previous_5"] == 1
+    assert set(result.spans["span_type"]) == {"disfluency", "discourse_marker"}
+
+
+def test_entity_coreference_provider_aligns_spans_and_uses_overlap_policy(monkeypatch):
+    tokens = pd.DataFrame(
+        {
+            "token_id": range(7),
+            "word": ["Alice", "met", "Bob", ".", "She", "liked", "him"],
+            "sentence_id": [0, 0, 0, 0, 1, 1, 1],
+            "part_of_speech": ["PROPN", "VERB", "PROPN", "PUNCT", "PRON", "VERB", "PRON"],
+        }
+    )
+    sentences = [
+        SimpleNamespace(
+            words=[SimpleNamespace() for _ in range(4)],
+            tokens=[SimpleNamespace(ner=tag) for tag in ["S-PERSON", "O", "S-PERSON", "O"]],
+        ),
+        SimpleNamespace(
+            words=[SimpleNamespace() for _ in range(3)],
+            tokens=[SimpleNamespace(ner=tag) for tag in ["O", "O", "O"]],
+        ),
+    ]
+    chains = [
+        SimpleNamespace(
+            index=0,
+            mentions=[
+                SimpleNamespace(sentence=1, start_word=0, end_word=1),
+                SimpleNamespace(sentence=0, start_word=0, end_word=1),
+            ],
+        ),
+        SimpleNamespace(
+            index=1,
+            mentions=[SimpleNamespace(sentence=0, start_word=2, end_word=3)],
+        ),
+    ]
+    fake_document = SimpleNamespace(sentences=sentences, coref=chains)
+    monkeypatch.setattr("stanza.Pipeline", lambda **kwargs: lambda text: fake_document)
+
+    result = entity_coreference_provider(
+        None,
+        tokens,
+        {"model_dir": "/models"},
+        {},
+    )
+    features = result.token_features
+    assert features["is_named_entity"].tolist() == [1, 0, 1, 0, 0, 0, 0]
+    assert features.loc[0, "named_entity_type"] == "PERSON"
+    assert features.loc[4, "coreference_newness"] == "subsequent"
+    assert features.loc[0, "coreference_mention_form"] == "proper"
+    assert features.loc[4, "coreference_mention_form"] == "pronominal"
+    assert features.loc[4, "coreference_antecedent_distance_words"] == 4
+    assert features.loc[2, "coreference_chain_size"] == 1
+    assert len(result.relations) == 1
+    assert set(result.spans["span_type"]) == {"named_entity", "coreference_mention"}
 
 
 def test_lexical_lookup_uses_longest_phrase_and_emits_missingness(tmp_path):
@@ -304,6 +476,84 @@ def test_resource_staging_validates_checksum(tmp_path):
         stage_language_resources(config, download=False)
 
 
+def test_stanza_staging_checks_specific_required_models(tmp_path, monkeypatch):
+    model_root = tmp_path / "stanza"
+    existing = model_root / "en" / "tokenize" / "ewt.pt"
+    existing.parent.mkdir(parents=True)
+    existing.write_bytes(b"tokenizer")
+    required = [
+        "en/ner/example.pt",
+        "en/coref/example.pt",
+    ]
+    calls = []
+
+    def fake_download(language, package, processors, model_dir):
+        calls.append((language, package, processors, model_dir))
+        for relative in required:
+            path = Path(model_dir) / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(b"model")
+
+    monkeypatch.setattr("stanza.download", fake_download)
+    config = LanguageFeatureGenerationConfig(
+        providers=["native"],
+        resource_dir=str(tmp_path),
+        resources={
+            "semantics": {
+                "type": "stanza_model",
+                "path": "stanza",
+                "language": "en",
+                "package": "ewt",
+                "processors": {"ner": "example", "coref": "example"},
+                "required_models": required,
+            }
+        },
+    )
+
+    staged = stage_language_resources(config, download=True)
+
+    assert len(calls) == 1
+    assert calls[0][2] == {"ner": "example", "coref": "example"}
+    assert staged["semantics"]["path"] == str(model_root.resolve())
+
+
+def test_huggingface_foundation_staging_checks_required_files(tmp_path, monkeypatch):
+    calls = []
+
+    def fake_snapshot_download(repo_id, revision, local_dir, allow_patterns):
+        calls.append((repo_id, revision, local_dir, allow_patterns))
+        for filename in ("config.json", "model.safetensors"):
+            (Path(local_dir) / filename).write_bytes(b"model")
+
+    monkeypatch.setattr("huggingface_hub.snapshot_download", fake_snapshot_download)
+    config = LanguageFeatureGenerationConfig(
+        providers=["native"],
+        resource_dir=str(tmp_path),
+        resources={
+            "foundation": {
+                "type": "huggingface_model",
+                "path": "foundation",
+                "repo_id": "example/model",
+                "revision": "revision",
+                "allow_patterns": ["*.json", "*.safetensors"],
+                "required_files": ["config.json", "model.safetensors"],
+            }
+        },
+    )
+
+    staged = stage_language_resources(config, download=True)
+
+    assert calls == [
+        (
+            "example/model",
+            "revision",
+            str(tmp_path / "foundation"),
+            ["*.json", "*.safetensors"],
+        )
+    ]
+    assert staged["foundation"]["path"] == str((tmp_path / "foundation").resolve())
+
+
 def test_generator_writes_manifest_and_reuses_identical_artifact(tmp_path):
     dataset_name = "language_feature_fixture"
     provider_name = "language_feature_fixture_provider"
@@ -330,7 +580,16 @@ def test_generator_writes_manifest_and_reuses_identical_artifact(tmp_path):
                         "token_id": token_table["token_id"],
                         "fixture_value": np.arange(len(token_table)),
                     }
-                )
+                ),
+                segments=pd.DataFrame(
+                    {
+                        "segment_id": ["fixture_segment_0"],
+                        "start": [0.0],
+                        "end": [1.0],
+                        "label": ["fixture"],
+                        "segment_type": ["fixture_segment"],
+                    }
+                ),
             )
 
     config = LanguageFeatureGenerationConfig(
@@ -345,5 +604,8 @@ def test_generator_writes_manifest_and_reuses_identical_artifact(tmp_path):
     tokens = pd.read_csv(first / "tokens.tsv", sep="\t")
     assert tokens["fixture_value"].tolist() == [0, 1, 2, 3]
     manifest = json.loads((first / "manifest.json").read_text())
-    assert manifest["schema_version"] == 1
+    assert manifest["schema_version"] == 2
     assert manifest["feature_providers"]["fixture_value"] == provider_name
+    segments = pd.read_csv(first / "segments.tsv", sep="\t")
+    assert segments.loc[0, "provider"] == provider_name
+    assert segments.loc[0, "label"] == "fixture"

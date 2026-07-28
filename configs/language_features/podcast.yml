@@ -11,12 +11,23 @@ dataset_options:
 
 providers:
   - native
+  - speaker_diarization
   - ud
   - lexical_norms
   - swow
   - wordnet
+  - disfluency
+  - entity_coreference
 
 provider_options:
+  speaker_diarization:
+    model_resource: pyannote_community_1
+    device: auto
+    # Leave all three null to infer the speaker count automatically. An exact
+    # num_speakers cannot be combined with min_speakers or max_speakers.
+    num_speakers: null
+    min_speakers: null
+    max_speakers: null
   ud:
     language: en
     package: ewt
@@ -35,16 +46,61 @@ provider_options:
     resource: swow
   wordnet:
     model_resource: wordnet
+  disfluency:
+    max_repeated_phrase_words: 5
+  entity_coreference:
+    language: en
+    model_resource: stanza_semantics
+    ner_package: ontonotes-ww-multi_charlm
+    coref_package: gum-nospeakers_roberta-large-lora
+    foundation_resource: roberta_large
+    use_gpu: false
 
 # Published resources are intentionally staged explicitly. Replace checksums with
 # those of the exact releases used for an analysis. "manual: true" prevents a
 # generation run from silently downloading a license- or click-through resource.
 resources:
+  # Access is gated: accept the model conditions and set HF_TOKEN before staging.
+  pyannote_community_1:
+    type: huggingface_model
+    path: pyannote/speaker-diarization-community-1
+    repo_id: pyannote/speaker-diarization-community-1
+    revision: main
+    required_files:
+      - config.yaml
   stanza_ewt:
     type: stanza_model
     path: stanza
     language: en
     package: ewt
+  stanza_semantics:
+    type: stanza_model
+    path: stanza
+    language: en
+    package: ewt
+    processors:
+      ner: ontonotes-ww-multi_charlm
+      coref: gum-nospeakers_roberta-large-lora
+    required_models:
+      - en/ner/ontonotes-ww-multi_charlm.pt
+      - en/coref/gum-nospeakers_roberta-large-lora.pt
+  roberta_large:
+    type: huggingface_model
+    path: transformers/roberta-large
+    repo_id: FacebookAI/roberta-large
+    revision: main
+    allow_patterns:
+      - config.json
+      - model.safetensors
+      - merges.txt
+      - vocab.json
+      - tokenizer.json
+      - tokenizer_config.json
+    required_files:
+      - config.json
+      - model.safetensors
+      - merges.txt
+      - vocab.json
   wordnet:
     type: nltk_corpus
     path: nltk_data

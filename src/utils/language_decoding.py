@@ -243,6 +243,8 @@ def _fit_decoder(
 
 
 def _decoder_metrics(kind: str, y_true, y_pred) -> dict[str, float]:
+    y_true = np.asarray(to_numpy(y_true))
+    y_pred = np.asarray(to_numpy(y_pred))
     if kind == "continuous":
         if np.std(y_true) == 0 or np.std(y_pred) == 0:
             correlation = float("nan")
@@ -545,7 +547,156 @@ def summarize_language_decoding(results: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
-def plot_language_decoding(summary: pd.DataFrame, output_path: Path) -> None:
+def _safe_pearson(left: np.ndarray, right: np.ndarray) -> float:
+    """Return Pearson correlation, or NaN for invalid/constant paired values."""
+    left = np.asarray(left, dtype=float).reshape(-1)
+    right = np.asarray(right, dtype=float).reshape(-1)
+    valid = np.isfinite(left) & np.isfinite(right)
+    if valid.sum() < 2 or np.std(left[valid]) == 0 or np.std(right[valid]) == 0:
+        return float("nan")
+    return float(np.corrcoef(left[valid], right[valid])[0, 1])
+
+
+def _saved_decision_scores(
+    output_dir: Path,
+    task: str,
+    subspace: str,
+    rank: int,
+    fold: int,
+    design: np.ndarray,
+    test_idx: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Reconstruct held-out continuous/logit scores from a saved decoder artifact."""
+    path = _artifact_dir(output_dir, task, fold, rank, subspace) / "weights.npz"
+    if not path.exists():
+        raise FileNotFoundError(f"Missing saved decoder weights: {path}")
+    with np.load(path, allow_pickle=False) as payload:
+        weights = np.asarray(payload["reduced_weights"], dtype=float)
+        intercept = np.asarray(payload["intercept"], dtype=float).reshape(-1)
+        classes = np.asarray(payload["classes"])
+    if weights.ndim == 1:
+        weights = weights[:, None]
+    scores = np.asarray(design[test_idx], dtype=float) @ weights + intercept
+    if scores.ndim == 1:
+        scores = scores[:, None]
+    return scores, classes
+
+
+def _matched_score_correlation(
+    left: np.ndarray, right: np.ndarray
+) -> tuple[float, int]:
+    """Correlate matched score columns and Fisher-average multiclass values."""
+    left = np.asarray(left, dtype=float)
+    right = np.asarray(right, dtype=float)
+    if left.ndim == 1:
+        left = left[:, None]
+    if right.ndim == 1:
+        right = right[:, None]
+    if left.shape != right.shape:
+        raise ValueError(
+            f"Paired decoder score shapes differ: {left.shape} vs {right.shape}"
+        )
+    correlations = np.asarray(
+        [_safe_pearson(left[:, index], right[:, index]) for index in range(left.shape[1])]
+    )
+    finite = correlations[np.isfinite(correlations)]
+    if not len(finite):
+        return float("nan"), 0
+    return float(fisher_z_mean_sem(finite)[0]), int(len(finite))
+
+
+def compute_prediction_agreement(
+    *,
+    output_dir: Path,
+    rrr_prepared: dict[tuple[int, int], tuple[np.ndarray, np.ndarray]],
+    pca_prepared: dict[tuple[int, int], tuple[np.ndarray, np.ndarray]],
+    folds: list[tuple[np.ndarray, np.ndarray]],
+    task_targets: dict[str, np.ndarray],
+    config: LanguageDecodingConfig,
+) -> pd.DataFrame:
+    """Compare fold-held-out RRR/PCA decoder outputs at each task and rank."""
+    rows = []
+    for fold, (train_idx, test_idx) in enumerate(folds):
+        for rank in map(int, config.rank_grid):
+            rrr_design = rrr_prepared[(fold, rank)][0]
+            pca_design = pca_prepared[(fold, rank)][0]
+            for task in config.tasks:
+                spec = get_language_task(task)
+                _, task_test = _fit_indices(
+                    task,
+                    task_targets[task],
+                    np.asarray(train_idx),
+                    np.asarray(test_idx),
+                    fold,
+                )
+                rrr_scores, rrr_classes = _saved_decision_scores(
+                    output_dir, task, "rrr", rank, fold, rrr_design, task_test
+                )
+                pca_scores, pca_classes = _saved_decision_scores(
+                    output_dir, task, "pca", rank, fold, pca_design, task_test
+                )
+                if not np.array_equal(rrr_classes, pca_classes):
+                    raise ValueError(
+                        f"RRR/PCA decoder classes differ for {task}, fold={fold}, "
+                        f"rank={rank}: {rrr_classes} vs {pca_classes}"
+                    )
+                prediction_correlation, n_score_columns = _matched_score_correlation(
+                    rrr_scores, pca_scores
+                )
+                error_correlation = float("nan")
+                if spec.kind == "continuous":
+                    target = np.asarray(task_targets[task][task_test], dtype=float)
+                    error_correlation = _safe_pearson(
+                        target - rrr_scores[:, 0], target - pca_scores[:, 0]
+                    )
+                rows.append(
+                    {
+                        "task": task,
+                        "kind": spec.kind,
+                        "k": rank,
+                        "fold": fold,
+                        "n_test": int(len(task_test)),
+                        "n_score_columns": n_score_columns,
+                        "prediction_correlation": prediction_correlation,
+                        "error_correlation": error_correlation,
+                    }
+                )
+    return pd.DataFrame(rows)
+
+
+def summarize_prediction_agreement(results: pd.DataFrame) -> pd.DataFrame:
+    """Fisher-average paired decoder correlations across outer folds."""
+    rows = []
+    for (task, kind, rank), group in results.groupby(
+        ["task", "kind", "k"], sort=False
+    ):
+        row = {
+            "task": task,
+            "kind": kind,
+            "k": int(rank),
+            "n_folds": int(len(group)),
+        }
+        for metric in ("prediction_correlation", "error_correlation"):
+            values = group[metric].to_numpy(dtype=float)
+            finite = values[np.isfinite(values)]
+            if len(finite):
+                mean, lower, upper = fisher_z_mean_sem(finite)
+                row[metric] = float(mean)
+                row[f"{metric}_sem_lower"] = float(lower)
+                row[f"{metric}_sem_upper"] = float(upper)
+            else:
+                row[metric] = float("nan")
+                row[f"{metric}_sem_lower"] = float("nan")
+                row[f"{metric}_sem_upper"] = float("nan")
+        rows.append(row)
+    return pd.DataFrame(rows)
+
+
+def plot_language_decoding(
+    summary: pd.DataFrame,
+    output_path: Path,
+    agreement: pd.DataFrame | None = None,
+) -> None:
     import matplotlib.pyplot as plt
 
     task_names = list(dict.fromkeys(summary["task"].tolist()))
@@ -594,7 +745,54 @@ def plot_language_decoding(summary: pd.DataFrame, output_path: Path) -> None:
         ax.set_ylabel("Pearson r" if spec.kind == "continuous" else "Balanced accuracy")
         ax.set_title(spec.display_name)
         ax.grid(alpha=0.25)
-        ax.legend(fontsize=8)
+        handles, labels = ax.get_legend_handles_labels()
+        if agreement is not None:
+            task_agreement = agreement[agreement["task"] == task_name].sort_values("k")
+            if not task_agreement.empty:
+                correlation_axis = ax.twinx()
+                correlation_axis.errorbar(
+                    task_agreement["k"],
+                    task_agreement["prediction_correlation"],
+                    yerr=np.vstack(
+                        [
+                            task_agreement["prediction_correlation_sem_lower"],
+                            task_agreement["prediction_correlation_sem_upper"],
+                        ]
+                    ),
+                    marker="s",
+                    linestyle="--",
+                    color="#059669",
+                    alpha=0.85,
+                    capsize=2,
+                    label="RRR–PCA score correlation",
+                )
+                if spec.kind == "continuous" and task_agreement[
+                    "error_correlation"
+                ].notna().any():
+                    correlation_axis.errorbar(
+                        task_agreement["k"],
+                        task_agreement["error_correlation"],
+                        yerr=np.vstack(
+                            [
+                                task_agreement["error_correlation_sem_lower"],
+                                task_agreement["error_correlation_sem_upper"],
+                            ]
+                        ),
+                        marker="^",
+                        linestyle=":",
+                        color="#7c3aed",
+                        alpha=0.85,
+                        capsize=2,
+                        label="RRR–PCA error correlation",
+                    )
+                correlation_axis.set_ylim(-1.05, 1.05)
+                correlation_axis.set_ylabel("RRR–PCA correlation")
+                correlation_handles, correlation_labels = (
+                    correlation_axis.get_legend_handles_labels()
+                )
+                handles += correlation_handles
+                labels += correlation_labels
+        ax.legend(handles, labels, fontsize=7, loc="best")
     for ax in axes.flat[len(task_names) :]:
         ax.set_visible(False)
     fig.suptitle("Language-feature decoding vs subspace rank")
@@ -1125,6 +1323,7 @@ def run_language_decoding(config: LanguageDecodingConfig) -> Path:
         task_targets=task_targets,
         config=config,
     ))
+    pca_prepared = None
     if pca_factor_paths:
         if multiview_config is None:
             pca_prepared = _prepare_single_view_subspaces(
@@ -1158,5 +1357,24 @@ def run_language_decoding(config: LanguageDecodingConfig) -> Path:
     results.to_csv(output_dir / "grid_results.csv", index=False)
     summary = summarize_language_decoding(results)
     summary.to_csv(output_dir / "summary.csv", index=False)
-    plot_language_decoding(summary, output_dir / "rank_analysis.png")
+    agreement_summary = None
+    if pca_prepared is not None:
+        agreement = compute_prediction_agreement(
+            output_dir=output_dir,
+            rrr_prepared=rrr_prepared,
+            pca_prepared=pca_prepared,
+            folds=folds,
+            task_targets=task_targets,
+            config=config,
+        )
+        agreement.to_csv(output_dir / "prediction_agreement.csv", index=False)
+        agreement_summary = summarize_prediction_agreement(agreement)
+        agreement_summary.to_csv(
+            output_dir / "prediction_agreement_summary.csv", index=False
+        )
+    plot_language_decoding(
+        summary,
+        output_dir / "rank_analysis.png",
+        agreement=agreement_summary,
+    )
     return output_dir

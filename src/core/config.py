@@ -352,6 +352,124 @@ class LanguageDecodingConfig:
 
 
 @dataclass
+class LanguageReconstructionConfig:
+    """Linearly reconstruct saved language-model subspaces from fixed predictors."""
+
+    encoding: EncodingConfig = field(default_factory=EncodingConfig)
+    rrr_run_path: str | None = None
+    mode: LanguageDecodingMode = LanguageDecodingMode.WITHIN_DATASET
+    source_name: str | None = None
+    fold_results_dir: str | None = None
+    output_dir: str | None = None
+    subspace_aggregation: str = "extrinsic"
+    rank_grid: list[int] = field(default_factory=lambda: [1, 2, 4, 8, 16, 32])
+    tasks: list[str] = field(default_factory=lambda: [
+        "part_of_speech",
+        "content_word",
+        "surprisal",
+        "entropy",
+        "sentence_position",
+        "iu_position",
+    ])
+    task_data: dict = field(default_factory=dict)
+    predictor_sets: list[str] = field(default_factory=lambda: ["tasks"])
+    glove_dim: int = 300
+    target_views: list[str] = field(default_factory=lambda: ["weighted", "span"])
+    ridge_alphas: list[float] | None = None
+    save_models: bool = False
+    refresh: bool = False
+
+    def __post_init__(self):
+        self.validate()
+
+    def validate(self):
+        _validate_subspace_aggregation(self.subspace_aggregation)
+        if not self.rrr_run_path:
+            raise ValueError("LanguageReconstructionConfig.rrr_run_path is required")
+        if not self.rank_grid or any(int(rank) < 1 for rank in self.rank_grid):
+            raise ValueError("rank_grid must contain positive integers")
+        if len(set(map(int, self.rank_grid))) != len(self.rank_grid):
+            raise ValueError("rank_grid must not contain duplicate ranks")
+        allowed_predictors = {"tasks", "glove", "tasks_glove"}
+        if not self.predictor_sets or set(self.predictor_sets) - allowed_predictors:
+            raise ValueError(
+                f"predictor_sets must be drawn from {sorted(allowed_predictors)}"
+            )
+        if len(set(self.predictor_sets)) != len(self.predictor_sets):
+            raise ValueError("predictor_sets must not contain duplicate names")
+        uses_tasks = bool({"tasks", "tasks_glove"} & set(self.predictor_sets))
+        if uses_tasks and (
+            not self.tasks or any(not str(task).strip() for task in self.tasks)
+        ):
+            raise ValueError(
+                "tasks must contain at least one non-empty task name when a "
+                "task predictor set is enabled"
+            )
+        if len(set(self.tasks)) != len(self.tasks):
+            raise ValueError("tasks must not contain duplicate names")
+        if self.glove_dim not in {50, 100, 200, 300}:
+            raise ValueError("glove_dim must be one of [50, 100, 200, 300]")
+        allowed_views = {"weighted", "span"}
+        if not self.target_views or set(self.target_views) - allowed_views:
+            raise ValueError(
+                f"target_views must be drawn from {sorted(allowed_views)}"
+            )
+        if len(set(self.target_views)) != len(self.target_views):
+            raise ValueError("target_views must not contain duplicate names")
+        if self.ridge_alphas is not None and (
+            not self.ridge_alphas or any(float(value) <= 0 for value in self.ridge_alphas)
+        ):
+            raise ValueError("ridge_alphas must contain positive values")
+
+
+@dataclass
+class LanguageAxisEncodingConfig:
+    """Encode neural responses from saved language-decoder task axes."""
+
+    language_decoding_run_path: str | None = None
+    output_dir: str | None = None
+    rank_grid: list[int] = field(default_factory=lambda: [32])
+    tasks: list[str] = field(
+        default_factory=lambda: [
+            "surprisal",
+            "entropy",
+            "iu_position",
+            "iu_onset",
+            "sentence_position",
+        ]
+    )
+    geometries: list[str] = field(default_factory=lambda: ["raw", "whitened"])
+    random_control_draws: int = 20
+    random_seed: int = 42
+    device: str = "auto"
+    refresh: bool = False
+
+    def __post_init__(self):
+        self.validate()
+
+    def validate(self):
+        if not self.language_decoding_run_path:
+            raise ValueError("language_decoding_run_path is required")
+        if not self.rank_grid or any(int(rank) < 1 for rank in self.rank_grid):
+            raise ValueError("rank_grid must contain positive integers")
+        if len(set(map(int, self.rank_grid))) != len(self.rank_grid):
+            raise ValueError("rank_grid must not contain duplicate ranks")
+        if not self.tasks or any(not str(task).strip() for task in self.tasks):
+            raise ValueError("tasks must contain non-empty names")
+        if len(set(self.tasks)) != len(self.tasks):
+            raise ValueError("tasks must not contain duplicate names")
+        allowed = {"raw", "whitened"}
+        if not self.geometries or set(self.geometries) - allowed:
+            raise ValueError(f"geometries must be drawn from {sorted(allowed)}")
+        if len(set(self.geometries)) != len(self.geometries):
+            raise ValueError("geometries must not contain duplicate names")
+        if isinstance(self.random_control_draws, bool) or self.random_control_draws < 0:
+            raise ValueError("random_control_draws must be a non-negative integer")
+        if self.device not in {"auto", "cpu", "cuda"}:
+            raise ValueError("device must be one of ['auto', 'cpu', 'cuda']")
+
+
+@dataclass
 class LanguageFeatureGenerationConfig:
     """Generate reusable, stimulus-aligned language annotation artifacts."""
 
