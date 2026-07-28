@@ -1232,6 +1232,7 @@ def _run_rrr_for_unit(
                     selected_idx=selected_idx,
                     precomputed_Y_hat_ols=Y_hat_ols_train,
                     precomputed_beta_full=baseline["beta_full_raw"],
+                    return_b=config.save_b_matrices,
                 )
                 A_full = rrr_result["A_dense"]
                 B_full = (
@@ -1248,6 +1249,7 @@ def _run_rrr_for_unit(
                 selected_idx=selected_idx,
                 precomputed_Y_hat_ols=Y_hat_ols_train,
                 precomputed_beta_full=baseline["beta_full_raw"],
+                return_b=config.save_b_matrices,
             )
             A_full = rrr_result["A_dense"]
             B_full = rrr_result["B_dense"] if config.save_b_matrices else None

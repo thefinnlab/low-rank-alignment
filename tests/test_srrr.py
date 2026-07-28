@@ -523,6 +523,7 @@ class TestFitDenseRRRPrecomputed:
             k=k,
             selected_idx=selected_idx,
             ridge_model=model,
+            return_b=True,
         )
         result_pre = fit_dense_rrr(
             X_train,
@@ -531,6 +532,7 @@ class TestFitDenseRRRPrecomputed:
             selected_idx=selected_idx,
             precomputed_Y_hat_ols=Y_hat_ols,
             precomputed_beta_full=beta_full,
+            return_b=True,
         )
 
         np.testing.assert_allclose(
@@ -555,6 +557,7 @@ class TestFitDenseRRRPrecomputed:
             selected_idx=selected_idx,
             precomputed_Y_hat_ols=Y_hat_ols,
             precomputed_beta_full=beta_full,
+            return_b=True,
         )
 
         assert result["A_dense"].shape == (len(selected_idx), k)
@@ -566,10 +569,21 @@ class TestFitDenseRRRPrecomputed:
         selected_idx = np.arange(X.shape[1])
         k = 2
 
-        result = fit_dense_rrr(X, Y, k=k, selected_idx=selected_idx)
+        result = fit_dense_rrr(X, Y, k=k, selected_idx=selected_idx, return_b=True)
 
         assert result["A_dense"].shape == (X.shape[1], k)
         assert result["B_dense"].shape == (Y.shape[1], k)
+
+    def test_b_factor_is_omitted_by_default(self, small_data):
+        X, Y = small_data
+        result = fit_dense_rrr(
+            X,
+            Y,
+            k=2,
+            selected_idx=np.arange(X.shape[1]),
+        )
+
+        assert "B_dense" not in result
 
     @pytest.mark.parametrize(
         ("svd_on_cpu", "expected_dtype"),
@@ -598,6 +612,7 @@ class TestFitDenseRRRPrecomputed:
             precomputed_beta_full=beta_full,
             device="cpu",
             svd_on_cpu=svd_on_cpu,
+            return_b=True,
         )
 
         assert observed == {"device": "cpu", "dtype": expected_dtype}
@@ -629,6 +644,7 @@ class TestFitDenseRRRPrecomputed:
             device="cpu",
             use_low_rank_svd=True,
             low_rank_svd_seed=17,
+            return_b=True,
         )
         first = fit_dense_rrr(**kwargs)
         rng_after = torch.random.get_rng_state()
