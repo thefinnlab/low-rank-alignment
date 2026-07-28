@@ -424,10 +424,11 @@ def fit_dense_rrr(
     # only the decomposition input to float64; the returned factors retain the
     # existing coefficient dtype/device contract.
     svd_input = (
-        Y_hat_ols.to(device="cpu", dtype=torch.float64)
+        Y_hat_ols.to(device="cpu")
         if svd_on_cpu
         else Y_hat_ols
     )
+    print("SVD Input:", svd_input.shape)
     if use_low_rank_svd:
         q = min(k + 32, min(svd_input.shape))
         fork_devices = [svd_input.device] if svd_input.device.type == "cuda" else []
@@ -438,6 +439,7 @@ def fit_dense_rrr(
     else:
         _, _, Vh = torch.linalg.svd(svd_input, full_matrices=False)
 
+    print("Vh:", Vh.shape)
     actual_k = min(k, Vh.shape[0])
     Vh_k = Vh[:actual_k, :].to(device=beta_ols.device, dtype=beta_ols.dtype)
 
