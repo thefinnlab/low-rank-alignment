@@ -9,6 +9,7 @@ import yaml
 from src.core.config import (
     EncodingConfig,
     FMRICrossDatasetRRRConfig,
+    FMRISignificanceConfig,
     RRRConfig,
     RRRViewConfig,
     ScriptMode,
@@ -24,6 +25,7 @@ from src.utils.config_utils import (
     apply_overrides,
     load_config,
     expand_per_model_layer_configs,
+    expand_fmri_layer_configs,
     save_effective_config,
 )
 
@@ -466,6 +468,48 @@ class TestExpandPerModelLayerConfigs:
 
         assert [c.per_model_config["layer"] for c in expanded] == [0, 24, 48]
         assert config.per_model_config["layer"] == [0, 24, 48]
+
+    def test_rrr_layer_expansion_formats_cross_source_path(self):
+        config = RRRConfig(
+            encoding=EncodingConfig(per_model_config={"layer": [0, 12]}),
+            cross_result_dir="results/fmri/model_layer{layer}/within_fmri_rrr",
+        )
+
+        expanded = expand_per_model_layer_configs(config)
+
+        assert [item.cross_result_dir for item in expanded] == [
+            "results/fmri/model_layer0/within_fmri_rrr",
+            "results/fmri/model_layer12/within_fmri_rrr",
+        ]
+
+
+class TestExpandFMRILayerConfigs:
+    def test_expands_layers_and_formats_artifact_paths(self):
+        config = FMRICrossDatasetRRRConfig(
+            layer=[0, 12],
+            significance_dir="results/model_layer{layer}/significance",
+            source_rrr_unit_dir="results/source_layer{layer}/rrr",
+            output_dir="results/model_layer{layer}/from_source",
+        )
+
+        expanded = expand_fmri_layer_configs(config)
+
+        assert [item.layer for item in expanded] == [0, 12]
+        assert expanded[1].significance_dir == "results/model_layer12/significance"
+        assert expanded[1].source_rrr_unit_dir == "results/source_layer12/rrr"
+        assert expanded[1].output_dir == "results/model_layer12/from_source"
+
+    def test_significance_config_uses_same_fanout(self):
+        config = FMRISignificanceConfig(
+            layer=[0, 12], output_dir="results/model_layer{layer}/significance"
+        )
+
+        expanded = expand_fmri_layer_configs(config)
+
+        assert [(item.layer, item.output_dir) for item in expanded] == [
+            (0, "results/model_layer0/significance"),
+            (12, "results/model_layer12/significance"),
+        ]
 
 
 # ---------------------------------------------------------------------------

@@ -5,9 +5,11 @@ per_dataset_config:
 model: transformer
 per_model_config:
   layer:
-  # - 0
+  - 0
+  - 12
   - 24
-  # - 48
+  - 36
+  - 48
   model_dir: gpt2-xl-batch
 offset: 0
 subjects:

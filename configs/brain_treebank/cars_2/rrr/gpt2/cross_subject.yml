@@ -17,7 +17,9 @@ encoding:
     model_dir: gpt2
     layer:
     - 0
+    - 3
     - 6
+    - 9
     - 12
 output_dir: null
 sig_dir: null

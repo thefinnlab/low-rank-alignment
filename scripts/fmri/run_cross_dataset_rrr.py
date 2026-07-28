@@ -12,7 +12,12 @@ from himalaya.backend import set_backend
 
 from src.core.config import FMRICrossDatasetRRRConfig
 from src.utils.alpha_grids import resolve_ridge_alphas, save_alpha_diagnostics
-from src.utils.config_utils import load_config, parse_args, save_effective_config
+from src.utils.config_utils import (
+    expand_fmri_layer_configs,
+    load_config,
+    parse_args,
+    save_effective_config,
+)
 from src.utils.encoding import extract_best_alphas, get_ridge_model_constructor
 from src.utils.fmri import (
     columnwise_correlation,
@@ -510,7 +515,9 @@ def run_config(config: FMRICrossDatasetRRRConfig) -> None:
 
 def main() -> None:
     args, overrides = parse_args(__doc__)
-    run_config(load_config(args.config, overrides, FMRICrossDatasetRRRConfig))
+    config = load_config(args.config, overrides, FMRICrossDatasetRRRConfig)
+    for layer_config in expand_fmri_layer_configs(config):
+        run_config(layer_config)
 
 
 if __name__ == "__main__":

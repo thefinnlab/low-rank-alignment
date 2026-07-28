@@ -207,6 +207,7 @@ class RRRConfig:
     cross_result_dir: str | None = (
         None  # Source results run root for mode=cross_dataset.
     )
+    cross_source_format: str = "fold_factors"
     views: list[RRRViewConfig] = field(default_factory=list)
     subspace_aggregation: str = "extrinsic"
 
@@ -265,6 +266,11 @@ class RRRConfig:
 
     def validate(self):
         _validate_subspace_aggregation(self.subspace_aggregation)
+        if self.cross_source_format not in {"fold_factors", "rank_bases"}:
+            raise ValueError(
+                "cross_source_format must be 'fold_factors' or 'rank_bases', "
+                f"got {self.cross_source_format!r}"
+            )
         if self.save_rrr_corr_per_target and not self.save_b_matrices:
             raise ValueError(
                 "save_rrr_corr_per_target=True requires save_b_matrices=True"
@@ -764,7 +770,7 @@ class FMRISignificanceConfig:
     fmri: FMRIDataConfig = field(default_factory=FMRIDataConfig)
     ridge: FMRIRidgeConfig = field(default_factory=FMRIRidgeConfig)
     model_dir: str = "gpt2-xl"
-    layer: int = 24
+    layer: int | list[int] = 24
     pooling: str = "mean"
     output_dir: str = "results/fmri/gpt2-xl_layer24/significance"
     batch_subjects: bool = False
@@ -798,7 +804,7 @@ class FMRICrossDatasetRRRConfig:
     fmri: FMRIDataConfig = field(default_factory=FMRIDataConfig)
     ridge: FMRIRidgeConfig = field(default_factory=FMRIRidgeConfig)
     model_dir: str = "gpt2-xl"
-    layer: int = 24
+    layer: int | list[int] = 24
     pooling: str = "mean"
     significance_dir: str = "results/fmri/gpt2-xl_layer24/significance"
     source_rrr_unit_dir: str = "results/gpt2-xl_layer24_offset0/rrr"

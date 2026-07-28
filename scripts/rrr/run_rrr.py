@@ -2267,11 +2267,22 @@ def _load_cross_dataset_A_by_rank(
     kind: str,
     ranks: list[int],
     aggregation: str = "extrinsic",
+    source_format: str = "fold_factors",
 ) -> dict[int, np.ndarray]:
-    """Load rank-specific averaged source fold A matrices for cross-dataset evaluation."""
+    """Load rank-specific source factors from fold runs or saved rank bases."""
     unit_dir = _cross_dataset_source_unit_dir(cross_result_dir, kind)
     averaged = {}
     for rank in sorted(set(int(k) for k in ranks)):
+        if source_format == "rank_bases":
+            path = os.path.join(unit_dir, f"k{rank}", "A.npy")
+            if not os.path.exists(path):
+                raise FileNotFoundError(
+                    f"Could not load cross-dataset {kind.upper()} rank basis from {path}."
+                )
+            averaged[rank] = np.load(path)
+            continue
+        if source_format != "fold_factors":
+            raise ValueError(f"Unsupported cross-dataset source format: {source_format}")
         try:
             averaged[rank] = aggregate_subspace_from_unit_dir(
                 unit_dir, rank=rank, method=aggregation
@@ -2447,6 +2458,7 @@ def _run_cross_dataset_rrr(
         kind="rrr",
         ranks=config.rank_grid,
         aggregation=config.subspace_aggregation,
+        source_format=config.cross_source_format,
     )
 
     A_pca_by_rank = None
@@ -2462,6 +2474,7 @@ def _run_cross_dataset_rrr(
             kind="pca",
             ranks=config.rank_grid,
             aggregation=config.subspace_aggregation,
+            source_format=config.cross_source_format,
         )
         pca_dir = _resolve_pca_sibling_dir(rrr_dir)
         validate_aggregation_cache(

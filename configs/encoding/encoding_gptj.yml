@@ -2,7 +2,7 @@ data_root: data/
 model: transformer
 per_model_config:
   model_dir: gpt-j-6b
-  layer: 14
+  layer: [0, 7, 14, 21, 28]
 offset: 0
 subjects: null
 run_name: null

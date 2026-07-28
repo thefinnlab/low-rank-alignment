@@ -1,0 +1,37 @@
+encoding:
+  data_root: data/
+  model: transformer
+  offset: 0
+  subjects: null
+  run_name: null
+  batch: false
+  per_model_config:
+    model_dir: gpt2
+    layer:
+    - 0
+    - 3
+    - 6
+    - 9
+    - 12
+output_dir: null
+sig_dir: null
+rrr_output_dir: null
+mode: cross_dataset
+cross_result_dir: results/fmri/gpt2_layer{layer}/within_fmri_rrr
+cross_source_format: rank_bases
+subspace_aggregation: extrinsic
+rank_grid:
+- 1
+- 2
+- 4
+- 8
+- 16
+- 32
+- 64
+- 128
+- 256
+- 512
+- 768
+refresh: false
+run_pca_baseline: true
+run_null_augmented: false

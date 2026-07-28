@@ -8,6 +8,7 @@ import pandas as pd
 import pytest
 
 from src.utils.srrr import save_rrr_factors, save_rrr_result, load_rrr_result
+from scripts.rrr.run_rrr import _load_cross_dataset_A_by_rank
 
 # ---------------------------------------------------------------------------
 # Shared fixtures
@@ -68,6 +69,26 @@ class TestSaveLoadRRRResult:
         assert os.path.exists(os.path.join(factors_dir, "B.npy"))
         assert os.path.isdir(metrics_dir)
         assert os.path.exists(os.path.join(metrics_dir, "metrics.npz"))
+
+
+class TestCrossDatasetRankBasisLoading:
+    def test_loads_single_saved_basis_per_rank(self, tmp_path, rng):
+        expected = rng.standard_normal((12, 4)).astype(np.float32)
+        rank_dir = tmp_path / "rrr" / "k4"
+        rank_dir.mkdir(parents=True)
+        np.save(rank_dir / "A.npy", expected)
+
+        loaded = _load_cross_dataset_A_by_rank(
+            str(tmp_path), "rrr", [4], source_format="rank_bases"
+        )
+
+        np.testing.assert_array_equal(loaded[4], expected)
+
+    def test_missing_rank_basis_reports_expected_path(self, tmp_path):
+        with pytest.raises(FileNotFoundError, match=r"rrr/k4/A.npy"):
+            _load_cross_dataset_A_by_rank(
+                str(tmp_path), "rrr", [4], source_format="rank_bases"
+            )
 
     def test_multiple_folds_independent(self, tmp_path, rng):
         max_k, k = 4, 2

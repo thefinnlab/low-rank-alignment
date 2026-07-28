@@ -1,0 +1,39 @@
+encoding:
+  data_root: data/
+  model: transformer
+  offset: 0
+  subjects: null
+  run_name: null
+  batch: false
+  per_model_config:
+    model_dir: llama3-8b
+    layer:
+    - 0
+    - 8
+    - 16
+    - 24
+    - 32
+output_dir: null
+sig_dir: null
+rrr_output_dir: null
+mode: cross_dataset
+cross_result_dir: results/fmri/llama3-8b_layer{layer}/within_fmri_rrr
+cross_source_format: rank_bases
+subspace_aggregation: extrinsic
+rank_grid:
+- 1
+- 2
+- 4
+- 8
+- 16
+- 32
+- 64
+- 128
+- 256
+- 512
+- 1024
+- 2048
+- 4096
+refresh: false
+run_pca_baseline: true
+run_null_augmented: false

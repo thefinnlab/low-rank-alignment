@@ -9,7 +9,9 @@ encoding:
     model_dir: roberta-large
     layer:
     - 0
+    - 6
     - 12
+    - 18
     - 24
 output_dir: null
 sig_dir: null

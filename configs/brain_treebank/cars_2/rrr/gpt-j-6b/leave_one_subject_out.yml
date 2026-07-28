@@ -17,7 +17,9 @@ encoding:
     model_dir: gpt-j-6b
     layer:
     - 0
+    - 7
     - 14
+    - 21
     - 28
 output_dir: null
 sig_dir: null

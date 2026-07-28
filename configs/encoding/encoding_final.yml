@@ -9,5 +9,7 @@ per_model_config:
   model_dir: gpt2-xl-batch
   layer:
   - 0
-  # - 24
+  - 12
+  - 24
+  - 36
   - 48

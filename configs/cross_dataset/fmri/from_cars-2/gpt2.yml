@@ -1,0 +1,60 @@
+fmri:
+  fmri_repo_root: data/deep-fMRI-dataset
+  embedding_root: data/fmri/stimuli
+  sessions:
+  - 1
+  - 2
+  - 3
+  - 4
+  - 5
+  subjects:
+  - UTS01
+  - UTS02
+  - UTS03
+  - UTS04
+  - UTS05
+  - UTS06
+  - UTS07
+  - UTS08
+  - UTS09
+  trim: 5
+  ndelays: 4
+ridge:
+  alphas: null
+  alpha_grid: {}
+  solver_params:
+    n_targets_batch: 8192
+    n_targets_batch_refit: 8192
+  y_in_cpu: true
+  force_cpu: false
+  log_alphas: true
+model_dir: gpt2
+layer:
+- 0
+- 3
+- 6
+- 9
+- 12
+pooling: mean
+significance_dir: results/fmri/gpt2_layer{layer}/significance
+source_rrr_unit_dir: results/gpt2_layer{layer}_offset0/movie-cars-2/rrr
+output_dir: results/fmri/gpt2_layer{layer}/from_cars-2_rrr
+source_mode: cross_dataset
+subspace_aggregation: extrinsic
+rrr_svd_on_cpu: false
+rrr_use_low_rank_svd: false
+rrr_low_rank_svd_seed: 0
+rrr_save_b_matrix: false
+rank_grid:
+- 1
+- 2
+- 4
+- 8
+- 16
+- 32
+- 64
+- 128
+- 256
+- 512
+- 768
+refresh: false
