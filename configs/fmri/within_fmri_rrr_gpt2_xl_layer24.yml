@@ -34,6 +34,7 @@ subspace_aggregation: extrinsic
 rrr_svd_on_cpu: false
 rrr_use_low_rank_svd: true
 rrr_low_rank_svd_seed: 0
+rrr_save_b_matrix: false
 
 # Not used by source_mode=within_fmri, but retained as null to make that explicit.
 source_rrr_unit_dir: null

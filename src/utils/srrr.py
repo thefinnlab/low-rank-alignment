@@ -315,6 +315,7 @@ def fit_dense_rrr(
     svd_on_cpu: bool = False,
     use_low_rank_svd: bool = False,
     low_rank_svd_seed: int = 0,
+    return_b: bool = False,
 ) -> dict:
     """Fit dense (non-sparse) Reduced Rank Regression on the selected direction subset.
 
@@ -355,11 +356,13 @@ def fit_dense_rrr(
             iterations. If False, retain the exact full-SVD behavior.
         low_rank_svd_seed: Random seed used only by the low-rank SVD. Its use is
             isolated so this function does not change the caller's Torch RNG state.
+        return_b: If True, return the target-space ``B_dense`` factor. This is
+            disabled by default because it can be much larger than ``A_dense``.
 
     Returns:
         dict with keys:
             A_dense: (n_selected, k)
-            B_dense: (n_targets, k)
+            B_dense: (n_targets, k), present only when return_b is True
             selected_idx: the input selected_idx
     """
     if device is None:
@@ -368,11 +371,13 @@ def fit_dense_rrr(
     n_targets = Y_train.shape[1]
     n_selected = len(selected_idx)
     if n_selected == 0:
-        return {
+        result = {
             "A_dense": np.zeros((0, k), dtype=np.float32),
-            "B_dense": np.zeros((n_targets, k), dtype=np.float32),
             "selected_idx": selected_idx,
         }
+        if return_b:
+            result["B_dense"] = np.zeros((n_targets, k), dtype=np.float32)
+        return result
 
     if precomputed_Y_hat_ols is not None and precomputed_beta_full is not None:
         # Use pre-computed values from a saved encoding model (avoids re-training).
@@ -442,7 +447,7 @@ def fit_dense_rrr(
     # A = beta_ols @ Vh_k^T  (n_selected, actual_k)
     # B = Vh_k^T             (n_targets, actual_k)
     A_dense = beta_ols @ Vh_k.T  # (n_selected, actual_k)
-    B_dense = Vh_k.T  # (n_targets, actual_k)
+    B_dense = Vh_k.T if return_b else None  # (n_targets, actual_k)
 
     # Pad to k if actual_k < k
     if actual_k < k:
@@ -450,15 +455,18 @@ def fit_dense_rrr(
         A_dense = torch.cat(
             [A_dense, torch.zeros(n_selected, pad, device=device)], dim=1
         )
-        B_dense = torch.cat(
-            [B_dense, torch.zeros(n_targets, pad, device=device)], dim=1
-        )
+        if B_dense is not None:
+            B_dense = torch.cat(
+                [B_dense, torch.zeros(n_targets, pad, device=device)], dim=1
+            )
 
-    return {
+    result = {
         "A_dense": to_numpy(A_dense),
-        "B_dense": to_numpy(B_dense),
         "selected_idx": selected_idx,
     }
+    if B_dense is not None:
+        result["B_dense"] = to_numpy(B_dense)
+    return result
 
 
 def predict_from_factors(

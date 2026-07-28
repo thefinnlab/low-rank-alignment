@@ -193,12 +193,15 @@ def _fit_within_fmri_bases(full_train, ridge_fit, ambient_dim, config, output_di
         svd_on_cpu=config.rrr_svd_on_cpu,
         use_low_rank_svd=config.rrr_use_low_rank_svd,
         low_rank_svd_seed=config.rrr_low_rank_svd_seed,
+        return_b=config.rrr_save_b_matrix,
     )
     fir_a = np.asarray(rrr_result["A_dense"], dtype=np.float32)
     delay_blocks = list(np.split(fir_a, ndelays, axis=0))
     source_dir = output_dir / "source_factors"
     source_dir.mkdir(parents=True, exist_ok=True)
     np.save(source_dir / "full_fir_A.npy", fir_a)
+    if config.rrr_save_b_matrix:
+        np.save(source_dir / "full_B.npy", rrr_result["B_dense"])
     for delay, block in enumerate(delay_blocks, start=1):
         delay_dir = source_dir / f"delay_{delay}"
         delay_dir.mkdir(parents=True, exist_ok=True)
@@ -234,6 +237,7 @@ def _fit_within_fmri_bases(full_train, ridge_fit, ambient_dim, config, output_di
 
     return {"rrr": rrr_bases, "pca": pca_bases}, {
         "rrr": str(source_dir / "full_fir_A.npy"),
+        "rrr_b": str(source_dir / "full_B.npy") if config.rrr_save_b_matrix else None,
         "rrr_delay_blocks": [
             str(source_dir / f"delay_{delay}" / "A.npy")
             for delay in range(1, ndelays + 1)
@@ -478,6 +482,7 @@ def run_config(config: FMRICrossDatasetRRRConfig) -> None:
         "rrr_svd_on_cpu": config.rrr_svd_on_cpu,
         "rrr_use_low_rank_svd": config.rrr_use_low_rank_svd,
         "rrr_low_rank_svd_seed": config.rrr_low_rank_svd_seed,
+        "rrr_save_b_matrix": config.rrr_save_b_matrix,
         "pca_available": "pca" in bases_by_method,
         "pca_training_representation": (
             "tr_aligned_trimmed_story_zscored_pre_fir"

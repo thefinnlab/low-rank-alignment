@@ -334,6 +334,7 @@ class TestApplyOverrides:
         assert FMRICrossDatasetRRRConfig().rrr_svd_on_cpu is False
         assert FMRICrossDatasetRRRConfig().rrr_use_low_rank_svd is False
         assert FMRICrossDatasetRRRConfig().rrr_low_rank_svd_seed == 0
+        assert FMRICrossDatasetRRRConfig().rrr_save_b_matrix is False
         with pytest.raises(ValueError, match="subspace_aggregation"):
             RRRConfig(subspace_aggregation="weighted")
 
