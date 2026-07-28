@@ -212,6 +212,8 @@ def test_within_fmri_bases_save_fir_blocks_rank_bases_and_pre_fir_pca(
         rank_grid=[1],
         subspace_aggregation="unnormalized",
         rrr_svd_on_cpu=True,
+        rrr_use_low_rank_svd=True,
+        rrr_low_rank_svd_seed=17,
         fmri=SimpleNamespace(ndelays=2),
     )
     ridge_fit = runner.FinalRidgeFit(
@@ -232,3 +234,5 @@ def test_within_fmri_bases_save_fir_blocks_rank_bases_and_pre_fir_pca(
     assert (tmp_path / "rrr/k1/A.npy").exists()
     assert (tmp_path / "pca/k1/A.npy").exists()
     assert fit_kwargs["svd_on_cpu"] is True
+    assert fit_kwargs["use_low_rank_svd"] is True
+    assert fit_kwargs["low_rank_svd_seed"] == 17

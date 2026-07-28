@@ -313,6 +313,8 @@ def fit_dense_rrr(
     precomputed_Y_hat_ols: np.ndarray | None = None,
     precomputed_beta_full: np.ndarray | None = None,
     svd_on_cpu: bool = False,
+    use_low_rank_svd: bool = False,
+    low_rank_svd_seed: int = 0,
 ) -> dict:
     """Fit dense (non-sparse) Reduced Rank Regression on the selected direction subset.
 
@@ -348,6 +350,11 @@ def fit_dense_rrr(
         svd_on_cpu: If True, run the SVD on CPU in float64 for improved numerical
             robustness. The resulting singular vectors are converted back to the
             coefficient tensor's device and dtype before constructing the factors.
+        use_low_rank_svd: If True, compute only a randomized approximation to the
+            leading singular vectors, with 32 oversampling dimensions and two power
+            iterations. If False, retain the exact full-SVD behavior.
+        low_rank_svd_seed: Random seed used only by the low-rank SVD. Its use is
+            isolated so this function does not change the caller's Torch RNG state.
 
     Returns:
         dict with keys:
@@ -416,7 +423,15 @@ def fit_dense_rrr(
         if svd_on_cpu
         else Y_hat_ols
     )
-    _, _, Vh = torch.linalg.svd(svd_input, full_matrices=False)
+    if use_low_rank_svd:
+        q = min(k + 32, min(svd_input.shape))
+        fork_devices = [svd_input.device] if svd_input.device.type == "cuda" else []
+        with torch.random.fork_rng(devices=fork_devices):
+            torch.manual_seed(low_rank_svd_seed)
+            _, _, V = torch.svd_lowrank(svd_input, q=q, niter=2)
+        Vh = V.T
+    else:
+        _, _, Vh = torch.linalg.svd(svd_input, full_matrices=False)
 
     actual_k = min(k, Vh.shape[0])
     Vh_k = Vh[:actual_k, :].to(device=beta_ols.device, dtype=beta_ols.dtype)

@@ -603,3 +603,43 @@ class TestFitDenseRRRPrecomputed:
         assert observed == {"device": "cpu", "dtype": expected_dtype}
         assert result["A_dense"].dtype == np.float32
         assert result["B_dense"].dtype == np.float32
+
+    def test_low_rank_svd_is_seeded_capped_and_preserves_rng(
+        self, fitted_model_and_data, monkeypatch
+    ):
+        """The opt-in solver computes only q vectors without leaking RNG state."""
+        _, X_train, Y_train, beta_full, Y_hat_ols, n_dirs, _ = fitted_model_and_data
+        original_low_rank = torch.svd_lowrank
+        observed = {}
+
+        def recording_low_rank(value, *args, **kwargs):
+            observed.update(kwargs)
+            return original_low_rank(value, *args, **kwargs)
+
+        monkeypatch.setattr(torch, "svd_lowrank", recording_low_rank)
+        torch.manual_seed(1234)
+        rng_before = torch.random.get_rng_state().clone()
+        kwargs = dict(
+            X_proj_train=X_train,
+            Y_train=Y_train,
+            k=2,
+            selected_idx=np.arange(n_dirs),
+            precomputed_Y_hat_ols=Y_hat_ols,
+            precomputed_beta_full=beta_full,
+            device="cpu",
+            use_low_rank_svd=True,
+            low_rank_svd_seed=17,
+        )
+        first = fit_dense_rrr(**kwargs)
+        rng_after = torch.random.get_rng_state()
+        second = fit_dense_rrr(**kwargs)
+
+        assert observed == {
+            "q": min(2 + 32, min(Y_hat_ols.shape)),
+            "niter": 2,
+        }
+        assert torch.equal(rng_before, rng_after)
+        np.testing.assert_allclose(first["A_dense"], second["A_dense"])
+        np.testing.assert_allclose(first["B_dense"], second["B_dense"])
+        assert first["A_dense"].shape == (n_dirs, 2)
+        assert first["B_dense"].shape == (Y_train.shape[1], 2)

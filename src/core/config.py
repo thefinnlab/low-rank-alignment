@@ -688,6 +688,8 @@ class FMRICrossDatasetRRRConfig:
     source_mode: str = "cross_dataset"
     subspace_aggregation: str = "extrinsic"
     rrr_svd_on_cpu: bool = False
+    rrr_use_low_rank_svd: bool = False
+    rrr_low_rank_svd_seed: int = 0
     rank_grid: list[int] = field(
         default_factory=lambda: [1, 2, 4, 8, 16, 32, 64, 128]
     )

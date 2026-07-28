@@ -29,8 +29,11 @@ source_mode: within_fmri
 # unnormalized to preserve the magnitude of each raw delay-specific factor.
 subspace_aggregation: extrinsic
 
-# Run the dense-RRR SVD on CPU in float64 for numerical robustness.
-rrr_svd_on_cpu: true
+# Compute only the requested leading RRR components on GPU. This avoids
+# materializing every right singular vector of the very wide voxel matrix.
+rrr_svd_on_cpu: false
+rrr_use_low_rank_svd: true
+rrr_low_rank_svd_seed: 0
 
 # Not used by source_mode=within_fmri, but retained as null to make that explicit.
 source_rrr_unit_dir: null
