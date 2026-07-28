@@ -33,6 +33,11 @@ tasks:
 
 # Leave empty to use processed_data/language_features/{dataset}/{stimulus}/tokens.tsv.
 task_data: {}
+
+# Compare registered language tasks, same-word GloVe vectors, and their joint design.
+# When any GloVe condition is enabled, all conditions use the same GloVe-covered words.
+predictor_sets: [tasks, glove, tasks_glove]
+glove_dim: 300
 target_views: [weighted, span]
 ridge_alphas: null
 

@@ -5,12 +5,15 @@ import pytest
 from src.core.config import LanguageDecodingMode, LanguageReconstructionConfig
 from src.utils.language_reconstruction import (
     _run_fit,
+    build_predictor_preprocessor,
     build_preprocessor,
+    filter_selection_and_folds,
     orthonormal_factor,
     prepare_target_factors,
     reconstruction_metrics,
     resolve_pca_sibling,
     summarize_comparisons,
+    summarize_predictor_contrasts,
     summarize_results,
     weighted_mean_factor,
 )
@@ -30,10 +33,17 @@ def _config(**overrides):
 def test_reconstruction_config_validates_choices():
     config = _config()
     assert config.target_views == ["weighted", "span"]
+    assert config.predictor_sets == ["tasks"]
+    assert config.glove_dim == 300
     with pytest.raises(ValueError, match="target_views"):
         _config(target_views=["raw"])
     with pytest.raises(ValueError, match="duplicate ranks"):
         _config(rank_grid=[2, 2])
+    with pytest.raises(ValueError, match="predictor_sets"):
+        _config(predictor_sets=["unknown"])
+    with pytest.raises(ValueError, match="glove_dim"):
+        _config(glove_dim=25)
+    assert _config(predictor_sets=["glove"], tasks=[]).tasks == []
 
 
 @pytest.mark.parametrize(
@@ -111,6 +121,37 @@ def test_preprocessor_retains_rows_and_encodes_missing_values():
     assert np.isfinite(held_out).all()
 
 
+def test_combined_preprocessor_scales_glove_and_encodes_tasks():
+    values = np.array(
+        [
+            [0.0, 0.0, 2.0, 20.0],
+            [1.0, 1.0, 4.0, 40.0],
+            [2.0, 0.0, 6.0, 60.0],
+        ]
+    )
+    transformer = build_predictor_preprocessor("tasks_glove", 2, [0], [1], 2)
+    transformed = transformer.fit_transform(values[:2])
+    assert transformed.shape == (2, 5)
+    np.testing.assert_allclose(transformed[:, -2:].mean(axis=0), 0.0, atol=1e-7)
+
+
+def test_glove_filter_preserves_and_remaps_source_folds():
+    selection = np.array([2, 4, 6, 8, 10, 12])
+    folds = [
+        (np.array([3, 4, 5]), np.array([0, 1, 2])),
+        (np.array([0, 1, 2]), np.array([3, 4, 5])),
+    ]
+    valid = np.zeros(13, dtype=bool)
+    valid[[2, 6, 8, 12]] = True
+    filtered, remapped, source_rows = filter_selection_and_folds(
+        selection, folds, valid
+    )
+    np.testing.assert_array_equal(filtered, [2, 6, 8, 12])
+    np.testing.assert_array_equal(source_rows, [0, 2, 3, 5])
+    np.testing.assert_array_equal(remapped[0][0], [2, 3])
+    np.testing.assert_array_equal(remapped[0][1], [0, 1])
+
+
 def test_reconstruction_metrics_perfect_and_rotation_sensitive_outputs():
     rng = np.random.default_rng(2)
     target = rng.normal(size=(30, 4))
@@ -134,11 +175,14 @@ def test_run_fit_writes_linear_reconstruction(tmp_path):
     config = _config(rank_grid=[2])
     row = _run_fit(
         output_dir=tmp_path,
+        predictor_set="tasks",
         subspace="rrr",
         target_view="weighted",
         rank=2,
         fold=0,
-        task_matrix=tasks,
+        predictor_matrix=tasks,
+        n_tasks=2,
+        n_glove=0,
         continuous=[0],
         categorical=[1],
         target=target.astype(np.float32),
@@ -147,6 +191,7 @@ def test_run_fit_writes_linear_reconstruction(tmp_path):
         config=config,
     )
     assert row["subspace"] == "rrr"
+    assert row["predictor_set"] == "tasks"
     assert len(list(tmp_path.rglob("metrics.json"))) == 1
 
 
@@ -157,6 +202,7 @@ def test_summary_and_paired_rrr_pca_comparison():
             score = 0.1 + 0.05 * (subspace == "rrr")
             rows.append(
                 {
+                    "predictor_set": "tasks",
                     "subspace": subspace,
                     "target_view": "span",
                     "rank": 2,
@@ -177,3 +223,34 @@ def test_summary_and_paired_rrr_pca_comparison():
         "linear_cka",
     }
     assert np.allclose(comparisons["mean"], 0.05)
+
+
+def test_predictor_contrasts_are_fold_paired():
+    rows = []
+    scores = {"tasks": 0.1, "glove": 0.2, "tasks_glove": 0.35}
+    for predictor_set, score in scores.items():
+        for fold in (0, 1):
+            rows.append(
+                {
+                    "predictor_set": predictor_set,
+                    "subspace": "rrr",
+                    "target_view": "span",
+                    "rank": 2,
+                    "fold": fold,
+                    **{metric: score for metric in (
+                        "multivariate_r2",
+                        "mean_coordinate_correlation",
+                        "linear_cka",
+                    )},
+                }
+            )
+    grid, summary = summarize_predictor_contrasts(pd.DataFrame(rows))
+    assert len(grid) == 18
+    assert set(summary.contrast) == {
+        "glove_minus_tasks",
+        "tasks_glove_minus_glove",
+        "tasks_glove_minus_tasks",
+    }
+    values = summary.set_index(["contrast", "metric"])["mean"]
+    assert values.loc[("glove_minus_tasks", "linear_cka")] == pytest.approx(0.1)
+    assert values.loc[("tasks_glove_minus_glove", "linear_cka")] == pytest.approx(0.15)

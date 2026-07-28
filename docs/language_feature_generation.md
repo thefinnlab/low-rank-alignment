@@ -28,14 +28,17 @@ Providers are resource bundles rather than one function per target. The built-in
 - `wordnet`: sense count and explicitly named most-frequent-sense (`*_mfs`) outputs.
 - `disfluency`: conservative filled-pause, repetition, discourse-marker, and lexical
   recurrence labels derived deterministically from canonical words;
+- `speaker_diarization`: local pyannote Community-1 exclusive diarization, anonymous
+  speaker labels, and greatest-overlap alignment to canonical words;
 - `entity_coreference`: Stanza OntoNotes NER and GUM no-speaker document-level
   coreference, with token labels plus entity/mention spans and antecedent relations.
 
 One stimulus directory contains `tokens.tsv`, `spans.tsv`, `relations.tsv`,
-`provider_tokens.tsv`, and `manifest.json`. The manifest records the configuration,
-input fingerprint, resource/model checksums, provider versions, feature ownership, and
-coverage. Writes are atomic. Existing artifacts are reused only when their fingerprint
-matches; changed inputs require `refresh: true`.
+`provider_tokens.tsv`, `segments.tsv`, and `manifest.json`. `segments.tsv` retains
+provider-owned timed media annotations such as diarized speaker turns. The manifest
+records the configuration, input fingerprint, resource/model checksums, provider
+versions, feature ownership, and coverage. Writes are atomic. Existing artifacts are
+reused only when their fingerprint matches; changed inputs require `refresh: true`.
 
 Brain Treebank native syntax/acoustics are retained separately from common annotations.
 Stanza tokenizes reconstructed sentences normally and is aligned back by character span.
@@ -63,11 +66,17 @@ fail during preflight rather than silently changing the predictor set.
 A fold-local multi-output ridge model jointly predicts every coordinate at each
 configured rank. Both raw weighted factors and QR-orthonormalized spans are evaluated.
 Because source-fold axes can rotate in cross-dataset mode, its weighted factor is derived
-from the leading eigensystem of the mean source-fold `A A^T` operator. See
-`configs/rrr/language_reconstruction.yml` for the complete interface.
+from the leading eigensystem of the mean source-fold `A A^T` operator. Predictor sets
+can evaluate the registered language tasks, same-word GloVe vectors, or their combined
+design. If a GloVe condition is requested, every condition is restricted to the same
+GloVe-covered words and the saved source folds are remapped without changing fold
+identity. Results include absolute metrics, RRR-minus-PCA comparisons, and paired
+GloVe/task/combined contrasts. See `configs/rrr/language_reconstruction.yml` for the
+complete interface.
 
 | Task name | Kind | Measurement | Source | Status |
 |---|---|---|---|---|
+| `speaker_identity` | categorical | Anonymous within-episode speaker cluster | pyannote Community-1 | Complete |
 | `native_part_of_speech` | categorical | Source POS tag | Podcast native | Complete |
 | `native_surprisal` | continuous | Source LM surprisal | Podcast native | Complete |
 | `native_entropy` | continuous | Source LM entropy | Podcast native | Complete |
@@ -187,6 +196,21 @@ Run:
 make stage-language-resources \
   LANGUAGE_FEATURE_CONFIG=configs/language_features/podcast.yml
 ```
+
+The Podcast speaker model is gated. Before staging, accept the conditions for
+`pyannote/speaker-diarization-community-1` on Hugging Face and export an `HF_TOKEN`
+with read access. The staged snapshot is then loaded locally; generation does not send
+the Podcast audio to a hosted diarization service. By default the provider infers the
+speaker count and selects CUDA when available. Its config supports `device`, an exact
+`num_speakers`, or compatible `min_speakers`/`max_speakers` bounds. Exact and bounded
+speaker-count settings cannot be combined.
+
+Speaker clusters are named deterministically by first appearance (`SPEAKER_00`,
+`SPEAKER_01`, ...). Each timed word receives the exclusive turn with the largest
+positive overlap; exact ties go to the earlier turn and words without overlap remain
+missing. Raw turns are saved in `segments.tsv`, while the manifest reports speaker
+durations, word counts, labeled-word coverage, and unmatched words for audit. These are
+anonymous identities within this episode, not real-person or cross-episode identities.
 
 Generation never downloads missing resources. Staging can download configured Stanza or
 NLTK model assets and URL-based resources, and validates every configured checksum.

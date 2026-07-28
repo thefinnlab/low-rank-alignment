@@ -40,16 +40,19 @@ def build_gap_tables(runs: list[tuple[str, Path]]) -> tuple[pd.DataFrame, pd.Dat
         values = pd.read_csv(path / "fold_results.csv")
         if "model" in values:
             values = values[values["model"] == "linear"]
+        if "predictor_set" not in values:
+            values["predictor_set"] = "tasks"
         for metric in METRICS:
             paired = values.pivot_table(
-                index=["target_view", "rank", "fold"],
+                index=["predictor_set", "target_view", "rank", "fold"],
                 columns="subspace",
                 values=metric,
             ).dropna(subset=["rrr", "pca"])
-            for (target_view, rank, fold), row in paired.iterrows():
+            for (predictor_set, target_view, rank, fold), row in paired.iterrows():
                 rows.append(
                     {
                         "task": task,
+                        "predictor_set": predictor_set,
                         "target_view": target_view,
                         "rank": int(rank),
                         "fold": int(fold),
@@ -61,7 +64,10 @@ def build_gap_tables(runs: list[tuple[str, Path]]) -> tuple[pd.DataFrame, pd.Dat
                 )
     grid = pd.DataFrame(rows)
     summary = (
-        grid.groupby(["task", "target_view", "rank", "metric"], sort=False).gap
+        grid.groupby(
+            ["task", "predictor_set", "target_view", "rank", "metric"],
+            sort=False,
+        ).gap
         .agg(["mean", "sem", "count"])
         .reset_index()
         .rename(columns={"count": "n_folds"})
@@ -71,8 +77,10 @@ def build_gap_tables(runs: list[tuple[str, Path]]) -> tuple[pd.DataFrame, pd.Dat
 
 def plot_gap_summary(summary: pd.DataFrame, output_dir: Path) -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
-    task_order = list(dict.fromkeys(summary["task"]))
-    colors = plt.get_cmap("tab10")(np.linspace(0, 1, max(len(task_order), 2)))
+    series_order = list(
+        dict.fromkeys(zip(summary["task"], summary["predictor_set"]))
+    )
+    colors = plt.get_cmap("tab10")(np.linspace(0, 1, max(len(series_order), 2)))
     for metric, ylabel in METRICS.items():
         figure, axes = plt.subplots(1, 2, figsize=(12, 4.8), sharey=True)
         for axis, target_view in zip(axes, ("weighted", "span")):
@@ -80,14 +88,18 @@ def plot_gap_summary(summary: pd.DataFrame, output_dir: Path) -> None:
                 (summary["metric"] == metric)
                 & (summary["target_view"] == target_view)
             ]
-            for color, task in zip(colors, task_order):
-                group = subset[subset["task"] == task].sort_values("rank")
+            for color, (task, predictor_set) in zip(colors, series_order):
+                group = subset[
+                    (subset["task"] == task)
+                    & (subset["predictor_set"] == predictor_set)
+                ].sort_values("rank")
                 if group.empty:
                     continue
                 ranks = group["rank"].to_numpy(dtype=float)
                 means = group["mean"].to_numpy(dtype=float)
                 sems = group["sem"].fillna(0).to_numpy(dtype=float)
-                axis.plot(ranks, means, marker="o", color=color, label=task)
+                label = task if predictor_set == "tasks" else f"{task}/{predictor_set}"
+                axis.plot(ranks, means, marker="o", color=color, label=label)
                 axis.fill_between(ranks, means - sems, means + sems, color=color, alpha=0.16)
             axis.axhline(0, color="black", linewidth=1, linestyle="--")
             axis.set_xscale("log", base=2)

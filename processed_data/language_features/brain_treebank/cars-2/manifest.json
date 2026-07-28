@@ -1,0 +1,317 @@
+{
+  "schema_version": 1,
+  "dataset": "brain_treebank",
+  "stimulus_id": "cars-2",
+  "n_tokens": 10760,
+  "input_fingerprint": "8875f18033c397ae8f4dd87cd977b2418d73c8640d769036be1c7fcbd2eaa929",
+  "resources": {
+    "stanza_ewt": {
+      "type": "stanza_model",
+      "path": "/home/handrail6120/Documents/projects/alignment-attribution/data/language_resources/stanza",
+      "language": "en",
+      "package": "ewt",
+      "sha256": "6743fe45dc83aedf84b0537d3528eaec31a003fb3d00d43f5bfac48760a32f45"
+    }
+  },
+  "providers": {
+    "native": {
+      "version": "1",
+      "native_columns": [
+        "native_dependency_head",
+        "native_dependency_relation",
+        "native_intensity_rms",
+        "native_lemma",
+        "native_part_of_speech",
+        "native_phoneme_count",
+        "native_pitch",
+        "native_speaker",
+        "native_surprisal",
+        "native_syllable_count",
+        "post_word_pause",
+        "pre_word_pause",
+        "sentence_end",
+        "sentence_length",
+        "sentence_onset",
+        "sentence_position",
+        "story_position",
+        "story_time_position",
+        "surprisal",
+        "word_duration",
+        "word_length",
+        "word_zipf_frequency"
+      ],
+      "media": {}
+    },
+    "ud": {
+      "version": "2",
+      "backend": "stanza",
+      "language": "en",
+      "package": "ewt",
+      "tokenization": "parser_native_with_character_alignment"
+    }
+  },
+  "feature_providers": {
+    "native_lemma": "native",
+    "native_part_of_speech": "native",
+    "native_dependency_relation": "native",
+    "native_dependency_head": "native",
+    "native_surprisal": "native",
+    "native_speaker": "native",
+    "native_pitch": "native",
+    "native_intensity_rms": "native",
+    "native_syllable_count": "native",
+    "native_phoneme_count": "native",
+    "surprisal": "native",
+    "word_length": "native",
+    "word_zipf_frequency": "native",
+    "word_duration": "native",
+    "pre_word_pause": "native",
+    "post_word_pause": "native",
+    "sentence_position": "native",
+    "sentence_onset": "native",
+    "sentence_end": "native",
+    "sentence_length": "native",
+    "story_position": "native",
+    "story_time_position": "native",
+    "lemma": "ud",
+    "part_of_speech": "ud",
+    "fine_part_of_speech": "ud",
+    "morphological_feature": "ud",
+    "dependency_relation": "ud",
+    "dependency_head_token_id": "ud",
+    "content_word": "ud",
+    "tense": "ud",
+    "aspect": "ud",
+    "mood": "ud",
+    "voice": "ud",
+    "grammatical_person": "ud",
+    "number": "ud",
+    "definiteness": "ud",
+    "dependency_depth": "ud",
+    "dependency_length": "ud",
+    "head_direction": "ud",
+    "number_of_dependents": "ud",
+    "subtree_size": "ud",
+    "left_dependents": "ud",
+    "right_dependents": "ud",
+    "open_dependencies": "ud",
+    "dependency_locality_cost": "ud"
+  },
+  "feature_coverage": {
+    "native_lemma": {
+      "available": 10760,
+      "total": 10760
+    },
+    "native_part_of_speech": {
+      "available": 10760,
+      "total": 10760
+    },
+    "native_dependency_relation": {
+      "available": 10760,
+      "total": 10760
+    },
+    "native_dependency_head": {
+      "available": 10760,
+      "total": 10760
+    },
+    "native_surprisal": {
+      "available": 10760,
+      "total": 10760
+    },
+    "native_speaker": {
+      "available": 10760,
+      "total": 10760
+    },
+    "native_pitch": {
+      "available": 10760,
+      "total": 10760
+    },
+    "native_intensity_rms": {
+      "available": 10760,
+      "total": 10760
+    },
+    "native_syllable_count": {
+      "available": 10760,
+      "total": 10760
+    },
+    "native_phoneme_count": {
+      "available": 10760,
+      "total": 10760
+    },
+    "surprisal": {
+      "available": 10760,
+      "total": 10760
+    },
+    "word_length": {
+      "available": 10760,
+      "total": 10760
+    },
+    "word_zipf_frequency": {
+      "available": 10760,
+      "total": 10760
+    },
+    "word_duration": {
+      "available": 10760,
+      "total": 10760
+    },
+    "pre_word_pause": {
+      "available": 10759,
+      "total": 10760
+    },
+    "post_word_pause": {
+      "available": 10759,
+      "total": 10760
+    },
+    "sentence_position": {
+      "available": 10760,
+      "total": 10760
+    },
+    "sentence_onset": {
+      "available": 10760,
+      "total": 10760
+    },
+    "sentence_end": {
+      "available": 10760,
+      "total": 10760
+    },
+    "sentence_length": {
+      "available": 10760,
+      "total": 10760
+    },
+    "story_position": {
+      "available": 10760,
+      "total": 10760
+    },
+    "story_time_position": {
+      "available": 10760,
+      "total": 10760
+    },
+    "lemma": {
+      "available": 10760,
+      "total": 10760
+    },
+    "part_of_speech": {
+      "available": 10760,
+      "total": 10760
+    },
+    "fine_part_of_speech": {
+      "available": 10760,
+      "total": 10760
+    },
+    "morphological_feature": {
+      "available": 10760,
+      "total": 10760
+    },
+    "dependency_relation": {
+      "available": 10760,
+      "total": 10760
+    },
+    "dependency_head_token_id": {
+      "available": 10760,
+      "total": 10760
+    },
+    "content_word": {
+      "available": 10760,
+      "total": 10760
+    },
+    "tense": {
+      "available": 1367,
+      "total": 10760
+    },
+    "aspect": {
+      "available": 0,
+      "total": 10760
+    },
+    "mood": {
+      "available": 1297,
+      "total": 10760
+    },
+    "voice": {
+      "available": 87,
+      "total": 10760
+    },
+    "grammatical_person": {
+      "available": 2609,
+      "total": 10760
+    },
+    "number": {
+      "available": 4753,
+      "total": 10760
+    },
+    "definiteness": {
+      "available": 562,
+      "total": 10760
+    },
+    "dependency_depth": {
+      "available": 10760,
+      "total": 10760
+    },
+    "dependency_length": {
+      "available": 8709,
+      "total": 10760
+    },
+    "head_direction": {
+      "available": 10760,
+      "total": 10760
+    },
+    "number_of_dependents": {
+      "available": 10760,
+      "total": 10760
+    },
+    "subtree_size": {
+      "available": 10760,
+      "total": 10760
+    },
+    "left_dependents": {
+      "available": 10760,
+      "total": 10760
+    },
+    "right_dependents": {
+      "available": 10760,
+      "total": 10760
+    },
+    "open_dependencies": {
+      "available": 10760,
+      "total": 10760
+    },
+    "dependency_locality_cost": {
+      "available": 10760,
+      "total": 10760
+    }
+  },
+  "config": {
+    "dataset": "brain_treebank",
+    "data_root": "data/brain-treebank",
+    "per_dataset_config": {
+      "movie": "cars-2"
+    },
+    "model_dir": "gpt2-xl",
+    "output_dir": "processed_data/language_features",
+    "resource_dir": "data/language_resources",
+    "providers": [
+      "native",
+      "ud"
+    ],
+    "dataset_options": {},
+    "provider_options": {
+      "ud": {
+        "language": "en",
+        "package": "ewt",
+        "model_resource": "stanza_ewt",
+        "use_gpu": false
+      }
+    },
+    "resources": {
+      "stanza_ewt": {
+        "type": "stanza_model",
+        "path": "stanza",
+        "language": "en",
+        "package": "ewt"
+      }
+    },
+    "refresh": false
+  },
+  "document_metadata": {
+    "stimulus_label": "cars-2"
+  }
+}

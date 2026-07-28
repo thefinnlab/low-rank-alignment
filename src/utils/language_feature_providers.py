@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import wave
 from collections import defaultdict
 from pathlib import Path
 
@@ -13,6 +14,201 @@ from src.utils.language_features import (
     AnnotationResult,
     register_annotation_provider,
 )
+
+
+def _iter_diarization_turns(annotation):
+    """Yield ``(start, end, label)`` across supported pyannote APIs."""
+    if hasattr(annotation, "itertracks"):
+        for turn, _, label in annotation.itertracks(yield_label=True):
+            yield float(turn.start), float(turn.end), str(label)
+        return
+    for item in annotation:
+        if len(item) == 2:
+            turn, label = item
+        elif len(item) == 3:
+            turn, _, label = item
+        else:
+            raise ValueError(f"Unexpected diarization item: {item!r}")
+        yield float(turn.start), float(turn.end), str(label)
+
+
+def _canonicalize_speaker_turns(annotation) -> pd.DataFrame:
+    """Sort turns and name speaker clusters by their first appearance."""
+    turns = sorted(
+        _iter_diarization_turns(annotation),
+        key=lambda row: (row[0], row[1], row[2]),
+    )
+    speaker_names: dict[str, str] = {}
+    rows = []
+    for start, end, raw_label in turns:
+        if not np.isfinite(start) or not np.isfinite(end) or start < 0 or end <= start:
+            raise ValueError(
+                f"Speaker diarization returned invalid turn [{start}, {end}]"
+            )
+        label = speaker_names.setdefault(
+            raw_label, f"SPEAKER_{len(speaker_names):02d}"
+        )
+        rows.append(
+            {
+                "segment_id": f"speaker_turn_{len(rows)}",
+                "start": start,
+                "end": end,
+                "label": label,
+                "segment_type": "speaker_turn",
+            }
+        )
+    if not rows:
+        raise ValueError("Speaker diarization returned no turns")
+    return pd.DataFrame(rows)
+
+
+def _assign_speakers_to_words(
+    token_table: pd.DataFrame, turns: pd.DataFrame
+) -> pd.Series:
+    """Assign the greatest-overlap exclusive speaker turn to each timed word."""
+    turn_starts = turns["start"].to_numpy(dtype=float)
+    turn_ends = turns["end"].to_numpy(dtype=float)
+    turn_labels = turns["label"].astype(str).to_numpy()
+    labels = pd.Series(pd.NA, index=token_table.index, dtype="string")
+    for index, token in token_table.iterrows():
+        start = pd.to_numeric(pd.Series([token.get("start")]), errors="coerce").iloc[0]
+        end = pd.to_numeric(pd.Series([token.get("end")]), errors="coerce").iloc[0]
+        if not np.isfinite(start) or not np.isfinite(end) or end <= start:
+            continue
+        overlaps = np.minimum(float(end), turn_ends) - np.maximum(float(start), turn_starts)
+        candidates = np.flatnonzero(overlaps > 0)
+        if len(candidates):
+            # Turns are time-sorted, so np.argmax provides the specified earliest-onset
+            # tie break when two turns have exactly the same overlap.
+            winner = candidates[int(np.argmax(overlaps[candidates]))]
+            labels.loc[index] = turn_labels[winner]
+    return labels
+
+
+def _load_pcm_wav(path: str, torch) -> dict:
+    """Load a PCM WAV in memory so pyannote does not require FFmpeg/TorchCodec."""
+    with wave.open(path, "rb") as stream:
+        channels = stream.getnchannels()
+        sample_rate = stream.getframerate()
+        sample_width = stream.getsampwidth()
+        frame_count = stream.getnframes()
+        dtype_and_scale = {
+            1: (np.uint8, 128.0),
+            2: (np.dtype("<i2"), 32768.0),
+            4: (np.dtype("<i4"), 2147483648.0),
+        }
+        if sample_width not in dtype_and_scale:
+            raise ValueError(
+                f"Unsupported {sample_width * 8}-bit WAV for speaker diarization"
+            )
+        dtype, scale = dtype_and_scale[sample_width]
+        # Downmix in chunks so the 30-minute stereo Podcast WAV does not require
+        # several full-size intermediate arrays.
+        mono = np.empty(frame_count, dtype=np.float32)
+        position = 0
+        while position < frame_count:
+            requested = min(1_000_000, frame_count - position)
+            raw = stream.readframes(requested)
+            samples = np.frombuffer(raw, dtype=dtype).astype(np.float32)
+            if len(samples) != requested * channels:
+                raise ValueError(f"Malformed PCM WAV at {path}")
+            if sample_width == 1:
+                samples -= 128.0
+            block = samples.reshape(-1, channels).mean(axis=1) / scale
+            mono[position : position + requested] = block
+            position += requested
+    waveform = mono[None, :]
+    return {
+        "waveform": torch.from_numpy(np.ascontiguousarray(waveform)),
+        "sample_rate": sample_rate,
+    }
+
+
+@register_annotation_provider("speaker_diarization", version="1")
+def speaker_diarization_provider(
+    document, token_table, options, resources
+) -> AnnotationResult:
+    """Run local pyannote diarization and align anonymous speakers to words."""
+    audio_path = document.media.get("audio")
+    if not audio_path or not Path(audio_path).exists():
+        raise FileNotFoundError(
+            "The speaker_diarization provider requires document.media['audio']"
+        )
+    resource_name = options.get("model_resource", "pyannote_community_1")
+    if resource_name not in resources:
+        raise ValueError(
+            f"Unknown speaker diarization model resource {resource_name!r}"
+        )
+    model_path = Path(resources[resource_name]["path"])
+    try:
+        import torch
+        from pyannote.audio import Pipeline
+    except ImportError as exc:
+        raise ImportError(
+            "The speaker_diarization provider requires 'pyannote.audio'"
+        ) from exc
+
+    device = str(options.get("device", "auto"))
+    if device not in {"auto", "cpu", "cuda"}:
+        raise ValueError("speaker_diarization device must be auto, cpu, or cuda")
+    use_cuda = device == "cuda" or (device == "auto" and torch.cuda.is_available())
+    if device == "cuda" and not torch.cuda.is_available():
+        raise RuntimeError("Speaker diarization requested CUDA, but CUDA is unavailable")
+
+    count_options = {
+        key: options.get(key)
+        for key in ("num_speakers", "min_speakers", "max_speakers")
+        if options.get(key) is not None
+    }
+    if "num_speakers" in count_options and len(count_options) > 1:
+        raise ValueError("num_speakers cannot be combined with min_speakers/max_speakers")
+    for key, value in count_options.items():
+        if int(value) < 1:
+            raise ValueError(f"{key} must be positive")
+        count_options[key] = int(value)
+    if (
+        "min_speakers" in count_options
+        and "max_speakers" in count_options
+        and count_options["min_speakers"] > count_options["max_speakers"]
+    ):
+        raise ValueError("min_speakers cannot exceed max_speakers")
+
+    pipeline = Pipeline.from_pretrained(str(model_path))
+    effective_device = "cuda" if use_cuda else "cpu"
+    pipeline.to(torch.device(effective_device))
+    audio = _load_pcm_wav(str(audio_path), torch)
+    diarization = pipeline(audio, **count_options)
+    exclusive = getattr(diarization, "exclusive_speaker_diarization", None)
+    if exclusive is None:
+        raise ValueError(
+            "The configured pyannote pipeline did not return exclusive diarization"
+        )
+    turns = _canonicalize_speaker_turns(exclusive)
+    speaker_identity = _assign_speakers_to_words(token_table, turns)
+    word_counts = speaker_identity.value_counts().sort_index()
+    durations = (turns["end"] - turns["start"]).groupby(turns["label"]).sum()
+    output = pd.DataFrame(
+        {"token_id": token_table["token_id"], "speaker_identity": speaker_identity}
+    )
+    return AnnotationResult(
+        output,
+        segments=turns,
+        metadata={
+            "model_resource": resource_name,
+            "device": effective_device,
+            "speaker_count_options": count_options,
+            "detected_speaker_count": int(turns["label"].nunique()),
+            "labeled_word_count": int(speaker_identity.notna().sum()),
+            "unmatched_word_count": int(speaker_identity.isna().sum()),
+            "labeled_word_fraction": float(speaker_identity.notna().mean()),
+            "speaker_word_counts": {
+                str(label): int(count) for label, count in word_counts.items()
+            },
+            "speaker_durations_seconds": {
+                str(label): float(duration) for label, duration in durations.items()
+            },
+        },
+    )
 
 
 LANCASTER_COLUMNS = (

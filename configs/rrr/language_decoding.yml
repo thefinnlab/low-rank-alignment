@@ -28,6 +28,7 @@ device: auto
 
 rank_grid: [1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 1600]
 tasks:
+  - speaker_identity
   - native_part_of_speech
   - native_surprisal
   - native_entropy

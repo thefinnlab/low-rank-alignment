@@ -11,6 +11,7 @@ dataset_options:
 
 providers:
   - native
+  - speaker_diarization
   - ud
   - lexical_norms
   - swow
@@ -19,6 +20,14 @@ providers:
   - entity_coreference
 
 provider_options:
+  speaker_diarization:
+    model_resource: pyannote_community_1
+    device: auto
+    # Leave all three null to infer the speaker count automatically. An exact
+    # num_speakers cannot be combined with min_speakers or max_speakers.
+    num_speakers: null
+    min_speakers: null
+    max_speakers: null
   ud:
     language: en
     package: ewt
@@ -51,6 +60,14 @@ provider_options:
 # those of the exact releases used for an analysis. "manual: true" prevents a
 # generation run from silently downloading a license- or click-through resource.
 resources:
+  # Access is gated: accept the model conditions and set HF_TOKEN before staging.
+  pyannote_community_1:
+    type: huggingface_model
+    path: pyannote/speaker-diarization-community-1
+    repo_id: pyannote/speaker-diarization-community-1
+    revision: main
+    required_files:
+      - config.yaml
   stanza_ewt:
     type: stanza_model
     path: stanza

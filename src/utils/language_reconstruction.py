@@ -26,7 +26,7 @@ from src.core.config import (
 from src.core.registry import resolve_dataset_context
 from src.utils.config_utils import save_effective_config
 from src.utils.constants import RIDGE_ALPHAS
-from src.utils.embeddings import load_embeddings
+from src.utils.embeddings import get_glove_embeddings, load_embeddings
 from src.utils.language_decoding import (
     _load_within_folds_and_selection,
     _outer_folds,
@@ -38,6 +38,11 @@ from src.utils.subspace_compare import aggregate_subspace_basis
 
 
 METRICS = ("multivariate_r2", "mean_coordinate_correlation", "linear_cka")
+PREDICTOR_CONTRASTS = (
+    ("glove_minus_tasks", "glove", "tasks"),
+    ("tasks_glove_minus_glove", "tasks_glove", "glove"),
+    ("tasks_glove_minus_tasks", "tasks_glove", "tasks"),
+)
 
 
 def resolve_pca_sibling(rrr_unit_dir: str | Path) -> Path:
@@ -240,6 +245,88 @@ def build_preprocessor(
     return ColumnTransformer(transformers, sparse_threshold=0.0)
 
 
+def build_predictor_preprocessor(
+    predictor_set: str,
+    n_tasks: int,
+    continuous: list[int],
+    categorical: list[int],
+    n_glove: int,
+) -> ColumnTransformer:
+    """Build fold-local preprocessing for one configured predictor condition."""
+    transformers = []
+    if predictor_set in {"tasks", "tasks_glove"}:
+        if continuous:
+            transformers.append(
+                (
+                    "continuous",
+                    Pipeline(
+                        [
+                            (
+                                "impute",
+                                SimpleImputer(strategy="median", add_indicator=True),
+                            ),
+                            ("scale", StandardScaler()),
+                        ]
+                    ),
+                    continuous,
+                )
+            )
+        if categorical:
+            transformers.append(
+                (
+                    "categorical",
+                    Pipeline(
+                        [
+                            (
+                                "impute",
+                                SimpleImputer(strategy="constant", fill_value=-1.0),
+                            ),
+                            (
+                                "one_hot",
+                                OneHotEncoder(
+                                    handle_unknown="ignore", sparse_output=False
+                                ),
+                            ),
+                        ]
+                    ),
+                    categorical,
+                )
+            )
+    if predictor_set in {"glove", "tasks_glove"}:
+        start = n_tasks if predictor_set == "tasks_glove" else 0
+        transformers.append(
+            ("glove", StandardScaler(), list(range(start, start + n_glove)))
+        )
+    return ColumnTransformer(transformers, sparse_threshold=0.0)
+
+
+def filter_selection_and_folds(
+    selection: np.ndarray,
+    folds: list[tuple[np.ndarray, np.ndarray]],
+    valid_transcript_rows: np.ndarray,
+) -> tuple[np.ndarray, list[tuple[np.ndarray, np.ndarray]], np.ndarray]:
+    """Filter a word selection and remap its existing folds to compact indices."""
+    selection = np.asarray(selection, dtype=int)
+    valid = np.asarray(valid_transcript_rows, dtype=bool)[selection]
+    kept_source_rows = np.flatnonzero(valid)
+    if not len(kept_source_rows):
+        raise ValueError("No selected transcript words have GloVe embeddings")
+    remap = np.full(len(selection), -1, dtype=int)
+    remap[kept_source_rows] = np.arange(len(kept_source_rows))
+    filtered_folds = []
+    for fold, (train_idx, test_idx) in enumerate(folds):
+        train = remap[np.asarray(train_idx, dtype=int)]
+        test = remap[np.asarray(test_idx, dtype=int)]
+        train, test = train[train >= 0], test[test >= 0]
+        if not len(train) or not len(test):
+            raise ValueError(
+                f"GloVe filtering leaves fold {fold} with "
+                f"n_train={len(train)}, n_test={len(test)}"
+            )
+        filtered_folds.append((train, test))
+    return selection[kept_source_rows], filtered_folds, kept_source_rows
+
+
 def reconstruction_metrics(y_true: np.ndarray, y_pred: np.ndarray) -> dict[str, float]:
     """Return calibration, coordinate, and representational reconstruction metrics."""
     y_true = np.asarray(y_true, dtype=np.float64)
@@ -295,6 +382,7 @@ def _fit_ridge(
 
 def _fit_dir(
     output_dir: Path,
+    predictor_set: str,
     subspace: str,
     target_view: str,
     rank: int,
@@ -303,6 +391,7 @@ def _fit_dir(
     return (
         output_dir
         / "fits"
+        / predictor_set
         / subspace
         / target_view
         / f"k{rank}"
@@ -337,11 +426,14 @@ def _save_fit(
 def _run_fit(
     *,
     output_dir: Path,
+    predictor_set: str,
     subspace: str,
     target_view: str,
     rank: int,
     fold: int,
-    task_matrix: np.ndarray,
+    predictor_matrix: np.ndarray,
+    n_tasks: int,
+    n_glove: int,
     continuous: list[int],
     categorical: list[int],
     target: np.ndarray,
@@ -349,17 +441,24 @@ def _run_fit(
     test_idx: np.ndarray,
     config: LanguageReconstructionConfig,
 ) -> dict:
-    path = _fit_dir(output_dir, subspace, target_view, rank, fold)
+    path = _fit_dir(output_dir, predictor_set, subspace, target_view, rank, fold)
     cached = _load_cached(path, config.refresh)
     if cached is not None:
         return cached
-    preprocessor = build_preprocessor(continuous, categorical)
-    X_train = np.asarray(preprocessor.fit_transform(task_matrix[train_idx]), dtype=np.float32)
-    X_test = np.asarray(preprocessor.transform(task_matrix[test_idx]), dtype=np.float32)
+    preprocessor = build_predictor_preprocessor(
+        predictor_set, n_tasks, continuous, categorical, n_glove
+    )
+    X_train = np.asarray(
+        preprocessor.fit_transform(predictor_matrix[train_idx]), dtype=np.float32
+    )
+    X_test = np.asarray(
+        preprocessor.transform(predictor_matrix[test_idx]), dtype=np.float32
+    )
     y_train, y_test = target[train_idx], target[test_idx]
     fitted_model = _fit_ridge(X_train, y_train, config)
     prediction = fitted_model.predict(X_test)
     row = {
+        "predictor_set": predictor_set,
         "subspace": subspace,
         "target_view": target_view,
         "rank": int(rank),
@@ -383,7 +482,7 @@ def _run_fit(
 def summarize_results(grid: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Summarize linear reconstruction metrics over outer folds."""
     fold_rows = grid.copy()
-    summary_keys = ["subspace", "target_view", "rank"]
+    summary_keys = ["predictor_set", "subspace", "target_view", "rank"]
     means = grid.groupby(summary_keys, sort=False)[list(METRICS)].mean()
     sems = grid.groupby(summary_keys, sort=False)[list(METRICS)].sem()
     summary = means.reset_index()
@@ -400,7 +499,7 @@ def summarize_comparisons(
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Build fold-paired RRR-minus-PCA comparisons."""
     rows = []
-    index = ["target_view", "rank", "fold"]
+    index = ["predictor_set", "target_view", "rank", "fold"]
     for metric in METRICS:
         space_table = fold_results.pivot_table(
             index=index, columns="subspace", values=metric
@@ -408,9 +507,10 @@ def summarize_comparisons(
         if {"rrr", "pca"} <= set(space_table.columns):
             values = (space_table["rrr"] - space_table["pca"]).rename("value")
             for keys, value in values.items():
-                target_view, rank, fold = keys
+                predictor_set, target_view, rank, fold = keys
                 rows.append(
                     {
+                        "predictor_set": predictor_set,
                         "target_view": target_view,
                         "rank": rank,
                         "fold": fold,
@@ -419,7 +519,7 @@ def summarize_comparisons(
                     }
                 )
     comparison_grid = pd.DataFrame(rows)
-    group_keys = ["target_view", "rank", "metric"]
+    group_keys = ["predictor_set", "target_view", "rank", "metric"]
     comparisons = (
         comparison_grid.groupby(group_keys, sort=False).value
         .agg(["mean", "sem", "count"])
@@ -429,30 +529,79 @@ def summarize_comparisons(
     return comparison_grid, comparisons
 
 
+def summarize_predictor_contrasts(
+    fold_results: pd.DataFrame,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Build configured fold-paired differences between predictor conditions."""
+    rows = []
+    index = ["subspace", "target_view", "rank", "fold"]
+    for metric in METRICS:
+        table = fold_results.pivot_table(
+            index=index, columns="predictor_set", values=metric
+        )
+        for contrast, left, right in PREDICTOR_CONTRASTS:
+            if {left, right} <= set(table.columns):
+                values = (table[left] - table[right]).rename("value")
+                for keys, value in values.items():
+                    subspace, target_view, rank, fold = keys
+                    rows.append(
+                        {
+                            "contrast": contrast,
+                            "subspace": subspace,
+                            "target_view": target_view,
+                            "rank": rank,
+                            "fold": fold,
+                            "metric": metric,
+                            "value": value,
+                        }
+                    )
+    columns = [
+        "contrast", "subspace", "target_view", "rank", "fold", "metric", "value"
+    ]
+    grid = pd.DataFrame(rows, columns=columns)
+    summary_columns = [
+        "contrast", "subspace", "target_view", "rank", "metric",
+        "mean", "sem", "n_folds",
+    ]
+    if grid.empty:
+        return grid, pd.DataFrame(columns=summary_columns)
+    keys = ["contrast", "subspace", "target_view", "rank", "metric"]
+    summary = (
+        grid.groupby(keys, sort=False).value.agg(["mean", "sem", "count"])
+        .reset_index()
+        .rename(columns={"count": "n_folds"})
+    )
+    return grid, summary
+
+
 def plot_results(summary: pd.DataFrame, output_dir: Path) -> None:
     """Write compact linear-reconstruction rank curves."""
-    for metric in METRICS:
-        figure, axes = plt.subplots(1, 2, figsize=(12, 4.5), sharey=True)
-        for axis, target_view in zip(axes, ("weighted", "span")):
-            subset = summary[summary.target_view == target_view]
-            for subspace, group in subset.groupby("subspace"):
-                group = group.sort_values("rank")
-                axis.plot(
-                    group["rank"], group[metric], marker="o", label=subspace
-                )
-            axis.set_xscale("log", base=2)
-            axis.set_title(target_view)
-            axis.set_xlabel("rank")
-            axis.grid(alpha=0.25)
-        axes[0].set_ylabel(metric.replace("_", " "))
-        axes[-1].legend(fontsize=8)
-        figure.tight_layout()
-        figure.savefig(output_dir / f"{metric}_by_rank.png", dpi=160)
-        plt.close(figure)
+    for predictor_set, predictor_summary in summary.groupby("predictor_set", sort=False):
+        for metric in METRICS:
+            figure, axes = plt.subplots(1, 2, figsize=(12, 4.5), sharey=True)
+            for axis, target_view in zip(axes, ("weighted", "span")):
+                subset = predictor_summary[predictor_summary.target_view == target_view]
+                for subspace, group in subset.groupby("subspace"):
+                    group = group.sort_values("rank")
+                    axis.plot(
+                        group["rank"], group[metric], marker="o", label=subspace
+                    )
+                axis.set_xscale("log", base=2)
+                axis.set_title(target_view)
+                axis.set_xlabel("rank")
+                axis.grid(alpha=0.25)
+            axes[0].set_ylabel(metric.replace("_", " "))
+            axes[-1].legend(fontsize=8)
+            figure.suptitle(predictor_set)
+            figure.tight_layout()
+            figure.savefig(
+                output_dir / f"{metric}_by_rank_{predictor_set}.png", dpi=160
+            )
+            plt.close(figure)
 
 
 def run_language_reconstruction(config: LanguageReconstructionConfig) -> Path:
-    """Run task-to-subspace reconstruction and return the artifact directory."""
+    """Run fixed-predictor subspace reconstruction and return its artifact directory."""
     enc = config.encoding
     subject_ids = enc.subjects or list(range(1, 10))
     dataset_context = resolve_dataset_context(
@@ -487,12 +636,60 @@ def run_language_reconstruction(config: LanguageReconstructionConfig) -> Path:
                 np.arange(len(selection))
             )
         )
+    original_selection = np.asarray(selection, dtype=int)
+    kept_source_rows = np.arange(len(original_selection), dtype=int)
+    uses_glove = bool({"glove", "tasks_glove"} & set(config.predictor_sets))
+    glove_embeddings = None
+    glove_coverage = None
+    if uses_glove:
+        glove_embeddings, glove_word_df = get_glove_embeddings(
+            enc.data_root, word_df, dim=config.glove_dim
+        )
+        glove_embeddings = np.asarray(glove_embeddings, dtype=np.float32)
+        in_glove = glove_word_df["in_glove"].to_numpy(dtype=bool)
+        selection, folds, kept_source_rows = filter_selection_and_folds(
+            original_selection, folds, in_glove
+        )
+        glove_coverage = {
+            "dimension": int(config.glove_dim),
+            "source_file": str(
+                Path(enc.data_root)
+                / "glove"
+                / f"glove.6B.{config.glove_dim}d.txt"
+            ),
+            "selected_before_filter": int(len(original_selection)),
+            "selected_after_filter": int(len(selection)),
+            "excluded_oov": int(len(original_selection) - len(selection)),
+        }
+
     X = embeddings[selection]
     stimulus_id = str(getattr(dataset_context, "stimulus_id", enc.dataset))
-    task_paths = _default_task_data(config, stimulus_id)
-    context = PodcastTaskContext(word_df, enc.data_root, task_paths)
-    task_matrix, continuous, categorical, schema = load_task_matrix(context, config.tasks)
-    task_matrix = task_matrix[selection]
+    uses_tasks = bool({"tasks", "tasks_glove"} & set(config.predictor_sets))
+    if uses_tasks:
+        task_paths = _default_task_data(config, stimulus_id)
+        context = PodcastTaskContext(word_df, enc.data_root, task_paths)
+        task_matrix, continuous, categorical, schema = load_task_matrix(
+            context, config.tasks
+        )
+        task_matrix = np.asarray(task_matrix[selection], dtype=np.float64)
+    else:
+        task_matrix = np.empty((len(selection), 0), dtype=np.float64)
+        continuous, categorical, schema = [], [], {}
+    selected_glove = (
+        np.asarray(glove_embeddings[selection], dtype=np.float32)
+        if glove_embeddings is not None
+        else np.empty((len(selection), 0), dtype=np.float32)
+    )
+    predictor_matrices = {}
+    for predictor_set in config.predictor_sets:
+        if predictor_set == "tasks":
+            predictor_matrices[predictor_set] = task_matrix
+        elif predictor_set == "glove":
+            predictor_matrices[predictor_set] = selected_glove
+        else:
+            predictor_matrices[predictor_set] = np.column_stack(
+                [task_matrix, selected_glove]
+            )
 
     target_root = config.output_dir or get_results_dir(
         enc.model,
@@ -507,7 +704,11 @@ def run_language_reconstruction(config: LanguageReconstructionConfig) -> Path:
         json.dumps(schema, indent=2), encoding="utf-8"
     )
     pd.DataFrame(
-        {"analysis_row": np.arange(len(selection)), "transcript_word_idx": selection}
+        {
+            "analysis_row": np.arange(len(selection)),
+            "source_analysis_row": kept_source_rows,
+            "transcript_word_idx": selection,
+        }
     ).to_csv(output_dir / "word_selection.csv", index=False)
 
     prepared = {
@@ -532,7 +733,10 @@ def run_language_reconstruction(config: LanguageReconstructionConfig) -> Path:
         "pca_unit_dir": str(pca_unit),
         "fold_results_dir": None if fold_root is None else str(fold_root),
         "analysis_rows": int(len(selection)),
+        "original_analysis_rows": int(len(original_selection)),
         "embedding_shape": list(embeddings.shape),
+        "predictor_sets": list(config.predictor_sets),
+        "glove": glove_coverage,
         "continuous_tasks": [config.tasks[index] for index in continuous],
         "categorical_tasks": [config.tasks[index] for index in categorical],
         "cross_weighted_strategy": (
@@ -546,30 +750,36 @@ def run_language_reconstruction(config: LanguageReconstructionConfig) -> Path:
     )
 
     rows = []
-    for subspace in ("rrr", "pca"):
-        print(f"\n[{subspace.upper()} targets]")
-        for target_view in config.target_views:
-            print(f"  [{target_view}]")
-            for fold, (train_idx, test_idx) in enumerate(folds):
-                for rank in map(int, config.rank_grid):
-                    factor = prepared[subspace][(target_view, fold, rank)]
-                    target = np.asarray(X @ factor, dtype=np.float32)
-                    rows.append(
-                        _run_fit(
-                            output_dir=output_dir,
-                            subspace=subspace,
-                            target_view=target_view,
-                            rank=rank,
-                            fold=fold,
-                            task_matrix=task_matrix,
-                            continuous=continuous,
-                            categorical=categorical,
-                            target=target,
-                            train_idx=np.asarray(train_idx),
-                            test_idx=np.asarray(test_idx),
-                            config=config,
+    for predictor_set in config.predictor_sets:
+        print(f"\n[{predictor_set} predictors]")
+        predictor_matrix = predictor_matrices[predictor_set]
+        for subspace in ("rrr", "pca"):
+            print(f"  [{subspace.upper()} targets]")
+            for target_view in config.target_views:
+                print(f"    [{target_view}]")
+                for fold, (train_idx, test_idx) in enumerate(folds):
+                    for rank in map(int, config.rank_grid):
+                        factor = prepared[subspace][(target_view, fold, rank)]
+                        target = np.asarray(X @ factor, dtype=np.float32)
+                        rows.append(
+                            _run_fit(
+                                output_dir=output_dir,
+                                predictor_set=predictor_set,
+                                subspace=subspace,
+                                target_view=target_view,
+                                rank=rank,
+                                fold=fold,
+                                predictor_matrix=predictor_matrix,
+                                n_tasks=task_matrix.shape[1],
+                                n_glove=selected_glove.shape[1],
+                                continuous=continuous,
+                                categorical=categorical,
+                                target=target,
+                                train_idx=np.asarray(train_idx),
+                                test_idx=np.asarray(test_idx),
+                                config=config,
+                            )
                         )
-                    )
     grid = pd.DataFrame(rows)
     grid.to_csv(output_dir / "grid_results.csv", index=False)
     fold_results, summary = summarize_results(grid)
@@ -578,5 +788,8 @@ def run_language_reconstruction(config: LanguageReconstructionConfig) -> Path:
     comparison_grid, comparisons = summarize_comparisons(fold_results)
     comparison_grid.to_csv(output_dir / "comparison_grid_results.csv", index=False)
     comparisons.to_csv(output_dir / "rrr_pca_comparison.csv", index=False)
+    predictor_grid, predictor_comparisons = summarize_predictor_contrasts(fold_results)
+    predictor_grid.to_csv(output_dir / "predictor_comparison_grid.csv", index=False)
+    predictor_comparisons.to_csv(output_dir / "predictor_comparison.csv", index=False)
     plot_results(summary, output_dir)
     return output_dir

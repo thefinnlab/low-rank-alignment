@@ -276,6 +276,7 @@ _CONTINUOUS_TASKS = {
 }
 
 _CATEGORICAL_TASKS = {
+    "speaker_identity": ("Speaker identity", None),
     "native_part_of_speech": ("Native part of speech", None),
     "part_of_speech": ("Standardized UD part of speech", None),
     "fine_part_of_speech": ("Fine-grained part of speech", None),

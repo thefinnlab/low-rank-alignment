@@ -1,4 +1,5 @@
 import json
+import wave
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -9,12 +10,15 @@ import pytest
 from src.core.config import LanguageFeatureGenerationConfig
 from src.utils.language_feature_providers import (
     LANCASTER_COLUMNS,
+    _assign_speakers_to_words,
+    _canonicalize_speaker_turns,
     _choose_parser_component,
     _dependency_derivatives,
     disfluency_provider,
     entity_coreference_provider,
     lexical_norms_provider,
     native_provider,
+    speaker_diarization_provider,
     swow_provider,
 )
 from src.utils.language_features import (
@@ -85,6 +89,90 @@ def test_native_controls_are_word_aligned_and_non_destructive():
         result.token_features["pre_word_pause"], [np.nan, 0.1, 0.1, 0.1], equal_nan=True
     )
     assert "lemma" not in result.token_features
+
+
+def test_speaker_turns_are_canonicalized_and_words_use_largest_overlap():
+    turns = _canonicalize_speaker_turns(
+        [
+            (SimpleNamespace(start=0.0, end=0.5), "raw_b"),
+            (SimpleNamespace(start=0.5, end=1.0), "raw_a"),
+            (SimpleNamespace(start=1.2, end=1.5), "raw_b"),
+        ]
+    )
+    assert turns["label"].tolist() == [
+        "SPEAKER_00",
+        "SPEAKER_01",
+        "SPEAKER_00",
+    ]
+    tokens = pd.DataFrame(
+        {
+            "start": [0.1, 0.4, 0.8, 1.05, 1.2],
+            "end": [0.2, 0.6, 0.95, 1.1, 1.2],
+        }
+    )
+    labels = _assign_speakers_to_words(tokens, turns)
+    assert labels.iloc[:3].tolist() == [
+        "SPEAKER_00",
+        "SPEAKER_00",  # equal overlap resolves to the earlier turn
+        "SPEAKER_01",
+    ]
+    assert labels.iloc[3:].isna().all()
+
+
+def test_speaker_provider_uses_local_exclusive_diarization(tmp_path, monkeypatch):
+    audio = tmp_path / "audio.wav"
+    with wave.open(str(audio), "wb") as stream:
+        stream.setnchannels(1)
+        stream.setsampwidth(2)
+        stream.setframerate(16_000)
+        stream.writeframes(np.zeros(16_000, dtype=np.int16).tobytes())
+    model = tmp_path / "model"
+    model.mkdir()
+    document = _document()
+    document.media["audio"] = str(audio)
+    calls = {}
+
+    class FakePipeline:
+        def to(self, device):
+            calls["device"] = str(device)
+
+        def __call__(self, payload, **kwargs):
+            calls["inference"] = (payload, kwargs)
+            return SimpleNamespace(
+                exclusive_speaker_diarization=[
+                    (SimpleNamespace(start=0.0, end=0.5), "cluster_9"),
+                    (SimpleNamespace(start=0.5, end=1.1), "cluster_2"),
+                ]
+            )
+
+    def fake_from_pretrained(path):
+        calls["model"] = path
+        return FakePipeline()
+
+    monkeypatch.setattr("pyannote.audio.Pipeline.from_pretrained", fake_from_pretrained)
+    monkeypatch.setattr("torch.cuda.is_available", lambda: False)
+
+    result = speaker_diarization_provider(
+        document,
+        document.tokens,
+        {"device": "auto", "min_speakers": 2, "max_speakers": 4},
+        {"pyannote_community_1": {"path": str(model)}},
+    )
+
+    assert calls["model"] == str(model)
+    assert calls["device"] == "cpu"
+    payload, kwargs = calls["inference"]
+    assert payload["sample_rate"] == 16_000
+    assert tuple(payload["waveform"].shape) == (1, 16_000)
+    assert kwargs == {"min_speakers": 2, "max_speakers": 4}
+    assert result.token_features["speaker_identity"].tolist() == [
+        "SPEAKER_00",
+        "SPEAKER_00",
+        "SPEAKER_01",
+        "SPEAKER_01",
+    ]
+    assert result.metadata["detected_speaker_count"] == 2
+    assert result.metadata["unmatched_word_count"] == 0
 
 
 def test_disfluency_provider_generates_conservative_recurrence_features():
@@ -492,7 +580,16 @@ def test_generator_writes_manifest_and_reuses_identical_artifact(tmp_path):
                         "token_id": token_table["token_id"],
                         "fixture_value": np.arange(len(token_table)),
                     }
-                )
+                ),
+                segments=pd.DataFrame(
+                    {
+                        "segment_id": ["fixture_segment_0"],
+                        "start": [0.0],
+                        "end": [1.0],
+                        "label": ["fixture"],
+                        "segment_type": ["fixture_segment"],
+                    }
+                ),
             )
 
     config = LanguageFeatureGenerationConfig(
@@ -507,5 +604,8 @@ def test_generator_writes_manifest_and_reuses_identical_artifact(tmp_path):
     tokens = pd.read_csv(first / "tokens.tsv", sep="\t")
     assert tokens["fixture_value"].tolist() == [0, 1, 2, 3]
     manifest = json.loads((first / "manifest.json").read_text())
-    assert manifest["schema_version"] == 1
+    assert manifest["schema_version"] == 2
     assert manifest["feature_providers"]["fixture_value"] == provider_name
+    segments = pd.read_csv(first / "segments.tsv", sep="\t")
+    assert segments.loc[0, "provider"] == provider_name
+    assert segments.loc[0, "label"] == "fixture"

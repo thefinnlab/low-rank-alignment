@@ -243,6 +243,8 @@ def _fit_decoder(
 
 
 def _decoder_metrics(kind: str, y_true, y_pred) -> dict[str, float]:
+    y_true = np.asarray(to_numpy(y_true))
+    y_pred = np.asarray(to_numpy(y_pred))
     if kind == "continuous":
         if np.std(y_true) == 0 or np.std(y_pred) == 0:
             correlation = float("nan")

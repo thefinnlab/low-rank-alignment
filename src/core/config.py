@@ -350,7 +350,7 @@ class LanguageDecodingConfig:
 
 @dataclass
 class LanguageReconstructionConfig:
-    """Linearly reconstruct saved language-model subspaces from language tasks."""
+    """Linearly reconstruct saved language-model subspaces from fixed predictors."""
 
     encoding: EncodingConfig = field(default_factory=EncodingConfig)
     rrr_run_path: str | None = None
@@ -369,6 +369,8 @@ class LanguageReconstructionConfig:
         "iu_position",
     ])
     task_data: dict = field(default_factory=dict)
+    predictor_sets: list[str] = field(default_factory=lambda: ["tasks"])
+    glove_dim: int = 300
     target_views: list[str] = field(default_factory=lambda: ["weighted", "span"])
     ridge_alphas: list[float] | None = None
     save_models: bool = False
@@ -385,10 +387,25 @@ class LanguageReconstructionConfig:
             raise ValueError("rank_grid must contain positive integers")
         if len(set(map(int, self.rank_grid))) != len(self.rank_grid):
             raise ValueError("rank_grid must not contain duplicate ranks")
-        if not self.tasks or any(not str(task).strip() for task in self.tasks):
-            raise ValueError("tasks must contain at least one non-empty task name")
+        allowed_predictors = {"tasks", "glove", "tasks_glove"}
+        if not self.predictor_sets or set(self.predictor_sets) - allowed_predictors:
+            raise ValueError(
+                f"predictor_sets must be drawn from {sorted(allowed_predictors)}"
+            )
+        if len(set(self.predictor_sets)) != len(self.predictor_sets):
+            raise ValueError("predictor_sets must not contain duplicate names")
+        uses_tasks = bool({"tasks", "tasks_glove"} & set(self.predictor_sets))
+        if uses_tasks and (
+            not self.tasks or any(not str(task).strip() for task in self.tasks)
+        ):
+            raise ValueError(
+                "tasks must contain at least one non-empty task name when a "
+                "task predictor set is enabled"
+            )
         if len(set(self.tasks)) != len(self.tasks):
             raise ValueError("tasks must not contain duplicate names")
+        if self.glove_dim not in {50, 100, 200, 300}:
+            raise ValueError("glove_dim must be one of [50, 100, 200, 300]")
         allowed_views = {"weighted", "span"}
         if not self.target_views or set(self.target_views) - allowed_views:
             raise ValueError(
