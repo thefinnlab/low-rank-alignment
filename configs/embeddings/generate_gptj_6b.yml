@@ -6,7 +6,9 @@ context_window: 1023
 stride: 512
 layers:
 - 0
+- 7
 - 14
+- 21
 - 28
 pooling: mean
 attention_mode: auto

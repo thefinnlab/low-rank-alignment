@@ -5,7 +5,12 @@ per_dataset_config:
   movie: cars-2
 context_window: 1023
 stride: 512
-layers: all
+layers:
+- 0
+- 12
+- 24
+- 36
+- 48
 pooling: mean
 attention_mode: auto
 dtype: float32

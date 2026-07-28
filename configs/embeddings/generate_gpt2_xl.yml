@@ -4,7 +4,12 @@ output_name: gpt2-xl-batch
 data_root: data/
 context_window: 1023
 stride: 512
-layers: all
+layers:
+- 0
+- 12
+- 24
+- 36
+- 48
 pooling: mean
 attention_mode: auto
 dtype: float32
