@@ -721,6 +721,11 @@ def run_config(config: FMRICrossDatasetRRRConfig) -> None:
             best_alphas=fitted.best_alphas,
         )
         computed_metrics[(method, rank)] = (corr_arr, r2_arr)
+        print(
+            f"{method.upper()} rank={rank}: "
+            f"r={_fisher_mean(corr_arr):.4f}, R2={float(np.mean(r2_arr)):.4f}",
+            flush=True,
+        )
 
     rows = []
     for method in method_names:
@@ -748,10 +753,12 @@ def run_config(config: FMRICrossDatasetRRRConfig) -> None:
                 }
             )
             rows.append(row)
-            print(
-                f"{method.upper()} rank={rank}: "
-                f"r={row['corr']:.4f}, R2={row['r2']:.4f}"
-            )
+            if (method, rank) not in computed_metrics:
+                print(
+                    f"{method.upper()} rank={rank} (cached): "
+                    f"r={row['corr']:.4f}, R2={row['r2']:.4f}",
+                    flush=True,
+                )
 
     frame = pd.DataFrame(rows).sort_values(["method", "rank"])
     frame.to_csv(output_dir / "grid_results.csv", index=False)
