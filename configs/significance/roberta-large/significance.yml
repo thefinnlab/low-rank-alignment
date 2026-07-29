@@ -28,3 +28,4 @@ device: null
 fdr_q: 0.01
 fdr_mode: electrode
 save_weights: true
+refresh: true

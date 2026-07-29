@@ -59,4 +59,4 @@ rank_grid:
 - 1024
 - 2048
 - 4096
-refresh: false
+refresh: true

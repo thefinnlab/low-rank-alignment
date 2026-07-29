@@ -33,6 +33,6 @@ rank_grid:
 - 512
 - 1024
 - 1600
-refresh: false
+refresh: true
 run_pca_baseline: true
 run_null_augmented: false

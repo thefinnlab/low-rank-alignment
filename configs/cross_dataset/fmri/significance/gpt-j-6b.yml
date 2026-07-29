@@ -43,4 +43,4 @@ null_seed: 42
 null_batch_size: 1024
 minimal_shift: 10
 fdr_q: 0.05
-refresh: false
+refresh: true

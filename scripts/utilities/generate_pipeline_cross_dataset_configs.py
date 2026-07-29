@@ -101,7 +101,7 @@ def _ieeg_cross_config(
         "cross_source_format": source_format,
         "subspace_aggregation": "extrinsic",
         "rank_grid": ranks,
-        "refresh": False,
+        "refresh": True,
         "run_pca_baseline": True,
         "run_null_augmented": False,
     }
@@ -121,7 +121,7 @@ def _fmri_significance(model_dir: str, layers: list[int]) -> dict:
         "null_batch_size": 1024,
         "minimal_shift": 10,
         "fdr_q": 0.05,
-        "refresh": False,
+        "refresh": True,
     }
 
 
@@ -156,7 +156,7 @@ def _fmri_rrr(
         "rrr_low_rank_svd_seed": 0,
         "rrr_save_b_matrix": False,
         "rank_grid": ranks,
-        "refresh": False,
+        "refresh": True,
     }
 
 
