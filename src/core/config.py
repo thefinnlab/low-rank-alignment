@@ -815,6 +815,8 @@ class FMRICrossDatasetRRRConfig:
     rrr_use_low_rank_svd: bool = False
     rrr_low_rank_svd_seed: int = 0
     rrr_save_b_matrix: bool = False
+    pca_svd_device: str = "auto"
+    prefetch_rank_designs: bool = False
     rank_grid: list[int] = field(
         default_factory=lambda: [1, 2, 4, 8, 16, 32, 64, 128]
     )
@@ -833,6 +835,8 @@ class FMRICrossDatasetRRRConfig:
             raise ValueError("rank_grid must contain positive integers")
         if len(set(map(int, self.rank_grid))) != len(self.rank_grid):
             raise ValueError("rank_grid must not contain duplicates")
+        if self.pca_svd_device not in {"auto", "cpu", "cuda"}:
+            raise ValueError("pca_svd_device must be one of ['auto', 'cpu', 'cuda']")
         if self.source_mode == "cross_dataset" and not self.source_rrr_unit_dir:
             raise ValueError("source_rrr_unit_dir is required")
 

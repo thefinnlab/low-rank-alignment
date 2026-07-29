@@ -133,6 +133,78 @@ def test_prepare_zero_pads_delays_at_each_story_boundary(monkeypatch):
     np.testing.assert_array_equal(prepared.stimulus[[0, 3]], 0)
 
 
+def test_cached_tr_alignment_projects_like_legacy_linear_resampling(monkeypatch):
+    frame = pd.DataFrame(
+        {
+            "word_idx": np.arange(12),
+            "word": ["x"] * 12,
+            "start": np.arange(12),
+            "end": np.arange(12) + 0.5,
+        }
+    )
+    sequence = type(
+        "Sequence", (), {"data_times": np.arange(12), "tr_times": np.arange(12)}
+    )()
+    monkeypatch.setattr(
+        fmri,
+        "_toolbox_modules",
+        lambda _: (lambda values, old, new, window: values, None, None),
+    )
+    monkeypatch.setattr(
+        fmri,
+        "load_story_word_data",
+        lambda root, stories: ({"story": frame}, {"story": sequence}),
+    )
+    embeddings = {"story": np.arange(36, dtype=np.float32).reshape(12, 3)}
+    basis = np.array([[1.0, 0.5], [0.25, -1.0], [0.75, 0.25]], dtype=np.float32)
+
+    aligned = fmri.align_fmri_stimuli("unused", ["story"], embeddings, trim=0)
+    cached = fmri.build_fmri_stimulus(aligned, ["story"], ndelays=2, basis=basis)
+    legacy = fmri.prepare_fmri_data(
+        "unused",
+        ["story"],
+        {"story": embeddings["story"] @ basis},
+        trim=0,
+        ndelays=2,
+    )
+
+    np.testing.assert_allclose(cached.pre_fir_stimulus, legacy.pre_fir_stimulus)
+    np.testing.assert_allclose(cached.stimulus, legacy.stimulus)
+
+
+def test_load_responses_reads_selected_voxels_in_subject_order(tmp_path):
+    root = tmp_path
+    stories = ["first", "second"]
+    slices = {"first": slice(0, 2), "second": slice(2, 5)}
+    masks = {
+        "UTS01": np.array([False, True, False, True]),
+        "UTS02": np.array([True, False, True, False]),
+    }
+    expected_parts = []
+    for story_index, story in enumerate(stories):
+        story_parts = []
+        rows = slices[story].stop - slices[story].start
+        for subject_index, subject in enumerate(masks):
+            path = fmri.response_path(str(root), subject, story)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            values = (
+                np.arange(rows * 4, dtype=np.float32).reshape(rows, 4)
+                + 100 * story_index
+                + 10 * subject_index
+            )
+            with h5py.File(path, "w") as handle:
+                handle.create_dataset("data", data=values)
+            story_parts.append(values[:, masks[subject]])
+        expected_parts.append(np.hstack(story_parts))
+
+    loaded = fmri.load_fmri_responses(
+        str(root), stories, slices, list(masks), masks, column_batch_size=1
+    )
+
+    np.testing.assert_array_equal(loaded, np.vstack(expected_parts))
+    assert loaded.dtype == np.float32
+
+
 def test_session_cv_splits_hold_out_whole_story_groups():
     slices = {"a": slice(0, 3), "b": slice(3, 5), "c": slice(5, 9)}
     folds = fmri.session_cv_splits(slices, {1: ["a", "b"], 2: ["c"]})
@@ -238,3 +310,108 @@ def test_within_fmri_bases_save_fir_blocks_rank_bases_and_pre_fir_pca(
     assert fit_kwargs["use_low_rank_svd"] is True
     assert fit_kwargs["low_rank_svd_seed"] == 17
     assert fit_kwargs["return_b"] is False
+
+
+def test_final_ridge_skips_unused_train_prediction_and_coefficients(
+    tmp_path, monkeypatch
+):
+    from scripts.fmri import run_cross_dataset_rrr as runner
+
+    predictions = []
+
+    class FakeModel:
+        named_steps = {"ridgecv": SimpleNamespace(coef_=None)}
+
+        def fit(self, X, Y):
+            return self
+
+        def predict(self, X):
+            predictions.append(X)
+            return np.zeros((len(X), 2), dtype=np.float32)
+
+    monkeypatch.setattr(runner, "resolve_ridge_alphas", lambda *args, **kwargs: [1.0])
+    monkeypatch.setattr(
+        runner, "get_ridge_model_constructor", lambda **kwargs: lambda _: FakeModel()
+    )
+    monkeypatch.setattr(runner, "extract_best_alphas", lambda model: np.ones(2))
+    config = SimpleNamespace(
+        ridge=SimpleNamespace(
+            alphas=[1.0],
+            alpha_grid={},
+            solver_params=None,
+            y_in_cpu=True,
+            force_cpu=False,
+            log_alphas=False,
+        )
+    )
+    X_train = np.ones((5, 3), dtype=np.float32)
+    X_test = np.ones((2, 3), dtype=np.float32)
+    result = runner._fit_final_ridge(
+        X_train,
+        np.ones((5, 2), dtype=np.float32),
+        X_test,
+        [],
+        config,
+        tmp_path,
+        {},
+    )
+
+    assert len(predictions) == 1
+    assert predictions[0] is X_test
+    assert result.train_prediction is None
+    assert result.coefficients is None
+
+
+def test_cross_dataset_completed_resume_skips_embeddings_and_responses(
+    tmp_path, monkeypatch
+):
+    from scripts.fmri import run_cross_dataset_rrr as runner
+    from src.core.config import FMRIDataConfig, FMRICrossDatasetRRRConfig
+
+    fmri_root = tmp_path / "fmri"
+    (fmri_root / "em_data").mkdir(parents=True)
+    (fmri_root / "em_data" / "sess_to_story.json").write_text(
+        '{"1": [["train"], "test"]}'
+    )
+    significance = tmp_path / "significance" / "subjects" / "UTS01"
+    significance.mkdir(parents=True)
+    pd.DataFrame({"voxel_index": [0], "sig": [True]}).to_csv(
+        significance / "significance.csv", index=False
+    )
+    source = tmp_path / "source" / "rrr"
+    (source / "fold_0").mkdir(parents=True)
+    np.save(source / "fold_0" / "A.npy", np.ones((2, 1), dtype=np.float32))
+    output = tmp_path / "output"
+    for metrics_dir in (output / "full", output / "rrr" / "k1"):
+        metrics_dir.mkdir(parents=True)
+        np.savez_compressed(
+            metrics_dir / "metrics.npz",
+            corr_per_target=np.array([0.25]),
+            r2_per_target=np.array([0.1]),
+            best_alphas=np.array([1.0]),
+        )
+    config = FMRICrossDatasetRRRConfig(
+        fmri=FMRIDataConfig(
+            fmri_repo_root=str(fmri_root), sessions=[1], subjects=["UTS01"]
+        ),
+        significance_dir=str(tmp_path / "significance"),
+        source_rrr_unit_dir=str(source),
+        output_dir=str(output),
+        source_mode="cross_dataset",
+        rank_grid=[1],
+    )
+    monkeypatch.setattr(
+        runner,
+        "load_story_embeddings",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("completed resume should not load embeddings")
+        ),
+    )
+    monkeypatch.setattr(runner, "_plot_results", lambda *args, **kwargs: None)
+
+    runner.run_config(config)
+
+    results = pd.read_csv(output / "grid_results.csv")
+    assert results[["method", "rank"]].to_dict("records") == [
+        {"method": "rrr", "rank": 1}
+    ]

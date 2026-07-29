@@ -34,6 +34,13 @@ class PreparedFMRI:
     story_slices: dict[str, slice]
 
 
+@dataclass
+class AlignedFMRIStimuli:
+    """Trimmed, TR-aligned story stimuli before z-scoring and FIR expansion."""
+
+    stories: dict[str, np.ndarray]
+
+
 def _toolbox_modules(fmri_repo_root: str):
     encoding_dir = str((Path(fmri_repo_root) / "encoding").resolve())
     if encoding_dir not in sys.path:
@@ -212,24 +219,17 @@ def finite_response_voxel_masks(
     return masks, excluded_by_story
 
 
-def prepare_fmri_data(
+def align_fmri_stimuli(
     fmri_repo_root: str,
     stories: list[str],
     word_embeddings: dict[str, np.ndarray],
     *,
     trim: int = 5,
-    ndelays: int = 4,
-    subjects: list[str] | None = None,
-    voxel_masks: dict[str, np.ndarray] | None = None,
-) -> PreparedFMRI:
-    """Lanczos-resample and apply the exact upstream trim/z-score/FIR contract."""
+) -> AlignedFMRIStimuli:
+    """Lanczos-resample stories once and retain their unscaled TR representation."""
     lanczosinterp2D, _, _ = _toolbox_modules(fmri_repo_root)
     frames, sequences = load_story_word_data(fmri_repo_root, stories)
-    stimulus_parts = []
-    pre_fir_parts = []
-    response_parts = []
-    story_slices = {}
-    cursor = 0
+    aligned = {}
     for story in stories:
         vectors = np.asarray(word_embeddings[story])
         if vectors.shape[0] != len(frames[story]):
@@ -242,35 +242,143 @@ def prepare_fmri_data(
             vectors, sequence.data_times, sequence.tr_times, window=3
         )
         stop = -int(trim) if trim else None
-        trimmed = downsampled[5 + int(trim) : stop]
-        pre_fir = _zscore_columns(trimmed).astype(np.float32)
+        aligned[story] = np.asarray(downsampled[5 + int(trim) : stop])
+    return AlignedFMRIStimuli(stories=aligned)
+
+
+def build_fmri_stimulus(
+    aligned: AlignedFMRIStimuli,
+    stories: list[str],
+    *,
+    ndelays: int = 4,
+    basis: np.ndarray | None = None,
+) -> PreparedFMRI:
+    """Build a story-z-scored FIR design, optionally in a projected space."""
+    stimulus_parts = []
+    pre_fir_parts = []
+    story_slices = {}
+    cursor = 0
+    for story in stories:
+        values = aligned.stories[story]
+        if basis is not None:
+            values = np.asarray(values @ basis, dtype=np.float32)
+        pre_fir = _zscore_columns(values).astype(np.float32)
         delayed = make_delayed(pre_fir, ndelays).astype(np.float32)
         pre_fir_parts.append(pre_fir)
         stimulus_parts.append(delayed)
         story_slices[story] = slice(cursor, cursor + len(delayed))
         cursor += len(delayed)
-
-        if subjects:
-            subject_parts = []
-            for subject in subjects:
-                with h5py.File(response_path(fmri_repo_root, subject, story), "r") as handle:
-                    response = handle["data"][...]
-                if voxel_masks is not None:
-                    response = response[:, np.asarray(voxel_masks[subject], dtype=bool)]
-                subject_parts.append(np.asarray(response, dtype=np.float32))
-            combined = np.hstack(subject_parts)
-            if combined.shape[0] != delayed.shape[0]:
-                raise ValueError(
-                    f"Story {story}: stimulus has {delayed.shape[0]} rows but "
-                    f"response has {combined.shape[0]} rows"
-                )
-            response_parts.append(combined)
     return PreparedFMRI(
         stimulus=np.vstack(stimulus_parts),
         pre_fir_stimulus=np.vstack(pre_fir_parts),
-        responses=np.vstack(response_parts) if response_parts else None,
+        responses=None,
         story_slices=story_slices,
     )
+
+
+def _read_response_columns(
+    dataset: h5py.Dataset,
+    indices: np.ndarray,
+    *,
+    column_batch_size: int = 1024,
+    row_batch_size: int = 64,
+) -> np.ndarray:
+    """Read sorted response columns without materializing every voxel."""
+    indices = np.asarray(indices, dtype=np.int64)
+    if indices.ndim != 1 or np.any(np.diff(indices) <= 0):
+        raise ValueError("Response column indices must be strictly increasing")
+    result = np.empty((dataset.shape[0], len(indices)), dtype=np.float32)
+    # Dense masks are much faster as a small number of bounded row reads than as
+    # thousands of HDF5 fancy-index selections. Sparse significance masks retain
+    # the selected-column path and avoid reading most voxel values.
+    if len(indices) >= dataset.shape[1] / 2:
+        for start in range(0, dataset.shape[0], int(row_batch_size)):
+            stop = min(start + int(row_batch_size), dataset.shape[0])
+            result[start:stop] = dataset[start:stop, :][:, indices]
+        return result
+    for start in range(0, len(indices), int(column_batch_size)):
+        stop = min(start + int(column_batch_size), len(indices))
+        result[:, start:stop] = dataset[:, indices[start:stop]]
+    return result
+
+
+def load_fmri_responses(
+    fmri_repo_root: str,
+    stories: list[str],
+    story_slices: dict[str, slice],
+    subjects: list[str],
+    voxel_masks: dict[str, np.ndarray] | None = None,
+    *,
+    column_batch_size: int = 1024,
+) -> np.ndarray:
+    """Load selected responses once into a story-by-subject ordered matrix."""
+    subject_indices = {}
+    subject_slices = {}
+    target_cursor = 0
+    for subject in subjects:
+        if voxel_masks is None:
+            first_path = response_path(fmri_repo_root, subject, stories[0])
+            with h5py.File(first_path, "r") as handle:
+                indices = np.arange(handle["data"].shape[1], dtype=np.int64)
+        else:
+            indices = np.flatnonzero(
+                np.asarray(voxel_masks[subject], dtype=bool)
+            ).astype(np.int64, copy=False)
+        subject_indices[subject] = indices
+        subject_slices[subject] = slice(target_cursor, target_cursor + len(indices))
+        target_cursor += len(indices)
+
+    n_rows = max(part.stop for part in story_slices.values())
+    responses = np.empty((n_rows, target_cursor), dtype=np.float32)
+    for story in stories:
+        row_slice = story_slices[story]
+        for subject in subjects:
+            path = response_path(fmri_repo_root, subject, story)
+            with h5py.File(path, "r") as handle:
+                dataset = handle["data"]
+                if dataset.shape[0] != row_slice.stop - row_slice.start:
+                    raise ValueError(
+                        f"Story {story}: stimulus has "
+                        f"{row_slice.stop - row_slice.start} rows but response "
+                        f"has {dataset.shape[0]} rows"
+                    )
+                indices = subject_indices[subject]
+                if len(indices) and indices[-1] >= dataset.shape[1]:
+                    raise ValueError(
+                        f"Subject {subject} response for {story} has "
+                        f"{dataset.shape[1]} voxels, but the mask selects "
+                        f"index {indices[-1]}"
+                    )
+                responses[row_slice, subject_slices[subject]] = _read_response_columns(
+                    dataset, indices, column_batch_size=column_batch_size
+                )
+    return responses
+
+
+def prepare_fmri_data(
+    fmri_repo_root: str,
+    stories: list[str],
+    word_embeddings: dict[str, np.ndarray],
+    *,
+    trim: int = 5,
+    ndelays: int = 4,
+    subjects: list[str] | None = None,
+    voxel_masks: dict[str, np.ndarray] | None = None,
+) -> PreparedFMRI:
+    """Compatibility wrapper for the complete fMRI preparation contract."""
+    aligned = align_fmri_stimuli(
+        fmri_repo_root, stories, word_embeddings, trim=trim
+    )
+    prepared = build_fmri_stimulus(aligned, stories, ndelays=ndelays)
+    if subjects:
+        prepared.responses = load_fmri_responses(
+            fmri_repo_root,
+            stories,
+            prepared.story_slices,
+            subjects,
+            voxel_masks,
+        )
+    return prepared
 
 
 def session_cv_splits(

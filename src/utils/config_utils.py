@@ -14,6 +14,11 @@ from src.core.config import EncodingConfig, SignificanceConfig
 
 
 _REDACTED_CONFIG_KEYS = {"hf_token", "token", "api_key", "access_token"}
+_OPERATIONAL_CONFIG_KEYS = {
+    "refresh",
+    "prefetch_rank_designs",
+    "pca_svd_device",
+}
 
 
 def _config_value(value, *, redact: bool = True):
@@ -52,7 +57,7 @@ def _artifact_config(value):
         return {
             key: _artifact_config(item)
             for key, item in value.items()
-            if key != "refresh"
+            if key not in _OPERATIONAL_CONFIG_KEYS
         }
     if isinstance(value, list):
         return [_artifact_config(item) for item in value]

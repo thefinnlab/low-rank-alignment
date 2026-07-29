@@ -424,7 +424,7 @@ def fit_dense_rrr(
     # only the decomposition input to float64; the returned factors retain the
     # existing coefficient dtype/device contract.
     svd_input = (
-        Y_hat_ols.to(device="cpu")
+        Y_hat_ols.to(device="cpu", dtype=torch.float64)
         if svd_on_cpu
         else Y_hat_ols
     )

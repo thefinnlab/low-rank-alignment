@@ -337,8 +337,12 @@ class TestApplyOverrides:
         assert FMRICrossDatasetRRRConfig().rrr_use_low_rank_svd is False
         assert FMRICrossDatasetRRRConfig().rrr_low_rank_svd_seed == 0
         assert FMRICrossDatasetRRRConfig().rrr_save_b_matrix is False
+        assert FMRICrossDatasetRRRConfig().pca_svd_device == "auto"
+        assert FMRICrossDatasetRRRConfig().prefetch_rank_designs is False
         with pytest.raises(ValueError, match="subspace_aggregation"):
             RRRConfig(subspace_aggregation="weighted")
+        with pytest.raises(ValueError, match="pca_svd_device"):
+            FMRICrossDatasetRRRConfig(pca_svd_device="mps")
 
     def test_within_fmri_does_not_require_cross_dataset_source(self):
         config = FMRICrossDatasetRRRConfig(
