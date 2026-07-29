@@ -4,7 +4,7 @@ encoding:
   offset: 0
   subjects: null  # null → all subjects (1–9)
   run_name: null
-  batch: false
+  batch: true
   num_folds: 5
   per_model_config:
     dim: 300
@@ -23,3 +23,4 @@ device: null
 fdr_q: 0.01
 fdr_mode: electrode
 save_weights: true
+refresh: true

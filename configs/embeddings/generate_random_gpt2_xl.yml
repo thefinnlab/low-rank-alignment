@@ -20,3 +20,4 @@ local_files_only: true
 add_prefix_space: true
 random_init_model: true
 random_init_seed: 42
+refresh: true

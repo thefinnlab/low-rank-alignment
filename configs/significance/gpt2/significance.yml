@@ -4,7 +4,7 @@ encoding:
   offset: 0
   subjects: null
   run_name: null
-  batch: false
+  batch: true
   num_folds: 5
   per_model_config:
     model_dir: gpt2

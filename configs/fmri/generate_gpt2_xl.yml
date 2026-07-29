@@ -19,3 +19,4 @@ fmri:
   subjects: [UTS01, UTS02, UTS03, UTS04, UTS05, UTS06, UTS07, UTS08, UTS09]
   trim: 5
   ndelays: 4
+refresh: true

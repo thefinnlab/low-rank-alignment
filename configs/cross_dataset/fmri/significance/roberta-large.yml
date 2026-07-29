@@ -37,7 +37,7 @@ layer:
 - 24
 pooling: mean
 output_dir: results/fmri/roberta-large_layer{layer}/significance
-batch_subjects: false
+batch_subjects: true
 num_null_shifts: 10000
 null_seed: 42
 null_batch_size: 1024
