@@ -37,6 +37,7 @@ RUN_DIR         ?=   # required for plots: RUN_DIR=results/my_run
 DATA_ROOT       ?= data
 ATLAS_PATH      ?= atlases/destrieux_2009/destrieux2009_rois_lateralized.nii.gz
 OVERRIDES       ?=   # e.g. OVERRIDES="--encoding.layer=48 --n_permutations=100"
+PIPELINE_ARGS   ?=   # arguments for submit-rrr-matrix
 
 # For downloading model weights.
 # MODELS ?= openai-community/gpt2-xl meta-llama/Meta-Llama-3-8B openai-community/gpt2 EleutherAI/gpt-j-6b FacebookAI/roberta-large
@@ -304,6 +305,13 @@ sig-rrr-batch:
 		echo "Submitted cross-subject RRR for $$model: $$rrr_job_id (afterok:$$sig_job_id)"; \
 	done
 
+## Submit the dependency-aware within/cross-dataset RRR matrix.
+## Usage:
+##   make submit-rrr-matrix PIPELINE_ARGS="--dry-run"
+##   make submit-rrr-matrix PIPELINE_ARGS="--datasets podcast fmri --models gpt2 gpt2-xl"
+submit-rrr-matrix:
+	python scripts/submit_rrr_matrix.py $(PIPELINE_ARGS)
+
 ## Print out regions where electrode in data are located according to an atlas
 ## Usage:
 ## make print-regions DATA_ROOT=data RUN_DIR=results/my_run
@@ -318,4 +326,4 @@ sig-test:
 test:
 	python -m pytest tests/ -v
 
-.PHONY: sig sig-batch train plots rrr rrr-batch sig-rrr-batch sig-test test generate-embeddings generate-embeddings-batch generate-random-embeddings download-models precompute-epochs print-atlas-regions
+.PHONY: sig sig-batch train plots rrr rrr-batch sig-rrr-batch submit-rrr-matrix sig-test test generate-embeddings generate-embeddings-batch generate-random-embeddings download-models precompute-epochs print-atlas-regions
