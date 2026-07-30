@@ -18,6 +18,7 @@ ENCODING_CONFIG ?= configs/encoding/encoding_mid.yml
 SIG_CONFIG      ?= configs/significance/significance_default.yml
 RRR_CONFIG      ?= configs/rrr/rrr_default.yml
 LANGUAGE_DECODING_CONFIG ?= configs/rrr/language_decoding.yml
+LANGUAGE_DECODING_SHARDS ?= $(sort $(wildcard configs/rrr/language_decoding_shards/*.yml))
 LANGUAGE_RECONSTRUCTION_CONFIG ?= configs/rrr/language_reconstruction.yml
 LANGUAGE_AXIS_ENCODING_CONFIG ?= configs/rrr/language_axis_encoding.yml
 LANGUAGE_FEATURE_CONFIG ?= configs/language_features/podcast.yml
@@ -208,9 +209,17 @@ rrr:
 ## Usage:
 ##   make language-decoding CMD=python
 ##   make language-decoding LANGUAGE_DECODING_CONFIG=configs/rrr/language_decoding.yml
+##   make language-decoding LANGUAGE_DECODING_CONFIG=configs/rrr/language_decoding_batch.yml
 language-decoding:
 	mkdir -p logs
 	$(CMD) scripts/rrr/run_language_decoding.py --config $(LANGUAGE_DECODING_CONFIG) $(OVERRIDES)
+
+## Submit/run one independent language-decoding job per dataset/model shard.
+language-decoding-shards:
+	mkdir -p logs
+	for config in $(LANGUAGE_DECODING_SHARDS); do
+		$(CMD) scripts/rrr/run_language_decoding.py --config $$config $(OVERRIDES)
+	done
 
 ## Predict matched-rank RRR/PCA spaces from configured language-task variables.
 ## Use CMD="uv run python" for a local run.

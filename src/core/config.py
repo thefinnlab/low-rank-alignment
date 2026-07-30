@@ -295,12 +295,53 @@ class RRRConfig:
 
 
 @dataclass
+class LanguageDecodingGloveConfig:
+    """Static lexical targets used by the contextual language probe."""
+
+    enabled: bool = False
+    dim: int = 50
+    offsets: list[int] = field(default_factory=lambda: list(range(-8, 1)))
+    retrieval_metrics: list[str] = field(
+        default_factory=lambda: ["mrr", "median_rank", "top_1", "top_5"]
+    )
+
+    def validate(self):
+        if self.dim < 1:
+            raise ValueError("glove.dim must be positive")
+        if not self.offsets or len(set(map(int, self.offsets))) != len(self.offsets):
+            raise ValueError("glove.offsets must be a nonempty list without duplicates")
+        supported = {"mrr", "median_rank", "top_1", "top_5"}
+        unknown = set(self.retrieval_metrics) - supported
+        if unknown:
+            raise ValueError(f"Unsupported GloVe retrieval metrics: {sorted(unknown)}")
+
+
+@dataclass
+class LanguageDecodingBootstrapConfig:
+    """Hierarchical uncertainty estimates for a batch decoding comparison."""
+
+    enabled: bool = True
+    draws: int = 10000
+    seed: int = 42
+    confidence_level: float = 0.95
+
+    def validate(self):
+        if self.draws < 1:
+            raise ValueError("bootstrap.draws must be positive")
+        if not 0 < self.confidence_level < 1:
+            raise ValueError("bootstrap.confidence_level must lie in (0, 1)")
+
+
+@dataclass
 class LanguageDecodingConfig:
     """Decode word-aligned linguistic targets from saved RRR/PCA subspaces."""
 
     encoding: EncodingConfig = field(default_factory=EncodingConfig)
     rrr_run_path: str | None = None
     pca_run_path: str | None = None
+    result_paths: list[str] = field(default_factory=list)
+    batch_output_dir: str | None = None
+    skip_missing_sources: bool = True
     mode: LanguageDecodingMode = LanguageDecodingMode.WITHIN_DATASET
     source_name: str | None = None
     fold_results_dir: str | None = None
@@ -334,6 +375,12 @@ class LanguageDecodingConfig:
     logistic_cs: list[float] = field(
         default_factory=lambda: [1e-4, 1e-3, 1e-2, 1e-1, 1.0, 10.0, 100.0]
     )
+    glove: LanguageDecodingGloveConfig = field(
+        default_factory=LanguageDecodingGloveConfig
+    )
+    bootstrap: LanguageDecodingBootstrapConfig = field(
+        default_factory=LanguageDecodingBootstrapConfig
+    )
     refresh: bool = False
 
     def __post_init__(self):
@@ -343,8 +390,14 @@ class LanguageDecodingConfig:
         _validate_subspace_aggregation(self.subspace_aggregation)
         if self.device not in {"auto", "cuda", "cpu"}:
             raise ValueError("device must be one of ['auto', 'cpu', 'cuda']")
-        if not self.rrr_run_path:
-            raise ValueError("LanguageDecodingConfig.rrr_run_path is required")
+        has_single = bool(self.rrr_run_path)
+        has_batch = bool(self.result_paths)
+        if has_single == has_batch:
+            raise ValueError(
+                "Configure exactly one of rrr_run_path or nonempty result_paths"
+            )
+        if has_batch and not self.batch_output_dir:
+            raise ValueError("batch_output_dir is required with result_paths")
         if not self.rank_grid or any(int(rank) < 1 for rank in self.rank_grid):
             raise ValueError("rank_grid must contain positive integers")
         if len(set(int(rank) for rank in self.rank_grid)) != len(self.rank_grid):
@@ -355,6 +408,8 @@ class LanguageDecodingConfig:
             raise ValueError("tasks must not contain duplicate names")
         if not self.logistic_cs or any(float(value) <= 0 for value in self.logistic_cs):
             raise ValueError("logistic_cs must contain positive values")
+        self.glove.validate()
+        self.bootstrap.validate()
 
 
 @dataclass

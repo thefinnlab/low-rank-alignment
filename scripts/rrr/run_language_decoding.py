@@ -7,11 +7,16 @@ from src.utils.config_utils import (
     parse_args,
 )
 from src.utils.language_decoding import run_language_decoding
+from src.utils.language_decoding_batch import run_language_decoding_batch
 
 
 def main():
     args, overrides = parse_args("Decode linguistic features from RRR/PCA subspaces")
     config = load_config(args.config, overrides, LanguageDecodingConfig)
+    if config.result_paths:
+        output_dir = run_language_decoding_batch(config)
+        print(f"Done: {output_dir}")
+        return
     configs = expand_per_model_layer_configs(config)
     for layer_config in configs:
         layer = layer_config.encoding.per_model_config.get("layer")

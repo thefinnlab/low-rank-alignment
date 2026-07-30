@@ -36,7 +36,7 @@ from src.utils.data_loaders import (
     load_precomputed_epochs,
     selection_after_offset,
 )
-from src.utils.embeddings import load_embeddings
+from src.utils.embeddings import get_glove_embeddings, load_embeddings
 from src.utils.config_utils import load_config, save_effective_config
 from src.utils.language_tasks import PodcastTaskContext, get_language_task
 from src.utils.multiview_rrr import (
@@ -58,11 +58,15 @@ def resolve_subspace_unit_dir(run_path: str, kind: str = "subspace") -> Path:
     """Resolve a configured run root or direct saved-subspace unit directory."""
     root = Path(run_path).expanduser().resolve()
     candidates = [root, root / kind]
-    valid = [path for path in candidates if list(path.glob("fold_*/A.npy"))]
+    valid = [
+        path
+        for path in candidates
+        if list(path.glob("fold_*/A.npy")) or list(path.glob("k*/A.npy"))
+    ]
     if len(valid) != 1:
         raise FileNotFoundError(
             f"Expected exactly one {kind.upper()} unit at {root} or {root / kind} with "
-            f"fold_*/A.npy; found {valid}"
+            f"fold_*/A.npy or k*/A.npy; found {valid}"
         )
     return valid[0]
 
@@ -261,6 +265,169 @@ def _decoder_metrics(kind: str, y_true, y_pred) -> dict[str, float]:
         "macro_f1": float(f1_score(y_true, y_pred, average="macro")),
         "accuracy": float(accuracy_score(y_true, y_pred)),
     }
+
+
+def _story_ids(story_position: np.ndarray) -> np.ndarray:
+    """Identify contiguous stories from resets in the registered position target."""
+    position = np.asarray(story_position, dtype=float)
+    ids = np.zeros(len(position), dtype=int)
+    for index in range(1, len(position)):
+        if (
+            np.isfinite(position[index])
+            and np.isfinite(position[index - 1])
+            and position[index] < position[index - 1]
+        ):
+            ids[index:] += 1
+    return ids
+
+
+def _shift_vector_target(
+    values: np.ndarray, story: np.ndarray, offset: int
+) -> tuple[np.ndarray, np.ndarray]:
+    """Align ``values[i + offset]`` to row i without crossing story boundaries."""
+    values = np.asarray(values)
+    shifted = np.full((len(values), *values.shape[1:]), np.nan, dtype=float)
+    source = np.arange(len(values)) + int(offset)
+    valid = (source >= 0) & (source < len(values))
+    rows = np.flatnonzero(valid)
+    rows = rows[story[rows] == story[source[rows]]]
+    shifted[rows] = values[source[rows]]
+    mask = np.zeros(len(values), dtype=bool)
+    mask[rows] = True
+    return shifted, mask
+
+
+def _glove_metrics(
+    target: np.ndarray,
+    prediction: np.ndarray,
+    truth_words: np.ndarray,
+    vocabulary: np.ndarray,
+    vocabulary_vectors: np.ndarray,
+) -> dict[str, float]:
+    denom = np.linalg.norm(target, axis=1) * np.linalg.norm(prediction, axis=1)
+    cosine = np.divide(
+        (target * prediction).sum(axis=1),
+        denom,
+        out=np.full(len(target), np.nan),
+        where=denom > 0,
+    )
+    normalized = prediction / np.maximum(
+        np.linalg.norm(prediction, axis=1, keepdims=True), 1e-12
+    )
+    order = np.argsort(-(normalized @ vocabulary_vectors.T), axis=1)
+    lookup = {word: index for index, word in enumerate(vocabulary)}
+    truth = np.asarray([lookup[word] for word in truth_words], dtype=int)
+    ranks = np.argmax(order == truth[:, None], axis=1) + 1
+    return {
+        "primary_score": float(np.nanmean(cosine)),
+        "cosine": float(np.nanmean(cosine)),
+        "r2": float(r2_score(target, prediction, multioutput="variance_weighted")),
+        "mrr": float(np.mean(1.0 / ranks)),
+        "median_rank": float(np.median(ranks)),
+        "top_1": float(np.mean(ranks <= 1)),
+        "top_5": float(np.mean(ranks <= 5)),
+        "retrieval_vocabulary_size": int(len(vocabulary)),
+    }
+
+
+def _run_glove_probes(
+    *,
+    output_dir: Path,
+    word_df: pd.DataFrame,
+    selection: np.ndarray,
+    folds: list[tuple[np.ndarray, np.ndarray]],
+    full_designs: list[np.ndarray],
+    rrr_prepared: dict[tuple[int, int], tuple[np.ndarray, np.ndarray]],
+    pca_prepared: dict[tuple[int, int], tuple[np.ndarray, np.ndarray]] | None,
+    context: PodcastTaskContext,
+    config: LanguageDecodingConfig,
+) -> list[dict]:
+    """Decode story-safe offset GloVe vectors and cache held-out predictions."""
+    if not config.glove.enabled:
+        return []
+    glove, glove_words = get_glove_embeddings(
+        config.encoding.data_root, word_df.reset_index(), int(config.glove.dim)
+    )
+    glove = np.asarray(glove, dtype=float)
+    covered = glove_words["in_glove"].to_numpy(dtype=bool)
+    normalized_words = np.asarray(
+        [re.sub(r"\b[^\w\s]+|[^\w\s]+\b", "", str(word).lower()) for word in word_df["word"]],
+        dtype=object,
+    )
+    vocabulary = np.asarray(sorted(set(normalized_words[covered])))
+    first = {word: np.flatnonzero((normalized_words == word) & covered)[0] for word in vocabulary}
+    vocabulary_vectors = np.stack([glove[first[word]] for word in vocabulary])
+    vocabulary_vectors /= np.maximum(
+        np.linalg.norm(vocabulary_vectors, axis=1, keepdims=True), 1e-12
+    )
+    story = _story_ids(np.asarray(get_language_task("story_position").getter(context)))
+    rows = []
+    for offset in map(int, config.glove.offsets):
+        target_all, boundary = _shift_vector_target(glove, story, offset)
+        covered_shift, _ = _shift_vector_target(covered.astype(float), story, offset)
+        source = np.arange(len(word_df)) + offset
+        truth_all = np.full(len(word_df), "", dtype=object)
+        valid_source = boundary & (source >= 0) & (source < len(word_df))
+        truth_all[valid_source] = normalized_words[source[valid_source]]
+        valid_all = boundary & (covered_shift == 1) & np.isfinite(target_all).all(axis=1)
+        target = target_all[selection]
+        truth = truth_all[selection]
+        valid = valid_all[selection]
+        for fold, (train, test) in enumerate(folds):
+            task_train = np.asarray(train)[valid[np.asarray(train)]]
+            task_test = np.asarray(test)[valid[np.asarray(test)]]
+            if not len(task_train) or not len(task_test):
+                raise ValueError(f"Empty GloVe train/test rows for offset={offset}, fold={fold}")
+            designs = {"full": full_designs[fold]}
+            for rank in map(int, config.rank_grid):
+                designs[f"rrr:k{rank}"] = rrr_prepared[(fold, rank)][0]
+                if pca_prepared is not None:
+                    designs[f"pca:k{rank}"] = pca_prepared[(fold, rank)][0]
+            for identity, design in designs.items():
+                subspace, _, rank_text = identity.partition(":k")
+                rank = None if not rank_text else int(rank_text)
+                artifact = (
+                    output_dir
+                    / "tasks"
+                    / f"glove_offset_{offset:+d}"
+                    / subspace
+                    / ("full" if rank is None else f"k{rank}")
+                    / f"fold_{fold}"
+                )
+                metrics_path = artifact / "metrics.json"
+                prediction_path = artifact / "predictions.npz"
+                if not config.refresh and metrics_path.exists() and prediction_path.exists():
+                    rows.append(json.loads(metrics_path.read_text()))
+                    continue
+                pipeline = _fit_decoder(
+                    design[task_train], target[task_train], "continuous", config
+                )
+                prediction = np.asarray(to_numpy(pipeline.predict(design[task_test])))
+                metrics = {
+                    "task": "glove",
+                    "offset": offset,
+                    "kind": "glove",
+                    "fold": fold,
+                    "space": "full" if rank is None else "rank",
+                    "subspace": subspace,
+                    "k": rank,
+                    "n_train": int(len(task_train)),
+                    "n_test": int(len(task_test)),
+                    **_glove_metrics(
+                        target[task_test], prediction, truth[task_test],
+                        vocabulary, vocabulary_vectors,
+                    ),
+                }
+                artifact.mkdir(parents=True, exist_ok=True)
+                np.savez_compressed(
+                    prediction_path,
+                    test_index=task_test,
+                    target=target[task_test].astype(np.float32),
+                    prediction=prediction.astype(np.float32),
+                )
+                metrics_path.write_text(json.dumps(metrics, indent=2, allow_nan=True))
+                rows.append(metrics)
+    return rows
 
 
 def _weight_payload(
@@ -951,6 +1118,31 @@ def _prepare_single_view_subspaces(
     config: LanguageDecodingConfig,
 ) -> dict[tuple[int, int], tuple[np.ndarray, np.ndarray]]:
     """Prepare projected embeddings and ambient factors for one embedding space."""
+    rank_paths = {
+        int(path.parent.name.removeprefix("k")): path
+        for path in factor_paths
+        if re.fullmatch(r"k\d+", path.parent.name)
+    }
+    if rank_paths:
+        if len(rank_paths) != len(factor_paths):
+            raise ValueError(f"Mixed fold and rank-specific {subspace} factors")
+        if config.mode == LanguageDecodingMode.WITHIN_DATASET:
+            raise ValueError("Rank-specific factors require mode='cross_dataset'")
+        prepared = {}
+        for rank in map(int, config.rank_grid):
+            if rank not in rank_paths:
+                raise ValueError(f"Missing rank-specific {subspace.upper()} basis k{rank}")
+            factor = np.asarray(np.load(rank_paths[rank]))
+            if factor.ndim != 2 or factor.shape[1] != rank:
+                raise ValueError(
+                    f"{subspace.upper()} k{rank} factor has shape {factor.shape}; "
+                    f"expected (*, {rank})"
+                )
+            design = np.asarray(X @ factor)
+            for fold in range(len(folds)):
+                prepared[(fold, rank)] = (design, factor)
+        return prepared
+
     matrices_by_fold = {
         int(path.parent.name.removeprefix("fold_")): np.load(path)
         for path in factor_paths
@@ -1097,9 +1289,14 @@ def run_language_decoding(config: LanguageDecodingConfig) -> Path:
         if config.pca_run_path
         else None
     )
-    rrr_factor_paths = sorted(rrr_unit_dir.glob("fold_*/A.npy"))
+    rrr_factor_paths = sorted(rrr_unit_dir.glob("fold_*/A.npy")) or sorted(
+        rrr_unit_dir.glob("k*/A.npy")
+    )
     pca_factor_paths = (
-        sorted(pca_unit_dir.glob("fold_*/A.npy"))
+        (
+            sorted(pca_unit_dir.glob("fold_*/A.npy"))
+            or sorted(pca_unit_dir.glob("k*/A.npy"))
+        )
         if pca_unit_dir is not None
         else []
     )
@@ -1377,4 +1574,49 @@ def run_language_decoding(config: LanguageDecodingConfig) -> Path:
         output_dir / "rank_analysis.png",
         agreement=agreement_summary,
     )
+    glove_rows = _run_glove_probes(
+        output_dir=output_dir,
+        word_df=word_df,
+        selection=selection,
+        folds=folds,
+        full_designs=(
+            full_designs if multiview_config is not None else [X] * len(folds)
+        ),
+        rrr_prepared=rrr_prepared,
+        pca_prepared=pca_prepared,
+        context=context,
+        config=config,
+    )
+    if glove_rows:
+        glove_results = pd.DataFrame(glove_rows)
+        glove_results.to_csv(output_dir / "glove_grid_results.csv", index=False)
+        summary_rows = []
+        for (offset, space, subspace, rank), group in glove_results.groupby(
+            ["offset", "space", "subspace", "k"], dropna=False, sort=False
+        ):
+            summary_rows.append(
+                {
+                    "task": "glove",
+                    "kind": "glove",
+                    "offset": int(offset),
+                    "space": space,
+                    "subspace": subspace,
+                    "k": rank,
+                    "primary_score": float(group.primary_score.mean()),
+                    "sem": float(group.primary_score.sem()),
+                    "n_folds": int(len(group)),
+                    **{
+                        metric: float(group[metric].mean())
+                        for metric in (
+                            "cosine", "r2", "mrr", "median_rank", "top_1", "top_5"
+                        )
+                    },
+                }
+            )
+        pd.DataFrame(summary_rows).to_csv(
+            output_dir / "glove_summary.csv", index=False
+        )
+        pd.concat([results.assign(offset=0), glove_results], ignore_index=True).to_csv(
+            output_dir / "all_grid_results.csv", index=False
+        )
     return output_dir

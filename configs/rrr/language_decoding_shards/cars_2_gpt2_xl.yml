@@ -1,0 +1,39 @@
+encoding:
+  data_root: data/
+  dataset: podcast
+  model: transformer
+  offset: 0
+  subjects: null
+  num_folds: 5
+  ridge_cv_folds: 5
+  per_model_config: {model_dir: gpt2, layer: 0}
+result_paths:
+  - results/gpt2-xl-batch_layer0_offset0/movie-cars-2
+  - results/gpt2-xl-batch_layer12_offset0/movie-cars-2
+  - results/gpt2-xl-batch_layer24_offset0/movie-cars-2
+  - results/gpt2-xl-batch_layer36_offset0/movie-cars-2
+  - results/gpt2-xl-batch_layer48_offset0/movie-cars-2
+batch_output_dir: results/language_decoding_batch/cars_2/gpt2_xl
+rrr_run_path: null
+pca_run_path: null
+skip_missing_sources: true
+mode: within_dataset
+subspace_aggregation: extrinsic
+device: auto
+rank_grid: [1, 2, 4, 8, 16, 32, 64]
+tasks: [speaker_identity, iu_position, surprisal]
+glove:
+  enabled: true
+  dim: 50
+  offsets: [-8, -7, -6, -5, -4, -3, -2, -1, 0]
+  retrieval_metrics: [mrr, median_rank, top_1, top_5]
+bootstrap:
+  enabled: true
+  draws: 10000
+  seed: 42
+  confidence_level: 0.95
+task_data:
+  language_features: processed_data/language_features/podcast/podcast/tokens.tsv
+  word_annotations: processed_data/df_word_onset_with_pos_class.csv
+refresh: false
+
