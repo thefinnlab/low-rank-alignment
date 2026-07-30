@@ -18,6 +18,7 @@ ENCODING_CONFIG ?= configs/encoding/encoding_mid.yml
 SIG_CONFIG      ?= configs/significance/significance_default.yml
 RRR_CONFIG      ?= configs/rrr/rrr_default.yml
 RANK_SATURATION_ARGS ?=
+LANGUAGE_DECODING_SATURATION_ARGS ?=
 LANGUAGE_DECODING_CONFIG ?= configs/rrr/language_decoding.yml
 LANGUAGE_DECODING_SHARDS ?= $(sort $(wildcard configs/rrr/language_decoding_shards/*.yml))
 LANGUAGE_DECODING_CPUS ?= 8
@@ -227,6 +228,10 @@ rank-saturation-summary:
 language-decoding:
 	mkdir -p logs
 	$(CMD) scripts/rrr/run_language_decoding.py --config $(LANGUAGE_DECODING_CONFIG) $(OVERRIDES)
+
+## Plot linguistic RRR-minus-PCA decoding at each source's RRR saturation rank.
+language-decoding-saturation:
+	uv run python scripts/rrr/plot_language_decoding_saturation.py $(LANGUAGE_DECODING_SATURATION_ARGS)
 
 ## Submit/run one independent language-decoding job per dataset/model shard.
 language-decoding-shards:
