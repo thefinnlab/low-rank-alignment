@@ -213,7 +213,11 @@ rrr:
 ## Discover completed RRR and PCA runs and generate target-level rank saturation figures.
 ## Restrict to RRR with RANK_SATURATION_ARGS="--methods rrr".
 rank-saturation:
-	uv run python scripts/rrr/plot_rank_saturation.py $(RANK_SATURATION_ARGS)
+	uv run python -m scripts.rrr.plot_rank_saturation $(RANK_SATURATION_ARGS)
+
+## Summarize saturation dimensionality by inferred model layer and dataset-transfer mode.
+rank-saturation-summary:
+	uv run python scripts/rrr/plot_saturation_summary.py $(RANK_SATURATION_SUMMARY_ARGS)
 
 ## Decode linguistic targets from saved RRR input subspaces
 ## Usage:

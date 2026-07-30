@@ -4,6 +4,7 @@ import pandas as pd
 from src.utils.rank_saturation import (
     electrode_units,
     fmri_spatial_blocks,
+    normalized_log_auc,
     summarize_rank_curve,
 )
 
@@ -20,7 +21,7 @@ def test_electrode_units_average_lags_in_fisher_space():
     assert labels.tolist() == ["1:A", "1:B"]
 
 
-def test_one_se_rule_selects_earliest_eligible_rank():
+def test_median_loss_and_performance_rules_are_reported_separately():
     ranks = np.array([1, 2, 4, 8])
     target_z = np.array([
         [0.10, 0.11, 0.09, 0.10],
@@ -32,7 +33,10 @@ def test_one_se_rule_selects_earliest_eligible_rank():
         ranks, target_z, np.arange(4), bootstrap_repeats=1000, seed=2
     )
     assert result.curve["peak_rank"].iloc[0] == 4
-    assert result.curve["saturation_rank"].iloc[0] == 2
+    assert result.curve["performance_saturation_rank"].iloc[0] == 2
+    assert result.curve["saturation_rank"].iloc[0] == 4
+    assert result.curve["performance_99pct_rank"].iloc[0] == 4
+    assert result.curve["probability_worse_than_mean_best"].between(0, 1).all()
     assert result.retention["fraction_within_peak_sem"].between(0, 1).all()
 
 
@@ -44,6 +48,15 @@ def test_cluster_bootstrap_retains_target_weighted_mean():
         ranks, target_z, clusters, bootstrap_repeats=200, seed=4
     )
     np.testing.assert_allclose(result.curve["mean_z"], [0.25, 0.4])
+
+
+def test_normalized_log_auc_uses_monotonic_pearson_curve():
+    ranks = np.array([1, 2, 4, 8])
+    performance = np.array([0.2, 0.6, 0.5, 1.0])
+    monotonic, normalized, auc = normalized_log_auc(ranks, performance)
+    np.testing.assert_allclose(monotonic, [0.2, 0.6, 0.6, 1.0])
+    np.testing.assert_allclose(normalized, [0.2, 0.6, 0.6, 1.0])
+    assert np.isclose(auc, (0.4 + 0.6 + 0.8) / 3)
 
 
 def test_fmri_blocks_recover_response_columns_from_thick_mask(tmp_path):

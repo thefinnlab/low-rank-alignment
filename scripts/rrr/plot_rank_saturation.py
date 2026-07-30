@@ -16,6 +16,7 @@ from src.utils.rank_saturation import (
     mean_folds,
     summarize_rank_curve,
 )
+from src.utils.saturation_bar_summary import build_auc_comparison_table
 
 
 def _rank(path: Path) -> int:
@@ -30,7 +31,12 @@ def discover_units(root: Path, methods: list[str]) -> list[tuple[Path, str, str]
     for directory in sorted(candidates):
         ancestry = [directory.name.lower(), *(parent.name.lower() for parent in directory.parents)]
         method = next(
-            (item for item in methods if any(name == item or name.endswith(f"_{item}") for name in ancestry)),
+            (
+                item
+                for name in ancestry
+                for item in methods
+                if name == item or name.endswith(f"_{item}")
+            ),
             None,
         )
         if method is None:
@@ -65,6 +71,16 @@ def _load_ieeg(unit: Path, method: str) -> tuple[np.ndarray, np.ndarray, pd.Data
             per_rank.append(fold_values)
     if not ranks:
         raise ValueError(f"no complete per-target metrics under {unit}")
+    fold_counts = {len(folds) for folds in per_rank}
+    target_shapes = {
+        np.asarray(fold).shape for folds in per_rank for fold in folds
+    }
+    if len(fold_counts) != 1 or len(target_shapes) != 1:
+        raise ValueError(
+            "per-target metrics are ragged across ranks/folds: "
+            f"fold counts={sorted(fold_counts)}, target shapes="
+            + ", ".join(map(str, sorted(target_shapes, key=str)))
+        )
     target_z = mean_folds(np.asarray(per_rank).transpose(1, 0, 2))
     artifact_root = _ancestor_with(unit, "all_subject_sig.csv")
     sig_path = artifact_root / "all_subject_sig.csv"
@@ -80,8 +96,38 @@ def _load_ieeg(unit: Path, method: str) -> tuple[np.ndarray, np.ndarray, pd.Data
     return np.asarray(ranks), units, pd.DataFrame({"cluster": labels})
 
 
+def _matching_fmri_manifest(unit: Path, n_targets: int) -> tuple[pd.DataFrame, Path]:
+    """Resolve a local manifest or an unambiguous matching sibling manifest."""
+    local_path = unit / "target_manifest.csv"
+    local = pd.read_csv(local_path)
+    if len(local) == n_targets:
+        return local, local_path
+    candidates = []
+    for path in sorted(unit.parent.glob("*/target_manifest.csv")):
+        if path == local_path:
+            continue
+        frame = pd.read_csv(path)
+        if len(frame) == n_targets:
+            candidates.append((frame, path))
+    if not candidates:
+        raise ValueError(
+            f"fMRI manifest has {len(local)} rows, metrics have {n_targets} targets, "
+            "and no sibling manifest matches"
+        )
+    reference, reference_path = candidates[0]
+    disagreements = [str(path) for frame, path in candidates[1:] if not frame.equals(reference)]
+    if disagreements:
+        raise ValueError(
+            "matching-length sibling fMRI manifests disagree: "
+            + ", ".join([str(reference_path), *disagreements])
+        )
+    print(
+        f"Recovering stale manifest in {unit} from {reference_path}", flush=True
+    )
+    return reference, reference_path
+
+
 def _load_fmri(unit: Path, method: str, repo_root: Path, block_mm: float):
-    manifest = pd.read_csv(unit / "target_manifest.csv")
     ranks, values = [], []
     for rank_dir in sorted((unit / method).glob("k*"), key=_rank):
         path = rank_dir / "metrics.npz"
@@ -91,10 +137,14 @@ def _load_fmri(unit: Path, method: str, repo_root: Path, block_mm: float):
             values.append(np.asarray(saved["corr_per_target"]))
         ranks.append(_rank(rank_dir))
     target_z = np.arctanh(np.clip(np.asarray(values), -1 + 1e-7, 1 - 1e-7))
-    if target_z.shape[1] != len(manifest):
-        raise ValueError("fMRI manifest/metric target count mismatch")
+    manifest, manifest_path = _matching_fmri_manifest(unit, target_z.shape[1])
     clusters = fmri_spatial_blocks(manifest, repo_root, block_mm)
-    return np.asarray(ranks), target_z, pd.DataFrame({"cluster": clusters})
+    return (
+        np.asarray(ranks),
+        target_z,
+        pd.DataFrame({"cluster": clusters}),
+        manifest_path,
+    )
 
 
 def _safe_name(path: Path, root: Path, method: str) -> str:
@@ -111,12 +161,15 @@ def _plot(summary, title: str, path: Path) -> None:
     ax.plot(curve["rank"], curve["mean_r"], marker="o", ms=3)
     sat = curve.iloc[0]["saturation_rank"]
     point = curve.loc[curve["rank"] == sat].iloc[0]
-    ax.scatter([sat], [point["mean_r"]], marker="*", s=90, zorder=5, label=f"one-SE rank {int(sat)}")
+    fraction = 100 * curve["performance_fraction"].iloc[0]
+    ax.scatter([sat], [point["mean_r"]], marker="*", s=90, zorder=5, label=f"{fraction:g}%-of-best rank {int(sat)}")
     ax.set(xscale="log", xlabel="Rank", ylabel="Mean correlation (r)", title="Performance")
     ax.legend(frameon=False)
     ax = axes[1]
     ax.fill_between(retention["rank"], retention["q25_loss_z"], retention["q75_loss_z"], alpha=.2)
     ax.plot(retention["rank"], retention["median_loss_z"], marker="o", ms=3, label="median loss")
+    sat_loss = retention.loc[retention["rank"] == sat, "median_loss_z"].iloc[0]
+    ax.scatter([sat], [sat_loss], marker="*", s=90, zorder=5)
     ax2 = ax.twinx()
     ax2.plot(retention["rank"], retention["fraction_within_peak_sem"], color="#d95f02", label="within peak SEM")
     ax.set(xscale="log", xlabel="Rank", ylabel="Loss from target peak (Fisher z)", title="Target retention")
@@ -139,6 +192,7 @@ def main() -> None:
     parser.add_argument("--fmri-block-mm", type=float, default=10.0)
     parser.add_argument("--bootstrap-repeats", type=int, default=2000)
     parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument("--performance-fraction", type=float, default=0.985)
     args = parser.parse_args()
     args.output_dir.mkdir(parents=True, exist_ok=True)
     rows, skipped = [], []
@@ -147,12 +201,17 @@ def main() -> None:
             if layout == "ieeg":
                 ranks, target_z, groups = _load_ieeg(unit, method)
                 analysis_dir = unit
+                manifest_source = "reconstructed_from_run_artifacts"
             else:
-                ranks, target_z, groups = _load_fmri(unit.parent, method, args.fmri_repo_root, args.fmri_block_mm)
+                ranks, target_z, groups, manifest_path = _load_fmri(
+                    unit.parent, method, args.fmri_repo_root, args.fmri_block_mm
+                )
                 analysis_dir = unit.parent
+                manifest_source = str(manifest_path)
             summary = summarize_rank_curve(
                 ranks, target_z, groups["cluster"].to_numpy(),
                 bootstrap_repeats=args.bootstrap_repeats, seed=args.seed,
+                performance_fraction=args.performance_fraction,
             )
             name = _safe_name(analysis_dir, args.results_root, method)
             summary.curve.to_csv(args.output_dir / f"{name}__curve.csv", index=False)
@@ -164,16 +223,36 @@ def main() -> None:
             row = summary.curve.iloc[0]
             sat_q = np.quantile(summary.bootstrap_saturation, [0.025, 0.5, 0.975])
             rows.append({"run": str(analysis_dir), "method": method, "layout": layout,
+                         "manifest_source": manifest_source,
                          "n_targets": target_z.shape[1], "n_clusters": groups["cluster"].nunique(),
-                         "peak_rank": int(row["peak_rank"]), "saturation_rank": int(row["saturation_rank"]),
-                         "bootstrap_saturation_q025": sat_q[0],
-                         "bootstrap_saturation_median": sat_q[1],
-                         "bootstrap_saturation_q975": sat_q[2]})
+                         "peak_rank": int(row["peak_rank"]),
+                         "best_loss_rank": int(row["best_loss_rank"]),
+                         "saturation_rank": int(row["saturation_rank"]),
+                         "performance_fraction": row["performance_fraction"],
+                         "performance_saturation_rank": int(row["performance_saturation_rank"]),
+                         "probability_saturation_rank": int(row["probability_saturation_rank"]),
+                         "performance_99pct_rank": row["performance_99pct_rank"],
+                         "median_loss_saturation_rank": int(row["median_loss_saturation_rank"]),
+                         "normalized_log_auc": row["normalized_log_auc"],
+                         "loss_bound_z": row["loss_bound_z"],
+                         "median_loss_bootstrap_saturation_q025": sat_q[0],
+                         "median_loss_bootstrap_saturation_median": sat_q[1],
+                         "median_loss_bootstrap_saturation_q975": sat_q[2]})
         except Exception as error:
             skipped.append({"run": str(unit), "method": method, "reason": str(error)})
-    pd.DataFrame(rows).to_csv(args.output_dir / "summary.csv", index=False)
+    summary_frame = pd.DataFrame(rows)
+    summary_frame.to_csv(args.output_dir / "summary.csv", index=False)
     pd.DataFrame(skipped).to_csv(args.output_dir / "skipped.csv", index=False)
+    comparisons, comparison_skipped = build_auc_comparison_table(summary_frame)
+    comparisons.to_csv(args.output_dir / "auc_comparisons.csv", index=False)
+    comparison_skipped.to_csv(
+        args.output_dir / "auc_comparison_skipped.csv", index=False
+    )
     print(f"Wrote {len(rows)} analyses to {args.output_dir}; skipped {len(skipped)}")
+    print(
+        f"Wrote {len(comparisons)} cross-dataset AUC comparison(s); "
+        f"skipped {len(comparison_skipped)} comparison row(s)"
+    )
 
 
 if __name__ == "__main__":
