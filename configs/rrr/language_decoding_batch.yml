@@ -25,6 +25,7 @@ subspace_aggregation: extrinsic
 device: auto
 rank_grid: [1, 2, 4, 8, 16, 32, 64]
 tasks: [speaker_identity, iu_position, surprisal]
+categorical_n_jobs: -1
 
 glove:
   enabled: true
@@ -43,4 +44,4 @@ task_data:
   word_annotations: processed_data/df_word_onset_with_pos_class.csv
 
 logistic_cs: [0.0001, 0.001, 0.01, 0.1, 1.0, 10.0, 100.0]
-refresh: false
+refresh: true

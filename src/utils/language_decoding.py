@@ -239,7 +239,7 @@ def _fit_decoder(
             class_weight="balanced",
             solver="lbfgs",
             max_iter=2000,
-            n_jobs=1,
+            n_jobs=int(config.categorical_n_jobs),
         )
     pipeline = make_pipeline(scaler, model)
     pipeline.fit(X_train, y_train)

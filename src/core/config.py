@@ -375,6 +375,7 @@ class LanguageDecodingConfig:
     logistic_cs: list[float] = field(
         default_factory=lambda: [1e-4, 1e-3, 1e-2, 1e-1, 1.0, 10.0, 100.0]
     )
+    categorical_n_jobs: int = 1
     glove: LanguageDecodingGloveConfig = field(
         default_factory=LanguageDecodingGloveConfig
     )
@@ -408,6 +409,12 @@ class LanguageDecodingConfig:
             raise ValueError("tasks must not contain duplicate names")
         if not self.logistic_cs or any(float(value) <= 0 for value in self.logistic_cs):
             raise ValueError("logistic_cs must contain positive values")
+        if (
+            isinstance(self.categorical_n_jobs, bool)
+            or not isinstance(self.categorical_n_jobs, int)
+            or self.categorical_n_jobs == 0
+        ):
+            raise ValueError("categorical_n_jobs must be a nonzero integer")
         self.glove.validate()
         self.bootstrap.validate()
 

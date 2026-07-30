@@ -19,6 +19,10 @@ SIG_CONFIG      ?= configs/significance/significance_default.yml
 RRR_CONFIG      ?= configs/rrr/rrr_default.yml
 LANGUAGE_DECODING_CONFIG ?= configs/rrr/language_decoding.yml
 LANGUAGE_DECODING_SHARDS ?= $(sort $(wildcard configs/rrr/language_decoding_shards/*.yml))
+LANGUAGE_DECODING_CPUS ?= 8
+LANGUAGE_DECODING_MEM ?= 64G
+LANGUAGE_DECODING_TIME ?= 12:00:00
+LANGUAGE_DECODING_SBATCH ?= sbatch --cpus-per-task=$(LANGUAGE_DECODING_CPUS) --mem=$(LANGUAGE_DECODING_MEM) --time=$(LANGUAGE_DECODING_TIME)
 LANGUAGE_RECONSTRUCTION_CONFIG ?= configs/rrr/language_reconstruction.yml
 LANGUAGE_AXIS_ENCODING_CONFIG ?= configs/rrr/language_axis_encoding.yml
 LANGUAGE_FEATURE_CONFIG ?= configs/language_features/podcast.yml
@@ -218,7 +222,8 @@ language-decoding:
 language-decoding-shards:
 	mkdir -p logs
 	for config in $(LANGUAGE_DECODING_SHARDS); do
-		$(CMD) scripts/rrr/run_language_decoding.py --config $$config $(OVERRIDES)
+		name=$$(basename $$config .yml)
+		$(LANGUAGE_DECODING_SBATCH) --job-name=language-decoding-$$name submit.sh scripts/rrr/run_language_decoding.py --config $$config $(OVERRIDES)
 	done
 
 ## Predict matched-rank RRR/PCA spaces from configured language-task variables.

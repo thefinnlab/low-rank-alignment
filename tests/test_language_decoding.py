@@ -244,6 +244,24 @@ def test_saved_raw_weights_reproduce_binary_logistic_decisions():
     assert metrics["balanced_accuracy"] > 0.9
 
 
+def test_categorical_decoder_uses_configured_parallelism():
+    rng = np.random.default_rng(18)
+    X = rng.normal(size=(60, 3))
+    y = (X[:, 0] > 0).astype(int)
+    config = LanguageDecodingConfig(
+        rrr_run_path="unused",
+        rank_grid=[2],
+        categorical_n_jobs=-1,
+        logistic_cs=[0.1, 1.0],
+    )
+    pipeline = _fit_decoder(X, y, "categorical", config)
+    assert pipeline[-1].n_jobs == -1
+    with pytest.raises(ValueError, match="categorical_n_jobs"):
+        LanguageDecodingConfig(
+            rrr_run_path="unused", rank_grid=[2], categorical_n_jobs=0
+        )
+
+
 def test_resolve_rrr_unit_and_config_enum(tmp_path):
     unit = tmp_path / "run" / "rrr" / "fold_0"
     unit.mkdir(parents=True)

@@ -22,6 +22,7 @@ subspace_aggregation: extrinsic
 device: auto
 rank_grid: [1, 2, 4, 8, 16, 32, 64]
 tasks: [speaker_identity, iu_position, surprisal]
+categorical_n_jobs: -1
 glove:
   enabled: true
   dim: 50
@@ -35,4 +36,4 @@ bootstrap:
 task_data:
   language_features: processed_data/language_features/podcast/podcast/tokens.tsv
   word_annotations: processed_data/df_word_onset_with_pos_class.csv
-refresh: false
+refresh: true
