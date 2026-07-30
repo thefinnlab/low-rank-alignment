@@ -17,6 +17,7 @@ export PYTHONPATH := $(CURDIR)
 ENCODING_CONFIG ?= configs/encoding/encoding_mid.yml
 SIG_CONFIG      ?= configs/significance/significance_default.yml
 RRR_CONFIG      ?= configs/rrr/rrr_default.yml
+RANK_SATURATION_ARGS ?=
 LANGUAGE_DECODING_CONFIG ?= configs/rrr/language_decoding.yml
 LANGUAGE_DECODING_SHARDS ?= $(sort $(wildcard configs/rrr/language_decoding_shards/*.yml))
 LANGUAGE_DECODING_CPUS ?= 8
@@ -208,6 +209,11 @@ plots:
 rrr:
 	mkdir -p logs
 	$(CMD) scripts/rrr/run_rrr.py --config $(RRR_CONFIG) $(OVERRIDES)
+
+## Discover completed RRR and PCA runs and generate target-level rank saturation figures.
+## Restrict to RRR with RANK_SATURATION_ARGS="--methods rrr".
+rank-saturation:
+	uv run python scripts/rrr/plot_rank_saturation.py $(RANK_SATURATION_ARGS)
 
 ## Decode linguistic targets from saved RRR input subspaces
 ## Usage:
