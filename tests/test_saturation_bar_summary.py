@@ -5,7 +5,9 @@ import pandas as pd
 from src.utils.saturation_bar_summary import (
     build_auc_comparison_table,
     build_saturation_bar_table,
+    plot_asymmetric_auc_distances,
     plot_saturation_bars,
+    summarize_auc_distances,
 )
 
 
@@ -31,6 +33,27 @@ def test_auc_comparison_pairs_transfer_with_within_target(tmp_path):
     assert skipped.empty
     assert len(comparisons) == 1
     assert np.isclose(comparisons.iloc[0]["cross_dataset_effectiveness"], 0.75)
+
+
+def test_auc_distance_summary_and_asymmetric_plot(tmp_path):
+    comparisons = pd.DataFrame([
+        {"method": "rrr", "source_dataset": "podcast", "target_dataset": "fmri", "model": "gpt2", "layer": 6, "cross_dataset_effectiveness": 0.7},
+        {"method": "rrr", "source_dataset": "podcast", "target_dataset": "fmri", "model": "gpt2-xl", "layer": 24, "cross_dataset_effectiveness": 0.9},
+        {"method": "rrr", "source_dataset": "fmri", "target_dataset": "podcast", "model": "gpt2-xl", "layer": 24, "cross_dataset_effectiveness": 1.1},
+    ])
+
+    values, summary = summarize_auc_distances(comparisons)
+    forward = summary.loc[
+        (summary.source_dataset == "podcast") & (summary.target_dataset == "fmri")
+    ].iloc[0]
+    reverse = summary.loc[
+        (summary.source_dataset == "fmri") & (summary.target_dataset == "podcast")
+    ].iloc[0]
+    assert np.isclose(forward.median_distance, 0.2)
+    assert reverse.median_distance == 0.0
+    plot_asymmetric_auc_distances(values, summary, "rrr", tmp_path / "distances")
+    assert (tmp_path / "distances.png").exists()
+    assert (tmp_path / "distances.svg").exists()
 
 
 def test_build_table_infers_path_metadata_and_percent(tmp_path, monkeypatch):

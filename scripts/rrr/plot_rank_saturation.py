@@ -16,7 +16,11 @@ from src.utils.rank_saturation import (
     mean_folds,
     summarize_rank_curve,
 )
-from src.utils.saturation_bar_summary import build_auc_comparison_table
+from src.utils.saturation_bar_summary import (
+    build_auc_comparison_table,
+    plot_asymmetric_auc_distances,
+    summarize_auc_distances,
+)
 
 
 def _rank(path: Path) -> int:
@@ -248,6 +252,14 @@ def main() -> None:
     comparison_skipped.to_csv(
         args.output_dir / "auc_comparison_skipped.csv", index=False
     )
+    distance_values, distance_summary = summarize_auc_distances(comparisons)
+    distance_values.to_csv(args.output_dir / "auc_distance_values.csv", index=False)
+    distance_summary.to_csv(args.output_dir / "auc_distance_summary.csv", index=False)
+    for method in sorted(distance_summary["method"].unique()):
+        plot_asymmetric_auc_distances(
+            distance_values, distance_summary, method,
+            args.output_dir / f"auc_distance_{method}",
+        )
     print(f"Wrote {len(rows)} analyses to {args.output_dir}; skipped {len(skipped)}")
     print(
         f"Wrote {len(comparisons)} cross-dataset AUC comparison(s); "

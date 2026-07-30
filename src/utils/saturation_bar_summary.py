@@ -6,7 +6,9 @@ import re
 from pathlib import Path
 
 import matplotlib.pyplot as plt
-from matplotlib.patches import Patch
+from matplotlib.cm import ScalarMappable
+from matplotlib.colors import Normalize
+from matplotlib.patches import Patch, Polygon
 import numpy as np
 import pandas as pd
 import yaml
@@ -15,6 +17,11 @@ import yaml
 DATASET_LABELS = {
     "podcast": "Podcast",
     "brain_treebank": "Brain Treebank",
+    "fmri": "fMRI",
+}
+DATASET_ABBREVIATIONS = {
+    "podcast": "P",
+    "brain_treebank": "BT",
     "fmri": "fMRI",
 }
 MODEL_LABELS = {
@@ -304,6 +311,137 @@ def build_auc_comparison_table(
             ),
         })
     return pd.DataFrame(comparisons), pd.DataFrame(skipped)
+
+
+def summarize_auc_distances(
+    comparisons: pd.DataFrame,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Summarize clipped ``1 - effectiveness`` across model/layer runs."""
+    required = {
+        "method", "source_dataset", "target_dataset", "model", "layer",
+        "cross_dataset_effectiveness",
+    }
+    missing = required.difference(comparisons.columns)
+    if missing:
+        raise ValueError(f"AUC comparisons are missing columns {sorted(missing)}")
+    values = comparisons.copy()
+    effectiveness = pd.to_numeric(
+        values["cross_dataset_effectiveness"], errors="coerce"
+    )
+    if effectiveness.isna().any():
+        raise ValueError("cross_dataset_effectiveness must be finite")
+    values["distance"] = np.maximum(0.0, 1.0 - effectiveness)
+    group_columns = ["method", "source_dataset", "target_dataset"]
+    summary = (
+        values.groupby(group_columns, sort=True)["distance"]
+        .agg(
+            median_distance="median",
+            q25_distance=lambda series: series.quantile(0.25),
+            q75_distance=lambda series: series.quantile(0.75),
+            n_model_layers="size",
+        )
+        .reset_index()
+    )
+    return values, summary
+
+
+def plot_asymmetric_auc_distances(
+    values: pd.DataFrame, summary: pd.DataFrame, method: str, path: Path
+) -> None:
+    """Plot both directed distances in diagonally split lower-triangle cells."""
+    values = values.loc[values.method == method]
+    summary = summary.loc[summary.method == method]
+    if summary.empty:
+        raise ValueError(f"No {method} AUC distances to plot")
+    preferred = ["podcast", "brain_treebank", "fmri"]
+    present = set(values.source_dataset) | set(values.target_dataset)
+    datasets = [item for item in preferred if item in present]
+    datasets.extend(sorted(present.difference(datasets)))
+    positions = {dataset: index for index, dataset in enumerate(datasets)}
+    vmax = max(1.0, float(values["distance"].max()))
+    norm = Normalize(vmin=0.0, vmax=vmax)
+    cmap = plt.get_cmap("magma_r")
+    fig, ax = plt.subplots(
+        figsize=(max(6.8, 2.25 * len(datasets)), max(5.8, 1.9 * len(datasets)))
+    )
+
+    def directed(source: str, target: str):
+        match = summary.loc[
+            (summary.source_dataset == source) & (summary.target_dataset == target)
+        ]
+        return None if match.empty else match.iloc[0]
+
+    def draw_half(vertices, row, center, direction, source, target):
+        if row is None:
+            ax.add_patch(Polygon(vertices, facecolor="#eeeeee", edgecolor="white", hatch="///"))
+            ax.text(*center, f"{direction}\nmissing", ha="center", va="center", fontsize=7)
+            return
+        median = float(row.median_distance)
+        ax.add_patch(Polygon(vertices, facecolor=cmap(norm(median)), edgecolor="white"))
+        ax.text(
+            *center,
+            f"{direction}\n{median:.2f} [{row.q25_distance:.2f}, {row.q75_distance:.2f}]\nn={int(row.n_model_layers)}",
+            ha="center", va="center", fontsize=7,
+            color="white" if norm(median) > 0.48 else "black",
+        )
+        points = values.loc[
+            (values.source_dataset == source) & (values.target_dataset == target)
+        ].sort_values(["model", "layer"])
+        offsets = np.linspace(-0.13, 0.13, len(points)) if len(points) > 1 else [0.0]
+        for offset, distance in zip(offsets, points.distance):
+            ax.scatter(
+                center[0] + offset, center[1] + 0.27,
+                s=13, c=[cmap(norm(float(distance)))], edgecolors="white",
+                linewidths=0.45, zorder=5,
+            )
+
+    for row_index in range(1, len(datasets)):
+        for column_index in range(row_index):
+            row_dataset = datasets[row_index]
+            column_dataset = datasets[column_index]
+            row_short = DATASET_ABBREVIATIONS.get(row_dataset, row_dataset)
+            column_short = DATASET_ABBREVIATIONS.get(column_dataset, column_dataset)
+            x, y = column_index, row_index
+            # With rows interpreted as targets and columns as sources, the
+            # lower-right half is column -> row and the upper-left is row -> column.
+            draw_half(
+                [(x - .5, y - .5), (x + .5, y - .5), (x + .5, y + .5)],
+                directed(column_dataset, row_dataset),
+                (x + .17, y - .13),
+                f"{column_short}→{row_short}",
+                column_dataset, row_dataset,
+            )
+            draw_half(
+                [(x - .5, y - .5), (x - .5, y + .5), (x + .5, y + .5)],
+                directed(row_dataset, column_dataset),
+                (x - .17, y + .13),
+                f"{row_short}→{column_short}",
+                row_dataset, column_dataset,
+            )
+
+    labels = [DATASET_LABELS.get(dataset, dataset) for dataset in datasets]
+    ax.set_xticks(range(len(datasets)), labels, rotation=30, ha="right")
+    ax.set_yticks(range(len(datasets)), labels)
+    ax.set_xlim(-.55, len(datasets) - .45)
+    ax.set_ylim(len(datasets) - .45, -.55)
+    ax.set_xlabel("Dataset pair (split cells show both directions)")
+    ax.set_ylabel("Dataset pair")
+    ax.set_title(
+        f"Asymmetric cross-dataset distance — {method.upper()}\n"
+        "median [IQR] across model/layer runs; dots are individual runs"
+    )
+    for index in range(len(datasets)):
+        ax.text(index, index, "within\ndataset", ha="center", va="center", color="#777777", fontsize=7)
+    for spine in ax.spines.values():
+        spine.set_visible(False)
+    ax.tick_params(length=0)
+    colorbar = fig.colorbar(ScalarMappable(norm=norm, cmap=cmap), ax=ax, shrink=.72, pad=.03)
+    colorbar.set_label("Distance = max(0, 1 − effectiveness)")
+    fig.tight_layout()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(path.with_suffix(".png"), dpi=300, bbox_inches="tight")
+    fig.savefig(path.with_suffix(".svg"), bbox_inches="tight")
+    plt.close(fig)
 
 
 def plot_saturation_bars(frame: pd.DataFrame, path: Path) -> None:
