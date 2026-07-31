@@ -95,7 +95,7 @@ Downstream configs can store list-valued `encoding.per_model_config.layer` entri
 | `scripts/rrr/run_language_decoding.py` | Decode registered word-level language targets across saved RRR and optional PCA rank sweeps with leakage-safe within- or cross-dataset folds |
 | `scripts/rrr/run_internal_language_decoding_batch.py` | Run every completed internal RRR/PCA layer for one dataset/model manifest entry |
 | `scripts/fmri/run_internal_language_decoding_batch.py` | Train language decoders on fMRI training stories and evaluate internal RRR/PCA spaces only on `wheretheressmoke` |
-| `scripts/bootstrap_language_decoding.py` | Test Podcast, Cars 2, or held-out-story fMRI RRR-vs-PCA decoding differences with paired sentence-block bootstraps at each rank and equal-model-weighted hierarchical model/layer summaries |
+| `scripts/bootstrap_language_decoding.py` | Test Podcast, Cars 2, or held-out-story fMRI RRR-vs-PCA decoding differences with paired sentence-block bootstraps at each rank and equal-model-weighted hierarchical model/layer summaries; logs discovery and per-stage job progress with elapsed time and ETA |
 | `scripts/submit_language_decoding.py` | Submit one internal language-decoding SLURM job per selected model class |
 | `scripts/rrr/run_language_reconstruction.py` | Jointly reconstruct matched-rank weighted/span RRR and PCA representations from configurable registered language-task variables |
 | `scripts/rrr/run_language_axis_encoding.py` | Encode neural responses from saved task axes, their residuals, actual labels, and matched random spans in RRR/PCA spaces |

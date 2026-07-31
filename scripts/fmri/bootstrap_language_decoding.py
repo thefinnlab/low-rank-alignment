@@ -7,6 +7,7 @@ import argparse
 import json
 import os
 import sys
+import time
 from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
 
@@ -337,11 +338,43 @@ def _cross_model_job(payload: tuple[tuple[str, int], dict[str, list[dict]], int,
     }
 
 
-def _run_jobs(function, payloads: list, jobs: int) -> list:
+def _log_progress(stage: str, completed: int, total: int, started: float) -> None:
+    elapsed = time.monotonic() - started
+    rate = completed / elapsed if elapsed else 0.0
+    remaining = (total - completed) / rate if rate else float("nan")
+    print(
+        f"[{stage}] {completed}/{total} jobs ({completed / total:.0%}); "
+        f"elapsed {elapsed:.1f}s; ETA {remaining:.1f}s",
+        file=sys.stderr,
+        flush=True,
+    )
+
+
+def _run_jobs(function, payloads: list, jobs: int, stage: str) -> list:
+    total = len(payloads)
+    if not total:
+        return []
+    started = time.monotonic()
+    print(
+        f"[{stage}] starting {total} jobs with {jobs} worker(s)",
+        file=sys.stderr,
+        flush=True,
+    )
+    report_every = max(1, (total + 19) // 20)
+    results = []
+
+    def consume(iterator) -> None:
+        for completed, result in enumerate(iterator, start=1):
+            results.append(result)
+            if completed % report_every == 0 or completed == total:
+                _log_progress(stage, completed, total, started)
+
     if jobs == 1:
-        return [function(payload) for payload in payloads]
-    with ProcessPoolExecutor(max_workers=jobs) as executor:
-        return list(executor.map(function, payloads))
+        consume(map(function, payloads))
+    else:
+        with ProcessPoolExecutor(max_workers=jobs) as executor:
+            consume(executor.map(function, payloads))
+    return results
 
 
 def _slug(value: str) -> str:
@@ -406,6 +439,13 @@ def main() -> None:
         raise ValueError("--jobs must be positive")
     if not 0 < args.alpha < 1:
         raise ValueError("--alpha must be between zero and one")
+    analysis_started = time.monotonic()
+    print(
+        f"[discovery] dataset={args.dataset}; repeats={args.bootstrap_repeats}; "
+        f"workers={args.jobs}; config={config_path}",
+        file=sys.stderr,
+        flush=True,
+    )
     records, grouped = (
         _discover_fmri(config_path)
         if args.dataset == "fmri"
@@ -413,13 +453,22 @@ def main() -> None:
     )
     if not records:
         raise RuntimeError("No heldout_predictions.npz artifacts found; rerun fMRI decoding with --refresh")
+    print(
+        f"[discovery] found {len(records)} model/layer/task/rank jobs and "
+        f"{len(grouped)} cross-model task/rank jobs in "
+        f"{time.monotonic() - analysis_started:.1f}s",
+        file=sys.stderr,
+        flush=True,
+    )
     individual_payloads = [
         (record, args.bootstrap_repeats, args.alpha, int(seed.generate_state(1)[0]))
         for record, seed in zip(
             records, np.random.SeedSequence([args.seed, 0]).spawn(len(records))
         )
     ]
-    individual = _run_jobs(_individual_job, individual_payloads, args.jobs)
+    individual = _run_jobs(
+        _individual_job, individual_payloads, args.jobs, "per-model/layer"
+    )
     individual_frame = _apply_rankwise_fdr(
         pd.DataFrame(individual), args.alpha, ["model", "layer", "rank"]
     )
@@ -431,7 +480,9 @@ def main() -> None:
             np.random.SeedSequence([args.seed, 1]).spawn(len(grouped_items)),
         )
     ]
-    cross_model = _run_jobs(_cross_model_job, cross_payloads, args.jobs)
+    cross_model = _run_jobs(
+        _cross_model_job, cross_payloads, args.jobs, "cross-model"
+    )
     cross_frame = _apply_rankwise_fdr(
         pd.DataFrame(cross_model), args.alpha, ["rank"]
     )
@@ -449,7 +500,7 @@ def main() -> None:
         "alternative": "rrr_gt_pca", "fdr": "BH across targets within rank",
         "cross_model": "equal model weights; layers averaged within model",
     }, indent=2))
-    print(f"Done: {output}")
+    print(f"Done in {time.monotonic() - analysis_started:.1f}s: {output}")
 
 
 if __name__ == "__main__":

@@ -242,7 +242,8 @@ cyan star markers above ranks where RRR wins after rank-wise target FDR. Pass
 `FMRI_LANGUAGE_BOOTSTRAP_REPEATS` and `FMRI_LANGUAGE_BOOTSTRAP_ARGS` to override the
 default 10,000 draws, seed, alpha, config, output directory, or `--jobs`. The analysis
 automatically uses `SLURM_CPUS_PER_TASK` worker processes when that variable is set;
-outside SLURM it defaults to one worker.
+outside SLURM it defaults to one worker. Discovery and both bootstrap stages log job
+counts, elapsed time, and an estimated time remaining to stderr.
 
 ## Resource staging
 
