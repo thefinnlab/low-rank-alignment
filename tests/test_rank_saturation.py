@@ -5,6 +5,7 @@ from pathlib import Path
 from scripts.rrr.plot_rank_saturation import (
     Analysis,
     _artifact_stem,
+    _exact_family_signflip,
     output_parts,
 )
 from src.utils.rank_saturation import (
@@ -149,6 +150,10 @@ def test_equivalence_curve_selects_earliest_simultaneously_equivalent_rank():
     assert result.saturation_rank == 2
     assert result.curve["equivalent"].tolist() == [False, True, True]
     assert result.curve.loc[1, "max_statistic_adjusted_pvalue"] <= 0.05
+
+
+def test_exact_family_signflip():
+    assert _exact_family_signflip(np.array([1.0, 2.0])) == 0.25
 
 
 def test_fmri_blocks_recover_response_columns_from_thick_mask(tmp_path):

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import itertools
 import re
 import sys
 from dataclasses import dataclass
@@ -241,6 +242,30 @@ def _family_name(model: str) -> str:
     return "random-gpt2-xl" if model.startswith("random-gpt2-xl") else model
 
 
+def _exact_family_signflip(effects: np.ndarray) -> float:
+    effects = np.asarray(effects, dtype=float)
+    if not len(effects):
+        return np.nan
+    observed = float(np.mean(effects))
+    null = np.asarray([
+        np.mean(effects * np.asarray(signs))
+        for signs in itertools.product((-1, 1), repeat=len(effects))
+    ])
+    return float(np.mean(null >= observed))
+
+
+def _pvalue_stars(pvalue: float) -> str:
+    if not np.isfinite(pvalue):
+        return "n/a"
+    if pvalue < .001:
+        return "***"
+    if pvalue < .01:
+        return "**"
+    if pvalue < .05:
+        return "*"
+    return "n.s."
+
+
 def _plot_cross_model_summary(frame: pd.DataFrame, title: str, path: Path) -> dict:
     """Draw paired saturation violins with explicit distribution means."""
     paired = frame.pivot_table(
@@ -260,6 +285,7 @@ def _plot_cross_model_summary(frame: pd.DataFrame, title: str, path: Path) -> di
             median_pca_rank=("pca", "median"),
         ).reset_index()
     )
+    pvalue = _exact_family_signflip(family["mean_log2_pca_over_rrr"].to_numpy())
     apply_publication_style()
     fig, ax = plt.subplots(figsize=(3.8, 4.0))
     methods = ["rrr", "pca"]
@@ -301,13 +327,18 @@ def _plot_cross_model_summary(frame: pd.DataFrame, title: str, path: Path) -> di
         )
     y_min = min(np.nanmin(values) for values in log_values)
     y_max = max(np.nanmax(values) for values in log_values)
+    bracket_y = y_max + .55
+    ax.plot([1, 1, 2, 2], [bracket_y - .10, bracket_y, bracket_y, bracket_y - .10],
+            color="black", linewidth=.8)
+    ax.text(1.5, bracket_y + .06, _pvalue_stars(pvalue),
+            ha="center", va="bottom", fontsize=9)
     integer_ticks = np.arange(np.floor(y_min), np.ceil(y_max) + 1)
     ax.set_yticks(integer_ticks, [str(int(2 ** value)) for value in integer_ticks])
     ax.set_xticks(positions, ["RRR", "PCA"])
     ax.set(
         ylabel="Saturation rank $k$",
         title=title,
-        ylim=(y_min - .35, y_max + .8),
+        ylim=(y_min - .35, bracket_y + .45),
         xlim=(.45, 2.55),
     )
     fig.tight_layout()
@@ -327,6 +358,7 @@ def _plot_cross_model_summary(frame: pd.DataFrame, title: str, path: Path) -> di
         "geometric_mean_pca_over_rrr": float(2 ** family["mean_log2_pca_over_rrr"].mean()),
         "mean_rrr_rank": means["rrr"],
         "mean_pca_rank": means["pca"],
+        "pvalue": pvalue,
     }
 
 
