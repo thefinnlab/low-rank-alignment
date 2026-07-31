@@ -209,20 +209,20 @@ def _plot(
         color = METHOD_COLORS[method]
         label = method.upper()
         curve = summary.curve
-        peak = int(curve["peak_rank"].iloc[0])
+        saturation = int(curve["saturation_rank"].iloc[0])
         axes[0].fill_between(curve["rank"], curve["lower_r"], curve["upper_r"], color=color, alpha=.18)
         axes[0].semilogx(curve["rank"], curve["mean_r"], color=color, marker="o", ms=3.5,
                         linewidth=1.4, label=label, zorder=4)
-        axes[0].axvline(peak, color=color, linestyle="--", linewidth=1.4, alpha=.55,
-                        label=f"{label} peak ($k={peak}$)")
+        axes[0].axvline(saturation, color=color, linestyle="--", linewidth=1.4, alpha=.55,
+                        label=f"{label} saturation ($k={saturation}$)")
 
         retention = summary.retention
         axes[1].fill_between(retention["rank"], retention["q25_loss_z"], retention["q75_loss_z"],
                              color=color, alpha=.18)
         axes[1].semilogx(retention["rank"], retention["median_loss_z"], color=color,
                         marker="o", ms=3.5, linewidth=1.4, label=label, zorder=4)
-        axes[1].axvline(peak, color=color, linestyle="--", linewidth=1.4, alpha=.55,
-                        label=f"{label} peak ($k={peak}$)")
+        axes[1].axvline(saturation, color=color, linestyle="--", linewidth=1.4, alpha=.55,
+                        label=f"{label} saturation ($k={saturation}$)")
 
     axes[0].axhline(full_mean, color=RED_BASELINE, linestyle="--", linewidth=1.0,
                     label="Full Model (Baseline)")
@@ -266,7 +266,22 @@ def _pvalue_stars(pvalue: float) -> str:
     return "n.s."
 
 
-def _plot_cross_model_summary(frame: pd.DataFrame, title: str, path: Path) -> dict:
+def _shared_saturation_max_exponent(frame: pd.DataFrame) -> int:
+    """Return the log2 exponent of the shared upper saturation-rank tick."""
+    values = frame["saturation_rank"].to_numpy(dtype=float)
+    values = values[np.isfinite(values) & (values > 0)]
+    if not len(values):
+        raise ValueError("no finite positive saturation ranks")
+    return max(0, int(np.ceil(np.log2(np.max(values)))))
+
+
+def _plot_cross_model_summary(
+    frame: pd.DataFrame,
+    title: str,
+    path: Path,
+    *,
+    max_tick_exponent: int,
+) -> dict:
     """Draw paired saturation violins with explicit distribution means."""
     paired = frame.pivot_table(
         index=["run", "model", "layer"], columns="method",
@@ -325,20 +340,18 @@ def _plot_cross_model_summary(frame: pd.DataFrame, title: str, path: Path) -> di
             (position, mean_log_position), xytext=(0, 8), textcoords="offset points",
             ha="center", va="bottom", fontsize=7,
         )
-    y_min = min(np.nanmin(values) for values in log_values)
-    y_max = max(np.nanmax(values) for values in log_values)
-    bracket_y = y_max + .55
+    bracket_y = max_tick_exponent + .55
     ax.plot([1, 1, 2, 2], [bracket_y - .10, bracket_y, bracket_y, bracket_y - .10],
             color="black", linewidth=.8)
     ax.text(1.5, bracket_y + .06, _pvalue_stars(pvalue),
             ha="center", va="bottom", fontsize=9)
-    integer_ticks = np.arange(np.floor(y_min), np.ceil(y_max) + 1)
+    integer_ticks = np.arange(0, max_tick_exponent + 1)
     ax.set_yticks(integer_ticks, [str(int(2 ** value)) for value in integer_ticks])
     ax.set_xticks(positions, ["RRR", "PCA"])
     ax.set(
         ylabel="Saturation rank $k$",
         title=title,
-        ylim=(y_min - .35, bracket_y + .45),
+        ylim=(-.35, bracket_y + .45),
         xlim=(.45, 2.55),
     )
     fig.tight_layout()
@@ -439,6 +452,7 @@ def main() -> None:
                     seed=args.seed,
                     equal_cluster_weight=equal_cluster_weight,
                     performance_fraction=args.performance_fraction,
+                    exclude_final_rank_from_peak=analysis.layout == "fmri",
                 )
             full_mean = (_load_ieeg_full(analysis.units["rrr"]) if analysis.layout == "ieeg"
                          else _load_fmri_full(analysis.root))
@@ -486,6 +500,7 @@ def main() -> None:
     cross_model_rows = []
     results_frame = pd.DataFrame(rows)
     if not results_frame.empty:
+        max_tick_exponent = _shared_saturation_max_exponent(results_frame)
         for (dataset, condition), group in results_frame.groupby(["dataset", "condition"]):
             try:
                 directory = args.output_dir / dataset / condition
@@ -494,6 +509,7 @@ def main() -> None:
                     group,
                     f"{dataset} / {condition}",
                     directory / "cross_model_saturation",
+                    max_tick_exponent=max_tick_exponent,
                 )
                 cross_model_rows.append({"dataset": dataset, "condition": condition, **metadata})
             except Exception as error:

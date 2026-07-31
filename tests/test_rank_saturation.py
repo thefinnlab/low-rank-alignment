@@ -6,6 +6,7 @@ from scripts.rrr.plot_rank_saturation import (
     Analysis,
     _artifact_stem,
     _exact_family_signflip,
+    _shared_saturation_max_exponent,
     output_parts,
 )
 from src.utils.rank_saturation import (
@@ -111,6 +112,24 @@ def test_fraction_of_best_rule_selects_earliest_eligible_rank():
     assert result.retention["fraction_within_peak_sem"].between(0, 1).all()
 
 
+def test_peak_can_exclude_final_rank_for_fmri_curves():
+    ranks = np.array([1, 2, 4, 8])
+    target_z = np.tile(np.array([[0.10], [0.20], [0.19], [0.30]]), (1, 4))
+    result = summarize_rank_curve(
+        ranks,
+        target_z,
+        np.arange(4),
+        bootstrap_repeats=100,
+        seed=2,
+        performance_fraction=1.0,
+        exclude_final_rank_from_peak=True,
+    )
+    assert result.curve["peak_rank"].iloc[0] == 2
+    assert result.curve["saturation_rank"].iloc[0] == 2
+    assert np.all(result.bootstrap_saturation == 2)
+    np.testing.assert_allclose(result.retention["median_loss_z"], [0.1, 0.0, 0.01, -0.1])
+
+
 def test_cluster_bootstrap_retains_target_weighted_mean():
     ranks = np.array([1, 2])
     target_z = np.array([[0.0, 0.0, 0.0, 1.0], [0.2, 0.2, 0.2, 1.0]])
@@ -154,6 +173,15 @@ def test_equivalence_curve_selects_earliest_simultaneously_equivalent_rank():
 
 def test_exact_family_signflip():
     assert _exact_family_signflip(np.array([1.0, 2.0])) == 0.25
+
+
+def test_shared_saturation_ticks_start_at_one_and_cover_global_maximum():
+    frame = pd.DataFrame({"saturation_rank": [1, 16, 65, np.nan]})
+    exponent = _shared_saturation_max_exponent(frame)
+    assert exponent == 7
+    assert [2 ** value for value in range(0, exponent + 1)] == [
+        1, 2, 4, 8, 16, 32, 64, 128
+    ]
 
 
 def test_fmri_blocks_recover_response_columns_from_thick_mask(tmp_path):
