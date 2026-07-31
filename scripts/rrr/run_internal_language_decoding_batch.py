@@ -23,12 +23,15 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--config", required=True, help="Dataset batch manifest")
     parser.add_argument("--model", required=True, help="Model key in the manifest")
     parser.add_argument("--device", choices=["auto", "cpu", "cuda"], default=None)
+    parser.add_argument("--tasks", nargs="+", default=None)
     parser.add_argument("--refresh", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
     return parser.parse_args()
 
 
-def build_layer_configs(manifest_path: str, model: str) -> list[LanguageDecodingConfig]:
+def build_layer_configs(
+    manifest_path: str, model: str, tasks: list[str] | None = None
+) -> list[LanguageDecodingConfig]:
     payload = yaml.safe_load(Path(manifest_path).read_text(encoding="utf-8")) or {}
     models = payload.get("models", {})
     if model not in models:
@@ -53,7 +56,7 @@ def build_layer_configs(manifest_path: str, model: str) -> list[LanguageDecoding
         source_name=f"{payload['dataset']}_{model}_internal",
         device=str(payload.get("device", "auto")),
         rank_grid=[int(rank) for rank in rrr_config.rank_grid],
-        tasks=[str(task) for task in payload["tasks"]],
+        tasks=[str(task) for task in (tasks or payload["tasks"])],
         task_data=task_data,
         logistic_cs=[float(value) for value in payload.get(
             "logistic_cs", [1e-4, 1e-3, 1e-2, 1e-1, 1, 10, 100]
@@ -71,7 +74,7 @@ def _completed_pair(config: LanguageDecodingConfig) -> bool:
 
 def main() -> None:
     args = _parse_args()
-    configs = build_layer_configs(args.config, args.model)
+    configs = build_layer_configs(args.config, args.model, args.tasks)
     if args.dry_run:
         for config in configs:
             layer = config.encoding.per_model_config["layer"]

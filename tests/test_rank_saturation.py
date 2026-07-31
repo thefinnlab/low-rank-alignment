@@ -10,11 +10,76 @@ from scripts.rrr.plot_rank_saturation import (
     output_parts,
 )
 from src.utils.rank_saturation import (
+    _cluster_bootstrap_means,
     electrode_units,
     fmri_spatial_blocks,
     summarize_equivalence_curve,
     summarize_rank_curve,
 )
+
+
+def _serial_cluster_bootstrap_means(
+    target_z, cluster_ids, repeats, seed, *, equal_cluster_weight=False
+):
+    codes, _ = pd.factorize(cluster_ids, sort=False)
+    n_clusters = int(codes.max()) + 1
+    sums = np.stack([
+        np.nansum(target_z[:, codes == i], axis=1) for i in range(n_clusters)
+    ])
+    counts = np.stack([
+        np.isfinite(target_z[:, codes == i]).sum(axis=1) for i in range(n_clusters)
+    ])
+    rng = np.random.default_rng(seed)
+    output = np.empty((repeats, target_z.shape[0]), dtype=float)
+    for repeat in range(repeats):
+        chosen = rng.integers(0, n_clusters, size=n_clusters)
+        if equal_cluster_weight:
+            output[repeat] = np.nanmean(sums[chosen] / counts[chosen], axis=0)
+        else:
+            output[repeat] = sums[chosen].sum(axis=0) / counts[chosen].sum(axis=0)
+    return output
+
+
+def test_batched_bootstrap_matches_serial_sampling():
+    target_z = np.array([
+        [0.1, np.nan, 0.3, 0.4, 0.5],
+        [0.2, 0.25, 0.35, np.nan, 0.55],
+    ])
+    clusters = np.array(["a", "a", "b", "c", "c"])
+    for equal_weight in (False, True):
+        expected = _serial_cluster_bootstrap_means(
+            target_z, clusters, 137, 9, equal_cluster_weight=equal_weight
+        )
+        actual = _cluster_bootstrap_means(
+            target_z,
+            clusters,
+            137,
+            9,
+            equal_cluster_weight=equal_weight,
+            batch_size=17,
+        )
+        np.testing.assert_array_equal(actual, expected)
+
+
+def test_summaries_accept_shared_bootstrap_means():
+    ranks = np.array([1, 2, 4])
+    target_z = np.array([
+        [0.10, 0.12, 0.08],
+        [0.18, 0.20, 0.16],
+        [0.19, 0.21, 0.17],
+    ])
+    clusters = np.arange(3)
+    boot = _cluster_bootstrap_means(target_z, clusters, 199, 3)
+    curve = summarize_rank_curve(
+        ranks, target_z, clusters, bootstrap_repeats=199, seed=3,
+        bootstrap_means=boot,
+    )
+    equivalence = summarize_equivalence_curve(
+        ranks, target_z, clusters, 0.02, bootstrap_repeats=199, seed=3,
+        bootstrap_means=boot,
+    )
+    assert len(curve.bootstrap_saturation) == 199
+    assert len(equivalence.curve) == len(ranks)
 
 
 def test_electrode_units_average_lags_in_fisher_space():

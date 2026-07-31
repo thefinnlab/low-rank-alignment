@@ -25,6 +25,7 @@ from scipy.stats import t
 from src.utils.plot_helpers import RED_BASELINE, RRR_PCA_COLORS, apply_publication_style
 from src.utils.rank_saturation import (
     SaturationSummary,
+    _cluster_bootstrap_means,
     electrode_units,
     fisher_r,
     fmri_spatial_blocks,
@@ -396,6 +397,12 @@ def main() -> None:
         ),
     )
     parser.add_argument("--bootstrap-repeats", type=int, default=2000)
+    parser.add_argument(
+        "--jobs",
+        type=int,
+        default=4,
+        help="Independent analyses to process concurrently (default: 4; use 1 for serial).",
+    )
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument(
         "--fmri-equivalence-fraction",
@@ -411,6 +418,8 @@ def main() -> None:
     args = parser.parse_args()
     if not 0 < args.fmri_equivalence_fraction < 1:
         parser.error("--fmri-equivalence-fraction must lie between zero and one")
+    if args.jobs < 1:
+        parser.error("--jobs must be at least one")
     args.output_dir.mkdir(parents=True, exist_ok=True)
     analyses = []
     for analysis in discover_analyses(args.results_root):
@@ -445,9 +454,9 @@ def main() -> None:
         for dataset, delta in dataset_deltas.items()
     ]).to_csv(args.output_dir / "dataset_deltas.csv", index=False)
 
-    rows, skipped = [], []
-    skipped.extend(resolution_skipped)
-    for analysis, parts in analyses:
+    def process_analysis(item):
+        analysis, parts = item
+        analysis_rows = []
         try:
             summaries = {}
             equivalence = {}
@@ -464,14 +473,23 @@ def main() -> None:
                         args.fmri_bootstrap_unit,
                     )
                 loaded[method] = (target_z, groups)
+                equal_cluster_weight = (
+                    analysis.layout == "fmri"
+                    and args.fmri_bootstrap_unit == "subject"
+                )
+                bootstrap_means = _cluster_bootstrap_means(
+                    target_z,
+                    groups["cluster"].to_numpy(),
+                    args.bootstrap_repeats,
+                    args.seed,
+                    equal_cluster_weight=equal_cluster_weight,
+                )
                 summaries[method] = summarize_rank_curve(
                     ranks, target_z, groups["cluster"].to_numpy(),
                     bootstrap_repeats=args.bootstrap_repeats,
                     seed=args.seed,
-                    equal_cluster_weight=(
-                        analysis.layout == "fmri"
-                        and args.fmri_bootstrap_unit == "subject"
-                    ),
+                    equal_cluster_weight=equal_cluster_weight,
+                    bootstrap_means=bootstrap_means,
                 )
                 if analysis.layout == "ieeg":
                     if parts[0] not in dataset_deltas:
@@ -494,6 +512,7 @@ def main() -> None:
                     bootstrap_repeats=args.bootstrap_repeats,
                     seed=args.seed,
                     equal_cluster_weight=equal_equivalence_weight,
+                    bootstrap_means=bootstrap_means,
                 )
                 equivalence[method].curve["delta_source"] = delta_source
             full_mean = (_load_ieeg_full(analysis.units["rrr"]) if analysis.layout == "ieeg"
@@ -514,7 +533,7 @@ def main() -> None:
                 row = summary.curve.iloc[0]
                 sat_q = np.quantile(summary.bootstrap_saturation, [0.025, 0.5, 0.975])
                 eq_rank = equivalence[method].saturation_rank
-                rows.append({"run": str(analysis.root), "dataset": parts[0],
+                analysis_rows.append({"run": str(analysis.root), "dataset": parts[0],
                              "condition": parts[1], "model": parts[2], "layer": parts[3],
                              "method": method, "layout": analysis.layout,
                              "output_dir": str(destination), "full_model_mean_r": full_mean,
@@ -532,8 +551,18 @@ def main() -> None:
             title = " / ".join(parts)
             response_name = "Voxel" if parts[0] == "fmri" else "Electrode"
             _plot(summaries, full_mean, title, response_name, destination / stem)
+            return analysis_rows, None
         except Exception as error:
-            skipped.append({"run": str(analysis.root), "reason": str(error)})
+            return [], {"run": str(analysis.root), "reason": str(error)}
+
+    processed = joblib.Parallel(n_jobs=min(args.jobs, len(analyses) or 1))(
+        joblib.delayed(process_analysis)(item) for item in analyses
+    )
+    rows, skipped = [], list(resolution_skipped)
+    for analysis_rows, error in processed:
+        rows.extend(analysis_rows)
+        if error is not None:
+            skipped.append(error)
     pd.DataFrame(rows).to_csv(args.output_dir / "summary.csv", index=False)
     cross_model_rows = []
     results_frame = pd.DataFrame(rows)

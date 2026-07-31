@@ -77,20 +77,27 @@ def _cluster_bootstrap_means(
     seed: int,
     *,
     equal_cluster_weight: bool = False,
+    batch_size: int = 64,
 ) -> np.ndarray:
-    """Cluster-bootstrap means for every rank."""
+    """Cluster-bootstrap means for every rank in bounded vectorized batches."""
     codes, _ = pd.factorize(cluster_ids, sort=False)
     n_clusters = int(codes.max()) + 1
     sums = np.stack([np.nansum(target_z[:, codes == i], axis=1) for i in range(n_clusters)])
     counts = np.stack([np.isfinite(target_z[:, codes == i]).sum(axis=1) for i in range(n_clusters)])
     rng = np.random.default_rng(seed)
     output = np.empty((repeats, target_z.shape[0]), dtype=float)
-    for repeat in range(repeats):
-        chosen = rng.integers(0, n_clusters, size=n_clusters)
+    for start in range(0, repeats, batch_size):
+        stop = min(start + batch_size, repeats)
+        chosen = rng.integers(0, n_clusters, size=(stop - start, n_clusters))
         if equal_cluster_weight:
-            output[repeat] = np.nanmean(sums[chosen] / counts[chosen], axis=0)
+            with np.errstate(invalid="ignore", divide="ignore"):
+                output[start:stop] = np.nanmean(
+                    sums[chosen] / counts[chosen], axis=1
+                )
         else:
-            output[repeat] = sums[chosen].sum(axis=0) / counts[chosen].sum(axis=0)
+            output[start:stop] = (
+                sums[chosen].sum(axis=1) / counts[chosen].sum(axis=1)
+            )
     return output
 
 
@@ -116,6 +123,7 @@ def summarize_rank_curve(
     bootstrap_repeats: int = 2000,
     seed: int = 0,
     equal_cluster_weight: bool = False,
+    bootstrap_means: np.ndarray | None = None,
 ) -> SaturationSummary:
     """Summarize a target-weighted curve and its one-SE saturation point."""
     ranks = np.asarray(ranks, dtype=int)
@@ -123,13 +131,19 @@ def summarize_rank_curve(
     cluster_ids = np.asarray(cluster_ids)
     if target_z.shape[0] != len(ranks) or target_z.shape[1] != len(cluster_ids):
         raise ValueError("rank/target dimensions do not match ranks and cluster_ids")
-    boot = _cluster_bootstrap_means(
-        target_z,
-        cluster_ids,
-        bootstrap_repeats,
-        seed,
-        equal_cluster_weight=equal_cluster_weight,
-    )
+    boot = bootstrap_means
+    if boot is None:
+        boot = _cluster_bootstrap_means(
+            target_z,
+            cluster_ids,
+            bootstrap_repeats,
+            seed,
+            equal_cluster_weight=equal_cluster_weight,
+        )
+    else:
+        boot = np.asarray(boot, dtype=float)
+        if boot.shape != (bootstrap_repeats, len(ranks)):
+            raise ValueError("bootstrap_means dimensions do not match repeats and ranks")
     if equal_cluster_weight:
         codes, _ = pd.factorize(cluster_ids, sort=False)
         cluster_means = np.stack([
@@ -184,6 +198,7 @@ def summarize_equivalence_curve(
     bootstrap_repeats: int = 2000,
     seed: int = 0,
     equal_cluster_weight: bool = False,
+    bootstrap_means: np.ndarray | None = None,
 ) -> EquivalenceSummary:
     """Test every rank against the best with one simultaneous max statistic."""
     if delta_z <= 0 or not np.isfinite(delta_z):
@@ -193,13 +208,19 @@ def summarize_equivalence_curve(
     cluster_ids = np.asarray(cluster_ids)
     if target_z.shape[0] != len(ranks) or target_z.shape[1] != len(cluster_ids):
         raise ValueError("rank/target dimensions do not match ranks and cluster_ids")
-    boot = _cluster_bootstrap_means(
-        target_z,
-        cluster_ids,
-        bootstrap_repeats,
-        seed,
-        equal_cluster_weight=equal_cluster_weight,
-    )
+    boot = bootstrap_means
+    if boot is None:
+        boot = _cluster_bootstrap_means(
+            target_z,
+            cluster_ids,
+            bootstrap_repeats,
+            seed,
+            equal_cluster_weight=equal_cluster_weight,
+        )
+    else:
+        boot = np.asarray(boot, dtype=float)
+        if boot.shape != (bootstrap_repeats, len(ranks)):
+            raise ValueError("bootstrap_means dimensions do not match repeats and ranks")
     if equal_cluster_weight:
         codes, _ = pd.factorize(cluster_ids, sort=False)
         cluster_means = np.stack([

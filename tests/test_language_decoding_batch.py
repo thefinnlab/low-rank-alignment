@@ -62,6 +62,15 @@ def test_internal_batch_podcast_includes_requested_iu_and_norm_features():
     )
 
 
+def test_internal_batch_can_select_a_task_subset():
+    configs = build_layer_configs(
+        "configs/language_decoding/internal/podcast.yml",
+        "gpt2",
+        ["surprisal", "self_surprisal"],
+    )
+    assert configs[0].tasks == ["surprisal", "self_surprisal"]
+
+
 def test_fmri_batch_uses_only_heldout_story_available_features():
     manifest, configs = _layer_configs(
         "configs/language_decoding/internal/fmri.yml", "gpt2"
