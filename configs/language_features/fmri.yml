@@ -1,0 +1,58 @@
+dataset: fmri
+data_root: data/deep-fMRI-dataset
+per_dataset_config:
+  # Exact sessions 1-5 story set with response files for UTS01-UTS09.
+  stories:
+    - alternateithicatom
+    - souls
+    - avatar
+    - legacy
+    - odetostepfather
+    - undertheinfluence
+    - howtodraw
+    - myfirstdaywiththeyankees
+    - naked
+    - stagefright
+    - tildeath
+    - sloth
+    - exorcism
+    - haveyoumethimyet
+    - adollshouse
+    - inamoment
+    - theclosetthatateeverything
+    - adventuresinsayingyes
+    - buck
+    - swimmingwithastronauts
+    - thatthingonmyarm
+    - eyespy
+    - itsabox
+    - hangtime
+    - wheretheressmoke
+output_dir: processed_data/language_features
+resource_dir: data/language_resources
+provider_resource_config: configs/language_features/podcast.yml
+
+dataset_options:
+  sentence_annotations: processed_data/language_boundaries/fmri/{story}/sentence_ids.tsv
+  iu_annotations: processed_data/language_boundaries/fmri/{story}/iu_boundaries.csv
+
+providers:
+  - native
+  - gpt2_surprisal
+  - speaker_diarization
+  - ud
+  - lexical_norms
+  - swow
+  - wordnet
+  - disfluency
+  - entity_coreference
+
+provider_options:
+  speaker_diarization:
+    device: cuda
+  ud:
+    use_gpu: true
+  entity_coreference:
+    use_gpu: true
+
+refresh: true

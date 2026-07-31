@@ -14,6 +14,8 @@ from src.utils.language_feature_providers import (
     _canonicalize_speaker_turns,
     _choose_parser_component,
     _dependency_derivatives,
+    _aggregate_token_surprisal,
+    _encode_gpt2_words,
     disfluency_provider,
     entity_coreference_provider,
     lexical_norms_provider,
@@ -25,11 +27,58 @@ from src.utils.language_features import (
     AnnotationResult,
     StimulusDocument,
     _canonical_tokens,
+    _attach_iu_ids,
     generate_language_features,
+    hydrate_provider_resources,
     register_annotation_provider,
     register_document_loader,
     stage_language_resources,
 )
+
+
+def test_iu_boundaries_align_generically_to_reference_words(tmp_path):
+    native = pd.DataFrame(
+        {
+            "word": ["one", "two", "three", "four"],
+            "start": [0.0, 0.4, 0.8, 1.2],
+            "end": [0.2, 0.6, 1.0, 1.4],
+        }
+    )
+    boundaries = tmp_path / "iu.csv"
+    pd.DataFrame(
+        [{"time": 0.7, "prev_word": "two", "next_word": "three"}]
+    ).to_csv(boundaries, index=False)
+
+    result = _attach_iu_ids(native, boundaries)
+
+    assert result["iu_id"].tolist() == [0, 0, 1, 1]
+    assert result.attrs["iu_alignment"] == {"boundaries": 1, "time_fallbacks": 0}
+
+
+def test_provider_resource_config_deep_merges_provider_options(tmp_path):
+    shared = tmp_path / "shared.yml"
+    shared.write_text(
+        "provider_options:\n"
+        "  ud:\n"
+        "    model_resource: stanza_ewt\n"
+        "    use_gpu: false\n"
+        "resources:\n"
+        "  stanza_ewt:\n"
+        "    type: stanza_model\n"
+        "    path: stanza\n"
+    )
+    config = LanguageFeatureGenerationConfig(
+        provider_resource_config=str(shared),
+        provider_options={"ud": {"use_gpu": True}},
+    )
+
+    hydrate_provider_resources(config)
+
+    assert config.provider_options["ud"] == {
+        "model_resource": "stanza_ewt",
+        "use_gpu": True,
+    }
+    assert config.resources["stanza_ewt"]["type"] == "stanza_model"
 
 
 def _document() -> StimulusDocument:
@@ -75,9 +124,30 @@ def test_canonical_tokens_assign_contiguous_negative_sentence_runs_separately():
     assert tokens["sentence_id"].tolist() == [4, 4, 2, 5, 3, 6, 6]
 
 
+def test_gpt2_word_encoding_and_subtoken_surprisal_aggregation():
+    class Tokenizer:
+        @staticmethod
+        def encode(text, add_special_tokens=False):
+            assert text.startswith(" ")
+            assert not add_special_tokens
+            return {" hello": [10], " world": [20, 21]}[text]
+
+    token_ids, token_words = _encode_gpt2_words(
+        Tokenizer(), ["hello", "", "world"]
+    )
+    assert token_ids.tolist() == [10, 20, 21]
+    assert token_words.tolist() == [0, 2, 2]
+    result = _aggregate_token_surprisal(
+        np.array([np.nan, 2.5, 1.5]), token_words, 3
+    )
+    np.testing.assert_allclose(result, [np.nan, np.nan, 4.0], equal_nan=True)
+
+
 def test_native_controls_are_word_aligned_and_non_destructive():
     document = _document()
     result = native_provider(document, document.tokens, {}, {})
+    assert "surprisal" not in result.token_features
+    assert result.token_features["native_surprisal"].tolist() == [1.0, 2.0, 3.0, 4.0]
     assert result.token_features["native_lemma"].tolist() == [
         "the",
         "ice",

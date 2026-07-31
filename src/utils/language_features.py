@@ -14,6 +14,7 @@ from typing import Callable
 
 import numpy as np
 import pandas as pd
+import yaml
 
 from src.core.config import LanguageFeatureGenerationConfig
 from src.core.registry import get_dataset_adapter, resolve_dataset_context
@@ -201,8 +202,8 @@ def _canonical_tokens(native: pd.DataFrame) -> pd.DataFrame:
     return tokens
 
 
-def _attach_podcast_iu_ids(native: pd.DataFrame, path: Path) -> pd.DataFrame:
-    """Align reviewed IU boundaries while preserving canonical transcript order."""
+def _attach_iu_ids(native: pd.DataFrame, path: Path) -> pd.DataFrame:
+    """Align PSST IU boundaries while preserving canonical transcript order."""
     if not path.exists():
         return native
     boundaries = pd.read_csv(path).sort_values("time").reset_index(drop=True)
@@ -247,6 +248,13 @@ def _attach_podcast_iu_ids(native: pd.DataFrame, path: Path) -> pd.DataFrame:
     return result
 
 
+def _annotation_path(template: str | None, stimulus_id: str) -> Path | None:
+    """Resolve an optional stimulus-scoped annotation path template."""
+    if not template:
+        return None
+    return Path(str(template).format(story=stimulus_id, stimulus_id=stimulus_id))
+
+
 @register_document_loader("podcast")
 def load_podcast_document(config: LanguageFeatureGenerationConfig) -> StimulusDocument:
     context = resolve_dataset_context(
@@ -289,7 +297,7 @@ def load_podcast_document(config: LanguageFeatureGenerationConfig) -> StimulusDo
     iu_path = Path(
         config.dataset_options.get("iu_annotations", "processed_data/iu_boundaries.csv")
     )
-    native = _attach_podcast_iu_ids(native, iu_path)
+    native = _attach_iu_ids(native, iu_path)
     audio = config.dataset_options.get(
         "audio", os.path.join(config.data_root, "stimuli", "podcast.wav")
     )
@@ -315,12 +323,72 @@ def load_brain_treebank_document(
     native = get_dataset_adapter("brain_treebank").load_word_table(
         config.data_root, context, drop_untimed_words=True
     )
+    iu_path = _annotation_path(
+        config.dataset_options.get("iu_annotations"), context.stimulus_id
+    )
+    if iu_path is not None:
+        native = _attach_iu_ids(native, iu_path)
     document = StimulusDocument(
         "brain_treebank",
         context.stimulus_id,
         _canonical_tokens(native),
         native.reset_index(drop=True),
         metadata={"stimulus_label": context.stimulus_label},
+    )
+    document.validate()
+    return document
+
+
+@register_document_loader("fmri")
+def load_fmri_document(config: LanguageFeatureGenerationConfig) -> StimulusDocument:
+    """Load one deep-fMRI story from its exact word-tier TextGrid."""
+    from src.utils.fmri import load_story_word_data
+
+    story = config.per_dataset_config.get("story")
+    if not story or not isinstance(story, str):
+        raise ValueError("fMRI language features require per_dataset_config.story")
+    frames, _ = load_story_word_data(config.data_root, [story])
+    native = frames[story].copy().reset_index(drop=True)
+
+    sentence_path = _annotation_path(
+        config.dataset_options.get("sentence_annotations"), story
+    )
+    if sentence_path is None or not sentence_path.exists():
+        raise FileNotFoundError(
+            "fMRI language features require SaT sentence annotations at "
+            f"{sentence_path}"
+        )
+    sentences = pd.read_csv(sentence_path, sep="\t", keep_default_na=False)
+    required = {"token_id", "word", "sentence_id"}
+    if not required <= set(sentences):
+        raise ValueError(
+            f"Sentence annotations are missing {sorted(required - set(sentences))}"
+        )
+    if len(sentences) != len(native) or not np.array_equal(
+        sentences["word"].astype(str).str.lower().to_numpy(),
+        native["word"].astype(str).str.lower().to_numpy(),
+    ):
+        raise ValueError(f"SaT sentence annotations do not match fMRI story {story}")
+    native["sentence_idx"] = pd.to_numeric(
+        sentences["sentence_id"], errors="raise"
+    ).astype(int)
+    native["idx_in_sentence"] = native.groupby("sentence_idx").cumcount()
+
+    iu_path = _annotation_path(config.dataset_options.get("iu_annotations"), story)
+    if iu_path is not None:
+        native = _attach_iu_ids(native, iu_path)
+    audio = Path(config.data_root) / "data" / "ds003020" / "stimuli" / f"{story}.wav"
+    document = StimulusDocument(
+        "fmri",
+        story,
+        _canonical_tokens(native),
+        native,
+        media={"audio": str(audio)} if audio.exists() else {},
+        metadata={
+            "sentence_annotations": str(sentence_path),
+            "iu_annotations": str(iu_path) if iu_path is not None else None,
+            "iu_alignment": native.attrs.get("iu_alignment", {}),
+        },
     )
     document.validate()
     return document
@@ -426,6 +494,21 @@ def stage_language_resources(
     return staged
 
 
+def hydrate_provider_resources(config: LanguageFeatureGenerationConfig) -> None:
+    """Reuse provider/resource declarations from another explicit YAML config."""
+    source = config.provider_resource_config
+    if not source:
+        return
+    payload = yaml.safe_load(Path(source).read_text(encoding="utf-8")) or {}
+    inherited_options = payload.get("provider_options", {})
+    inherited_resources = payload.get("resources", {})
+    config.provider_options = {
+        name: {**inherited_options.get(name, {}), **config.provider_options.get(name, {})}
+        for name in set(inherited_options) | set(config.provider_options)
+    }
+    config.resources = {**inherited_resources, **config.resources}
+
+
 def _provider_order(requested: list[str]) -> list[str]:
     missing = [name for name in requested if name not in PROVIDERS]
     if missing:
@@ -472,6 +555,7 @@ def _input_fingerprint(document: StimulusDocument, config, resources) -> str:
 
 def generate_language_features(config: LanguageFeatureGenerationConfig) -> Path:
     """Run configured providers and atomically write one stimulus artifact."""
+    hydrate_provider_resources(config)
     # Import registers built-in providers without coupling this core to their code.
     from src.utils import language_feature_providers as _builtins  # noqa: F401
 

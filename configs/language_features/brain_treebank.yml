@@ -4,10 +4,17 @@ per_dataset_config:
   movie: cars-2
 output_dir: processed_data/language_features
 resource_dir: data/language_resources
+provider_resource_config: configs/language_features/podcast.yml
 
 providers:
   - native
+  - gpt2_surprisal
   - ud
+  - lexical_norms
+  - swow
+  - wordnet
+  - disfluency
+  - entity_coreference
 
 provider_options:
   ud:
@@ -15,11 +22,7 @@ provider_options:
     package: ewt
     model_resource: stanza_ewt
     use_gpu: false
+  entity_coreference:
+    use_gpu: true
 
-resources:
-  stanza_ewt:
-    type: stanza_model
-    path: stanza
-    language: en
-    package: ewt
-refresh: false
+refresh: true

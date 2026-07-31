@@ -71,9 +71,14 @@ def fmri_spatial_blocks(
 
 
 def _cluster_bootstrap_means(
-    target_z: np.ndarray, cluster_ids: np.ndarray, repeats: int, seed: int
+    target_z: np.ndarray,
+    cluster_ids: np.ndarray,
+    repeats: int,
+    seed: int,
+    *,
+    equal_cluster_weight: bool = False,
 ) -> np.ndarray:
-    """Target-weighted cluster bootstrap means for every rank."""
+    """Cluster-bootstrap means for every rank."""
     codes, _ = pd.factorize(cluster_ids, sort=False)
     n_clusters = int(codes.max()) + 1
     sums = np.stack([np.nansum(target_z[:, codes == i], axis=1) for i in range(n_clusters)])
@@ -82,7 +87,10 @@ def _cluster_bootstrap_means(
     output = np.empty((repeats, target_z.shape[0]), dtype=float)
     for repeat in range(repeats):
         chosen = rng.integers(0, n_clusters, size=n_clusters)
-        output[repeat] = sums[chosen].sum(axis=0) / counts[chosen].sum(axis=0)
+        if equal_cluster_weight:
+            output[repeat] = np.nanmean(sums[chosen] / counts[chosen], axis=0)
+        else:
+            output[repeat] = sums[chosen].sum(axis=0) / counts[chosen].sum(axis=0)
     return output
 
 
@@ -100,6 +108,7 @@ def summarize_rank_curve(
     *,
     bootstrap_repeats: int = 2000,
     seed: int = 0,
+    equal_cluster_weight: bool = False,
 ) -> SaturationSummary:
     """Summarize a target-weighted curve and its one-SE saturation point."""
     ranks = np.asarray(ranks, dtype=int)
@@ -107,8 +116,22 @@ def summarize_rank_curve(
     cluster_ids = np.asarray(cluster_ids)
     if target_z.shape[0] != len(ranks) or target_z.shape[1] != len(cluster_ids):
         raise ValueError("rank/target dimensions do not match ranks and cluster_ids")
-    boot = _cluster_bootstrap_means(target_z, cluster_ids, bootstrap_repeats, seed)
-    mean_z = np.nanmean(target_z, axis=1)
+    boot = _cluster_bootstrap_means(
+        target_z,
+        cluster_ids,
+        bootstrap_repeats,
+        seed,
+        equal_cluster_weight=equal_cluster_weight,
+    )
+    if equal_cluster_weight:
+        codes, _ = pd.factorize(cluster_ids, sort=False)
+        cluster_means = np.stack([
+            np.nanmean(target_z[:, codes == code], axis=1)
+            for code in range(int(codes.max()) + 1)
+        ])
+        mean_z = np.nanmean(cluster_means, axis=0)
+    else:
+        mean_z = np.nanmean(target_z, axis=1)
     sem_z = np.nanstd(boot, axis=0, ddof=1)
     peak_index = int(np.nanargmax(mean_z))
     threshold_z = mean_z[peak_index] - sem_z[peak_index]

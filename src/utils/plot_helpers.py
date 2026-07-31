@@ -16,7 +16,7 @@ GRAY = "#6b7280"
 
 def make_viridis_cmap():
     """Return a truncated viridis colormap (range 0.08–0.92)."""
-    _raw = cm.get_cmap("viridis", 256)
+    _raw = plt.get_cmap("viridis").resampled(256)
     return mcolors.LinearSegmentedColormap.from_list(
         "viridis_trunc", _raw(np.linspace(0.08, 0.92, 256))
     )

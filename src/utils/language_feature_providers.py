@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 import wave
 from collections import defaultdict
+from math import log
 from pathlib import Path
 
 import numpy as np
@@ -240,6 +241,140 @@ def _empty_features(token_table: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame({"token_id": token_table["token_id"].to_numpy()})
 
 
+def _encode_gpt2_words(tokenizer, words: list[str]) -> tuple[np.ndarray, np.ndarray]:
+    """Encode space-delimited transcript words and retain their word ownership."""
+    token_ids: list[int] = []
+    token_words: list[int] = []
+    for word_index, word in enumerate(words):
+        if not word:
+            continue
+        pieces = tokenizer.encode(f" {word}", add_special_tokens=False)
+        if not pieces:
+            continue
+        token_ids.extend(int(piece) for piece in pieces)
+        token_words.extend([word_index] * len(pieces))
+    return np.asarray(token_ids, dtype=np.int64), np.asarray(token_words, dtype=np.int64)
+
+
+def _aggregate_token_surprisal(
+    token_surprisal: np.ndarray, token_words: np.ndarray, n_words: int
+) -> np.ndarray:
+    """Sum BPE-token surprisal within each transcript word."""
+    result = np.full(n_words, np.nan, dtype=float)
+    for word_index in np.unique(token_words):
+        values = token_surprisal[token_words == word_index]
+        if np.isfinite(values).all():
+            result[int(word_index)] = float(values.sum())
+    return result
+
+
+@register_annotation_provider("gpt2_surprisal", version="1")
+def gpt2_surprisal_provider(
+    document, token_table, options, resources
+) -> AnnotationResult:
+    """Compute word surprisal from GPT-2 small using preceding story context."""
+    del document
+    resource_name = str(options.get("model_resource", "gpt2_small"))
+    if resource_name not in resources:
+        raise ValueError(f"Unknown GPT-2 model resource {resource_name!r}")
+    model_path = Path(resources[resource_name]["path"])
+    try:
+        import torch
+        from transformers import AutoModelForCausalLM, AutoTokenizer
+        from tqdm.auto import tqdm
+    except ImportError as exc:
+        raise ImportError(
+            "The gpt2_surprisal provider requires torch and transformers"
+        ) from exc
+
+    requested_device = str(options.get("device", "auto"))
+    if requested_device not in {"auto", "cpu", "cuda"}:
+        raise ValueError("gpt2_surprisal device must be auto, cpu, or cuda")
+    use_cuda = requested_device == "cuda" or (
+        requested_device == "auto" and torch.cuda.is_available()
+    )
+    if requested_device == "cuda" and not torch.cuda.is_available():
+        raise RuntimeError("GPT-2 surprisal requested CUDA, but CUDA is unavailable")
+    device = "cuda" if use_cuda else "cpu"
+    batch_size = int(options.get("batch_size", 16))
+    context_tokens = int(options.get("context_tokens", 1024))
+    if batch_size < 1:
+        raise ValueError("gpt2_surprisal batch_size must be positive")
+    if context_tokens != 1024:
+        raise ValueError("Standardized GPT-2 surprisal requires context_tokens=1024")
+
+    tokenizer = AutoTokenizer.from_pretrained(str(model_path), local_files_only=True)
+    model = AutoModelForCausalLM.from_pretrained(
+        str(model_path), local_files_only=True
+    ).eval().to(device)
+    words = token_table["word"].fillna("").astype(str).tolist()
+    token_ids, token_words = _encode_gpt2_words(tokenizer, words)
+    token_surprisal = np.full(len(token_ids), np.nan, dtype=float)
+    # Token zero has no preceding linguistic context. Every later target is scored
+    # from up to the previous 1,024 BPE tokens, with no cross-story state.
+    batch_starts = range(1, len(token_ids), batch_size)
+    for batch_start in tqdm(
+        batch_starts,
+        desc=f"GPT-2 surprisal ({len(token_table)} words)",
+        unit="batch",
+    ):
+        targets = np.arange(
+            batch_start, min(batch_start + batch_size, len(token_ids)), dtype=int
+        )
+        lengths = np.minimum(targets, context_tokens)
+        width = int(lengths.max())
+        input_ids = torch.full(
+            (len(targets), width),
+            int(tokenizer.eos_token_id),
+            dtype=torch.long,
+        )
+        attention_mask = torch.zeros((len(targets), width), dtype=torch.long)
+        position_ids = torch.zeros((len(targets), width), dtype=torch.long)
+        for row, (target, length) in enumerate(zip(targets, lengths)):
+            context = torch.from_numpy(token_ids[target - length : target])
+            input_ids[row, width - length :] = context
+            attention_mask[row, width - length :] = 1
+            position_ids[row, width - length :] = torch.arange(length)
+        input_ids = input_ids.to(device)
+        attention_mask = attention_mask.to(device)
+        position_ids = position_ids.to(device)
+        with torch.inference_mode():
+            logits = model(
+                input_ids,
+                attention_mask=attention_mask,
+                position_ids=position_ids,
+            ).logits[:, -1, :].float()
+            target_ids = torch.from_numpy(token_ids[targets]).to(device)
+            nll_nats = torch.nn.functional.cross_entropy(
+                logits, target_ids, reduction="none"
+            )
+        token_surprisal[targets] = nll_nats.cpu().numpy() / log(2.0)
+    word_surprisal = _aggregate_token_surprisal(
+        token_surprisal, token_words, len(token_table)
+    )
+    del model
+    if use_cuda:
+        torch.cuda.empty_cache()
+    return AnnotationResult(
+        pd.DataFrame(
+            {
+                "token_id": token_table["token_id"].to_numpy(),
+                "surprisal": word_surprisal,
+            }
+        ),
+        metadata={
+            "model": "gpt2",
+            "model_resource": resource_name,
+            "device": device,
+            "context_reset": "stimulus",
+            "context_tokens": context_tokens,
+            "unit": "bits",
+            "word_aggregation": "sum_bpe_tokens",
+            "first_token": "missing",
+        },
+    )
+
+
 @register_annotation_provider("disfluency", version="1", requires=("ud",))
 def disfluency_provider(document, token_table, options, resources) -> AnnotationResult:
     """Generate conservative transcript-based disfluency and recurrence labels."""
@@ -381,8 +516,6 @@ def native_provider(document, token_table, options, resources) -> AnnotationResu
     for source, target in mapping.items():
         if source in native and target not in output:
             output[target] = native[source].replace("", pd.NA).to_numpy()
-    if "native_surprisal" in output:
-        output["surprisal"] = output["native_surprisal"]
     if "native_entropy" in output:
         output["entropy"] = output["native_entropy"]
 

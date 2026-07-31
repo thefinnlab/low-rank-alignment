@@ -27,6 +27,7 @@ dependencies = [
     "stanza>=1.10.1",
     "peft",
     "pyannote.audio>=4,<5",
+    "wtpsplit>=2.2.1",
 ]
 
 [[tool.uv.index]]

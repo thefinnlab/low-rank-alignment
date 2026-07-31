@@ -22,6 +22,7 @@ LANGUAGE_DECODING_CONFIG ?= configs/rrr/language_decoding.yml
 LANGUAGE_RECONSTRUCTION_CONFIG ?= configs/rrr/language_reconstruction.yml
 LANGUAGE_AXIS_ENCODING_CONFIG ?= configs/rrr/language_axis_encoding.yml
 LANGUAGE_FEATURE_CONFIG ?= configs/language_features/podcast.yml
+SURPRISAL_CONFIGS ?= configs/language_features/podcast.yml configs/language_features/brain_treebank.yml configs/language_features/fmri.yml
 GCCA_CONFIG     ?= configs/gcca/maxvar_gcca.yml
 GCCA_ENCODING_CONFIG ?= configs/gcca/encoding.yml
 PRECOMPUTE_EPOCHS_CONFIG ?= configs/precompute_epochs/precompute_epochs_default.yml
@@ -205,8 +206,8 @@ rrr:
 	mkdir -p logs
 	$(CMD) scripts/rrr/run_rrr.py --config $(RRR_CONFIG) $(OVERRIDES)
 
-## Discover completed RRR and PCA runs and generate target-level rank saturation figures.
-## Restrict to RRR with RANK_SATURATION_ARGS="--methods rrr".
+## Discover paired RRR/PCA runs and generate combined target-level rank saturation figures.
+## Filter with RANK_SATURATION_ARGS="--condition internal_rrr" (or cross_dataset).
 rank-saturation:
 	uv run python scripts/rrr/plot_rank_saturation.py $(RANK_SATURATION_ARGS)
 
@@ -236,6 +237,16 @@ language-axis-encoding:
 language-features:
 	mkdir -p logs
 	$(CMD) scripts/utilities/generate_language_features.py --config $(LANGUAGE_FEATURE_CONFIG) $(OVERRIDES)
+
+## Generate/update only GPT-2 surprisal for Podcast, Cars 2, and shared fMRI stories
+surprisal:
+	$(CMD) scripts/utilities/generate_surprisal.py $(foreach config,$(SURPRISAL_CONFIGS),--config $(config)) $(OVERRIDES)
+
+## Resume fMRI SaT/PSST boundaries, then generate expanded Cars 2 and fMRI labels.
+expanded-language-features:
+	uv run python scripts/utilities/generate_fmri_language_boundaries.py --device cuda --stories alternateithicatom souls avatar legacy odetostepfather undertheinfluence howtodraw myfirstdaywiththeyankees naked stagefright tildeath sloth exorcism haveyoumethimyet adollshouse inamoment theclosetthatateeverything adventuresinsayingyes buck swimmingwithastronauts thatthingonmyarm eyespy itsabox hangtime wheretheressmoke
+	uv run python scripts/utilities/generate_language_features.py --config configs/language_features/brain_treebank.yml
+	uv run python scripts/utilities/generate_language_features.py --config configs/language_features/fmri.yml
 
 ## Explicitly download/validate resources without running annotation providers
 stage-language-resources:

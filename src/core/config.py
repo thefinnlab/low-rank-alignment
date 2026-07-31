@@ -485,6 +485,7 @@ class LanguageFeatureGenerationConfig:
     model_dir: str = "gpt2-xl"
     output_dir: str = "processed_data/language_features"
     resource_dir: str = "data/language_resources"
+    provider_resource_config: str | None = None
     providers: list[str] = field(
         default_factory=lambda: ["native", "ud", "lexical_norms", "swow", "wordnet"]
     )

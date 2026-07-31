@@ -1,7 +1,8 @@
 # Language Feature Generation
 
 `scripts/utilities/generate_language_features.py` creates reusable annotations before
-language decoding. It currently supports Podcast and every Brain Treebank movie. The
+language decoding. It supports Podcast, every Brain Treebank movie, and story-batched
+deep-fMRI TextGrid transcripts. The
 Podcast decoder registry reads useful generated columns directly from `tokens.tsv`, so
 decoding does not rerun parsers or lexicon joins.
 
@@ -10,8 +11,15 @@ decoding does not rerun parsers or lexicon joins.
 Each dataset loader returns a `StimulusDocument` with contiguous canonical word IDs,
 surface text, timing, sentence membership, optional speakers, source IDs, and media
 references. Providers consume this contract and may have dataset-specific overrides.
-Adding deep-fMRI later therefore requires a document loader; providers remain reusable
-unless the dataset has a better native source for a feature.
+Deep-fMRI generation uses one document and artifact directory per story. Run
+`scripts/utilities/generate_fmri_language_boundaries.py` first: TED2020-corrupted English
+Segment Any Text supplies sentence boundaries for the unpunctuated word tier, while PSST
+supplies audio-derived IU boundaries. Both are snapped back to the exact TextGrid words.
+The boundary and feature sweeps resume at the story-artifact level.
+`scripts/utilities/generate_surprisal.py` (or `make surprisal`) updates only the shared
+GPT-2 surprisal column in existing artifacts, and creates canonical minimal artifacts
+when a story has no completed full-provider output. It is resumable by model checksum
+and avoids rerunning unrelated audio and document-level providers.
 
 Negative or missing source sentence IDs are normalized by assigning each contiguous run
 of affected words its own synthetic sentence ID after the source's nonnegative ID range.
@@ -20,6 +28,9 @@ For the centered `[-1, 1]` NRC-VAD release, emotional intensity is absolute vale
 Providers are resource bundles rather than one function per target. The built-ins are:
 
 - `native`: timing, structural controls, and source annotations under `native_*` names;
+- `gpt2_surprisal`: standardized GPT-2-small word surprisal in bits, resetting at each
+  stimulus, using up to 1,024 preceding BPE tokens, and summing across a word's BPE
+  tokens; the first word is missing because it has no preceding linguistic context;
 - `ud`: common Stanza EWT lemmas, UD POS/morphology/dependencies, deterministic tree
   measures, and a parser-token-to-canonical-word crosswalk;
 - `lexical_norms`: configuration-driven norm tables, longest non-overlapping phrase
@@ -83,7 +94,7 @@ complete interface.
 | `part_of_speech` | categorical | Standardized universal POS | Stanza UD | Complete |
 | `fine_part_of_speech` | categorical | Standardized language-specific POS | Stanza UD | Complete |
 | `content_word` | categorical | UD content/function indicator | Stanza UD | Complete |
-| `surprisal` | continuous | Standardized surprisal | Native provider | Complete |
+| `surprisal` | continuous | GPT-2-small surprisal in bits | GPT-2 provider | Complete |
 | `entropy` | continuous | Standardized entropy | Native provider | Complete |
 | `surprisal_class` | categorical | Three-way surprisal bin | Legacy Podcast CSV | Complete (legacy) |
 | `story_position` | continuous | Normalized word progress | Native provider | Complete |
@@ -185,8 +196,8 @@ the combined morphology string, and `aspect` are intentionally not decoding targ
 - Event-boundary and mental-state/perspective targets are not yet implemented.
 - Expanded prosody beyond word timing and pauses (F0/intensity, rate, lengthening,
   pitch reset, prominence, ToBI, and repair/false-start targets) is not yet implemented.
-- Brain Treebank artifacts can be generated, but loading them into language decoding is
-  future work because the current language-decoding runner is Podcast-only.
+- Brain Treebank and fMRI artifacts can be generated, but loading them into language
+  decoding is future work because the current language-decoding runner is Podcast-only.
 
 ## Resource staging
 

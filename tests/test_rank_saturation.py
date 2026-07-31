@@ -1,6 +1,8 @@
 import numpy as np
 import pandas as pd
+from pathlib import Path
 
+from scripts.rrr.plot_rank_saturation import Analysis, _artifact_stem, output_parts
 from src.utils.rank_saturation import (
     electrode_units,
     fmri_spatial_blocks,
@@ -46,6 +48,21 @@ def test_cluster_bootstrap_retains_target_weighted_mean():
     np.testing.assert_allclose(result.curve["mean_z"], [0.25, 0.4])
 
 
+def test_equal_cluster_weight_gives_subjects_equal_influence():
+    ranks = np.array([1, 2])
+    target_z = np.array([[0.0, 0.0, 0.0, 1.0], [0.2, 0.2, 0.2, 1.0]])
+    subjects = np.array(["many", "many", "many", "one"])
+    result = summarize_rank_curve(
+        ranks,
+        target_z,
+        subjects,
+        bootstrap_repeats=200,
+        seed=4,
+        equal_cluster_weight=True,
+    )
+    np.testing.assert_allclose(result.curve["mean_z"], [0.5, 0.6])
+
+
 def test_fmri_blocks_recover_response_columns_from_thick_mask(tmp_path):
     import nibabel as nib
 
@@ -62,3 +79,28 @@ def test_fmri_blocks_recover_response_columns_from_thick_mask(tmp_path):
     manifest = pd.DataFrame({"subject": ["UTS01"] * 3, "voxel_index": [0, 1, 2]})
     blocks = fmri_spatial_blocks(manifest, tmp_path, block_mm=4.0)
     assert blocks.tolist() == ["UTS01:0:0:0", "UTS01:0:0:0", "UTS01:1:0:0"]
+
+
+def test_rank_saturation_output_parts_for_internal_movie_run():
+    root = Path("results")
+    analysis = Analysis(
+        root / "gpt2-xl-batch_layer24_offset0" / "movie-cars-2",
+        "ieeg",
+        {},
+    )
+    assert output_parts(analysis, root) == (
+        "cars-2", "internal_rrr", "gpt2-xl-batch", "layer24"
+    )
+
+
+def test_rank_saturation_output_parts_for_cross_dataset_fmri_run():
+    root = Path("results")
+    analysis = Analysis(
+        root / "fmri" / "gpt2-xl_layer24" / "cross_dataset_rrr",
+        "fmri",
+        {},
+    )
+    assert output_parts(analysis, root) == (
+        "fmri", "cross_dataset", "gpt2-xl", "layer24"
+    )
+    assert _artifact_stem(analysis, root) == "cross_dataset_rrr"
