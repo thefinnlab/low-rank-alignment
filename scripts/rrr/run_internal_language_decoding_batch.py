@@ -35,6 +35,16 @@ def build_layer_configs(manifest_path: str, model: str) -> list[LanguageDecoding
         raise ValueError(f"Unknown model {model!r}; available={sorted(models)}")
     model_spec = models[model]
     rrr_config = load_config(model_spec["rrr_config"], {}, RRRConfig)
+    task_data = dict(payload["task_data"])
+    self_surprisal_root = payload.get("self_surprisal_root")
+    if self_surprisal_root:
+        task_data["self_surprisal"] = str(
+            Path(self_surprisal_root)
+            / model
+            / payload["self_surprisal_dataset"]
+            / payload["self_surprisal_stimulus"]
+            / "tokens.tsv"
+        )
     config = LanguageDecodingConfig(
         encoding=deepcopy(rrr_config.encoding),
         rrr_run_path=str(model_spec["result_template"]) + "/rrr",
@@ -44,7 +54,7 @@ def build_layer_configs(manifest_path: str, model: str) -> list[LanguageDecoding
         device=str(payload.get("device", "auto")),
         rank_grid=[int(rank) for rank in rrr_config.rank_grid],
         tasks=[str(task) for task in payload["tasks"]],
-        task_data=dict(payload["task_data"]),
+        task_data=task_data,
         logistic_cs=[float(value) for value in payload.get(
             "logistic_cs", [1e-4, 1e-3, 1e-2, 1e-1, 1, 10, 100]
         )],

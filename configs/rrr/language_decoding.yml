@@ -36,6 +36,7 @@ tasks:
   - fine_part_of_speech
   - content_word
   - surprisal
+  - self_surprisal
   - entropy
   - surprisal_class
   - story_position

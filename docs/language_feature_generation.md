@@ -20,6 +20,13 @@ The boundary and feature sweeps resume at the story-artifact level.
 GPT-2 surprisal column in existing artifacts, and creates canonical minimal artifacts
 when a story has no completed full-provider output. It is resumable by model checksum
 and avoids rerunning unrelated audio and document-level providers.
+`scripts/utilities/generate_self_surprisal.py` (or `make self-surprisal`) creates
+separate model/dataset/stimulus artifacts under
+`processed_data/language_features/self_surprisal/`. Causal models are scored in bits
+with their configured tokenizer, final LM head, causal window/stride, and initialization;
+subtoken surprisals are summed within each transcript word. The random GPT-2 XL uses
+its configured seed. RoBERTa's artifact copies standardized GPT-2-small surprisal and
+records that fallback explicitly in `manifest.json`.
 `scripts/utilities/generate_fmri_iu_features.py` (or `make fmri-iu-features`) similarly
 populates IU position, onset, end, and length from the already aligned PSST boundaries
 without rerunning audio inference or unrelated providers.
@@ -102,6 +109,7 @@ complete interface.
 | `fine_part_of_speech` | categorical | Standardized language-specific POS | Stanza UD | Complete |
 | `content_word` | categorical | UD content/function indicator | Stanza UD | Complete |
 | `surprisal` | continuous | GPT-2-small surprisal in bits | GPT-2 provider | Complete |
+| `self_surprisal` | continuous | Embedding model's own surprisal in bits; GPT-2 fallback for RoBERTa | Per-model artifact | Complete |
 | `entropy` | continuous | Standardized entropy | Native provider | Complete |
 | `surprisal_class` | categorical | Three-way surprisal bin | Legacy Podcast CSV | Complete (legacy) |
 | `story_position` | continuous | Normalized word progress | Native provider | Complete |

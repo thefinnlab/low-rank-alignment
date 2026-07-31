@@ -2,12 +2,14 @@ dataset: fmri
 device: auto
 refresh: false
 feature_root: processed_data/language_features/fmri
+self_surprisal_root: processed_data/language_features/self_surprisal
 
 # These columns are present for every retained training story and the shared held-out
 # story. Decoder regularization uses leave-one-session-out CV on training stories;
 # final metrics are reported only on wheretheressmoke.
 tasks:
   - surprisal
+  - self_surprisal
   - word_zipf_frequency
   - word_length
   - content_word

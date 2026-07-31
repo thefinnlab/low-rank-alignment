@@ -55,11 +55,25 @@ def _complete(config: FMRICrossDatasetRRRConfig) -> bool:
                for k in config.rank_grid)
 
 
-def _load_labels(stories, feature_root: str, tasks: list[str]):
+def _load_labels(stories, feature_root: str, tasks: list[str], self_surprisal_root=None):
     tables = {}
     for story in stories:
         path = Path(feature_root) / story / "tokens.tsv"
         table = pd.read_csv(path, sep="\t", keep_default_na=False, low_memory=False)
+        if "self_surprisal" in tasks:
+            if self_surprisal_root is None:
+                raise ValueError("self_surprisal requires self_surprisal_root")
+            self_path = Path(self_surprisal_root) / story / "tokens.tsv"
+            self_table = pd.read_csv(
+                self_path, sep="\t", keep_default_na=False, low_memory=False
+            )
+            if len(self_table) != len(table) or not np.array_equal(
+                self_table["word"].astype(str), table["word"].astype(str)
+            ):
+                raise ValueError(f"Self-surprisal alignment failed for {story}")
+            table["self_surprisal"] = pd.to_numeric(
+                self_table["self_surprisal"], errors="coerce"
+            )
         missing = set(tasks) - set(table)
         if missing:
             raise ValueError(f"{story} is missing feature columns {sorted(missing)}")
@@ -110,7 +124,12 @@ def _run(manifest, config, model, device, refresh):
         config.fmri.embedding_root, config.model_dir, stories, config.layer, config.pooling
     )
     frames, _ = load_story_word_data(config.fmri.fmri_repo_root, stories)
-    tables, targets = _load_labels(stories, manifest["feature_root"], manifest["tasks"])
+    self_root = manifest.get("self_surprisal_root")
+    if self_root:
+        self_root = Path(self_root) / model / "fmri"
+    tables, targets = _load_labels(
+        stories, manifest["feature_root"], manifest["tasks"], self_root
+    )
     for story in stories:
         if len(embeddings[story]) != len(tables[story]) or not np.array_equal(
             frames[story]["word"].astype(str), tables[story]["word"].astype(str)

@@ -6,6 +6,7 @@ refresh: false
 # discussed interpretable features present across its completed token artifact.
 tasks:
   - surprisal
+  - self_surprisal
   - word_zipf_frequency
   - word_length
   - content_word
@@ -21,6 +22,10 @@ tasks:
 
 task_data:
   language_features: processed_data/language_features/brain_treebank/cars-2/tokens.tsv
+
+self_surprisal_root: processed_data/language_features/self_surprisal
+self_surprisal_dataset: brain_treebank
+self_surprisal_stimulus: cars-2
 
 models:
   gpt-j-6b:

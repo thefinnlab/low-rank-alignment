@@ -30,6 +30,7 @@ LANGUAGE_RECONSTRUCTION_CONFIG ?= configs/rrr/language_reconstruction.yml
 LANGUAGE_AXIS_ENCODING_CONFIG ?= configs/rrr/language_axis_encoding.yml
 LANGUAGE_FEATURE_CONFIG ?= configs/language_features/podcast.yml
 SURPRISAL_CONFIGS ?= configs/language_features/podcast.yml configs/language_features/brain_treebank.yml configs/language_features/fmri.yml
+SELF_SURPRISAL_CONFIG ?= configs/language_features/self_surprisal.yml
 GCCA_CONFIG     ?= configs/gcca/maxvar_gcca.yml
 GCCA_ENCODING_CONFIG ?= configs/gcca/encoding.yml
 PRECOMPUTE_EPOCHS_CONFIG ?= configs/precompute_epochs/precompute_epochs_default.yml
@@ -263,6 +264,10 @@ language-features:
 ## Generate/update only GPT-2 surprisal for Podcast, Cars 2, and shared fMRI stories
 surprisal:
 	$(CMD) scripts/utilities/generate_surprisal.py $(foreach config,$(SURPRISAL_CONFIGS),--config $(config)) $(OVERRIDES)
+
+## Generate model-specific surprisal used by the self_surprisal decoding task
+self-surprisal:
+	$(CMD) scripts/utilities/generate_self_surprisal.py --config $(SELF_SURPRISAL_CONFIG) $(OVERRIDES)
 
 ## Populate fMRI IU position, onset, end, and length from aligned PSST boundaries
 fmri-iu-features:

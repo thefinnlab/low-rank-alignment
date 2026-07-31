@@ -35,6 +35,11 @@ def test_internal_batch_expands_model_layers_and_result_templates():
     assert configs[1].encoding.dataset == "brain_treebank"
     assert "iu_position" not in configs[1].tasks
     assert "surprisal" in configs[1].tasks
+    assert "self_surprisal" in configs[1].tasks
+    assert configs[1].task_data["self_surprisal"] == (
+        "processed_data/language_features/self_surprisal/gpt2/"
+        "brain_treebank/cars-2/tokens.tsv"
+    )
 
 
 def test_internal_batch_podcast_includes_requested_iu_and_norm_features():
@@ -49,6 +54,9 @@ def test_internal_batch_podcast_includes_requested_iu_and_norm_features():
         48,
     ]
     assert Path(configs[0].task_data["language_features"]).name == "tokens.tsv"
+    assert configs[0].task_data["self_surprisal"].endswith(
+        "gpt2-xl/podcast/podcast/tokens.tsv"
+    )
     assert {"iu_position", "iu_onset", "iu_end", "concreteness", "surprisal"} <= set(
         configs[0].tasks
     )
@@ -66,6 +74,7 @@ def test_fmri_batch_uses_only_heldout_story_available_features():
     assert {"iu_position", "iu_onset", "iu_end", "iu_length"} <= set(
         manifest["tasks"]
     )
+    assert "self_surprisal" in manifest["tasks"]
 
 
 def test_fmri_decoder_inner_cv_holds_out_complete_sessions_after_missing_mask():

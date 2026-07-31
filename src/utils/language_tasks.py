@@ -125,6 +125,32 @@ class PodcastTaskContext:
         return self._cache["language_features"]
 
     @property
+    def self_surprisal(self) -> pd.DataFrame:
+        """Return model-specific surprisal after strict transcript alignment."""
+        if "self_surprisal" not in self._cache:
+            default = str(self.paths.get(
+                "language_features",
+                "processed_data/language_features/podcast/podcast/tokens.tsv",
+            ))
+            path = self._resolve_path("self_surprisal", default)
+            features = pd.read_csv(
+                path, sep="\t", keep_default_na=False, na_values=[""]
+            )
+            self._validate_alignment(
+                features,
+                id_column="token_id",
+                start_column="start",
+                end_column="end",
+                source_name="Self-surprisal artifact",
+            )
+            if "self_surprisal" not in features:
+                raise ValueError(
+                    f"Self-surprisal artifact {path} is missing 'self_surprisal'"
+                )
+            self._cache["self_surprisal"] = features
+        return self._cache["self_surprisal"]
+
+    @property
     def words(self) -> pd.DataFrame:
         """Return legacy Podcast annotations used only by ``surprisal_class``."""
         if "words" not in self._cache:
@@ -274,6 +300,14 @@ _CONTINUOUS_TASKS = {
     "coreference_chain_size": "Coreference chain size",
     "coreference_antecedent_distance_words": "Coreference antecedent distance",
 }
+
+
+@register_language_task("self_surprisal", "Self surprisal", "continuous")
+def self_surprisal_target(context: PodcastTaskContext) -> np.ndarray:
+    """Read surprisal produced by the embedding model's own LM head."""
+    return pd.to_numeric(
+        context.self_surprisal["self_surprisal"], errors="coerce"
+    ).to_numpy(dtype=np.float64)
 
 _CATEGORICAL_TASKS = {
     "speaker_identity": ("Speaker identity", None),
