@@ -22,6 +22,10 @@ LANGUAGE_DECODING_CONFIG ?= configs/rrr/language_decoding.yml
 LANGUAGE_DECODING_DATASET ?= podcast
 LANGUAGE_DECODING_MODELS ?= $(filter-out glove,$(PIPELINE_MODELS))
 LANGUAGE_DECODING_SUBMIT_ARGS ?=
+FMRI_LANGUAGE_BOOTSTRAP_REPEATS ?= 10000
+FMRI_LANGUAGE_BOOTSTRAP_ARGS ?=
+LANGUAGE_DECODING_BOOTSTRAP_REPEATS ?= 10000
+LANGUAGE_DECODING_BOOTSTRAP_ARGS ?=
 LANGUAGE_RECONSTRUCTION_CONFIG ?= configs/rrr/language_reconstruction.yml
 LANGUAGE_AXIS_ENCODING_CONFIG ?= configs/rrr/language_axis_encoding.yml
 LANGUAGE_FEATURE_CONFIG ?= configs/language_features/podcast.yml
@@ -226,6 +230,16 @@ language-decoding:
 ## completed configured layers. Add --dry-run through LANGUAGE_DECODING_SUBMIT_ARGS.
 submit-language-decoding:
 	$(CMD) scripts/submit_language_decoding.py --dataset $(LANGUAGE_DECODING_DATASET) --models $(LANGUAGE_DECODING_MODELS) $(LANGUAGE_DECODING_SUBMIT_ARGS)
+
+## Paired sentence-block RRR-vs-PCA inference per fMRI rank, including an
+## equal-model-weighted hierarchical summary with layers averaged within model.
+fmri-language-decoding-bootstrap:
+	$(CMD) scripts/fmri/bootstrap_language_decoding.py --bootstrap-repeats $(FMRI_LANGUAGE_BOOTSTRAP_REPEATS) $(FMRI_LANGUAGE_BOOTSTRAP_ARGS)
+
+## Bootstrap one dataset's paired internal RRR/PCA decoding results. The dataset
+## defaults to LANGUAGE_DECODING_DATASET and may be podcast, cars-2, or fmri.
+language-decoding-bootstrap:
+	$(CMD) scripts/bootstrap_language_decoding.py --dataset $(LANGUAGE_DECODING_DATASET) --bootstrap-repeats $(LANGUAGE_DECODING_BOOTSTRAP_REPEATS) $(LANGUAGE_DECODING_BOOTSTRAP_ARGS)
 
 ## Predict matched-rank RRR/PCA spaces from configured language-task variables.
 ## Use CMD="uv run python" for a local run.

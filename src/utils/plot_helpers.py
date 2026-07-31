@@ -12,6 +12,7 @@ import matplotlib.pyplot as plt
 # Shared color constants
 RED_BASELINE = "#d62728"
 GRAY = "#6b7280"
+RRR_PCA_COLORS = {"rrr": "#74cee5", "pca": "#56a89c"}
 
 
 def make_viridis_cmap():

@@ -373,6 +373,7 @@ def _run_one_fit(
     config: LanguageDecodingConfig,
     A: np.ndarray | None,
     subspace: str,
+    block_ids: np.ndarray | None = None,
 ) -> dict:
     cached = _load_cached_fit(
         output_dir, task_name, fold, rank, subspace, config.refresh
@@ -401,6 +402,15 @@ def _run_one_fit(
     }
     artifact_dir.mkdir(parents=True, exist_ok=True)
     np.savez(weights_path, **_weight_payload(pipeline, A))
+    np.savez_compressed(
+        artifact_dir / "heldout_predictions.npz",
+        y_true=np.asarray(y[task_test]),
+        y_pred=np.asarray(prediction),
+        row_index=np.asarray(task_test, dtype=int),
+        block_id=np.asarray(
+            task_test if block_ids is None else block_ids[task_test], dtype=str
+        ),
+    )
     metrics_path.write_text(json.dumps(metrics, indent=2, allow_nan=True))
     return metrics
 
@@ -417,6 +427,7 @@ def _run_task_decoding(
     config: LanguageDecodingConfig,
     A: np.ndarray | None,
     subspace: str,
+    block_ids: np.ndarray | None = None,
 ) -> list[dict]:
     """Fit one design, batching continuous targets with identical valid rows."""
     results: dict[str, dict] = {}
@@ -425,7 +436,7 @@ def _run_task_decoding(
     for task_name in config.tasks:
         spec = get_language_task(task_name)
         if spec.kind != "continuous":
-            results[task_name] = _run_one_fit(
+            fit_args = (
                 output_dir,
                 task_name,
                 spec.kind,
@@ -438,6 +449,9 @@ def _run_task_decoding(
                 config,
                 A,
                 subspace,
+            )
+            results[task_name] = _run_one_fit(
+                *fit_args, *(() if block_ids is None else (block_ids,))
             )
             continue
         cached = _load_cached_fit(
@@ -457,7 +471,7 @@ def _run_task_decoding(
         task_test = np.asarray(test_key, dtype=int)
         if len(task_names) == 1:
             task_name = task_names[0]
-            results[task_name] = _run_one_fit(
+            fit_args = (
                 output_dir,
                 task_name,
                 "continuous",
@@ -470,6 +484,9 @@ def _run_task_decoding(
                 config,
                 A,
                 subspace,
+            )
+            results[task_name] = _run_one_fit(
+                *fit_args, *(() if block_ids is None else (block_ids,))
             )
             continue
         targets = np.column_stack(
@@ -501,6 +518,15 @@ def _run_task_decoding(
             np.savez(
                 artifact_dir / "weights.npz",
                 **_weight_payload(pipeline, A, target_index=target_index),
+            )
+            np.savez_compressed(
+                artifact_dir / "heldout_predictions.npz",
+                y_true=np.asarray(y[task_test]),
+                y_pred=np.asarray(predictions[:, target_index]),
+                row_index=np.asarray(task_test, dtype=int),
+                block_id=np.asarray(
+                    task_test if block_ids is None else block_ids[task_test], dtype=str
+                ),
             )
             (artifact_dir / "metrics.json").write_text(
                 json.dumps(metrics, indent=2, allow_nan=True)
@@ -1000,6 +1026,7 @@ def _run_subspace_decoding(
     folds: list[tuple[np.ndarray, np.ndarray]],
     task_targets: dict[str, np.ndarray],
     config: LanguageDecodingConfig,
+    block_ids: np.ndarray | None = None,
 ) -> list[dict]:
     """Run one shared task/rank/fold sweep over prepared subspace inputs."""
     rows = []
@@ -1025,6 +1052,7 @@ def _run_subspace_decoding(
                     config=config,
                     A=ambient_factor,
                     subspace=subspace,
+                    block_ids=block_ids,
                 )
             )
     return rows
@@ -1158,11 +1186,13 @@ def run_language_decoding(config: LanguageDecodingConfig) -> Path:
                 )
         X = None if embeddings is None else embeddings[selection]
         task_targets = {name: target[selection] for name, target in task_targets.items()}
+        block_ids = context.language_features["sentence_id"].astype(str).to_numpy()[selection]
         folds = _outer_folds(test_idxs, len(selection))
     else:
         selection = np.arange(len(word_df), dtype=int)
         X = embeddings
         fold_root = None
+        block_ids = context.language_features["sentence_id"].astype(str).to_numpy()
         folds = list(
             KFold(n_splits=enc.num_folds, shuffle=False).split(
                 np.arange(len(selection))
@@ -1292,6 +1322,7 @@ def run_language_decoding(config: LanguageDecodingConfig) -> Path:
                 config=config,
                 A=full_projection,
                 subspace="full",
+                block_ids=block_ids,
             )
         )
 
@@ -1321,6 +1352,7 @@ def run_language_decoding(config: LanguageDecodingConfig) -> Path:
         folds=folds,
         task_targets=task_targets,
         config=config,
+        block_ids=block_ids,
     ))
     pca_prepared = None
     if pca_factor_paths:
@@ -1350,6 +1382,7 @@ def run_language_decoding(config: LanguageDecodingConfig) -> Path:
             folds=folds,
             task_targets=task_targets,
             config=config,
+            block_ids=block_ids,
         ))
 
     results = pd.DataFrame(rows)

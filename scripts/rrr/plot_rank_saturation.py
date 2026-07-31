@@ -22,7 +22,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 from scipy.stats import t
-from src.utils.plot_helpers import RED_BASELINE, apply_publication_style
+from src.utils.plot_helpers import RED_BASELINE, RRR_PCA_COLORS, apply_publication_style
 from src.utils.rank_saturation import (
     SaturationSummary,
     electrode_units,
@@ -34,7 +34,7 @@ from src.utils.rank_saturation import (
 )
 
 
-METHOD_COLORS = {"rrr": "#74cee5", "pca": "#56a89c"}
+METHOD_COLORS = RRR_PCA_COLORS
 
 
 @dataclass(frozen=True)

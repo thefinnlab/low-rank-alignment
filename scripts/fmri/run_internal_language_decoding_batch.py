@@ -123,6 +123,9 @@ def _run(manifest, config, model, device, refresh):
         rrr_run_path="unused", device=device or manifest.get("device", "auto"),
         tasks=list(manifest["tasks"]), refresh=refresh,
     )
+    solver_params = dict(decoder.encoding.ridge_solver_params or {})
+    solver_params.setdefault("n_alphas_batch", 1)
+    decoder.encoding.ridge_solver_params = solver_params
     _configure_decoder_backend(decoder.device)
     output = Path(config.output_dir) / "language_decoding" / "heldout_wheretheressmoke"
     if (output / "metrics.csv").is_file() and not refresh:
@@ -130,7 +133,7 @@ def _run(manifest, config, model, device, refresh):
         return
     output.mkdir(parents=True, exist_ok=True)
     rows = []
-    designs = [("full", None, None)]
+    designs = []
     paired_ranks = [
         int(rank)
         for rank in config.rank_grid
@@ -165,13 +168,22 @@ def _run(manifest, config, model, device, refresh):
             artifact = output / "tasks" / task / method / ("full" if rank is None else f"k{rank}")
             artifact.mkdir(parents=True, exist_ok=True)
             np.savez(artifact / "weights.npz", **_weight_payload(pipeline, factor))
+            np.savez_compressed(
+                artifact / "heldout_predictions.npz",
+                y_true=np.asarray(test_y[test_valid]),
+                y_pred=np.asarray(prediction),
+                row_index=np.flatnonzero(test_valid),
+                block_id=tables[test_stories[0]].loc[
+                    test_valid, "sentence_id"
+                ].astype(str).to_numpy(dtype=str),
+            )
             (artifact / "metrics.json").write_text(json.dumps(metrics, indent=2, allow_nan=True))
     pd.DataFrame(rows).to_csv(output / "metrics.csv", index=False)
     (output / "metadata.json").write_text(json.dumps({
         "dataset": "fmri", "model": model, "layer": int(config.layer),
         "train_stories": train_stories, "test_story": test_stories[0],
         "inner_cv": "leave_one_session_out", "tasks": manifest["tasks"],
-        "paired_ranks": paired_ranks, "full_embedding_reference": True,
+        "paired_ranks": paired_ranks,
     }, indent=2))
     print(f"Done: {output}")
 

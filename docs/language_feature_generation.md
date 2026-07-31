@@ -206,7 +206,35 @@ the combined morphology string, and `aspect` are intentionally not decoding targ
 - Brain Treebank artifacts can be loaded by the language decoder with dataset-specific
   task manifests. The fMRI decoder trains on retained training-story words, tunes with
   leave-one-session-out inner folds, and evaluates only on `wheretheressmoke`, which is
-  excluded from the fMRI ridge, RRR, and PCA fits.
+  excluded from the fMRI ridge, RRR, and PCA fits. Only paired internal RRR and PCA
+  spaces are evaluated. Each fit saves held-out predictions and sentence identifiers.
+  `scripts/bootstrap_language_decoding.py` uses these artifacts for paired
+  sentence-block inference separately at every rank. For fMRI it resamples the held-out
+  story; for Podcast and Cars 2 it first pools the fold-held-out predictions so each
+  selected word appears once. It also reports a hierarchical cross-model result with
+  equal model-class weights and layers averaged within model; Benjamini-Hochberg FDR is
+  applied across targets independently within each rank.
+
+Existing decoding results created before prediction saving was added must be refreshed
+once. On the cluster, submit those jobs and then run inference after they finish. For
+example, for Podcast:
+
+```bash
+uv run python scripts/submit_language_decoding.py --dataset podcast --refresh
+make language-decoding-bootstrap CMD="uv run python" LANGUAGE_DECODING_DATASET=podcast
+```
+
+The bootstrap writes `per_model_layer_rank.csv`, `cross_model_rank.csv`, analysis
+metadata, and per-target PNG/SVG rank curves under
+`results/<dataset>/language_decoding_bootstrap/`. Individual curves are grouped under
+`plots/per_model_layer/`; equal-weighted summaries are under `plots/cross_model/`.
+They use the same cyan RRR and teal PCA palette as the rank-saturation figures, with
+cyan star markers above ranks where RRR wins after rank-wise target FDR. Pass
+`--no-plots` to skip them. Use
+`FMRI_LANGUAGE_BOOTSTRAP_REPEATS` and `FMRI_LANGUAGE_BOOTSTRAP_ARGS` to override the
+default 10,000 draws, seed, alpha, config, output directory, or `--jobs`. The analysis
+automatically uses `SLURM_CPUS_PER_TASK` worker processes when that variable is set;
+outside SLURM it defaults to one worker.
 
 ## Resource staging
 

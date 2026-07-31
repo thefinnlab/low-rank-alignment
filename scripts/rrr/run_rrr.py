@@ -135,12 +135,14 @@ def _save_full_model_metrics_once(
     fold_f: int,
     Y_test: np.ndarray,
     Y_hat_full: np.ndarray,
+    *,
+    refresh: bool = False,
 ) -> None:
-    """Save full-model metrics to fold_{f}/full_model_metrics.npz (once, not per-k)."""
+    """Save full-model metrics once per fold, overwriting them during refresh."""
     fold_dir = os.path.join(unit_dir, f"fold_{fold_f}")
     os.makedirs(fold_dir, exist_ok=True)
     path = os.path.join(fold_dir, "full_model_metrics.npz")
-    if os.path.exists(path):
+    if os.path.exists(path) and not refresh:
         return
     corr_arr = to_numpy(correlation_score(Y_test, Y_hat_full))
     r2_arr = to_numpy(r2_score(Y_test, Y_hat_full))
@@ -704,6 +706,7 @@ def _run_subspace_rank_loop_for_fold(
     save_primary_corr_per_target: bool = True,
     save_rrr_corr_per_target: bool = False,
     orthonormalize_a_per_rank: bool = False,
+    refresh: bool = False,
 ) -> list[dict]:
     """Evaluate rank-k projected ridge models for one fold from a known A matrix.
 
@@ -718,7 +721,9 @@ def _run_subspace_rank_loop_for_fold(
     Y_test = baseline["Y_test"]
     Y_hat_full = baseline["Y_hat_full_test"]
 
-    _save_full_model_metrics_once(unit_dir, fold_f, Y_test, Y_hat_full)
+    _save_full_model_metrics_once(
+        unit_dir, fold_f, Y_test, Y_hat_full, refresh=refresh
+    )
     full_corr_per_target = to_numpy(correlation_score(Y_test, Y_hat_full))
     full_corr = float(fisher_z_mean(full_corr_per_target))
     full_r2 = float(to_numpy(r2_score(Y_test, Y_hat_full)).mean())
@@ -1281,6 +1286,7 @@ def _run_rrr_for_unit(
                 save_primary_corr_per_target=config.save_nr_corr_per_target,
                 save_rrr_corr_per_target=config.save_rrr_corr_per_target,
                 orthonormalize_a_per_rank=config.orthonormalize_a_per_rank,
+                refresh=config.refresh,
             )
         )
 
@@ -1420,7 +1426,9 @@ def _run_pca_for_unit(
         Y_hat_full = baseline["Y_hat_full_test"]
 
         # Save full model metrics once per fold (not per-k)
-        _save_full_model_metrics_once(pca_unit_dir, fold_f, Y_test, Y_hat_full)
+        _save_full_model_metrics_once(
+            pca_unit_dir, fold_f, Y_test, Y_hat_full, refresh=refresh
+        )
         full_corr = float(
             fisher_z_mean(to_numpy(correlation_score(Y_test, Y_hat_full)))
         )
@@ -2408,6 +2416,7 @@ def _run_cross_dataset_subspace_for_unit(
                     primary_label=primary_label,
                     progress_desc=f"  cross-dataset fold {fold_f}",
                     orthonormalize_a_per_rank=config.orthonormalize_a_per_rank,
+                    refresh=config.refresh and rank == ranks_to_run[0],
                 )
             )
 

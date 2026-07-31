@@ -399,6 +399,32 @@ class TestRunRRRForUnit:
             os.path.join(str(tmp_path), "fold_0", "full_model_metrics.npz")
         )
 
+    def test_full_model_metrics_refresh_overwrites_existing_file(self, tmp_path):
+        from run_rrr import _save_full_model_metrics_once
+
+        y_test = np.arange(24, dtype=float).reshape(8, 3)
+        first_prediction = y_test.copy()
+        refreshed_prediction = -y_test
+
+        _save_full_model_metrics_once(
+            str(tmp_path), 0, y_test, first_prediction
+        )
+        path = tmp_path / "fold_0" / "full_model_metrics.npz"
+        with np.load(path) as saved:
+            first = saved["full_corr_per_target"].copy()
+
+        _save_full_model_metrics_once(
+            str(tmp_path), 0, y_test, refreshed_prediction
+        )
+        with np.load(path) as saved:
+            np.testing.assert_array_equal(saved["full_corr_per_target"], first)
+
+        _save_full_model_metrics_once(
+            str(tmp_path), 0, y_test, refreshed_prediction, refresh=True
+        )
+        with np.load(path) as saved:
+            assert not np.array_equal(saved["full_corr_per_target"], first)
+
     def test_cross_dataset_subspace_uses_rank_specific_source_average(
         self, tmp_path, small_data, monkeypatch
     ):
