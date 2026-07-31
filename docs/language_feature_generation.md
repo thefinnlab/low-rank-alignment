@@ -22,11 +22,26 @@ when a story has no completed full-provider output. It is resumable by model che
 and avoids rerunning unrelated audio and document-level providers.
 `scripts/utilities/generate_self_surprisal.py` (or `make self-surprisal`) creates
 separate model/dataset/stimulus artifacts under
-`processed_data/language_features/self_surprisal/`. Causal models are scored in bits
-with their configured tokenizer, final LM head, causal window/stride, and initialization;
-subtoken surprisals are summed within each transcript word. The random GPT-2 XL uses
-its configured seed. RoBERTa's artifact copies standardized GPT-2-small surprisal and
-records that fallback explicitly in `manifest.json`.
+`processed_data/language_features/self_surprisal/`. It exactly follows the original
+Podcast scorer: each target receives the preceding configured rolling context with
+left padding and no padding mask, including the first target; subtoken surprisal is
+summed within each word in bits, while word entropy is the first subtoken's predictive
+entropy in nats. Causal models use their configured tokenizer, final LM head, and
+initialization. The random GPT-2 XL uses its configured seed. RoBERTa uses the same
+procedure with GPT-2 small and records that fallback explicitly in `manifest.json`.
+Generate only the model-specific values, with one parallel SLURM job per model, using
+`uv run python scripts/submit_language_decoding.py --dataset all
+--generate-predictability --generation-only --refresh`.
+Generate these artifacts in parallel by model and release every dependent internal
+model/dataset decoding job with
+`uv run python scripts/submit_language_decoding.py --dataset all --device cuda
+--generate-predictability --tasks surprisal self_surprisal self_entropy
+pre_word_pause post_word_pause iu_position sentence_position --max-rank 256 --refresh`.
+Use `--run-name predictability-context-quick` to keep this subset run's task artifacts,
+tables, plots, configuration, and metadata separate from existing all-task results.
+After decoding finishes, bootstrap each dataset's paired RRR-versus-PCA differences with
+`uv run python scripts/bootstrap_language_decoding.py --dataset <dataset> --run-name
+predictability-context-quick`; bootstrap outputs are kept under the same named identity.
 `scripts/utilities/generate_fmri_iu_features.py` (or `make fmri-iu-features`) similarly
 populates IU position, onset, end, and length from the already aligned PSST boundaries
 without rerunning audio inference or unrelated providers.
@@ -110,6 +125,7 @@ complete interface.
 | `content_word` | categorical | UD content/function indicator | Stanza UD | Complete |
 | `surprisal` | continuous | GPT-2-small surprisal in bits | GPT-2 provider | Complete |
 | `self_surprisal` | continuous | Embedding model's own surprisal in bits; GPT-2 fallback for RoBERTa | Per-model artifact | Complete |
+| `self_entropy` | continuous | Embedding model's first-subtoken predictive entropy in nats; GPT-2 fallback for RoBERTa | Per-model artifact | Complete |
 | `entropy` | continuous | Standardized entropy | Native provider | Complete |
 | `surprisal_class` | categorical | Three-way surprisal bin | Legacy Podcast CSV | Complete (legacy) |
 | `story_position` | continuous | Normalized word progress | Native provider | Complete |

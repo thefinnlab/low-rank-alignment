@@ -126,7 +126,7 @@ class PodcastTaskContext:
 
     @property
     def self_surprisal(self) -> pd.DataFrame:
-        """Return model-specific surprisal after strict transcript alignment."""
+        """Return model-specific prediction metrics after strict alignment."""
         if "self_surprisal" not in self._cache:
             default = str(self.paths.get(
                 "language_features",
@@ -143,9 +143,11 @@ class PodcastTaskContext:
                 end_column="end",
                 source_name="Self-surprisal artifact",
             )
-            if "self_surprisal" not in features:
+            required = {"self_surprisal", "self_entropy"}
+            missing = required - set(features)
+            if missing:
                 raise ValueError(
-                    f"Self-surprisal artifact {path} is missing 'self_surprisal'"
+                    f"Self-surprisal artifact {path} is missing {sorted(missing)}"
                 )
             self._cache["self_surprisal"] = features
         return self._cache["self_surprisal"]
@@ -307,6 +309,14 @@ def self_surprisal_target(context: PodcastTaskContext) -> np.ndarray:
     """Read surprisal produced by the embedding model's own LM head."""
     return pd.to_numeric(
         context.self_surprisal["self_surprisal"], errors="coerce"
+    ).to_numpy(dtype=np.float64)
+
+
+@register_language_task("self_entropy", "Self entropy", "continuous")
+def self_entropy_target(context: PodcastTaskContext) -> np.ndarray:
+    """Read first-subtoken entropy produced by the embedding model's LM head."""
+    return pd.to_numeric(
+        context.self_surprisal["self_entropy"], errors="coerce"
     ).to_numpy(dtype=np.float64)
 
 _CATEGORICAL_TASKS = {

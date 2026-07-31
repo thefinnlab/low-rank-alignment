@@ -5,6 +5,7 @@ refresh: false
 tasks:
   - surprisal
   - self_surprisal
+  - self_entropy
   - word_zipf_frequency
   - word_length
   - content_word

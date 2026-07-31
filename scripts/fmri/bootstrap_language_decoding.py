@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sys
 import time
 from concurrent.futures import ProcessPoolExecutor
@@ -30,6 +31,7 @@ def _args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--dataset", choices=["podcast", "cars-2", "fmri"], default="fmri")
     parser.add_argument("--config", default=None)
+    parser.add_argument("--run-name", default=None)
     parser.add_argument("--bootstrap-repeats", type=int, default=10_000)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--alpha", type=float, default=0.05)
@@ -231,14 +233,19 @@ def _apply_rankwise_fdr(frame: pd.DataFrame, alpha: float, groups: list[str]) ->
     return frame
 
 
-def _discover_fmri(config_path: str) -> tuple[list[dict], dict[tuple[str, int], dict[str, list[dict]]]]:
+def _discover_fmri(
+    config_path: str, run_name: str | None = None
+) -> tuple[list[dict], dict[tuple[str, int], dict[str, list[dict]]]]:
     manifest = yaml.safe_load(Path(config_path).read_text(encoding="utf-8")) or {}
     records = []
     grouped: dict[tuple[str, int], dict[str, list[dict]]] = {}
     for model in manifest["models"]:
         _, configs = _layer_configs(config_path, model)
         for config in configs:
-            root = Path(config.output_dir) / "language_decoding" / "heldout_wheretheressmoke"
+            identity = "heldout_wheretheressmoke"
+            if run_name:
+                identity += f"__{run_name}"
+            root = Path(config.output_dir) / "language_decoding" / identity
             metrics_path = root / "metrics.csv"
             if not metrics_path.is_file():
                 continue
@@ -270,19 +277,26 @@ def _generic_output_root(config) -> Path | None:
     for metadata_path in candidates.glob("*/run_metadata.json"):
         metadata = json.loads(metadata_path.read_text())
         saved = metadata.get("subspace_unit_dirs", {})
-        if saved.get("rrr") == expected_rrr and saved.get("pca") == expected_pca:
+        saved_source_name = metadata.get("config", {}).get("source_name")
+        if (
+            saved.get("rrr") == expected_rrr
+            and saved.get("pca") == expected_pca
+            and saved_source_name == config.source_name
+        ):
             matched.append(metadata_path.parent)
     if len(matched) > 1:
         raise ValueError(f"Multiple matching language-decoding outputs found: {matched}")
     return matched[0] if matched else None
 
 
-def _discover_generic(config_path: str) -> tuple[list[dict], dict[tuple[str, int], dict[str, list[dict]]]]:
+def _discover_generic(
+    config_path: str, run_name: str | None = None
+) -> tuple[list[dict], dict[tuple[str, int], dict[str, list[dict]]]]:
     manifest = yaml.safe_load(Path(config_path).read_text(encoding="utf-8")) or {}
     records = []
     grouped: dict[tuple[str, int], dict[str, list[dict]]] = {}
     for model in manifest["models"]:
-        for config in build_layer_configs(config_path, model):
+        for config in build_layer_configs(config_path, model, run_name=run_name):
             root = _generic_output_root(config)
             if root is None or not (root / "grid_results.csv").is_file():
                 continue
@@ -431,8 +445,13 @@ def _write_plots(individual: pd.DataFrame, cross_model: pd.DataFrame, output: Pa
 
 def main() -> None:
     args = _args()
+    if args.run_name and not re.fullmatch(r"[A-Za-z0-9._-]+", args.run_name):
+        raise ValueError("--run-name may contain only letters, numbers, '.', '_', and '-'")
     config_path = args.config or f"configs/language_decoding/internal/{args.dataset}.yml"
-    output_path = args.output_dir or f"results/{args.dataset}/language_decoding_bootstrap"
+    default_output = Path(f"results/{args.dataset}/language_decoding_bootstrap")
+    if args.run_name:
+        default_output /= args.run_name
+    output_path = args.output_dir or str(default_output)
     if args.bootstrap_repeats < 1:
         raise ValueError("--bootstrap-repeats must be positive")
     if args.jobs < 1:
@@ -447,9 +466,9 @@ def main() -> None:
         flush=True,
     )
     records, grouped = (
-        _discover_fmri(config_path)
+        _discover_fmri(config_path, args.run_name)
         if args.dataset == "fmri"
-        else _discover_generic(config_path)
+        else _discover_generic(config_path, args.run_name)
     )
     if not records:
         raise RuntimeError("No heldout_predictions.npz artifacts found; rerun fMRI decoding with --refresh")
@@ -494,6 +513,7 @@ def main() -> None:
         _write_plots(individual_frame, cross_frame, output)
     (output / "metadata.json").write_text(json.dumps({
         "dataset": args.dataset, "config": config_path,
+        "run_name": args.run_name,
         "bootstrap_repeats": args.bootstrap_repeats,
         "seed": args.seed, "alpha": args.alpha, "jobs": args.jobs,
         "plots": not args.no_plots, "bootstrap_unit": "sentence",

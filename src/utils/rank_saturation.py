@@ -125,7 +125,6 @@ def summarize_rank_curve(
     equal_cluster_weight: bool = False,
     bootstrap_means: np.ndarray | None = None,
     performance_fraction: float = 0.985,
-    exclude_final_rank_from_peak: bool = False,
 ) -> SaturationSummary:
     """Summarize a target-weighted curve and its fraction-of-best saturation."""
     ranks = np.asarray(ranks, dtype=int)
@@ -135,8 +134,6 @@ def summarize_rank_curve(
         raise ValueError("rank/target dimensions do not match ranks and cluster_ids")
     if not 0 < performance_fraction <= 1:
         raise ValueError("performance_fraction must be in (0, 1]")
-    if exclude_final_rank_from_peak and len(ranks) < 2:
-        raise ValueError("at least two ranks are required to exclude the final rank")
     boot = bootstrap_means
     if boot is None:
         boot = _cluster_bootstrap_means(
@@ -160,8 +157,7 @@ def summarize_rank_curve(
     else:
         mean_z = np.nanmean(target_z, axis=1)
     sem_z = np.nanstd(boot, axis=0, ddof=1)
-    peak_candidates = slice(None, -1) if exclude_final_rank_from_peak else slice(None)
-    peak_index = int(np.nanargmax(mean_z[peak_candidates]))
+    peak_index = int(np.nanargmax(mean_z))
     threshold_z = performance_fraction * mean_z[peak_index]
     if mean_z[peak_index] > 0:
         eligible = np.flatnonzero(mean_z >= threshold_z)
@@ -171,7 +167,7 @@ def summarize_rank_curve(
 
     bootstrap_saturation = np.empty(bootstrap_repeats, dtype=int)
     for index, sample in enumerate(boot):
-        sample_peak = int(np.nanargmax(sample[peak_candidates]))
+        sample_peak = int(np.nanargmax(sample))
         if sample[sample_peak] > 0:
             sample_threshold = performance_fraction * sample[sample_peak]
             bootstrap_saturation[index] = ranks[
@@ -180,7 +176,7 @@ def summarize_rank_curve(
         else:
             bootstrap_saturation[index] = ranks[sample_peak]
 
-    unit_peak = np.nanmax(target_z[peak_candidates], axis=0)
+    unit_peak = np.nanmax(target_z, axis=0)
     losses = unit_peak[None, :] - target_z
     margin = sem_z[peak_index]
     curve = pd.DataFrame({

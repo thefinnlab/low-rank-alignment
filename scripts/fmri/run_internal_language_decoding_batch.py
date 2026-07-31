@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sys
 from copy import deepcopy
 from pathlib import Path
@@ -33,6 +34,9 @@ def _args() -> argparse.Namespace:
     parser.add_argument("--config", required=True)
     parser.add_argument("--model", required=True)
     parser.add_argument("--device", choices=["auto", "cpu", "cuda"], default=None)
+    parser.add_argument("--tasks", nargs="+", default=None)
+    parser.add_argument("--max-rank", type=int, default=None)
+    parser.add_argument("--run-name", default=None)
     parser.add_argument("--refresh", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
     return parser.parse_args()
@@ -60,9 +64,12 @@ def _load_labels(stories, feature_root: str, tasks: list[str], self_surprisal_ro
     for story in stories:
         path = Path(feature_root) / story / "tokens.tsv"
         table = pd.read_csv(path, sep="\t", keep_default_na=False, low_memory=False)
-        if "self_surprisal" in tasks:
+        self_tasks = {"self_surprisal", "self_entropy"} & set(tasks)
+        if self_tasks:
             if self_surprisal_root is None:
-                raise ValueError("self_surprisal requires self_surprisal_root")
+                raise ValueError(
+                    f"{sorted(self_tasks)} require self_surprisal_root"
+                )
             self_path = Path(self_surprisal_root) / story / "tokens.tsv"
             self_table = pd.read_csv(
                 self_path, sep="\t", keep_default_na=False, low_memory=False
@@ -71,9 +78,13 @@ def _load_labels(stories, feature_root: str, tasks: list[str], self_surprisal_ro
                 self_table["word"].astype(str), table["word"].astype(str)
             ):
                 raise ValueError(f"Self-surprisal alignment failed for {story}")
-            table["self_surprisal"] = pd.to_numeric(
-                self_table["self_surprisal"], errors="coerce"
-            )
+            missing_self = self_tasks - set(self_table)
+            if missing_self:
+                raise ValueError(
+                    f"{self_path} is missing columns {sorted(missing_self)}"
+                )
+            for task in self_tasks:
+                table[task] = pd.to_numeric(self_table[task], errors="coerce")
         missing = set(tasks) - set(table)
         if missing:
             raise ValueError(f"{story} is missing feature columns {sorted(missing)}")
@@ -113,7 +124,7 @@ def _session_cv(stories, tables, groups, valid):
     return splits
 
 
-def _run(manifest, config, model, device, refresh):
+def _run(manifest, config, model, device, refresh, run_name=None):
     train_stories, test_stories, groups = resolve_fmri_stories(
         config.fmri.fmri_repo_root, config.fmri.sessions
     )
@@ -146,7 +157,10 @@ def _run(manifest, config, model, device, refresh):
     solver_params.setdefault("n_alphas_batch", 1)
     decoder.encoding.ridge_solver_params = solver_params
     _configure_decoder_backend(decoder.device)
-    output = Path(config.output_dir) / "language_decoding" / "heldout_wheretheressmoke"
+    output_identity = "heldout_wheretheressmoke"
+    if run_name:
+        output_identity += f"__{run_name}"
+    output = Path(config.output_dir) / "language_decoding" / output_identity
     if (output / "metrics.csv").is_file() and not refresh:
         print(f"Reusing {output}")
         return
@@ -209,7 +223,27 @@ def _run(manifest, config, model, device, refresh):
 
 def main():
     args = _args()
+    if args.run_name and not re.fullmatch(r"[A-Za-z0-9._-]+", args.run_name):
+        raise ValueError("--run-name may contain only letters, numbers, '.', '_', and '-'")
     manifest, configs = _layer_configs(args.config, args.model)
+    if args.max_rank is not None:
+        if args.max_rank < 1:
+            raise ValueError("--max-rank must be positive")
+        for config in configs:
+            config.rank_grid = [
+                int(rank) for rank in config.rank_grid if int(rank) <= args.max_rank
+            ]
+            if not config.rank_grid:
+                raise ValueError(
+                    f"No configured ranks are at or below max_rank={args.max_rank}"
+                )
+    if args.tasks is not None:
+        unknown = sorted(set(args.tasks) - set(manifest["tasks"]))
+        if unknown:
+            raise ValueError(
+                f"Unknown task(s) {unknown}; available={manifest['tasks']}"
+            )
+        manifest["tasks"] = list(args.tasks)
     if args.dry_run:
         for config in configs:
             print(f"{args.model}: layer {config.layer}: " + ("completed_pair" if _complete(config) else "missing_pair"))
@@ -219,7 +253,9 @@ def main():
         print(f"No completed fMRI internal RRR/PCA layers for {args.model}; nothing to do")
         return
     for config in completed:
-        _run(manifest, config, args.model, args.device, args.refresh)
+        _run(
+            manifest, config, args.model, args.device, args.refresh, args.run_name
+        )
 
 
 if __name__ == "__main__":

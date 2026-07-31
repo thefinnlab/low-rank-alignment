@@ -37,6 +37,7 @@ tasks:
   - content_word
   - surprisal
   - self_surprisal
+  - self_entropy
   - entropy
   - surprisal_class
   - story_position

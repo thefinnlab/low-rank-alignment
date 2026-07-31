@@ -10,6 +10,7 @@ self_surprisal_root: processed_data/language_features/self_surprisal
 tasks:
   - surprisal
   - self_surprisal
+  - self_entropy
   - word_zipf_frequency
   - word_length
   - content_word

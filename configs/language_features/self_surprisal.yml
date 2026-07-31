@@ -13,7 +13,8 @@ models:
   llama3-8b:
     embedding_config: configs/embeddings/generate_llama3_8b.yml
   roberta-large:
-    fallback: gpt2_surprisal
+    embedding_config: configs/embeddings/generate_gpt2.yml
+    fallback_for: roberta-large
   random-gpt2-xl:
     embedding_config: configs/embeddings/generate_random_gpt2_xl.yml
   gpt2:

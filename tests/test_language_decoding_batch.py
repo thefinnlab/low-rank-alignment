@@ -36,10 +36,12 @@ def test_internal_batch_expands_model_layers_and_result_templates():
     assert "iu_position" not in configs[1].tasks
     assert "surprisal" in configs[1].tasks
     assert "self_surprisal" in configs[1].tasks
+    assert "self_entropy" in configs[1].tasks
     assert configs[1].task_data["self_surprisal"] == (
         "processed_data/language_features/self_surprisal/gpt2/"
         "brain_treebank/cars-2/tokens.tsv"
     )
+    assert configs[1].task_data["self_entropy"] == configs[1].task_data["self_surprisal"]
 
 
 def test_internal_batch_podcast_includes_requested_iu_and_norm_features():
@@ -71,6 +73,23 @@ def test_internal_batch_can_select_a_task_subset():
     assert configs[0].tasks == ["surprisal", "self_surprisal"]
 
 
+def test_internal_batch_can_limit_maximum_rank():
+    configs = build_layer_configs(
+        "configs/language_decoding/internal/podcast.yml", "gpt2-xl", max_rank=256
+    )
+    assert configs[0].rank_grid
+    assert max(configs[0].rank_grid) == 256
+
+
+def test_internal_batch_can_use_separate_run_identity():
+    configs = build_layer_configs(
+        "configs/language_decoding/internal/podcast.yml",
+        "gpt2",
+        run_name="predictability-context-quick",
+    )
+    assert configs[0].source_name.endswith("__predictability-context-quick")
+
+
 def test_fmri_batch_uses_only_heldout_story_available_features():
     manifest, configs = _layer_configs(
         "configs/language_decoding/internal/fmri.yml", "gpt2"
@@ -84,6 +103,7 @@ def test_fmri_batch_uses_only_heldout_story_available_features():
         manifest["tasks"]
     )
     assert "self_surprisal" in manifest["tasks"]
+    assert "self_entropy" in manifest["tasks"]
 
 
 def test_fmri_decoder_inner_cv_holds_out_complete_sessions_after_missing_mask():

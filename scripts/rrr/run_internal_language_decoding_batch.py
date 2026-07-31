@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
 import sys
 from copy import deepcopy
 from pathlib import Path
@@ -24,13 +25,19 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--model", required=True, help="Model key in the manifest")
     parser.add_argument("--device", choices=["auto", "cpu", "cuda"], default=None)
     parser.add_argument("--tasks", nargs="+", default=None)
+    parser.add_argument("--max-rank", type=int, default=None)
+    parser.add_argument("--run-name", default=None)
     parser.add_argument("--refresh", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
     return parser.parse_args()
 
 
 def build_layer_configs(
-    manifest_path: str, model: str, tasks: list[str] | None = None
+    manifest_path: str,
+    model: str,
+    tasks: list[str] | None = None,
+    max_rank: int | None = None,
+    run_name: str | None = None,
 ) -> list[LanguageDecodingConfig]:
     payload = yaml.safe_load(Path(manifest_path).read_text(encoding="utf-8")) or {}
     models = payload.get("models", {})
@@ -41,21 +48,30 @@ def build_layer_configs(
     task_data = dict(payload["task_data"])
     self_surprisal_root = payload.get("self_surprisal_root")
     if self_surprisal_root:
-        task_data["self_surprisal"] = str(
+        prediction_metrics_path = str(
             Path(self_surprisal_root)
             / model
             / payload["self_surprisal_dataset"]
             / payload["self_surprisal_stimulus"]
             / "tokens.tsv"
         )
+        task_data["self_surprisal"] = prediction_metrics_path
+        task_data["self_entropy"] = prediction_metrics_path
     config = LanguageDecodingConfig(
         encoding=deepcopy(rrr_config.encoding),
         rrr_run_path=str(model_spec["result_template"]) + "/rrr",
         pca_run_path=str(model_spec["result_template"]) + "/pca",
         mode=LanguageDecodingMode.WITHIN_DATASET,
-        source_name=f"{payload['dataset']}_{model}_internal",
+        source_name=(
+            f"{payload['dataset']}_{model}_internal"
+            + (f"__{run_name}" if run_name else "")
+        ),
         device=str(payload.get("device", "auto")),
-        rank_grid=[int(rank) for rank in rrr_config.rank_grid],
+        rank_grid=[
+            int(rank)
+            for rank in rrr_config.rank_grid
+            if max_rank is None or int(rank) <= max_rank
+        ],
         tasks=[str(task) for task in (tasks or payload["tasks"])],
         task_data=task_data,
         logistic_cs=[float(value) for value in payload.get(
@@ -63,6 +79,8 @@ def build_layer_configs(
         )],
         refresh=bool(payload.get("refresh", False)),
     )
+    if not config.rank_grid:
+        raise ValueError(f"No configured ranks are at or below max_rank={max_rank}")
     return expand_per_model_layer_configs(config)
 
 
@@ -74,7 +92,13 @@ def _completed_pair(config: LanguageDecodingConfig) -> bool:
 
 def main() -> None:
     args = _parse_args()
-    configs = build_layer_configs(args.config, args.model, args.tasks)
+    if args.max_rank is not None and args.max_rank < 1:
+        raise ValueError("--max-rank must be positive")
+    if args.run_name and not re.fullmatch(r"[A-Za-z0-9._-]+", args.run_name):
+        raise ValueError("--run-name may contain only letters, numbers, '.', '_', and '-'")
+    configs = build_layer_configs(
+        args.config, args.model, args.tasks, args.max_rank, args.run_name
+    )
     if args.dry_run:
         for config in configs:
             layer = config.encoding.per_model_config["layer"]

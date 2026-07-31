@@ -265,7 +265,7 @@ language-features:
 surprisal:
 	$(CMD) scripts/utilities/generate_surprisal.py $(foreach config,$(SURPRISAL_CONFIGS),--config $(config)) $(OVERRIDES)
 
-## Generate model-specific surprisal used by the self_surprisal decoding task
+## Generate model-specific surprisal and entropy used by language decoding
 self-surprisal:
 	$(CMD) scripts/utilities/generate_self_surprisal.py --config $(SELF_SURPRISAL_CONFIG) $(OVERRIDES)
 

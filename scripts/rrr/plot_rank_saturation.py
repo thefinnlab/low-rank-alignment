@@ -24,10 +24,12 @@ import pandas as pd
 from src.utils.plot_helpers import RED_BASELINE, RRR_PCA_COLORS, apply_publication_style
 from src.utils.rank_saturation import (
     SaturationSummary,
+    _cluster_bootstrap_means,
     electrode_units,
     fisher_r,
     fmri_spatial_blocks,
     mean_folds,
+    summarize_equivalence_curve,
     summarize_rank_curve,
 )
 
@@ -220,20 +222,23 @@ def _plot(
         color = METHOD_COLORS[method]
         label = method.upper()
         curve = summary.curve
-        saturation = int(curve["saturation_rank"].iloc[0])
+        saturation = curve["saturation_rank"].iloc[0]
         axes[0].fill_between(curve["rank"], curve["lower_r"], curve["upper_r"], color=color, alpha=.18)
         axes[0].semilogx(curve["rank"], curve["mean_r"], color=color, marker="o", ms=3.5,
                         linewidth=1.4, label=label, zorder=4)
-        axes[0].axvline(saturation, color=color, linestyle="--", linewidth=1.4, alpha=.55,
-                        label=f"{label} saturation ($k={saturation}$)")
+        if pd.notna(saturation):
+            saturation = int(saturation)
+            axes[0].axvline(saturation, color=color, linestyle="--", linewidth=1.4, alpha=.55,
+                            label=f"{label} saturation ($k={saturation}$)")
 
         retention = summary.retention
         axes[1].fill_between(retention["rank"], retention["q25_loss_z"], retention["q75_loss_z"],
                              color=color, alpha=.18)
         axes[1].semilogx(retention["rank"], retention["median_loss_z"], color=color,
                         marker="o", ms=3.5, linewidth=1.4, label=label, zorder=4)
-        axes[1].axvline(saturation, color=color, linestyle="--", linewidth=1.4, alpha=.55,
-                        label=f"{label} saturation ($k={saturation}$)")
+        if pd.notna(saturation):
+            axes[1].axvline(saturation, color=color, linestyle="--", linewidth=1.4, alpha=.55,
+                            label=f"{label} saturation ($k={saturation}$)")
 
     axes[0].axhline(full_mean, color=RED_BASELINE, linestyle="--", linewidth=1.0,
                     label="Full Model (Baseline)")
@@ -413,7 +418,13 @@ def main() -> None:
         "--performance-fraction",
         type=float,
         default=0.985,
-        help="Fraction of peak Fisher-z performance defining saturation (default: 0.985).",
+        help="Fraction of peak Fisher-z performance defining iEEG saturation (default: 0.985).",
+    )
+    parser.add_argument(
+        "--fmri-equivalence-fraction",
+        type=float,
+        default=0.985,
+        help="fMRI practical-equivalence fraction of best performance (default: 0.985).",
     )
     parser.add_argument(
         "--condition",
@@ -423,6 +434,8 @@ def main() -> None:
     args = parser.parse_args()
     if not 0 < args.performance_fraction <= 1:
         parser.error("--performance-fraction must lie in (0, 1]")
+    if not 0 < args.fmri_equivalence_fraction < 1:
+        parser.error("--fmri-equivalence-fraction must lie between zero and one")
     if args.jobs < 1:
         parser.error("--jobs must be at least one")
     args.output_dir.mkdir(parents=True, exist_ok=True)
@@ -440,6 +453,8 @@ def main() -> None:
         analysis_rows = []
         try:
             summaries = {}
+            equivalence = {}
+            fraction_saturation = {}
             loaded = {}
             for method, unit in analysis.units.items():
                 if analysis.layout == "ieeg":
@@ -457,14 +472,45 @@ def main() -> None:
                     analysis.layout == "fmri"
                     and args.fmri_bootstrap_unit == "subject"
                 )
+                bootstrap_means = None
+                if analysis.layout == "fmri":
+                    fraction_saturation[method] = int(
+                        summaries[method].curve["saturation_rank"].iloc[0]
+                    )
+                    bootstrap_means = _cluster_bootstrap_means(
+                        target_z,
+                        groups["cluster"].to_numpy(),
+                        args.bootstrap_repeats,
+                        args.seed,
+                        equal_cluster_weight=equal_cluster_weight,
+                    )
                 summaries[method] = summarize_rank_curve(
                     ranks, target_z, groups["cluster"].to_numpy(),
                     bootstrap_repeats=args.bootstrap_repeats,
                     seed=args.seed,
                     equal_cluster_weight=equal_cluster_weight,
+                    bootstrap_means=bootstrap_means,
                     performance_fraction=args.performance_fraction,
-                    exclude_final_rank_from_peak=analysis.layout == "fmri",
                 )
+                if analysis.layout == "fmri":
+                    best_z = float(summaries[method].curve["mean_z"].max())
+                    delta_z = (1 - args.fmri_equivalence_fraction) * abs(best_z)
+                    equivalence[method] = summarize_equivalence_curve(
+                        ranks,
+                        target_z,
+                        groups["cluster"].to_numpy(),
+                        delta_z,
+                        bootstrap_repeats=args.bootstrap_repeats,
+                        seed=args.seed,
+                        equal_cluster_weight=equal_cluster_weight,
+                        bootstrap_means=bootstrap_means,
+                    )
+                    equivalence[method].curve["delta_source"] = (
+                        f"{args.fmri_equivalence_fraction:.4f}_of_best"
+                    )
+                    summaries[method].curve["saturation_rank"] = (
+                        equivalence[method].saturation_rank
+                    )
             full_mean = (_load_ieeg_full(analysis.units["rrr"]) if analysis.layout == "ieeg"
                          else _load_fmri_full(analysis.root))
             destination = args.output_dir.joinpath(*parts)
@@ -475,23 +521,54 @@ def main() -> None:
             for method, summary in summaries.items():
                 summary.curve.to_csv(destination / f"{stem}__{method}_curve.csv", index=False)
                 summary.retention.to_csv(destination / f"{stem}__{method}_retention.csv", index=False)
-                pd.DataFrame({"saturation_rank": summary.bootstrap_saturation}).to_csv(
-                    destination / f"{stem}__{method}_saturation_bootstrap.csv", index=False)
+                if analysis.layout == "fmri":
+                    equivalence[method].curve.to_csv(
+                        destination / f"{stem}__{method}_equivalence.csv", index=False
+                    )
+                    pd.DataFrame({
+                        "fraction_of_peak_saturation_rank": summary.bootstrap_saturation
+                    }).to_csv(
+                        destination / f"{stem}__{method}_fraction_saturation_bootstrap.csv",
+                        index=False,
+                    )
+                else:
+                    pd.DataFrame({"saturation_rank": summary.bootstrap_saturation}).to_csv(
+                        destination / f"{stem}__{method}_saturation_bootstrap.csv", index=False
+                    )
                 row = summary.curve.iloc[0]
                 sat_q = np.quantile(summary.bootstrap_saturation, [0.025, 0.5, 0.975])
-                analysis_rows.append({"run": str(analysis.root), "dataset": parts[0],
+                output_row = {"run": str(analysis.root), "dataset": parts[0],
                              "condition": parts[1], "model": parts[2], "layer": parts[3],
                              "method": method, "layout": analysis.layout,
                              "output_dir": str(destination), "full_model_mean_r": full_mean,
                              "n_targets": loaded[method][0].shape[1],
                              "n_clusters": loaded[method][1]["cluster"].nunique(),
                              "peak_rank": int(row["peak_rank"]),
-                             "saturation_rank": int(row["saturation_rank"]),
-                             "performance_fraction": float(row["performance_fraction"]),
-                             "threshold_z": float(row["threshold_z"]),
-                             "bootstrap_saturation_q025": sat_q[0],
-                             "bootstrap_saturation_median": sat_q[1],
-                             "bootstrap_saturation_q975": sat_q[2]})
+                             "saturation_rank": row["saturation_rank"],
+                             "saturation_method": (
+                                 "simultaneous_equivalence" if analysis.layout == "fmri"
+                                 else "fraction_of_peak"
+                             )}
+                if analysis.layout == "fmri":
+                    output_row.update({
+                        "fraction_of_peak_rank": fraction_saturation[method],
+                        "equivalence_delta_z": float(
+                            equivalence[method].curve["delta_z"].iloc[0]
+                        ),
+                        "equivalence_delta_source": equivalence[method].curve[
+                            "delta_source"
+                        ].iloc[0],
+                        "minimum_adjusted_pvalue": equivalence[method].minimum_pvalue,
+                    })
+                else:
+                    output_row.update({
+                        "performance_fraction": float(row["performance_fraction"]),
+                        "threshold_z": float(row["threshold_z"]),
+                        "bootstrap_saturation_q025": sat_q[0],
+                        "bootstrap_saturation_median": sat_q[1],
+                        "bootstrap_saturation_q975": sat_q[2],
+                    })
+                analysis_rows.append(output_row)
             title = " / ".join(parts)
             response_name = "Voxel" if parts[0] == "fmri" else "Electrode"
             _plot(summaries, full_mean, title, response_name, destination / stem)
