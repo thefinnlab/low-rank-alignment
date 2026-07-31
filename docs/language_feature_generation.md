@@ -22,13 +22,15 @@ when a story has no completed full-provider output. It is resumable by model che
 and avoids rerunning unrelated audio and document-level providers.
 `scripts/utilities/generate_self_surprisal.py` (or `make self-surprisal`) creates
 separate model/dataset/stimulus artifacts under
-`processed_data/language_features/self_surprisal/`. It exactly follows the original
-Podcast scorer: each target receives the preceding configured rolling context with
-left padding and no padding mask, including the first target; subtoken surprisal is
-summed within each word in bits, while word entropy is the first subtoken's predictive
-entropy in nats. Causal models use their configured tokenizer, final LM head, and
-initialization. The random GPT-2 XL uses its configured seed. RoBERTa uses the same
-procedure with GPT-2 small and records that fallback explicitly in `manifest.json`.
+`processed_data/language_features/self_surprisal/`. Each target receives all available
+real preceding tokens up to the configured context limit. Left padding is excluded by
+the attention mask, real-context positions restart at zero, and the first target is
+missing because it has no linguistic context. Subtoken surprisal is summed within each
+word in bits, while word entropy is the first subtoken's predictive entropy in nats.
+Causal models use their configured tokenizer, final LM head, and initialization. Target
+windows are batched without changing their contexts, and the batch size halves
+automatically on CUDA OOM. The random GPT-2 XL uses its configured seed. RoBERTa uses
+the same procedure with GPT-2 small and records that fallback in `manifest.json`.
 Generate only the model-specific values, with one parallel SLURM job per model, using
 `uv run python scripts/submit_language_decoding.py --dataset all
 --generate-predictability --generation-only --refresh`.

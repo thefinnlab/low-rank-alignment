@@ -29,10 +29,27 @@ from src.utils.language_features import DOCUMENT_LOADERS  # noqa: E402
 from src.utils.language_feature_providers import _aggregate_token_surprisal  # noqa: E402
 
 
+def _build_clean_context_batch(
+    token_ids: np.ndarray, targets: np.ndarray, context_len: int, pad_id: int
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Build masked left-padded rows containing only context before each target."""
+    batch = torch.full((len(targets), context_len), int(pad_id), dtype=torch.long)
+    attention_mask = torch.zeros_like(batch)
+    position_ids = torch.zeros_like(batch)
+    for row, target in enumerate(targets):
+        start = max(0, int(target) - context_len)
+        sequence = torch.from_numpy(token_ids[start:int(target)])
+        if len(sequence):
+            batch[row, -len(sequence) :] = sequence
+            attention_mask[row, -len(sequence) :] = 1
+            position_ids[row, -len(sequence) :] = torch.arange(len(sequence))
+    return batch, attention_mask, position_ids
+
+
 def _score_causal_words(
-    words: list[str], cfg: GenerateEmbeddingsConfig
+    words: list[str], cfg: GenerateEmbeddingsConfig, batch_size_override: int | None = None
 ) -> tuple[np.ndarray, np.ndarray, dict]:
-    """Reproduce the original Podcast word surprisal and entropy procedure."""
+    """Score words from all available real causal context, without pad attention."""
     tokenizer_name = _tokenizer_name_or_path(cfg)
     kwargs = {
         "cache_dir": cfg.hf_cache_dir,
@@ -53,32 +70,55 @@ def _score_causal_words(
     from tqdm.auto import tqdm
 
     context_len = int(cfg.context_window)
-    width = context_len + 1
+    width = context_len
     pad_id = tokenizer.pad_token_id if tokenizer.pad_token_id is not None else 0
-    batch_size = int(cfg.batch_size)
-    for batch_start in tqdm(
-        range(0, len(token_ids), batch_size), desc=cfg.output_name
-    ):
+    requested_batch_size = int(batch_size_override or cfg.batch_size)
+    if requested_batch_size < 1:
+        raise ValueError("Scoring batch size must be positive")
+    effective_batch_size = requested_batch_size
+    progress = tqdm(total=max(0, len(token_ids) - 1), desc=cfg.output_name)
+    batch_start = 1
+    while batch_start < len(token_ids):
         targets = np.arange(
-            batch_start, min(batch_start + batch_size, len(token_ids)), dtype=int
+            batch_start,
+            min(batch_start + effective_batch_size, len(token_ids)),
+            dtype=int,
         )
-        batch = torch.full((len(targets), width), int(pad_id), dtype=torch.long)
-        for row, target in enumerate(targets):
-            start = max(0, int(target) - context_len)
-            sequence = torch.from_numpy(token_ids[start : target + 1])
-            batch[row, -len(sequence) :] = sequence
-        batch = batch.to(cfg.device)
-        with torch.inference_mode():
-            logits = model(batch).logits[:, -2, :].float()
-            probabilities = torch.softmax(logits, dim=-1)
-            target_ids = torch.from_numpy(token_ids[targets]).to(cfg.device)
-            true_probabilities = probabilities.gather(
-                1, target_ids[:, None]
-            ).squeeze(1)
-            surprisal_bits = -torch.log2(true_probabilities)
-            entropy = torch.distributions.Categorical(probs=probabilities).entropy()
+        batch, attention_mask, position_ids = _build_clean_context_batch(
+            token_ids, targets, width, int(pad_id)
+        )
+        try:
+            batch = batch.to(cfg.device)
+            attention_mask = attention_mask.to(cfg.device)
+            position_ids = position_ids.to(cfg.device)
+            with torch.inference_mode():
+                logits = model(
+                    batch,
+                    attention_mask=attention_mask,
+                    position_ids=position_ids,
+                ).logits[:, -1, :].float()
+                probabilities = torch.softmax(logits, dim=-1)
+                target_ids = torch.from_numpy(token_ids[targets]).to(cfg.device)
+                true_probabilities = probabilities.gather(
+                    1, target_ids[:, None]
+                ).squeeze(1)
+                surprisal_bits = -torch.log2(true_probabilities)
+                entropy = torch.distributions.Categorical(
+                    probs=probabilities
+                ).entropy()
+        except torch.OutOfMemoryError:
+            if effective_batch_size == 1:
+                raise
+            effective_batch_size = max(1, effective_batch_size // 2)
+            del batch, attention_mask, position_ids
+            torch.cuda.empty_cache()
+            print(f"CUDA OOM; retrying with batch_size={effective_batch_size}")
+            continue
         token_surprisal[targets] = surprisal_bits.cpu().numpy()
         token_entropy[targets] = entropy.cpu().numpy()
+        batch_start += len(targets)
+        progress.update(len(targets))
+    progress.close()
 
     word_surprisal = _aggregate_token_surprisal(
         token_surprisal, token_words_array, len(words)
@@ -95,13 +135,16 @@ def _score_causal_words(
         "random_init_model": cfg.random_init_model,
         "random_init_seed": cfg.random_init_seed,
         "context_window": context_len,
-        "context_policy": "original_podcast_rolling_window",
-        "padding_policy": "tokenizer_pad_id_or_zero_without_attention_mask",
+        "context_policy": "full_available_causal_context",
+        "padding_policy": "left_padding_excluded_by_attention_mask",
+        "position_policy": "real_context_positions_restart_at_zero",
+        "requested_batch_size": requested_batch_size,
+        "effective_batch_size": effective_batch_size,
         "surprisal_unit": "bits",
         "surprisal_word_aggregation": "sum_subtokens",
         "entropy_unit": "nats",
         "entropy_word_aggregation": "first_subtoken",
-        "first_token": "scored_from_left_padding",
+        "first_token": "missing_no_preceding_context",
     }
     del model
     if str(cfg.device).startswith("cuda"):
@@ -116,6 +159,7 @@ def _write_artifact(
     feature_cfg: LanguageFeatureGenerationConfig,
     output_root: Path,
     refresh: bool,
+    batch_size: int | None,
 ) -> Path:
     document = DOCUMENT_LOADERS[feature_cfg.dataset](feature_cfg)
     destination = output_root / model_name / document.dataset / document.stimulus_id
@@ -128,7 +172,7 @@ def _write_artifact(
         columns = set(pd.read_csv(token_path, sep="\t", nrows=1).columns)
         if {"self_surprisal", "self_entropy"} <= columns and manifest.get(
             "context_policy"
-        ) == "original_podcast_rolling_window":
+        ) == "full_available_causal_context":
             print(
                 f"Skipping completed {model_name}: "
                 f"{document.dataset}/{document.stimulus_id}"
@@ -141,6 +185,7 @@ def _write_artifact(
     surprisal, entropy, metadata = _score_causal_words(
         document.tokens["word"].fillna("").astype(str).tolist(),
         embedding_cfg,
+        batch_size,
     )
     if model_spec.get("fallback_for"):
         metadata["source"] = "gpt2_small_causal_fallback"
@@ -174,7 +219,15 @@ def main() -> None:
     parser.add_argument("--models", nargs="+")
     parser.add_argument("--datasets", nargs="+")
     parser.add_argument("--refresh", action="store_true")
+    parser.add_argument(
+        "--batch-size",
+        type=int,
+        default=None,
+        help="Initial target batch size; halves automatically on CUDA OOM",
+    )
     args = parser.parse_args()
+    if args.batch_size is not None and args.batch_size < 1:
+        parser.error("--batch-size must be positive")
     payload = yaml.safe_load(Path(args.config).read_text()) or {}
     models = args.models or list(payload["models"])
     datasets = args.datasets or list(payload["datasets"])
@@ -199,6 +252,7 @@ def main() -> None:
                     feature_cfg=expanded,
                     output_root=output_root,
                     refresh=args.refresh,
+                    batch_size=args.batch_size,
                 )
 
 
