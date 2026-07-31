@@ -173,7 +173,18 @@ def output_parts(analysis: Analysis, results_root: Path) -> tuple[str, str, str,
     movie = next((part.removeprefix("movie-") for part in parts if part.startswith("movie-")), None)
     if movie:
         dataset = movie
-    condition = "cross_dataset" if any("cross_dataset" in part for part in parts) else "internal_rrr"
+    if dataset == "fmri":
+        condition = (
+            "internal_rrr"
+            if analysis.root.name.startswith("within_fmri_rrr")
+            else "cross_dataset"
+        )
+    else:
+        condition = (
+            "cross_dataset"
+            if any("cross_dataset" in part for part in parts)
+            else "internal_rrr"
+        )
     match = next(
         (item for part in parts if (item := re.fullmatch(r"(.+)_layer(\d+)(?:_offset-?\d+)?", part))),
         None,

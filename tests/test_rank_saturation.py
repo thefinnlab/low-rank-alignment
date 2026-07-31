@@ -225,3 +225,27 @@ def test_rank_saturation_output_parts_for_cross_dataset_fmri_run():
         "fmri", "cross_dataset", "gpt2-xl", "layer24"
     )
     assert _artifact_stem(analysis, root) == "cross_dataset_rrr"
+
+
+def test_rank_saturation_output_parts_for_from_dataset_fmri_run():
+    root = Path("results")
+    analysis = Analysis(
+        root / "fmri" / "random-gpt2-xl_layer36" / "from_cars-2_rrr",
+        "fmri",
+        {},
+    )
+    assert output_parts(analysis, root) == (
+        "fmri", "cross_dataset", "random-gpt2-xl", "layer36"
+    )
+
+
+def test_rank_saturation_output_parts_for_internal_fmri_run():
+    root = Path("results")
+    analysis = Analysis(
+        root / "fmri" / "random-gpt2-xl_layer36" / "within_fmri_rrr",
+        "fmri",
+        {},
+    )
+    assert output_parts(analysis, root) == (
+        "fmri", "internal_rrr", "random-gpt2-xl", "layer36"
+    )
