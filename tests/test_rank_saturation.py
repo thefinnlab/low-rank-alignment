@@ -5,8 +5,6 @@ from pathlib import Path
 from scripts.rrr.plot_rank_saturation import (
     Analysis,
     _artifact_stem,
-    _exact_family_signflip,
-    _one_sided_resolution,
     output_parts,
 )
 from src.utils.rank_saturation import (
@@ -94,11 +92,11 @@ def test_electrode_units_average_lags_in_fisher_space():
     assert labels.tolist() == ["1:A", "1:B"]
 
 
-def test_one_se_rule_selects_earliest_eligible_rank():
+def test_fraction_of_best_rule_selects_earliest_eligible_rank():
     ranks = np.array([1, 2, 4, 8])
     target_z = np.array([
         [0.10, 0.11, 0.09, 0.10],
-        [0.195, 0.245, 0.175, 0.215],
+        [0.20, 0.255, 0.18, 0.215],
         [0.20, 0.26, 0.18, 0.22],
         [0.19, 0.25, 0.17, 0.21],
     ])
@@ -107,6 +105,8 @@ def test_one_se_rule_selects_earliest_eligible_rank():
     )
     assert result.curve["peak_rank"].iloc[0] == 4
     assert result.curve["saturation_rank"].iloc[0] == 2
+    assert result.curve["performance_fraction"].iloc[0] == 0.985
+    assert result.curve["threshold_z"].iloc[0] == 0.985 * result.curve["mean_z"].max()
     assert result.retention["fraction_within_peak_sem"].between(0, 1).all()
 
 
@@ -149,13 +149,6 @@ def test_equivalence_curve_selects_earliest_simultaneously_equivalent_rank():
     assert result.saturation_rank == 2
     assert result.curve["equivalent"].tolist() == [False, True, True]
     assert result.curve.loc[1, "max_statistic_adjusted_pvalue"] <= 0.05
-
-
-def test_fold_resolution_and_exact_family_signflip():
-    values = np.array([0.1, 0.2, 0.3, 0.4, 0.5])
-    expected = 2.131846786326649 * np.std(values, ddof=1) / np.sqrt(5)
-    np.testing.assert_allclose(_one_sided_resolution(values), expected)
-    assert _exact_family_signflip(np.array([1.0, 2.0])) == 0.25
 
 
 def test_fmri_blocks_recover_response_columns_from_thick_mask(tmp_path):

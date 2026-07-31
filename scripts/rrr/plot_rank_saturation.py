@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import argparse
-import itertools
 import re
 import sys
 from dataclasses import dataclass
@@ -21,16 +20,13 @@ import joblib
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-from scipy.stats import t
 from src.utils.plot_helpers import RED_BASELINE, RRR_PCA_COLORS, apply_publication_style
 from src.utils.rank_saturation import (
     SaturationSummary,
-    _cluster_bootstrap_means,
     electrode_units,
     fisher_r,
     fmri_spatial_blocks,
     mean_folds,
-    summarize_equivalence_curve,
     summarize_rank_curve,
 )
 
@@ -134,23 +130,6 @@ def _load_ieeg_full(unit: Path) -> float:
     return float(fisher_r(np.nanmean(units)))
 
 
-def _ieeg_full_fold_population(unit: Path) -> np.ndarray:
-    """Equal-subject full-model Fisher-z score in every held-out fold."""
-    manifest, _ = _ieeg_manifest(unit)
-    fold_means = []
-    for path in sorted(unit.glob("fold_*/full_model_metrics.npz")):
-        with np.load(path) as saved:
-            values = np.arctanh(np.clip(saved["full_corr_per_target"], -1 + 1e-7, 1 - 1e-7))
-        electrodes, labels = electrode_units(values[None, :], manifest)
-        subjects = np.asarray([label.split(":", 1)[0] for label in labels])
-        subject_means = [
-            np.nanmean(electrodes[0, subjects == subject])
-            for subject in np.unique(subjects)
-        ]
-        fold_means.append(np.nanmean(subject_means))
-    return np.asarray(fold_means)
-
-
 def _load_fmri(
     unit: Path,
     method: str,
@@ -183,14 +162,6 @@ def _load_fmri_full(root: Path) -> float:
     with np.load(root / "full" / "metrics.npz") as saved:
         values = np.asarray(saved["corr_per_target"])
     return float(fisher_r(np.nanmean(np.arctanh(np.clip(values, -1 + 1e-7, 1 - 1e-7)))))
-
-
-def _one_sided_resolution(values: np.ndarray) -> float:
-    values = np.asarray(values, dtype=float)
-    values = values[np.isfinite(values)]
-    if len(values) < 2:
-        raise ValueError("at least two independent measurements are required for delta")
-    return float(t.ppf(0.95, len(values) - 1) * np.std(values, ddof=1) / np.sqrt(len(values)))
 
 
 def output_parts(analysis: Analysis, results_root: Path) -> tuple[str, str, str, str]:
@@ -270,32 +241,8 @@ def _family_name(model: str) -> str:
     return "random-gpt2-xl" if model.startswith("random-gpt2-xl") else model
 
 
-def _exact_family_signflip(effects: np.ndarray) -> float:
-    effects = np.asarray(effects, dtype=float)
-    if not len(effects):
-        return np.nan
-    observed = float(np.mean(effects))
-    null = np.asarray([
-        np.mean(effects * np.asarray(signs))
-        for signs in itertools.product((-1, 1), repeat=len(effects))
-    ])
-    return float(np.mean(null >= observed))
-
-
-def _pvalue_stars(pvalue: float) -> str:
-    if not np.isfinite(pvalue):
-        return "n/a"
-    if pvalue < .001:
-        return "***"
-    if pvalue < .01:
-        return "**"
-    if pvalue < .05:
-        return "*"
-    return "n.s."
-
-
 def _plot_cross_model_summary(frame: pd.DataFrame, title: str, path: Path) -> dict:
-    """Draw paired poster-style saturation violins and return test metadata."""
+    """Draw paired saturation violins with explicit distribution means."""
     paired = frame.pivot_table(
         index=["run", "model", "layer"], columns="method",
         values="saturation_rank", aggfunc="first",
@@ -313,8 +260,6 @@ def _plot_cross_model_summary(frame: pd.DataFrame, title: str, path: Path) -> di
             median_pca_rank=("pca", "median"),
         ).reset_index()
     )
-    pvalue = _exact_family_signflip(family["mean_log2_pca_over_rrr"].to_numpy())
-
     apply_publication_style()
     fig, ax = plt.subplots(figsize=(3.8, 4.0))
     methods = ["rrr", "pca"]
@@ -345,23 +290,26 @@ def _plot_cross_model_summary(frame: pd.DataFrame, title: str, path: Path) -> di
         ax.scatter(paired_positions, ys, c=[METHOD_COLORS[m] for m in methods], s=19,
                    edgecolors="white", linewidths=.35, zorder=3)
 
+    means = {method: float(paired[method].mean()) for method in methods}
+    for position, method, values in zip(positions, methods, log_values):
+        mean_log_position = np.log2(means[method])
+        ax.scatter(position, mean_log_position, marker="D", s=28, color="black", zorder=5)
+        ax.annotate(
+            f"mean = {means[method]:.1f}",
+            (position, mean_log_position), xytext=(0, 8), textcoords="offset points",
+            ha="center", va="bottom", fontsize=7,
+        )
     y_min = min(np.nanmin(values) for values in log_values)
     y_max = max(np.nanmax(values) for values in log_values)
-    bracket_y = y_max + .55
-    ax.plot([1, 1, 2, 2], [bracket_y - .10, bracket_y, bracket_y, bracket_y - .10],
-            color="black", linewidth=.8)
-    ax.text(1.5, bracket_y + .06, _pvalue_stars(pvalue), ha="center", va="bottom", fontsize=9)
     integer_ticks = np.arange(np.floor(y_min), np.ceil(y_max) + 1)
     ax.set_yticks(integer_ticks, [str(int(2 ** value)) for value in integer_ticks])
     ax.set_xticks(positions, ["RRR", "PCA"])
     ax.set(
         ylabel="Saturation rank $k$",
         title=title,
-        ylim=(y_min - .35, bracket_y + .45),
+        ylim=(y_min - .35, y_max + .8),
         xlim=(.45, 2.55),
     )
-    ax.text(.98, .02, f"family sign-flip $p={pvalue:.4f}$",
-            transform=ax.transAxes, ha="right", va="bottom", fontsize=6.5)
     fig.tight_layout()
     fig.savefig(path.with_suffix(".png"), dpi=300, bbox_inches="tight", pad_inches=.05)
     fig.savefig(path.with_suffix(".svg"), bbox_inches="tight", pad_inches=.05)
@@ -377,7 +325,8 @@ def _plot_cross_model_summary(frame: pd.DataFrame, title: str, path: Path) -> di
         "median_rrr_rank": float(paired["rrr"].median()),
         "median_pca_rank": float(paired["pca"].median()),
         "geometric_mean_pca_over_rrr": float(2 ** family["mean_log2_pca_over_rrr"].mean()),
-        "pvalue": pvalue,
+        "mean_rrr_rank": means["rrr"],
+        "mean_pca_rank": means["pca"],
     }
 
 
@@ -405,10 +354,10 @@ def main() -> None:
     )
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument(
-        "--fmri-equivalence-fraction",
+        "--performance-fraction",
         type=float,
         default=0.985,
-        help="fMRI practical-equivalence fraction of best performance (default: 0.985).",
+        help="Fraction of peak Fisher-z performance defining saturation (default: 0.985).",
     )
     parser.add_argument(
         "--condition",
@@ -416,8 +365,8 @@ def main() -> None:
         help="Only plot analyses from this condition (default: plot both).",
     )
     args = parser.parse_args()
-    if not 0 < args.fmri_equivalence_fraction < 1:
-        parser.error("--fmri-equivalence-fraction must lie between zero and one")
+    if not 0 < args.performance_fraction <= 1:
+        parser.error("--performance-fraction must lie in (0, 1]")
     if args.jobs < 1:
         parser.error("--jobs must be at least one")
     args.output_dir.mkdir(parents=True, exist_ok=True)
@@ -430,36 +379,11 @@ def main() -> None:
         if args.condition is None or parts[1] == args.condition:
             analyses.append((analysis, parts))
 
-    # iEEG delta is fixed per dataset from the median full-model held-out-fold
-    # resolution. It never inspects an RRR or PCA rank curve.
-    resolution_values: dict[str, list[float]] = {}
-    resolution_skipped = []
-    for analysis, parts in analyses:
-        if analysis.layout != "ieeg":
-            continue
-        try:
-            resolution = _one_sided_resolution(
-                _ieeg_full_fold_population(analysis.units["rrr"])
-            )
-            resolution_values.setdefault(parts[0], []).append(resolution)
-        except Exception as error:
-            resolution_skipped.append({"run": str(analysis.root), "reason": str(error)})
-    dataset_deltas = {
-        dataset: float(np.median(values))
-        for dataset, values in resolution_values.items() if values
-    }
-    pd.DataFrame([
-        {"dataset": dataset, "delta_z": delta, "n_reference_runs": len(resolution_values[dataset]),
-         "source": "median_full_model_one_sided_95pct_fold_resolution"}
-        for dataset, delta in dataset_deltas.items()
-    ]).to_csv(args.output_dir / "dataset_deltas.csv", index=False)
-
     def process_analysis(item):
         analysis, parts = item
         analysis_rows = []
         try:
             summaries = {}
-            equivalence = {}
             loaded = {}
             for method, unit in analysis.units.items():
                 if analysis.layout == "ieeg":
@@ -477,44 +401,13 @@ def main() -> None:
                     analysis.layout == "fmri"
                     and args.fmri_bootstrap_unit == "subject"
                 )
-                bootstrap_means = _cluster_bootstrap_means(
-                    target_z,
-                    groups["cluster"].to_numpy(),
-                    args.bootstrap_repeats,
-                    args.seed,
-                    equal_cluster_weight=equal_cluster_weight,
-                )
                 summaries[method] = summarize_rank_curve(
                     ranks, target_z, groups["cluster"].to_numpy(),
                     bootstrap_repeats=args.bootstrap_repeats,
                     seed=args.seed,
                     equal_cluster_weight=equal_cluster_weight,
-                    bootstrap_means=bootstrap_means,
+                    performance_fraction=args.performance_fraction,
                 )
-                if analysis.layout == "ieeg":
-                    if parts[0] not in dataset_deltas:
-                        raise ValueError(f"no fold-resolution delta available for {parts[0]}")
-                    delta_z = dataset_deltas[parts[0]]
-                    equivalence_groups = groups["cluster"].to_numpy()
-                    equal_equivalence_weight = False
-                    delta_source = "dataset_full_model_fold_resolution"
-                else:
-                    best_z = float(summaries[method].curve["mean_z"].max())
-                    delta_z = (1 - args.fmri_equivalence_fraction) * abs(best_z)
-                    equivalence_groups = groups["cluster"].to_numpy()
-                    equal_equivalence_weight = args.fmri_bootstrap_unit == "subject"
-                    delta_source = f"{args.fmri_equivalence_fraction:.4f}_of_best"
-                equivalence[method] = summarize_equivalence_curve(
-                    ranks,
-                    target_z,
-                    equivalence_groups,
-                    delta_z,
-                    bootstrap_repeats=args.bootstrap_repeats,
-                    seed=args.seed,
-                    equal_cluster_weight=equal_equivalence_weight,
-                    bootstrap_means=bootstrap_means,
-                )
-                equivalence[method].curve["delta_source"] = delta_source
             full_mean = (_load_ieeg_full(analysis.units["rrr"]) if analysis.layout == "ieeg"
                          else _load_fmri_full(analysis.root))
             destination = args.output_dir.joinpath(*parts)
@@ -525,14 +418,10 @@ def main() -> None:
             for method, summary in summaries.items():
                 summary.curve.to_csv(destination / f"{stem}__{method}_curve.csv", index=False)
                 summary.retention.to_csv(destination / f"{stem}__{method}_retention.csv", index=False)
-                equivalence[method].curve.to_csv(
-                    destination / f"{stem}__{method}_equivalence.csv", index=False
-                )
-                pd.DataFrame({"one_se_saturation_rank": summary.bootstrap_saturation}).to_csv(
-                    destination / f"{stem}__{method}_one_se_saturation_bootstrap.csv", index=False)
+                pd.DataFrame({"saturation_rank": summary.bootstrap_saturation}).to_csv(
+                    destination / f"{stem}__{method}_saturation_bootstrap.csv", index=False)
                 row = summary.curve.iloc[0]
                 sat_q = np.quantile(summary.bootstrap_saturation, [0.025, 0.5, 0.975])
-                eq_rank = equivalence[method].saturation_rank
                 analysis_rows.append({"run": str(analysis.root), "dataset": parts[0],
                              "condition": parts[1], "model": parts[2], "layer": parts[3],
                              "method": method, "layout": analysis.layout,
@@ -540,11 +429,9 @@ def main() -> None:
                              "n_targets": loaded[method][0].shape[1],
                              "n_clusters": loaded[method][1]["cluster"].nunique(),
                              "peak_rank": int(row["peak_rank"]),
-                             "one_se_saturation_rank": int(row["saturation_rank"]),
-                             "saturation_rank": eq_rank,
-                             "equivalence_delta_z": float(equivalence[method].curve["delta_z"].iloc[0]),
-                             "equivalence_delta_source": equivalence[method].curve["delta_source"].iloc[0],
-                             "minimum_adjusted_pvalue": equivalence[method].minimum_pvalue,
+                             "saturation_rank": int(row["saturation_rank"]),
+                             "performance_fraction": float(row["performance_fraction"]),
+                             "threshold_z": float(row["threshold_z"]),
                              "bootstrap_saturation_q025": sat_q[0],
                              "bootstrap_saturation_median": sat_q[1],
                              "bootstrap_saturation_q975": sat_q[2]})
@@ -558,7 +445,7 @@ def main() -> None:
     processed = joblib.Parallel(n_jobs=min(args.jobs, len(analyses) or 1))(
         joblib.delayed(process_analysis)(item) for item in analyses
     )
-    rows, skipped = [], list(resolution_skipped)
+    rows, skipped = [], []
     for analysis_rows, error in processed:
         rows.extend(analysis_rows)
         if error is not None:

@@ -124,13 +124,16 @@ def summarize_rank_curve(
     seed: int = 0,
     equal_cluster_weight: bool = False,
     bootstrap_means: np.ndarray | None = None,
+    performance_fraction: float = 0.985,
 ) -> SaturationSummary:
-    """Summarize a target-weighted curve and its one-SE saturation point."""
+    """Summarize a target-weighted curve and its fraction-of-best saturation."""
     ranks = np.asarray(ranks, dtype=int)
     target_z = np.asarray(target_z, dtype=float)
     cluster_ids = np.asarray(cluster_ids)
     if target_z.shape[0] != len(ranks) or target_z.shape[1] != len(cluster_ids):
         raise ValueError("rank/target dimensions do not match ranks and cluster_ids")
+    if not 0 < performance_fraction <= 1:
+        raise ValueError("performance_fraction must be in (0, 1]")
     boot = bootstrap_means
     if boot is None:
         boot = _cluster_bootstrap_means(
@@ -155,15 +158,23 @@ def summarize_rank_curve(
         mean_z = np.nanmean(target_z, axis=1)
     sem_z = np.nanstd(boot, axis=0, ddof=1)
     peak_index = int(np.nanargmax(mean_z))
-    threshold_z = mean_z[peak_index] - sem_z[peak_index]
-    eligible = np.flatnonzero(mean_z >= threshold_z)
-    saturation_index = int(eligible[0])
+    threshold_z = performance_fraction * mean_z[peak_index]
+    if mean_z[peak_index] > 0:
+        eligible = np.flatnonzero(mean_z >= threshold_z)
+        saturation_index = int(eligible[0])
+    else:
+        saturation_index = peak_index
 
     bootstrap_saturation = np.empty(bootstrap_repeats, dtype=int)
     for index, sample in enumerate(boot):
         sample_peak = int(np.nanargmax(sample))
-        sample_threshold = sample[sample_peak] - sem_z[sample_peak]
-        bootstrap_saturation[index] = ranks[np.flatnonzero(sample >= sample_threshold)[0]]
+        if sample[sample_peak] > 0:
+            sample_threshold = performance_fraction * sample[sample_peak]
+            bootstrap_saturation[index] = ranks[
+                np.flatnonzero(sample >= sample_threshold)[0]
+            ]
+        else:
+            bootstrap_saturation[index] = ranks[sample_peak]
 
     unit_peak = np.nanmax(target_z, axis=0)
     losses = unit_peak[None, :] - target_z
@@ -177,6 +188,7 @@ def summarize_rank_curve(
         "upper_r": fisher_r(mean_z + sem_z),
         "peak_rank": ranks[peak_index],
         "saturation_rank": ranks[saturation_index],
+        "performance_fraction": performance_fraction,
         "threshold_z": threshold_z,
     })
     retention = pd.DataFrame({
