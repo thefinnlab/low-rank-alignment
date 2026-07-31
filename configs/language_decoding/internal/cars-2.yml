@@ -1,0 +1,43 @@
+dataset: cars-2
+device: auto
+refresh: false
+
+# Cars 2 has no IU labels or expanded lexical/emotion norms. These tasks are the
+# discussed interpretable features present across its completed token artifact.
+tasks:
+  - surprisal
+  - word_zipf_frequency
+  - word_length
+  - content_word
+  - part_of_speech
+  - sentence_position
+  - sentence_onset
+  - sentence_end
+  - word_duration
+  - pre_word_pause
+  - post_word_pause
+  - dependency_depth
+  - dependency_length
+
+task_data:
+  language_features: processed_data/language_features/brain_treebank/cars-2/tokens.tsv
+
+models:
+  gpt-j-6b:
+    rrr_config: configs/brain_treebank/cars_2/rrr/gpt-j-6b/cross_subject.yml
+    result_template: results/gpt-j-6b_layer{layer}_offset0/movie-cars-2
+  gpt2-xl:
+    rrr_config: configs/brain_treebank/cars_2/rrr/gpt2-xl/cross_subject.yml
+    result_template: results/gpt2-xl-batch_layer{layer}_offset0/movie-cars-2
+  llama3-8b:
+    rrr_config: configs/brain_treebank/cars_2/rrr/llama3-8b/cross_subject.yml
+    result_template: results/llama3-8b_layer{layer}_offset0/movie-cars-2
+  roberta-large:
+    rrr_config: configs/brain_treebank/cars_2/rrr/roberta-large/cross_subject.yml
+    result_template: results/roberta-large_layer{layer}_offset0/movie-cars-2
+  random-gpt2-xl:
+    rrr_config: configs/brain_treebank/cars_2/rrr/random-gpt2-xl/cross_subject.yml
+    result_template: results/random-gpt2-xl_layer{layer}_offset0/movie-cars-2
+  gpt2:
+    rrr_config: configs/brain_treebank/cars_2/rrr/gpt2/cross_subject.yml
+    result_template: results/gpt2_layer{layer}_offset0/movie-cars-2

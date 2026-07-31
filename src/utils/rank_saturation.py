@@ -101,6 +101,13 @@ class SaturationSummary:
     bootstrap_saturation: np.ndarray
 
 
+@dataclass
+class EquivalenceSummary:
+    curve: pd.DataFrame
+    saturation_rank: int | None
+    minimum_pvalue: float
+
+
 def summarize_rank_curve(
     ranks: np.ndarray,
     target_z: np.ndarray,
@@ -166,3 +173,64 @@ def summarize_rank_curve(
         "fraction_within_peak_sem": np.nanmean(losses <= margin, axis=1),
     })
     return SaturationSummary(curve, retention, bootstrap_saturation)
+
+
+def summarize_equivalence_curve(
+    ranks: np.ndarray,
+    target_z: np.ndarray,
+    cluster_ids: np.ndarray,
+    delta_z: float,
+    *,
+    bootstrap_repeats: int = 2000,
+    seed: int = 0,
+    equal_cluster_weight: bool = False,
+) -> EquivalenceSummary:
+    """Test every rank against the best with one simultaneous max statistic."""
+    if delta_z <= 0 or not np.isfinite(delta_z):
+        raise ValueError("delta_z must be finite and positive")
+    ranks = np.asarray(ranks, dtype=int)
+    target_z = np.asarray(target_z, dtype=float)
+    cluster_ids = np.asarray(cluster_ids)
+    if target_z.shape[0] != len(ranks) or target_z.shape[1] != len(cluster_ids):
+        raise ValueError("rank/target dimensions do not match ranks and cluster_ids")
+    boot = _cluster_bootstrap_means(
+        target_z,
+        cluster_ids,
+        bootstrap_repeats,
+        seed,
+        equal_cluster_weight=equal_cluster_weight,
+    )
+    if equal_cluster_weight:
+        codes, _ = pd.factorize(cluster_ids, sort=False)
+        cluster_means = np.stack([
+            np.nanmean(target_z[:, codes == code], axis=1)
+            for code in range(int(codes.max()) + 1)
+        ])
+        performance = np.nanmean(cluster_means, axis=0)
+    else:
+        performance = np.nanmean(target_z, axis=1)
+    observed_regret = np.nanmax(performance) - performance
+    bootstrap_regret = np.nanmax(boot, axis=1)[:, None] - boot
+    max_centered_error = np.nanmax(
+        bootstrap_regret - observed_regret[None, :], axis=1
+    )
+    critical = float(np.nanquantile(max_centered_error, 0.95))
+    upper = observed_regret + critical
+    pvalues = np.asarray([
+        (1 + np.sum(max_centered_error >= delta_z - regret))
+        / (bootstrap_repeats + 1)
+        for regret in observed_regret
+    ])
+    passed = pvalues <= 0.05
+    eligible = np.flatnonzero(passed)
+    saturation_rank = int(ranks[eligible[0]]) if len(eligible) else None
+    curve = pd.DataFrame({
+        "rank": ranks,
+        "performance_z": performance,
+        "observed_regret_z": observed_regret,
+        "simultaneous_95_upper_regret_z": upper,
+        "max_statistic_adjusted_pvalue": pvalues,
+        "delta_z": delta_z,
+        "equivalent": passed,
+    })
+    return EquivalenceSummary(curve, saturation_rank, float(np.min(pvalues)))

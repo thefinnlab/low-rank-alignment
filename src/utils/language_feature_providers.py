@@ -973,6 +973,17 @@ def _choose_parser_component(parser_words, candidates, parser_depths) -> int:
     return min(eligible, key=lambda index: (parser_depths[index], index))
 
 
+_STANZA_UD_PIPELINES: dict[tuple, object] = {}
+
+
+def _cached_stanza_ud_pipeline(stanza, pipeline_kwargs: dict):
+    """Reuse the immutable UD pipeline across stimulus-batched generation."""
+    key = tuple(sorted((name, str(value)) for name, value in pipeline_kwargs.items()))
+    if key not in _STANZA_UD_PIPELINES:
+        _STANZA_UD_PIPELINES[key] = stanza.Pipeline(**pipeline_kwargs)
+    return _STANZA_UD_PIPELINES[key]
+
+
 @register_annotation_provider("ud", version="2", requires=("native",))
 def stanza_ud_provider(document, token_table, options, resources) -> AnnotationResult:
     del document
@@ -994,7 +1005,7 @@ def stanza_ud_provider(document, token_table, options, resources) -> AnnotationR
     )
     if model_dir:
         pipeline_kwargs["dir"] = model_dir
-    pipeline = stanza.Pipeline(**pipeline_kwargs)
+    pipeline = _cached_stanza_ud_pipeline(stanza, pipeline_kwargs)
     output = _empty_features(token_table)
     scalar_columns = {
         "lemma": pd.NA,

@@ -294,13 +294,24 @@
       "coref_package": "gum-nospeakers_roberta-large-lora",
       "tokenization": "canonical_pretokenized_sentences",
       "overlap_policy": "shortest_then_earliest_chain_and_mention"
+    },
+    "gpt2_surprisal": {
+      "version": "1",
+      "model": "gpt2",
+      "model_resource": "gpt2_small",
+      "device": "cuda",
+      "context_reset": "stimulus",
+      "context_tokens": 1024,
+      "unit": "bits",
+      "word_aggregation": "sum_bpe_tokens",
+      "first_token": "missing"
     }
   },
   "feature_providers": {
     "native_part_of_speech": "native",
     "native_surprisal": "native",
     "native_entropy": "native",
-    "surprisal": "native",
+    "surprisal": "gpt2_surprisal",
     "entropy": "native",
     "word_length": "native",
     "word_zipf_frequency": "native",
@@ -457,7 +468,7 @@
       "total": 5136
     },
     "surprisal": {
-      "available": 5136,
+      "available": 5135,
       "total": 5136
     },
     "entropy": {
@@ -1237,6 +1248,19 @@
     "iu_alignment": {
       "boundaries": 1020,
       "time_fallbacks": 75
+    }
+  },
+  "focused_updates": {
+    "gpt2_surprisal": {
+      "resource_sha256": "bf67666759f5a4026932eabbc4b01310c5fa75b518945029190daa42f1494155",
+      "model": "gpt2",
+      "model_resource": "gpt2_small",
+      "device": "cuda",
+      "context_reset": "stimulus",
+      "context_tokens": 1024,
+      "unit": "bits",
+      "word_aggregation": "sum_bpe_tokens",
+      "first_token": "missing"
     }
   }
 }

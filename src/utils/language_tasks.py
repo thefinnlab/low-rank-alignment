@@ -27,7 +27,7 @@ class TaskSpec:
 
 @dataclass
 class PodcastTaskContext:
-    """Lazy Podcast annotations aligned to a model's word-level transcript."""
+    """Lazy word annotations aligned to a dataset's embedding transcript."""
 
     word_df: pd.DataFrame
     data_root: str = ""
@@ -103,7 +103,7 @@ class PodcastTaskContext:
 
     @property
     def language_features(self) -> pd.DataFrame:
-        """Return the generated Podcast token artifact after strict alignment checks."""
+        """Return a generated token artifact after strict alignment checks."""
         if "language_features" not in self._cache:
             path = self._resolve_path(
                 "language_features",

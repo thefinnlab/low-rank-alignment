@@ -48,6 +48,17 @@
       "language": "en",
       "package": "ewt",
       "tokenization": "parser_native_with_character_alignment"
+    },
+    "gpt2_surprisal": {
+      "version": "1",
+      "model": "gpt2",
+      "model_resource": "gpt2_small",
+      "device": "cuda",
+      "context_reset": "stimulus",
+      "context_tokens": 1024,
+      "unit": "bits",
+      "word_aggregation": "sum_bpe_tokens",
+      "first_token": "missing"
     }
   },
   "feature_providers": {
@@ -61,7 +72,7 @@
     "native_intensity_rms": "native",
     "native_syllable_count": "native",
     "native_phoneme_count": "native",
-    "surprisal": "native",
+    "surprisal": "gpt2_surprisal",
     "word_length": "native",
     "word_zipf_frequency": "native",
     "word_duration": "native",
@@ -139,7 +150,7 @@
       "total": 10760
     },
     "surprisal": {
-      "available": 10760,
+      "available": 10759,
       "total": 10760
     },
     "word_length": {
@@ -313,5 +324,18 @@
   },
   "document_metadata": {
     "stimulus_label": "cars-2"
+  },
+  "focused_updates": {
+    "gpt2_surprisal": {
+      "resource_sha256": "bf67666759f5a4026932eabbc4b01310c5fa75b518945029190daa42f1494155",
+      "model": "gpt2",
+      "model_resource": "gpt2_small",
+      "device": "cuda",
+      "context_reset": "stimulus",
+      "context_tokens": 1024,
+      "unit": "bits",
+      "word_aggregation": "sum_bpe_tokens",
+      "first_token": "missing"
+    }
   }
 }

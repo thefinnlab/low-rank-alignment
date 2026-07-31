@@ -212,13 +212,14 @@ def _fit_decoder(
     y_train: np.ndarray,
     kind: str,
     config: LanguageDecodingConfig,
+    cv=None,
 ):
     scaler = StandardScaler()
     if kind == "continuous":
         _configure_decoder_backend(config.device)
         model = RidgeCV(
             alphas=np.asarray(config.encoding.ridge_alphas or RIDGE_ALPHAS),
-            cv=_inner_cv(len(y_train), config.encoding.ridge_cv_folds),
+            cv=cv or _inner_cv(len(y_train), config.encoding.ridge_cv_folds),
             fit_intercept=True,
             solver_params=config.encoding.ridge_solver_params,
             Y_in_cpu=bool(config.encoding.ridge_y_in_cpu or False),
@@ -230,7 +231,7 @@ def _fit_decoder(
             raise ValueError(f"Categorical training fold contains only class {classes}")
         model = LogisticRegressionCV(
             Cs=np.asarray(config.logistic_cs, dtype=float),
-            cv=_inner_cv(len(y_train), config.encoding.ridge_cv_folds),
+            cv=cv or _inner_cv(len(y_train), config.encoding.ridge_cv_folds),
             scoring="balanced_accuracy",
             class_weight="balanced",
             solver="lbfgs",
@@ -1037,8 +1038,6 @@ def run_language_decoding(config: LanguageDecodingConfig) -> Path:
         f"continuous=himalaya/{effective_device}, categorical=scikit-learn/cpu"
     )
     enc = config.encoding
-    if enc.dataset != "podcast":
-        raise ValueError("Language decoding currently supports dataset='podcast' only")
     subject_ids = enc.subjects or list(range(1, 10))
     dataset_context = resolve_dataset_context(
         enc.dataset, subject_ids, enc.per_dataset_config, enc.data_root

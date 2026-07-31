@@ -228,7 +228,15 @@ def expand_per_model_layer_configs(config):
         expanded = deepcopy(config)
         expanded_encoding = getattr(expanded, "encoding", expanded)
         expanded_encoding.per_model_config["layer"] = scalar_layer
-        for field_name in ("cross_result_dir", "output_dir", "sig_dir", "rrr_output_dir"):
+        for field_name in (
+            "cross_result_dir",
+            "output_dir",
+            "sig_dir",
+            "rrr_output_dir",
+            "rrr_run_path",
+            "pca_run_path",
+            "fold_results_dir",
+        ):
             value = getattr(expanded, field_name, None)
             if isinstance(value, str) and "{layer}" in value:
                 setattr(expanded, field_name, value.format(layer=scalar_layer))

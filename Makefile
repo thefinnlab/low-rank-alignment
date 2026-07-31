@@ -19,6 +19,9 @@ SIG_CONFIG      ?= configs/significance/significance_default.yml
 RRR_CONFIG      ?= configs/rrr/rrr_default.yml
 RANK_SATURATION_ARGS ?=
 LANGUAGE_DECODING_CONFIG ?= configs/rrr/language_decoding.yml
+LANGUAGE_DECODING_DATASET ?= podcast
+LANGUAGE_DECODING_MODELS ?= $(filter-out glove,$(PIPELINE_MODELS))
+LANGUAGE_DECODING_SUBMIT_ARGS ?=
 LANGUAGE_RECONSTRUCTION_CONFIG ?= configs/rrr/language_reconstruction.yml
 LANGUAGE_AXIS_ENCODING_CONFIG ?= configs/rrr/language_axis_encoding.yml
 LANGUAGE_FEATURE_CONFIG ?= configs/language_features/podcast.yml
@@ -219,6 +222,11 @@ language-decoding:
 	mkdir -p logs
 	$(CMD) scripts/rrr/run_language_decoding.py --config $(LANGUAGE_DECODING_CONFIG) $(OVERRIDES)
 
+## Submit one internal RRR/PCA language-decoding job per model; each job runs all
+## completed configured layers. Add --dry-run through LANGUAGE_DECODING_SUBMIT_ARGS.
+submit-language-decoding:
+	$(CMD) scripts/submit_language_decoding.py --dataset $(LANGUAGE_DECODING_DATASET) --models $(LANGUAGE_DECODING_MODELS) $(LANGUAGE_DECODING_SUBMIT_ARGS)
+
 ## Predict matched-rank RRR/PCA spaces from configured language-task variables.
 ## Use CMD="uv run python" for a local run.
 language-reconstruction:
@@ -241,6 +249,14 @@ language-features:
 ## Generate/update only GPT-2 surprisal for Podcast, Cars 2, and shared fMRI stories
 surprisal:
 	$(CMD) scripts/utilities/generate_surprisal.py $(foreach config,$(SURPRISAL_CONFIGS),--config $(config)) $(OVERRIDES)
+
+## Populate fMRI IU position, onset, end, and length from aligned PSST boundaries
+fmri-iu-features:
+	$(CMD) scripts/utilities/generate_fmri_iu_features.py --config configs/language_features/fmri.yml
+
+## Populate the common interpretable lexical, sentence, norm, and syntax features
+fmri-interpretable-features:
+	$(CMD) scripts/utilities/generate_fmri_interpretable_features.py --config configs/language_features/fmri.yml
 
 ## Resume fMRI SaT/PSST boundaries, then generate expanded Cars 2 and fMRI labels.
 expanded-language-features:

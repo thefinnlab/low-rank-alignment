@@ -2,10 +2,17 @@ import numpy as np
 import pandas as pd
 from pathlib import Path
 
-from scripts.rrr.plot_rank_saturation import Analysis, _artifact_stem, output_parts
+from scripts.rrr.plot_rank_saturation import (
+    Analysis,
+    _artifact_stem,
+    _exact_family_signflip,
+    _one_sided_resolution,
+    output_parts,
+)
 from src.utils.rank_saturation import (
     electrode_units,
     fmri_spatial_blocks,
+    summarize_equivalence_curve,
     summarize_rank_curve,
 )
 
@@ -61,6 +68,29 @@ def test_equal_cluster_weight_gives_subjects_equal_influence():
         equal_cluster_weight=True,
     )
     np.testing.assert_allclose(result.curve["mean_z"], [0.5, 0.6])
+
+
+def test_equivalence_curve_selects_earliest_simultaneously_equivalent_rank():
+    ranks = np.array([1, 2, 4])
+    target_z = np.tile(np.array([[0.10], [0.195], [0.20]]), (1, 8))
+    result = summarize_equivalence_curve(
+        ranks,
+        target_z,
+        np.arange(8),
+        delta_z=0.01,
+        bootstrap_repeats=199,
+        seed=3,
+    )
+    assert result.saturation_rank == 2
+    assert result.curve["equivalent"].tolist() == [False, True, True]
+    assert result.curve.loc[1, "max_statistic_adjusted_pvalue"] <= 0.05
+
+
+def test_fold_resolution_and_exact_family_signflip():
+    values = np.array([0.1, 0.2, 0.3, 0.4, 0.5])
+    expected = 2.131846786326649 * np.std(values, ddof=1) / np.sqrt(5)
+    np.testing.assert_allclose(_one_sided_resolution(values), expected)
+    assert _exact_family_signflip(np.array([1.0, 2.0])) == 0.25
 
 
 def test_fmri_blocks_recover_response_columns_from_thick_mask(tmp_path):

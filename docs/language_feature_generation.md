@@ -20,6 +20,13 @@ The boundary and feature sweeps resume at the story-artifact level.
 GPT-2 surprisal column in existing artifacts, and creates canonical minimal artifacts
 when a story has no completed full-provider output. It is resumable by model checksum
 and avoids rerunning unrelated audio and document-level providers.
+`scripts/utilities/generate_fmri_iu_features.py` (or `make fmri-iu-features`) similarly
+populates IU position, onset, end, and length from the already aligned PSST boundaries
+without rerunning audio inference or unrelated providers.
+`scripts/utilities/generate_fmri_interpretable_features.py` (or
+`make fmri-interpretable-features`) adds the shared decoding subset from native timing
+and sentence structure, Stanza UD syntax, and lexical norms without invoking the heavy
+diarization or document-level coreference providers.
 
 Negative or missing source sentence IDs are normalized by assigning each contiguous run
 of affected words its own synthetic sentence ID after the source's nonnegative ID range.
@@ -196,8 +203,10 @@ the combined morphology string, and `aspect` are intentionally not decoding targ
 - Event-boundary and mental-state/perspective targets are not yet implemented.
 - Expanded prosody beyond word timing and pauses (F0/intensity, rate, lengthening,
   pitch reset, prominence, ToBI, and repair/false-start targets) is not yet implemented.
-- Brain Treebank and fMRI artifacts can be generated, but loading them into language
-  decoding is future work because the current language-decoding runner is Podcast-only.
+- Brain Treebank artifacts can be loaded by the language decoder with dataset-specific
+  task manifests. The fMRI decoder trains on retained training-story words, tunes with
+  leave-one-session-out inner folds, and evaluates only on `wheretheressmoke`, which is
+  excluded from the fMRI ridge, RRR, and PCA fits.
 
 ## Resource staging
 

@@ -1,0 +1,233 @@
+{
+  "schema_version": 2,
+  "dataset": "fmri",
+  "stimulus_id": "naked",
+  "n_tokens": 3218,
+  "providers": {
+    "gpt2_surprisal": {
+      "version": "1",
+      "model": "gpt2",
+      "model_resource": "gpt2_small",
+      "device": "cuda",
+      "context_reset": "stimulus",
+      "context_tokens": 1024,
+      "unit": "bits",
+      "word_aggregation": "sum_bpe_tokens",
+      "first_token": "missing"
+    },
+    "native": {
+      "version": "1",
+      "native_columns": [
+        "iu_end",
+        "iu_length",
+        "iu_onset",
+        "iu_position",
+        "post_word_pause",
+        "pre_word_pause",
+        "sentence_end",
+        "sentence_length",
+        "sentence_onset",
+        "sentence_position",
+        "story_position",
+        "story_time_position",
+        "word_duration",
+        "word_length",
+        "word_zipf_frequency"
+      ],
+      "media": {
+        "audio": "data/deep-fMRI-dataset/data/ds003020/stimuli/naked.wav"
+      }
+    },
+    "ud": {
+      "version": "2",
+      "backend": "stanza",
+      "language": "en",
+      "package": "ewt",
+      "tokenization": "parser_native_with_character_alignment"
+    },
+    "lexical_norms": {
+      "version": "1",
+      "coverage": {
+        "concreteness": 3086,
+        "visual_strength": 3087,
+        "auditory_strength": 3087,
+        "haptic_strength": 3087,
+        "olfactory_strength": 3087,
+        "gustatory_strength": 3087,
+        "interoceptive_strength": 3087,
+        "hand_arm_action_strength": 3087,
+        "mouth_throat_action_strength": 3087,
+        "foot_leg_action_strength": 3087,
+        "head_action_strength": 3087,
+        "torso_action_strength": 3087,
+        "valence": 2463,
+        "arousal": 2463,
+        "dominance": 2463,
+        "age_of_acquisition": 3043,
+        "word_prevalence": 3141,
+        "semantic_diversity": 2813,
+        "socialness": 553
+      },
+      "resources": [
+        "concreteness",
+        "lancaster",
+        "nrc_vad",
+        "age_of_acquisition",
+        "word_prevalence",
+        "semantic_diversity",
+        "socialness"
+      ]
+    }
+  },
+  "feature_providers": {
+    "surprisal": "gpt2_surprisal",
+    "iu_position": "native",
+    "iu_onset": "native",
+    "iu_end": "native",
+    "iu_length": "native",
+    "word_zipf_frequency": "native",
+    "word_length": "native",
+    "sentence_position": "native",
+    "sentence_onset": "native",
+    "sentence_end": "native",
+    "word_duration": "native",
+    "pre_word_pause": "native",
+    "post_word_pause": "native",
+    "content_word": "ud",
+    "part_of_speech": "ud",
+    "dependency_depth": "ud",
+    "dependency_length": "ud",
+    "concreteness": "lexical_norms",
+    "valence": "lexical_norms",
+    "arousal": "lexical_norms"
+  },
+  "feature_coverage": {
+    "surprisal": {
+      "available": 3216,
+      "total": 3218
+    },
+    "iu_position": {
+      "available": 3218,
+      "total": 3218
+    },
+    "iu_onset": {
+      "available": 3218,
+      "total": 3218
+    },
+    "iu_end": {
+      "available": 3218,
+      "total": 3218
+    },
+    "iu_length": {
+      "available": 3218,
+      "total": 3218
+    },
+    "word_zipf_frequency": {
+      "available": 3218,
+      "total": 3218
+    },
+    "word_length": {
+      "available": 3218,
+      "total": 3218
+    },
+    "sentence_position": {
+      "available": 3218,
+      "total": 3218
+    },
+    "sentence_onset": {
+      "available": 3218,
+      "total": 3218
+    },
+    "sentence_end": {
+      "available": 3218,
+      "total": 3218
+    },
+    "word_duration": {
+      "available": 3218,
+      "total": 3218
+    },
+    "pre_word_pause": {
+      "available": 3217,
+      "total": 3218
+    },
+    "post_word_pause": {
+      "available": 3217,
+      "total": 3218
+    },
+    "content_word": {
+      "available": 3218,
+      "total": 3218
+    },
+    "part_of_speech": {
+      "available": 3217,
+      "total": 3218
+    },
+    "dependency_depth": {
+      "available": 3218,
+      "total": 3218
+    },
+    "dependency_length": {
+      "available": 3124,
+      "total": 3218
+    },
+    "concreteness": {
+      "available": 3086,
+      "total": 3218
+    },
+    "valence": {
+      "available": 2463,
+      "total": 3218
+    },
+    "arousal": {
+      "available": 2463,
+      "total": 3218
+    }
+  },
+  "focused_updates": {
+    "gpt2_surprisal": {
+      "resource_sha256": "bf67666759f5a4026932eabbc4b01310c5fa75b518945029190daa42f1494155",
+      "model": "gpt2",
+      "model_resource": "gpt2_small",
+      "device": "cuda",
+      "context_reset": "stimulus",
+      "context_tokens": 1024,
+      "unit": "bits",
+      "word_aggregation": "sum_bpe_tokens",
+      "first_token": "missing"
+    },
+    "fmri_iu_features": {
+      "source": "aligned_psst_boundaries",
+      "features": [
+        "iu_position",
+        "iu_onset",
+        "iu_end",
+        "iu_length"
+      ],
+      "iu_count": 920
+    },
+    "fmri_interpretable_features": {
+      "providers": [
+        "native",
+        "ud",
+        "lexical_norms"
+      ],
+      "features": [
+        "word_zipf_frequency",
+        "word_length",
+        "sentence_position",
+        "sentence_onset",
+        "sentence_end",
+        "word_duration",
+        "pre_word_pause",
+        "post_word_pause",
+        "content_word",
+        "part_of_speech",
+        "dependency_depth",
+        "dependency_length",
+        "concreteness",
+        "valence",
+        "arousal"
+      ]
+    }
+  }
+}

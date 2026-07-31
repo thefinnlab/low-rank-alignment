@@ -1,0 +1,48 @@
+dataset: podcast
+device: auto
+refresh: false
+
+tasks:
+  - surprisal
+  - word_zipf_frequency
+  - word_length
+  - content_word
+  - part_of_speech
+  - sentence_position
+  - sentence_onset
+  - sentence_end
+  - word_duration
+  - pre_word_pause
+  - post_word_pause
+  - concreteness
+  - valence
+  - arousal
+  - dependency_depth
+  - dependency_length
+  - iu_position
+  - iu_onset
+  - iu_end
+  - iu_length
+
+task_data:
+  language_features: processed_data/language_features/podcast/podcast/tokens.tsv
+
+models:
+  gpt-j-6b:
+    rrr_config: configs/rrr/gpt-j-6b/cross_subject.yml
+    result_template: results/gpt-j-6b_layer{layer}_offset0
+  gpt2-xl:
+    rrr_config: configs/rrr/gpt2-xl/cross_subject.yml
+    result_template: results/gpt2-xl-batch_layer{layer}_offset0
+  llama3-8b:
+    rrr_config: configs/rrr/llama3-8b/cross_subject.yml
+    result_template: results/llama3-8b_layer{layer}_offset0
+  roberta-large:
+    rrr_config: configs/rrr/roberta-large/cross_subject.yml
+    result_template: results/roberta-large_layer{layer}_offset0
+  random-gpt2-xl:
+    rrr_config: configs/rrr/random-gpt2-xl/cross_subject.yml
+    result_template: results/random-gpt2-xl_layer{layer}_offset0
+  gpt2:
+    rrr_config: configs/rrr/gpt2/cross_subject.yml
+    result_template: results/gpt2_layer{layer}_offset0
