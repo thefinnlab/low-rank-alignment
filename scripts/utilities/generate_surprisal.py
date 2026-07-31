@@ -69,7 +69,8 @@ def _write_surprisal(config: LanguageFeatureGenerationConfig) -> Path:
     if (
         existing_path.exists()
         and update.get("resource_sha256") == resource["sha256"]
-        and "surprisal" in pd.read_csv(existing_path, sep="\t", nrows=1).columns
+        and {"surprisal", "standardized_entropy"}
+        <= set(pd.read_csv(existing_path, sep="\t", nrows=1).columns)
     ):
         print(f"Skipping completed surprisal: {document.dataset}/{document.stimulus_id}")
         return output
@@ -85,8 +86,13 @@ def _write_surprisal(config: LanguageFeatureGenerationConfig) -> Path:
     if len(features) != len(document.tokens):
         raise ValueError("GPT-2 surprisal returned a misaligned token count")
     token_table = _load_existing_tokens(output, document.tokens)
-    token_table = token_table.drop(columns=["surprisal"], errors="ignore")
+    token_table = token_table.drop(
+        columns=["surprisal", "standardized_entropy"], errors="ignore"
+    )
     token_table["surprisal"] = features["surprisal"].to_numpy(dtype=float)
+    token_table["standardized_entropy"] = features[
+        "standardized_entropy"
+    ].to_numpy(dtype=float)
 
     output.mkdir(parents=True, exist_ok=True)
     temporary_tokens = output / "tokens.tsv.tmp"
@@ -110,8 +116,15 @@ def _write_surprisal(config: LanguageFeatureGenerationConfig) -> Path:
         **result.metadata,
     }
     manifest.setdefault("feature_providers", {})["surprisal"] = "gpt2_surprisal"
+    manifest.setdefault("feature_providers", {})[
+        "standardized_entropy"
+    ] = "gpt2_surprisal"
     manifest.setdefault("feature_coverage", {})["surprisal"] = {
         "available": int(token_table["surprisal"].notna().sum()),
+        "total": int(len(token_table)),
+    }
+    manifest.setdefault("feature_coverage", {})["standardized_entropy"] = {
+        "available": int(token_table["standardized_entropy"].notna().sum()),
         "total": int(len(token_table)),
     }
     manifest.setdefault("focused_updates", {})["gpt2_surprisal"] = {

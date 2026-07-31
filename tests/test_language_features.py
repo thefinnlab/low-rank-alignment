@@ -15,6 +15,7 @@ from src.utils.language_feature_providers import (
     _choose_parser_component,
     _dependency_derivatives,
     _aggregate_token_surprisal,
+    _aggregate_first_subtoken,
     _encode_gpt2_words,
     disfluency_provider,
     entity_coreference_provider,
@@ -141,6 +142,10 @@ def test_gpt2_word_encoding_and_subtoken_surprisal_aggregation():
         np.array([np.nan, 2.5, 1.5]), token_words, 3
     )
     np.testing.assert_allclose(result, [np.nan, np.nan, 4.0], equal_nan=True)
+    entropy = _aggregate_first_subtoken(
+        np.array([np.nan, 3.5, 2.5]), token_words, 3
+    )
+    np.testing.assert_allclose(entropy, [np.nan, np.nan, 3.5], equal_nan=True)
 
 
 def test_native_controls_are_word_aligned_and_non_destructive():

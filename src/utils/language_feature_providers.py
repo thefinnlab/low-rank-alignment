@@ -268,6 +268,18 @@ def _aggregate_token_surprisal(
     return result
 
 
+def _aggregate_first_subtoken(
+    token_values: np.ndarray, token_words: np.ndarray, n_words: int
+) -> np.ndarray:
+    """Take each transcript word's first BPE-token value."""
+    result = np.full(n_words, np.nan, dtype=float)
+    for word_index in np.unique(token_words):
+        indices = np.flatnonzero(token_words == word_index)
+        if len(indices):
+            result[int(word_index)] = float(token_values[indices[0]])
+    return result
+
+
 @register_annotation_provider("gpt2_surprisal", version="1")
 def gpt2_surprisal_provider(
     document, token_table, options, resources
@@ -310,6 +322,7 @@ def gpt2_surprisal_provider(
     words = token_table["word"].fillna("").astype(str).tolist()
     token_ids, token_words = _encode_gpt2_words(tokenizer, words)
     token_surprisal = np.full(len(token_ids), np.nan, dtype=float)
+    token_entropy = np.full(len(token_ids), np.nan, dtype=float)
     # Token zero has no preceding linguistic context. Every later target is scored
     # from up to the previous 1,024 BPE tokens, with no cross-story state.
     batch_starts = range(1, len(token_ids), batch_size)
@@ -348,9 +361,17 @@ def gpt2_surprisal_provider(
             nll_nats = torch.nn.functional.cross_entropy(
                 logits, target_ids, reduction="none"
             )
+            probabilities = torch.softmax(logits, dim=-1)
+            entropy_nats = torch.distributions.Categorical(
+                probs=probabilities
+            ).entropy()
         token_surprisal[targets] = nll_nats.cpu().numpy() / log(2.0)
+        token_entropy[targets] = entropy_nats.cpu().numpy()
     word_surprisal = _aggregate_token_surprisal(
         token_surprisal, token_words, len(token_table)
+    )
+    word_entropy = _aggregate_first_subtoken(
+        token_entropy, token_words, len(token_table)
     )
     del model
     if use_cuda:
@@ -360,6 +381,7 @@ def gpt2_surprisal_provider(
             {
                 "token_id": token_table["token_id"].to_numpy(),
                 "surprisal": word_surprisal,
+                "standardized_entropy": word_entropy,
             }
         ),
         metadata={
@@ -370,6 +392,8 @@ def gpt2_surprisal_provider(
             "context_tokens": context_tokens,
             "unit": "bits",
             "word_aggregation": "sum_bpe_tokens",
+            "entropy_unit": "nats",
+            "entropy_word_aggregation": "first_bpe_token",
             "first_token": "missing",
         },
     )

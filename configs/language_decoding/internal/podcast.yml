@@ -4,6 +4,7 @@ refresh: false
 
 tasks:
   - surprisal
+  - standardized_entropy
   - self_surprisal
   - self_entropy
   - word_zipf_frequency

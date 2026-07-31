@@ -261,7 +261,7 @@ language-features:
 	mkdir -p logs
 	$(CMD) scripts/utilities/generate_language_features.py --config $(LANGUAGE_FEATURE_CONFIG) $(OVERRIDES)
 
-## Generate/update only GPT-2 surprisal for Podcast, Cars 2, and shared fMRI stories
+## Generate/update only standardized GPT-2 surprisal and entropy across datasets
 surprisal:
 	$(CMD) scripts/utilities/generate_surprisal.py $(foreach config,$(SURPRISAL_CONFIGS),--config $(config)) $(OVERRIDES)
 

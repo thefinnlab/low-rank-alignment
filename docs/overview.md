@@ -106,7 +106,7 @@ Downstream configs can store list-valued `encoding.per_model_config.layer` entri
 | `scripts/utilities/cache_pipeline_models.py` | Cache model and tokenizer snapshots required by the default `PIPELINE_MODELS` for offline generation |
 | `scripts/utilities/export_transcript.py` | Export a dataset adapter's normalized transcript word table for review |
 | `scripts/utilities/generate_language_features.py` | Stage pinned annotation resources and generate dataset-standard token/span/relation artifacts |
-| `scripts/utilities/generate_surprisal.py` | Resumably generate GPT-2-small word surprisal across Podcast, Cars 2, and shared fMRI stories without rerunning unrelated providers |
+| `scripts/utilities/generate_surprisal.py` | Resumably generate standardized GPT-2-small word surprisal and entropy across Podcast, Cars 2, and shared fMRI stories without rerunning unrelated providers |
 | `scripts/utilities/generate_self_surprisal.py` | Resumably generate per-model word surprisal and entropy artifacts used by the `self_surprisal` and `self_entropy` decoding tasks |
 | `scripts/utilities/generate_fmri_language_boundaries.py` | Batch SaT sentence segmentation and PSST IU transcription for timed deep-fMRI stories |
 | `scripts/utilities/generate_fmri_iu_features.py` | Populate fMRI word-level IU position, onset, end, and length from aligned PSST boundaries |

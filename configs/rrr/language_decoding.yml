@@ -36,6 +36,7 @@ tasks:
   - fine_part_of_speech
   - content_word
   - surprisal
+  - standardized_entropy
   - self_surprisal
   - self_entropy
   - entropy

@@ -6,6 +6,7 @@ refresh: false
 # discussed interpretable features present across its completed token artifact.
 tasks:
   - surprisal
+  - standardized_entropy
   - self_surprisal
   - self_entropy
   - word_zipf_frequency

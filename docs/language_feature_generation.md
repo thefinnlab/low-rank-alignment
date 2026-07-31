@@ -17,7 +17,7 @@ Segment Any Text supplies sentence boundaries for the unpunctuated word tier, wh
 supplies audio-derived IU boundaries. Both are snapped back to the exact TextGrid words.
 The boundary and feature sweeps resume at the story-artifact level.
 `scripts/utilities/generate_surprisal.py` (or `make surprisal`) updates only the shared
-GPT-2 surprisal column in existing artifacts, and creates canonical minimal artifacts
+GPT-2 surprisal and entropy columns in existing artifacts, and creates canonical minimal artifacts
 when a story has no completed full-provider output. It is resumable by model checksum
 and avoids rerunning unrelated audio and document-level providers.
 `scripts/utilities/generate_self_surprisal.py` (or `make self-surprisal`) creates
@@ -37,7 +37,7 @@ Generate only the model-specific values, with one parallel SLURM job per model, 
 Generate these artifacts in parallel by model and release every dependent internal
 model/dataset decoding job with
 `uv run python scripts/submit_language_decoding.py --dataset all --device cuda
---generate-predictability --tasks surprisal self_surprisal self_entropy
+--generate-predictability --tasks surprisal standardized_entropy self_surprisal self_entropy
 pre_word_pause post_word_pause iu_position sentence_position --max-rank 256 --refresh`.
 Use `--run-name predictability-context-quick` to keep this subset run's task artifacts,
 tables, plots, configuration, and metadata separate from existing all-task results.
@@ -59,9 +59,10 @@ For the centered `[-1, 1]` NRC-VAD release, emotional intensity is absolute vale
 Providers are resource bundles rather than one function per target. The built-ins are:
 
 - `native`: timing, structural controls, and source annotations under `native_*` names;
-- `gpt2_surprisal`: standardized GPT-2-small word surprisal in bits, resetting at each
-  stimulus, using up to 1,024 preceding BPE tokens, and summing across a word's BPE
-  tokens; the first word is missing because it has no preceding linguistic context;
+- `gpt2_surprisal`: standardized GPT-2-small word surprisal in bits and first-subtoken
+  predictive entropy in nats, resetting at each stimulus and using up to 1,024
+  preceding BPE tokens; the first word is missing because it has no preceding
+  linguistic context;
 - `ud`: common Stanza EWT lemmas, UD POS/morphology/dependencies, deterministic tree
   measures, and a parser-token-to-canonical-word crosswalk;
 - `lexical_norms`: configuration-driven norm tables, longest non-overlapping phrase
@@ -126,9 +127,10 @@ complete interface.
 | `fine_part_of_speech` | categorical | Standardized language-specific POS | Stanza UD | Complete |
 | `content_word` | categorical | UD content/function indicator | Stanza UD | Complete |
 | `surprisal` | continuous | GPT-2-small surprisal in bits | GPT-2 provider | Complete |
+| `standardized_entropy` | continuous | GPT-2-small first-subtoken predictive entropy in nats | GPT-2 provider | Complete |
 | `self_surprisal` | continuous | Embedding model's own surprisal in bits; GPT-2 fallback for RoBERTa | Per-model artifact | Complete |
 | `self_entropy` | continuous | Embedding model's first-subtoken predictive entropy in nats; GPT-2 fallback for RoBERTa | Per-model artifact | Complete |
-| `entropy` | continuous | Standardized entropy | Native provider | Complete |
+| `entropy` | continuous | Legacy source entropy alias | Podcast native | Complete (legacy) |
 | `surprisal_class` | categorical | Three-way surprisal bin | Legacy Podcast CSV | Complete (legacy) |
 | `story_position` | continuous | Normalized word progress | Native provider | Complete |
 | `story_time_position` | continuous | Normalized elapsed-time progress | Native provider | Complete |

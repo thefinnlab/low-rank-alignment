@@ -9,6 +9,7 @@ self_surprisal_root: processed_data/language_features/self_surprisal
 # final metrics are reported only on wheretheressmoke.
 tasks:
   - surprisal
+  - standardized_entropy
   - self_surprisal
   - self_entropy
   - word_zipf_frequency
