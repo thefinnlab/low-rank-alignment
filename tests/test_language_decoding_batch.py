@@ -8,10 +8,10 @@ from scripts.fmri.run_internal_language_decoding_batch import _layer_configs, _s
 from scripts.fmri.bootstrap_language_decoding import (
     _apply_rankwise_fdr,
     _load_fold_pair,
-    cross_dataset_hierarchical_bootstrap,
     cross_dataset_mean_scores,
     hierarchical_block_bootstrap,
     paired_block_bootstrap,
+    _relative_preference as _bootstrap_relative_preference,
 )
 from scripts.rrr.plot_rank_saturation import METHOD_COLORS
 from src.utils.plot_helpers import RRR_PCA_COLORS
@@ -161,8 +161,15 @@ def test_hierarchical_bootstrap_gives_models_equal_observed_weight():
     assert observed == 0
     assert len(boot) == 20
 
+    pca, rrr, observed, boot, boot_pca, boot_rrr = hierarchical_block_bootstrap(
+        {"many_layers": [pair(1), pair(1), pair(1)], "one_layer": [pair(-1)]},
+        "continuous", 20, np.random.default_rng(3),
+        return_method_bootstrap=True,
+    )
+    np.testing.assert_allclose(boot, boot_rrr - boot_pca)
 
-def test_cross_dataset_bootstrap_gives_datasets_equal_observed_weight():
+
+def test_cross_dataset_mean_gives_datasets_equal_observed_weight():
     blocks = np.repeat(["s1", "s2"], 3)
 
     def record(rrr_wins):
@@ -178,20 +185,11 @@ def test_cross_dataset_bootstrap_gives_datasets_equal_observed_weight():
         "a": {"model": [record(True), record(True), record(True)]},
         "b": {"model": [record(False)]},
     }
-    scores, pca, rrr, observed, boot = cross_dataset_hierarchical_bootstrap(
-        datasets, "continuous", 20, np.random.default_rng(4)
-    )
+    scores, pca, rrr, observed = cross_dataset_mean_scores(datasets, "continuous")
     assert scores["a"]["delta"] == 2
     assert scores["b"]["delta"] == -2
     assert pca == rrr
     assert observed == 0
-    assert len(boot) == 20
-
-    mean_scores, mean_pca, mean_rrr, mean_delta = cross_dataset_mean_scores(
-        datasets, "continuous"
-    )
-    assert mean_scores == scores
-    assert (mean_pca, mean_rrr, mean_delta) == (pca, rrr, observed)
 
 
 def test_bootstrap_fdr_is_applied_separately_per_rank():
@@ -215,6 +213,11 @@ def test_relative_preference_ratio_and_low_performance_threshold():
     assert _relative_preference(0.2, 0.1, 0.05) == 1
     assert _relative_preference(0.1, 0.2, 0.05) == -1
     assert _relative_preference(0.04, 0.03, 0.05) == 0
+    np.testing.assert_allclose(
+        _bootstrap_relative_preference([0.2, 0.1, 0.04], [0.1, 0.2, 0.03], 0.05),
+        [1, -1, 0],
+    )
+    assert _bootstrap_relative_preference(0.2, 0.1, 0.05) == 1
 
 
 def test_relative_preferences_transform_averaged_scores():

@@ -261,7 +261,12 @@ metadata, and per-target PNG/SVG rank curves under
 `results/<dataset>/language_decoding_bootstrap/`. Individual curves are grouped under
 `plots/per_model_layer/`; equal-weighted summaries are under `plots/cross_model/`.
 They use the same cyan RRR and teal PCA palette as the rank-saturation figures, with
-cyan star markers above ranks where RRR wins after rank-wise target FDR. Pass
+cyan star markers above ranks where RRR wins after rank-wise target FDR.
+Relative-preference curves under `plots/relative_preference/` transform each paired
+bootstrap replicate's already averaged RRR and PCA scores using
+`(RRR - PCA) / min(RRR, PCA)`, and display percentile confidence bands plus the same
+FDR significance markers. Both averaged scores below `0.05` map to zero by default;
+override this with `--low-performance-threshold`. Pass
 `--no-plots` to skip them. Use
 `FMRI_LANGUAGE_BOOTSTRAP_REPEATS` and `FMRI_LANGUAGE_BOOTSTRAP_ARGS` to override the
 default 10,000 draws, seed, alpha, config, output directory, or `--jobs`. The analysis
@@ -269,16 +274,19 @@ automatically uses `SLURM_CPUS_PER_TASK` worker processes when that variable is 
 outside SLURM it defaults to one worker. Discovery and both bootstrap stages log job
 counts, elapsed time, and an estimated time remaining to stderr.
 
-The cross-dataset command is:
+To run all three independent within-dataset analyses and make combined comparison
+plots, use:
 
 ```bash
 make language-decoding-bootstrap CMD="uv run python" LANGUAGE_DECODING_DATASET=all
 ```
 
-It writes `cross_dataset_rank.csv` and per-task PNG/SVG curves under
-`results/language_decoding_bootstrap/`. Thick lines show the equal-dataset mean RRR and
-PCA scores; lower-opacity lines show each dataset separately. Stars mark ranks where
-the mean RRR-minus-PCA difference survives target-wise FDR within that rank.
+This mode performs no cross-dataset averaging or bootstrap. It writes
+`within_dataset_relative_rank.csv` and per-task PNG/SVG overlays under
+`results/language_decoding_bootstrap/plots/within_dataset_comparison/`. Each plot has
+separate Podcast, Cars 2, and fMRI relative-preference lines and confidence bands for
+task/rank cells available in all three datasets; stars retain each dataset's independent
+within-dataset FDR result.
 
 To generate the same cross-dataset mean curves without bootstrap inference or
 significance markers, run:

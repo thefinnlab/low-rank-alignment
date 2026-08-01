@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""Run paired rank-wise language-decoding bootstrap inference for one dataset."""
+"""Run paired rank-wise within-dataset language-decoding bootstrap inference."""
 
 import sys
 from pathlib import Path
