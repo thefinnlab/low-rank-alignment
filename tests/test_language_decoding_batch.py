@@ -15,6 +15,7 @@ from scripts.fmri.bootstrap_language_decoding import (
 )
 from scripts.rrr.plot_rank_saturation import METHOD_COLORS
 from src.utils.plot_helpers import RRR_PCA_COLORS
+from scripts.plot_mean_language_decoding import _relative_preference
 
 
 def test_internal_batch_expands_model_layers_and_result_templates():
@@ -205,6 +206,12 @@ def test_bootstrap_fdr_is_applied_separately_per_rank():
 def test_bootstrap_and_rank_saturation_share_rrr_pca_colors():
     assert METHOD_COLORS is RRR_PCA_COLORS
     assert RRR_PCA_COLORS == {"rrr": "#74cee5", "pca": "#56a89c"}
+
+
+def test_relative_preference_ratio_and_low_performance_threshold():
+    assert _relative_preference(0.2, 0.1, 0.05) == 1
+    assert _relative_preference(0.1, 0.2, 0.05) == -1
+    assert _relative_preference(0.04, 0.03, 0.05) == 0
 
 
 def test_generic_bootstrap_pools_and_orders_paired_outer_folds(tmp_path):
