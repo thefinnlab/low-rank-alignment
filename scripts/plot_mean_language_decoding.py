@@ -22,7 +22,6 @@ from scripts.fmri.bootstrap_language_decoding import (
     _cross_dataset_groups,
     _plot_curve,
     _plot_cross_dataset_curve,
-    _score,
     _slug,
     cross_dataset_mean_scores,
 )
@@ -58,24 +57,19 @@ def _relative_preference(rrr: float, pca: float, threshold: float) -> float:
     return (rrr - pca) / denominator
 
 
-def _relative_means(by_dataset: dict, kind: str, threshold: float) -> dict[str, float]:
-    common_models = sorted(
-        set.intersection(*(set(models) for models in by_dataset.values()))
-    )
-    dataset_means = {}
-    for dataset, models in by_dataset.items():
-        model_means = []
-        for model in common_models:
-            layer_values = []
-            for record in models[model]:
-                pair = record["pair"]
-                rrr = _score(kind, pair["y_true"], pair["rrr"])
-                pca = _score(kind, pair["y_true"], pair["pca"])
-                layer_values.append(_relative_preference(rrr, pca, threshold))
-            model_means.append(float(np.nanmean(layer_values)))
-        dataset_means[dataset] = float(np.nanmean(model_means))
-    dataset_means["all"] = float(np.nanmean(list(dataset_means.values())))
-    return dataset_means
+def _relative_preferences(
+    scores: dict[str, dict[str, float]],
+    mean_rrr: float,
+    mean_pca: float,
+    threshold: float,
+) -> dict[str, float]:
+    """Transform already-averaged method scores into relative preferences."""
+    preferences = {
+        dataset: _relative_preference(values["rrr"], values["pca"], threshold)
+        for dataset, values in scores.items()
+    }
+    preferences["all"] = _relative_preference(mean_rrr, mean_pca, threshold)
+    return preferences
 
 
 def _plot_preference(frame: pd.DataFrame, title: str, destination: Path) -> None:
@@ -132,8 +126,8 @@ def main() -> None:
             )
         kind = kinds.pop()
         scores, pca, rrr, delta = cross_dataset_mean_scores(by_dataset, kind)
-        preferences = _relative_means(
-            by_dataset, kind, args.low_performance_threshold
+        preferences = _relative_preferences(
+            scores, rrr, pca, args.low_performance_threshold
         )
         common_models = set.intersection(
             *(set(models) for models in by_dataset.values())
@@ -216,8 +210,8 @@ def main() -> None:
             "layer_weighting": "equal within dataset/model",
             "within_dataset_scope": "cross-dataset-shared task/rank cells and models",
             "relative_preference": (
-                "(RRR - PCA) / min(RRR, PCA), computed per model-layer "
-                "before averaging"
+                "(mean RRR - mean PCA) / min(mean RRR, mean PCA), computed "
+                "after hierarchical averaging"
             ),
             "low_performance_threshold": args.low_performance_threshold,
             "inference": None,

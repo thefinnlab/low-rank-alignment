@@ -15,7 +15,10 @@ from scripts.fmri.bootstrap_language_decoding import (
 )
 from scripts.rrr.plot_rank_saturation import METHOD_COLORS
 from src.utils.plot_helpers import RRR_PCA_COLORS
-from scripts.plot_mean_language_decoding import _relative_preference
+from scripts.plot_mean_language_decoding import (
+    _relative_preference,
+    _relative_preferences,
+)
 
 
 def test_internal_batch_expands_model_layers_and_result_templates():
@@ -212,6 +215,15 @@ def test_relative_preference_ratio_and_low_performance_threshold():
     assert _relative_preference(0.2, 0.1, 0.05) == 1
     assert _relative_preference(0.1, 0.2, 0.05) == -1
     assert _relative_preference(0.04, 0.03, 0.05) == 0
+
+
+def test_relative_preferences_transform_averaged_scores():
+    scores = {
+        "podcast": {"rrr": 0.2, "pca": 0.1},
+        "fmri": {"rrr": 0.1, "pca": 0.2},
+    }
+    result = _relative_preferences(scores, mean_rrr=0.15, mean_pca=0.15, threshold=0.05)
+    assert result == {"podcast": 1, "fmri": -1, "all": 0}
 
 
 def test_generic_bootstrap_pools_and_orders_paired_outer_folds(tmp_path):

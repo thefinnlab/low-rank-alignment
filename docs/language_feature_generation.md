@@ -295,11 +295,11 @@ models within dataset, and Podcast, Cars 2, and fMRI receive equal weight. Separ
 within-dataset curves use those same cross-dataset-shared task/rank cells and model
 identities; their values are also saved in `within_dataset_mean_rank.csv`.
 The script additionally writes `relative_preference_rank.csv` and corresponding plots.
-For each model-layer and rank, preference is `(RRR - PCA) / min(RRR, PCA)`, so `+1`
-means RRR is twice PCA and `-1` means PCA is twice RRR. Cells where both scores are
-below `0.05` are set to zero by default; change this with
-`--low-performance-threshold`. These cell-level preferences are averaged with the same
-equal-model and equal-dataset hierarchy as the raw curves.
+After the RRR and PCA curves are averaged with the hierarchy above, preference is
+`(mean RRR - mean PCA) / min(mean RRR, mean PCA)`, so `+1` means mean RRR is twice
+mean PCA and `-1` means mean PCA is twice mean RRR. Cells where both averaged scores
+are below `0.05` are set to zero by default; change this with
+`--low-performance-threshold`.
 
 ## Resource staging
 
