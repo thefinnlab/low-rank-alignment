@@ -50,6 +50,10 @@ def _args() -> argparse.Namespace:
         "--output-dir", default=None
     )
     parser.add_argument("--no-plots", action="store_true")
+    parser.add_argument(
+        "--summary-only", action="store_true",
+        help="Skip per-model/layer bootstraps and run only within-dataset averages",
+    )
     return parser.parse_args()
 
 
@@ -558,6 +562,10 @@ def _write_plots(individual: pd.DataFrame, cross_model: pd.DataFrame, output: Pa
             frame, f"{task}: {model}, layer {int(layer)}",
             output / "plots" / "per_model_layer" / _slug(str(model)) / f"layer{int(layer)}" / _slug(str(task)),
         )
+    _write_summary_plots(cross_model, output)
+
+
+def _write_summary_plots(cross_model: pd.DataFrame, output: Path) -> None:
     for task, frame in cross_model.groupby("task"):
         _plot_curve(
             frame, f"{task}: equal-weighted cross-model",
@@ -682,19 +690,21 @@ def _run_within_dataset(
         f"{time.monotonic() - started:.1f}s",
         file=sys.stderr, flush=True,
     )
-    individual_payloads = [
-        (record, args.bootstrap_repeats, args.alpha, int(seed.generate_state(1)[0]))
-        for record, seed in zip(
-            records, np.random.SeedSequence([args.seed, 0]).spawn(len(records))
+    individual_frame = None
+    if not args.summary_only:
+        individual_payloads = [
+            (record, args.bootstrap_repeats, args.alpha, int(seed.generate_state(1)[0]))
+            for record, seed in zip(
+                records, np.random.SeedSequence([args.seed, 0]).spawn(len(records))
+            )
+        ]
+        individual_frame = _apply_rankwise_fdr(
+            pd.DataFrame(_run_jobs(
+                _individual_job, individual_payloads, args.jobs,
+                f"{dataset}:per-model/layer",
+            )),
+            args.alpha, ["model", "layer", "rank"],
         )
-    ]
-    individual_frame = _apply_rankwise_fdr(
-        pd.DataFrame(_run_jobs(
-            _individual_job, individual_payloads, args.jobs,
-            f"{dataset}:per-model/layer",
-        )),
-        args.alpha, ["model", "layer", "rank"],
-    )
     grouped_items = sorted(grouped.items())
     cross_payloads = [
         (
@@ -713,15 +723,20 @@ def _run_within_dataset(
         args.alpha, ["rank"],
     )
     output.mkdir(parents=True, exist_ok=True)
-    individual_frame.to_csv(output / "per_model_layer_rank.csv", index=False)
+    if individual_frame is not None:
+        individual_frame.to_csv(output / "per_model_layer_rank.csv", index=False)
     cross_frame.to_csv(output / "cross_model_rank.csv", index=False)
     if not args.no_plots:
-        _write_plots(individual_frame, cross_frame, output)
+        if individual_frame is None:
+            _write_summary_plots(cross_frame, output)
+        else:
+            _write_plots(individual_frame, cross_frame, output)
     (output / "metadata.json").write_text(json.dumps({
         "dataset": dataset, "config": config_path, "run_name": args.run_name,
         "bootstrap_repeats": args.bootstrap_repeats,
         "seed": args.seed, "alpha": args.alpha, "jobs": args.jobs,
         "plots": not args.no_plots, "bootstrap_unit": "sentence",
+        "summary_only": args.summary_only,
         "alternative": "rrr_gt_pca", "fdr": "BH across targets within rank",
         "cross_model": "equal model weights; layers averaged within model",
         "relative_preference": (

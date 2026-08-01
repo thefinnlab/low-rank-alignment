@@ -273,6 +273,10 @@ default 10,000 draws, seed, alpha, config, output directory, or `--jobs`. The an
 automatically uses `SLURM_CPUS_PER_TASK` worker processes when that variable is set;
 outside SLURM it defaults to one worker. Discovery and both bootstrap stages log job
 counts, elapsed time, and an estimated time remaining to stderr.
+Pass `--summary-only` to skip all per-model/layer bootstrap jobs and generate only the
+equal-model-weighted within-dataset raw and relative summaries. This option also works
+with `--dataset all`, in which case each of the three dataset summaries is bootstrapped
+independently before the combined overlay is written.
 
 To run all three independent within-dataset analyses and make combined comparison
 plots, use:
