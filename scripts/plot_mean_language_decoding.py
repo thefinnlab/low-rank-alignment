@@ -16,6 +16,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from scripts.fmri.bootstrap_language_decoding import (
     _cross_dataset_groups,
+    _plot_curve,
     _plot_cross_dataset_curve,
     _slug,
     cross_dataset_mean_scores,
@@ -90,9 +91,34 @@ def main() -> None:
     frame.drop(columns="significant_rrr_gt_pca").to_csv(
         output / "cross_dataset_mean_rank.csv", index=False
     )
+    within_rows = []
+    for row in rows:
+        for dataset in DATASETS:
+            slug = dataset.replace("-", "_")
+            within_rows.append({
+                "dataset": dataset,
+                "rank": row["rank"],
+                "task": row["task"],
+                "kind": row["kind"],
+                "pca_score": row[f"{slug}_pca"],
+                "rrr_score": row[f"{slug}_rrr"],
+                "delta": row[f"{slug}_delta"],
+                "n_models": row["n_models"],
+                "significant_rrr_gt_pca": False,
+            })
+    within_frame = pd.DataFrame(within_rows)
+    within_frame.drop(columns="significant_rrr_gt_pca").to_csv(
+        output / "within_dataset_mean_rank.csv", index=False
+    )
     for task, task_frame in frame.groupby("task"):
         _plot_cross_dataset_curve(
             task_frame, output / "plots" / "cross_dataset" / _slug(str(task))
+        )
+    for (dataset, task), task_frame in within_frame.groupby(["dataset", "task"]):
+        _plot_curve(
+            task_frame,
+            f"{task}: equal-weighted models, {dataset}",
+            output / "plots" / "within_dataset" / _slug(str(dataset)) / _slug(str(task)),
         )
     (output / "metadata.json").write_text(
         json.dumps({
@@ -101,6 +127,7 @@ def main() -> None:
             "dataset_weighting": "equal",
             "model_weighting": "equal over models shared by every dataset",
             "layer_weighting": "equal within dataset/model",
+            "within_dataset_scope": "cross-dataset-shared task/rank cells and models",
             "inference": None,
         }, indent=2),
         encoding="utf-8",

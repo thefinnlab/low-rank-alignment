@@ -291,7 +291,9 @@ uv run python scripts/plot_mean_language_decoding.py --run-name predictability-c
 This writes direct means, metadata, and PNG/SVG plots under
 `results/language_decoding_mean/`, nested under the run name when provided. It keeps
 the bootstrap analysis's fixed weighting: layers are averaged within each shared model,
-models within dataset, and Podcast, Cars 2, and fMRI receive equal weight.
+models within dataset, and Podcast, Cars 2, and fMRI receive equal weight. Separate
+within-dataset curves use those same cross-dataset-shared task/rank cells and model
+identities; their values are also saved in `within_dataset_mean_rank.csv`.
 
 ## Resource staging
 
