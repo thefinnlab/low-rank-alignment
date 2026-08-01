@@ -212,7 +212,9 @@ def cross_dataset_hierarchical_bootstrap(
 ) -> tuple[dict[str, dict[str, float]], float, float, float, np.ndarray]:
     """Bootstrap the equal-dataset mean with model identities shared across datasets."""
     dataset_names = sorted(datasets)
-    common_models = sorted(set.intersection(*(set(datasets[name]) for name in dataset_names)))
+    common_models = sorted(
+        set.intersection(*(set(datasets[name]) for name in dataset_names))
+    )
     if not common_models:
         raise ValueError("Cross-dataset bootstrap has no model shared by every dataset")
     lookups = {
@@ -228,22 +230,9 @@ def cross_dataset_hierarchical_bootstrap(
         )
         return _score(kind, pair["y_true"][rows], pair[method][rows])
 
-    scores: dict[str, dict[str, float]] = {}
-    for name in dataset_names:
-        scores[name] = {
-            method: float(np.mean([
-                np.mean([
-                    score_pair(record["pair"], method)
-                    for record in datasets[name][model]
-                ])
-                for model in common_models
-            ]))
-            for method in ("pca", "rrr")
-        }
-        scores[name]["delta"] = scores[name]["rrr"] - scores[name]["pca"]
-    observed_pca = float(np.mean([scores[name]["pca"] for name in dataset_names]))
-    observed_rrr = float(np.mean([scores[name]["rrr"] for name in dataset_names]))
-    observed = observed_rrr - observed_pca
+    scores, observed_pca, observed_rrr, observed = cross_dataset_mean_scores(
+        datasets, kind
+    )
 
     boot = np.full(repeats, np.nan)
     for index in range(repeats):
@@ -265,6 +254,35 @@ def cross_dataset_hierarchical_bootstrap(
             dataset_deltas.append(float(np.mean(model_deltas)))
         boot[index] = np.mean(dataset_deltas)
     return scores, observed_pca, observed_rrr, observed, boot
+
+
+def cross_dataset_mean_scores(
+    datasets: dict[str, dict[str, list[dict]]], kind: str
+) -> tuple[dict[str, dict[str, float]], float, float, float]:
+    """Compute fixed equal-dataset/model means, averaging layers within model."""
+    dataset_names = sorted(datasets)
+    common_models = sorted(set.intersection(*(set(datasets[name]) for name in dataset_names)))
+    if not common_models:
+        raise ValueError("Cross-dataset mean has no model shared by every dataset")
+
+    scores: dict[str, dict[str, float]] = {}
+    for name in dataset_names:
+        scores[name] = {
+            method: float(np.mean([
+                np.mean([
+                    _score(kind, record["pair"]["y_true"], record["pair"][method])
+                    for record in datasets[name][model]
+                ])
+                for model in common_models
+            ]))
+            for method in ("pca", "rrr")
+        }
+        scores[name]["delta"] = scores[name]["rrr"] - scores[name]["pca"]
+    observed_pca = float(np.mean([scores[name]["pca"] for name in dataset_names]))
+    observed_rrr = float(np.mean([scores[name]["rrr"] for name in dataset_names]))
+    observed = observed_rrr - observed_pca
+
+    return scores, observed_pca, observed_rrr, observed
 
 
 def _summary(delta: float, boot: np.ndarray, alpha: float) -> dict[str, float]:

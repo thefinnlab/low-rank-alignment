@@ -9,6 +9,7 @@ from scripts.fmri.bootstrap_language_decoding import (
     _apply_rankwise_fdr,
     _load_fold_pair,
     cross_dataset_hierarchical_bootstrap,
+    cross_dataset_mean_scores,
     hierarchical_block_bootstrap,
     paired_block_bootstrap,
 )
@@ -181,6 +182,12 @@ def test_cross_dataset_bootstrap_gives_datasets_equal_observed_weight():
     assert pca == rrr
     assert observed == 0
     assert len(boot) == 20
+
+    mean_scores, mean_pca, mean_rrr, mean_delta = cross_dataset_mean_scores(
+        datasets, "continuous"
+    )
+    assert mean_scores == scores
+    assert (mean_pca, mean_rrr, mean_delta) == (pca, rrr, observed)
 
 
 def test_bootstrap_fdr_is_applied_separately_per_rank():

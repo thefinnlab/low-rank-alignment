@@ -280,6 +280,19 @@ It writes `cross_dataset_rank.csv` and per-task PNG/SVG curves under
 PCA scores; lower-opacity lines show each dataset separately. Stars mark ranks where
 the mean RRR-minus-PCA difference survives target-wise FDR within that rank.
 
+To generate the same cross-dataset mean curves without bootstrap inference or
+significance markers, run:
+
+```bash
+uv run python scripts/plot_mean_language_decoding.py
+uv run python scripts/plot_mean_language_decoding.py --run-name predictability-context-quick
+```
+
+This writes direct means, metadata, and PNG/SVG plots under
+`results/language_decoding_mean/`, nested under the run name when provided. It keeps
+the bootstrap analysis's fixed weighting: layers are averaged within each shared model,
+models within dataset, and Podcast, Cars 2, and fMRI receive equal weight.
+
 ## Resource staging
 
 Run:
