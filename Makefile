@@ -237,8 +237,8 @@ submit-language-decoding:
 fmri-language-decoding-bootstrap:
 	$(CMD) scripts/fmri/bootstrap_language_decoding.py --bootstrap-repeats $(FMRI_LANGUAGE_BOOTSTRAP_REPEATS) $(FMRI_LANGUAGE_BOOTSTRAP_ARGS)
 
-## Bootstrap one dataset's paired internal RRR/PCA decoding results. The dataset
-## defaults to LANGUAGE_DECODING_DATASET and may be podcast, cars-2, or fmri.
+## Bootstrap paired internal RRR/PCA decoding results. The dataset defaults to
+## LANGUAGE_DECODING_DATASET and may be podcast, cars-2, fmri, or all.
 language-decoding-bootstrap:
 	$(CMD) scripts/bootstrap_language_decoding.py --dataset $(LANGUAGE_DECODING_DATASET) --bootstrap-repeats $(LANGUAGE_DECODING_BOOTSTRAP_REPEATS) $(LANGUAGE_DECODING_BOOTSTRAP_ARGS)
 

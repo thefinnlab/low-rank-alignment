@@ -8,6 +8,7 @@ from scripts.fmri.run_internal_language_decoding_batch import _layer_configs, _s
 from scripts.fmri.bootstrap_language_decoding import (
     _apply_rankwise_fdr,
     _load_fold_pair,
+    cross_dataset_hierarchical_bootstrap,
     hierarchical_block_bootstrap,
     paired_block_bootstrap,
 )
@@ -151,6 +152,32 @@ def test_hierarchical_bootstrap_gives_models_equal_observed_weight():
         20,
         np.random.default_rng(3),
     )
+    assert pca == rrr
+    assert observed == 0
+    assert len(boot) == 20
+
+
+def test_cross_dataset_bootstrap_gives_datasets_equal_observed_weight():
+    blocks = np.repeat(["s1", "s2"], 3)
+
+    def record(rrr_wins):
+        y_true = np.arange(6, dtype=float)
+        return {"pair": {
+            "y_true": y_true,
+            "rrr": y_true if rrr_wins else y_true[::-1],
+            "pca": y_true[::-1] if rrr_wins else y_true,
+            "block_id": blocks,
+        }}
+
+    datasets = {
+        "a": {"model": [record(True), record(True), record(True)]},
+        "b": {"model": [record(False)]},
+    }
+    scores, pca, rrr, observed, boot = cross_dataset_hierarchical_bootstrap(
+        datasets, "continuous", 20, np.random.default_rng(4)
+    )
+    assert scores["a"]["delta"] == 2
+    assert scores["b"]["delta"] == -2
     assert pca == rrr
     assert observed == 0
     assert len(boot) == 20

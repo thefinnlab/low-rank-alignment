@@ -29,7 +29,10 @@ from src.utils.plot_helpers import RRR_PCA_COLORS, apply_publication_style
 
 def _args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--dataset", choices=["podcast", "cars-2", "fmri"], default="fmri")
+    parser.add_argument(
+        "--dataset", choices=["podcast", "cars-2", "fmri", "all"], default="fmri",
+        help="Use 'all' for the equal-weighted cross-dataset summary",
+    )
     parser.add_argument("--config", default=None)
     parser.add_argument("--run-name", default=None)
     parser.add_argument("--bootstrap-repeats", type=int, default=10_000)
@@ -201,6 +204,69 @@ def hierarchical_block_bootstrap(
     return observed_pca, observed_rrr, observed, boot
 
 
+def cross_dataset_hierarchical_bootstrap(
+    datasets: dict[str, dict[str, list[dict]]],
+    kind: str,
+    repeats: int,
+    rng: np.random.Generator,
+) -> tuple[dict[str, dict[str, float]], float, float, float, np.ndarray]:
+    """Bootstrap the equal-dataset mean with model identities shared across datasets."""
+    dataset_names = sorted(datasets)
+    common_models = sorted(set.intersection(*(set(datasets[name]) for name in dataset_names)))
+    if not common_models:
+        raise ValueError("Cross-dataset bootstrap has no model shared by every dataset")
+    lookups = {
+        id(record["pair"]): _block_lookup(record["pair"]["block_id"])[1]
+        for name in dataset_names
+        for model in common_models
+        for record in datasets[name][model]
+    }
+
+    def score_pair(pair: dict, method: str, sampled_blocks=None) -> float:
+        rows = np.arange(len(pair["y_true"])) if sampled_blocks is None else np.concatenate(
+            [lookups[id(pair)][str(block)] for block in sampled_blocks]
+        )
+        return _score(kind, pair["y_true"][rows], pair[method][rows])
+
+    scores: dict[str, dict[str, float]] = {}
+    for name in dataset_names:
+        scores[name] = {
+            method: float(np.mean([
+                np.mean([
+                    score_pair(record["pair"], method)
+                    for record in datasets[name][model]
+                ])
+                for model in common_models
+            ]))
+            for method in ("pca", "rrr")
+        }
+        scores[name]["delta"] = scores[name]["rrr"] - scores[name]["pca"]
+    observed_pca = float(np.mean([scores[name]["pca"] for name in dataset_names]))
+    observed_rrr = float(np.mean([scores[name]["rrr"] for name in dataset_names]))
+    observed = observed_rrr - observed_pca
+
+    boot = np.full(repeats, np.nan)
+    for index in range(repeats):
+        sampled_models = rng.choice(common_models, size=len(common_models), replace=True)
+        dataset_deltas = []
+        for name in dataset_names:
+            reference = datasets[name][common_models[0]][0]["pair"]
+            blocks, _ = _block_lookup(reference["block_id"])
+            sampled_blocks = rng.choice(blocks, size=len(blocks), replace=True)
+            model_deltas = []
+            for model in sampled_models:
+                records = datasets[name][str(model)]
+                sampled_layers = rng.choice(len(records), size=len(records), replace=True)
+                model_deltas.append(float(np.mean([
+                    score_pair(records[layer]["pair"], "rrr", sampled_blocks)
+                    - score_pair(records[layer]["pair"], "pca", sampled_blocks)
+                    for layer in sampled_layers
+                ])))
+            dataset_deltas.append(float(np.mean(model_deltas)))
+        boot[index] = np.mean(dataset_deltas)
+    return scores, observed_pca, observed_rrr, observed, boot
+
+
 def _summary(delta: float, boot: np.ndarray, alpha: float) -> dict[str, float]:
     finite = boot[np.isfinite(boot)]
     if not np.isfinite(delta) or not len(finite):
@@ -352,6 +418,52 @@ def _cross_model_job(payload: tuple[tuple[str, int], dict[str, list[dict]], int,
     }
 
 
+def _cross_dataset_groups(
+    config_paths: dict[str, str], run_name: str | None,
+) -> dict[tuple[str, int], dict[str, dict[str, list[dict]]]]:
+    """Keep task/rank cells present in every dataset, organized by model."""
+    discovered = {}
+    for dataset, config_path in config_paths.items():
+        _, grouped = (
+            _discover_fmri(config_path, run_name)
+            if dataset == "fmri"
+            else _discover_generic(config_path, run_name)
+        )
+        discovered[dataset] = grouped
+    shared = set.intersection(*(set(groups) for groups in discovered.values()))
+    return {
+        key: {dataset: discovered[dataset][key] for dataset in sorted(discovered)}
+        for key in sorted(shared)
+    }
+
+
+def _cross_dataset_job(payload: tuple) -> dict:
+    (task, rank), by_dataset, repeats, alpha, seed = payload
+    kinds = {
+        record["kind"]
+        for models in by_dataset.values()
+        for records in models.values()
+        for record in records
+    }
+    if len(kinds) != 1:
+        raise ValueError(f"Task-kind mismatch across datasets for {task}: {sorted(kinds)}")
+    kind = kinds.pop()
+    scores, pca, rrr, delta, boot = cross_dataset_hierarchical_bootstrap(
+        by_dataset, kind, repeats, np.random.default_rng(seed)
+    )
+    common_models = set.intersection(*(set(models) for models in by_dataset.values()))
+    result = {
+        "rank": rank, "task": task, "kind": kind,
+        "pca_score": pca, "rrr_score": rrr, "delta": delta,
+        "n_datasets": len(by_dataset), "n_models": len(common_models),
+        **_summary(delta, boot, alpha),
+    }
+    for dataset, values in scores.items():
+        slug = dataset.replace("-", "_")
+        result.update({f"{slug}_{key}": value for key, value in values.items()})
+    return result
+
+
 def _log_progress(stage: str, completed: int, total: int, started: float) -> None:
     elapsed = time.monotonic() - started
     rate = completed / elapsed if elapsed else 0.0
@@ -443,12 +555,107 @@ def _write_plots(individual: pd.DataFrame, cross_model: pd.DataFrame, output: Pa
         )
 
 
+def _plot_cross_dataset_curve(frame: pd.DataFrame, destination: Path) -> None:
+    frame = frame.sort_values("rank")
+    apply_publication_style()
+    fig, axis = plt.subplots(figsize=(5.2, 3.4))
+    dataset_labels = (
+        ("podcast", "Podcast", "--"),
+        ("cars_2", "Cars 2", ":"),
+        ("fmri", "fMRI", "-."),
+    )
+    for method in ("rrr", "pca"):
+        color = RRR_PCA_COLORS[method]
+        for dataset, label, linestyle in dataset_labels:
+            column = f"{dataset}_{method}"
+            if column in frame:
+                axis.semilogx(
+                    frame["rank"], frame[column], color=color, alpha=.25,
+                    linewidth=1, linestyle=linestyle,
+                    label=f"{label} {method.upper()}", zorder=2,
+                )
+        axis.semilogx(
+            frame["rank"], frame[f"{method}_score"], marker="o", markersize=3.5,
+            linewidth=2, color=color, label=f"Mean {method.upper()}", zorder=5,
+        )
+    significant = frame["significant_rrr_gt_pca"].astype(bool).to_numpy()
+    if significant.any():
+        values = frame[["rrr_score", "pca_score"]].to_numpy(float)
+        finite = values[np.isfinite(values)]
+        spacing = max((float(np.ptp(finite)) if len(finite) else 1.0) * .06, .01)
+        marker_y = np.fmax(values[:, 0], values[:, 1]) + spacing
+        axis.scatter(
+            frame.loc[significant, "rank"], marker_y[significant], marker="*", s=34,
+            color=RRR_PCA_COLORS["rrr"], linewidths=0, zorder=10,
+            label="Mean RRR > PCA (rank-wise FDR)",
+        )
+    axis.set_xlabel("Rank $k$ (log scale)")
+    axis.set_ylabel(
+        "Held-out correlation (r)" if str(frame["kind"].iloc[0]) == "continuous"
+        else "Held-out balanced accuracy"
+    )
+    axis.set_title(f"{frame['task'].iloc[0]}: equal-weighted datasets")
+    axis.legend(loc="best", fontsize=6, ncol=2)
+    fig.tight_layout()
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(destination.with_suffix(".png"), dpi=300, bbox_inches="tight", pad_inches=.05)
+    fig.savefig(destination.with_suffix(".svg"), bbox_inches="tight", pad_inches=.05)
+    plt.close(fig)
+
+
+def _run_cross_dataset(args: argparse.Namespace, output: Path, started: float) -> None:
+    config_paths = {
+        dataset: f"configs/language_decoding/internal/{dataset}.yml"
+        for dataset in ("podcast", "cars-2", "fmri")
+    }
+    if args.config:
+        raise ValueError("--config is not supported with --dataset all; use the three internal manifests")
+    grouped = _cross_dataset_groups(config_paths, args.run_name)
+    if not grouped:
+        raise RuntimeError("No task/rank cells with held-out predictions were found in all datasets")
+    print(
+        f"[discovery] found {len(grouped)} shared cross-dataset task/rank jobs in "
+        f"{time.monotonic() - started:.1f}s", file=sys.stderr, flush=True,
+    )
+    items = sorted(grouped.items())
+    payloads = [
+        (key, value, args.bootstrap_repeats, args.alpha, int(seed.generate_state(1)[0]))
+        for (key, value), seed in zip(
+            items, np.random.SeedSequence([args.seed, 2]).spawn(len(items))
+        )
+    ]
+    frame = _apply_rankwise_fdr(
+        pd.DataFrame(_run_jobs(_cross_dataset_job, payloads, args.jobs, "cross-dataset")),
+        args.alpha, ["rank"],
+    )
+    output.mkdir(parents=True, exist_ok=True)
+    frame.to_csv(output / "cross_dataset_rank.csv", index=False)
+    if not args.no_plots:
+        for task, task_frame in frame.groupby("task"):
+            _plot_cross_dataset_curve(
+                task_frame, output / "plots" / "cross_dataset" / _slug(str(task))
+            )
+    (output / "metadata.json").write_text(json.dumps({
+        "dataset": "all", "configs": config_paths, "run_name": args.run_name,
+        "bootstrap_repeats": args.bootstrap_repeats, "seed": args.seed,
+        "alpha": args.alpha, "jobs": args.jobs, "plots": not args.no_plots,
+        "datasets": ["podcast", "cars-2", "fmri"],
+        "dataset_weighting": "equal; datasets treated as fixed",
+        "bootstrap": "shared model draws; layers sampled within dataset/model; independent sentence-block draws by dataset",
+        "alternative": "mean_rrr_gt_pca", "fdr": "BH across targets within rank",
+    }, indent=2))
+
+
 def main() -> None:
     args = _args()
     if args.run_name and not re.fullmatch(r"[A-Za-z0-9._-]+", args.run_name):
         raise ValueError("--run-name may contain only letters, numbers, '.', '_', and '-'")
     config_path = args.config or f"configs/language_decoding/internal/{args.dataset}.yml"
-    default_output = Path(f"results/{args.dataset}/language_decoding_bootstrap")
+    default_output = (
+        Path("results/language_decoding_bootstrap")
+        if args.dataset == "all"
+        else Path(f"results/{args.dataset}/language_decoding_bootstrap")
+    )
     if args.run_name:
         default_output /= args.run_name
     output_path = args.output_dir or str(default_output)
@@ -465,6 +672,11 @@ def main() -> None:
         file=sys.stderr,
         flush=True,
     )
+    if args.dataset == "all":
+        output = Path(output_path)
+        _run_cross_dataset(args, output, analysis_started)
+        print(f"Done in {time.monotonic() - analysis_started:.1f}s: {output}")
+        return
     records, grouped = (
         _discover_fmri(config_path, args.run_name)
         if args.dataset == "fmri"

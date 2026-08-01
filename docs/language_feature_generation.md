@@ -241,7 +241,11 @@ the combined morphology string, and `aspect` are intentionally not decoding targ
   story; for Podcast and Cars 2 it first pools the fold-held-out predictions so each
   selected word appears once. It also reports a hierarchical cross-model result with
   equal model-class weights and layers averaged within model; Benjamini-Hochberg FDR is
-  applied across targets independently within each rank.
+  applied across targets independently within each rank. Passing `--dataset all`
+  additionally tests the fixed, equal-weighted mean over task/rank cells shared by
+  Podcast, Cars 2, and fMRI. Its hierarchical bootstrap shares sampled model identities
+  across datasets, samples layers within each dataset/model, and samples sentence blocks
+  independently within each dataset.
 
 Existing decoding results created before prediction saving was added must be refreshed
 once. On the cluster, submit those jobs and then run inference after they finish. For
@@ -264,6 +268,17 @@ default 10,000 draws, seed, alpha, config, output directory, or `--jobs`. The an
 automatically uses `SLURM_CPUS_PER_TASK` worker processes when that variable is set;
 outside SLURM it defaults to one worker. Discovery and both bootstrap stages log job
 counts, elapsed time, and an estimated time remaining to stderr.
+
+The cross-dataset command is:
+
+```bash
+make language-decoding-bootstrap CMD="uv run python" LANGUAGE_DECODING_DATASET=all
+```
+
+It writes `cross_dataset_rank.csv` and per-task PNG/SVG curves under
+`results/language_decoding_bootstrap/`. Thick lines show the equal-dataset mean RRR and
+PCA scores; lower-opacity lines show each dataset separately. Stars mark ranks where
+the mean RRR-minus-PCA difference survives target-wise FDR within that rank.
 
 ## Resource staging
 
