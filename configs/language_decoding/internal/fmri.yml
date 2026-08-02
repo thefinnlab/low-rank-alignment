@@ -36,9 +36,9 @@ models:
   gpt-j-6b:
     rrr_config: configs/cross_dataset/fmri/within/gpt-j-6b.yml
     result_template: results/fmri/gpt-j-6b_layer{layer}/within_fmri_rrr
-  gpt2-xl:
+  gpt2-xl-batch:
     rrr_config: configs/cross_dataset/fmri/within/gpt2-xl.yml
-    result_template: results/fmri/gpt2-xl_layer{layer}/within_fmri_rrr
+    result_template: results/fmri/gpt2-xl-batch_layer{layer}/within_fmri_rrr
   llama3-8b:
     rrr_config: configs/cross_dataset/fmri/within/llama3-8b.yml
     result_template: results/fmri/llama3-8b_layer{layer}/within_fmri_rrr

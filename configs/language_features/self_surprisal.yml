@@ -8,7 +8,7 @@ datasets:
 models:
   gpt-j-6b:
     embedding_config: configs/embeddings/generate_gptj_6b.yml
-  gpt2-xl:
+  gpt2-xl-batch:
     embedding_config: configs/embeddings/generate_gpt2_xl.yml
   llama3-8b:
     embedding_config: configs/embeddings/generate_llama3_8b.yml

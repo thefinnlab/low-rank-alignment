@@ -56,7 +56,7 @@ def test_internal_batch_expands_model_layers_and_result_templates():
 
 def test_internal_batch_podcast_includes_requested_iu_and_norm_features():
     configs = build_layer_configs(
-        "configs/language_decoding/internal/podcast.yml", "gpt2-xl"
+        "configs/language_decoding/internal/podcast.yml", "gpt2-xl-batch"
     )
     assert [config.encoding.per_model_config["layer"] for config in configs] == [
         0,
@@ -67,7 +67,7 @@ def test_internal_batch_podcast_includes_requested_iu_and_norm_features():
     ]
     assert Path(configs[0].task_data["language_features"]).name == "tokens.tsv"
     assert configs[0].task_data["self_surprisal"].endswith(
-        "gpt2-xl/podcast/podcast/tokens.tsv"
+        "gpt2-xl-batch/podcast/podcast/tokens.tsv"
     )
     assert {"iu_position", "iu_onset", "iu_end", "concreteness", "surprisal"} <= set(
         configs[0].tasks
@@ -85,7 +85,7 @@ def test_internal_batch_can_select_a_task_subset():
 
 def test_internal_batch_can_limit_maximum_rank():
     configs = build_layer_configs(
-        "configs/language_decoding/internal/podcast.yml", "gpt2-xl", max_rank=256
+        "configs/language_decoding/internal/podcast.yml", "gpt2-xl-batch", max_rank=256
     )
     assert configs[0].rank_grid
     assert max(configs[0].rank_grid) == 256
