@@ -280,6 +280,10 @@ fmri-iu-features:
 fmri-interpretable-features:
 	$(CMD) scripts/utilities/generate_fmri_interpretable_features.py --config configs/language_features/fmri.yml
 
+## Populate only Cars 2 concreteness labels without rerunning other providers
+cars-2-concreteness:
+	$(CMD) scripts/utilities/generate_cars2_concreteness.py --config configs/language_features/brain_treebank.yml
+
 ## Resume fMRI SaT/PSST boundaries, then generate expanded Cars 2 and fMRI labels.
 expanded-language-features:
 	uv run python scripts/utilities/generate_fmri_language_boundaries.py --device cuda --stories alternateithicatom souls avatar legacy odetostepfather undertheinfluence howtodraw myfirstdaywiththeyankees naked stagefright tildeath sloth exorcism haveyoumethimyet adollshouse inamoment theclosetthatateeverything adventuresinsayingyes buck swimmingwithastronauts thatthingonmyarm eyespy itsabox hangtime wheretheressmoke

@@ -19,6 +19,10 @@ from scripts.plot_mean_language_decoding import (
     _relative_preference,
     _relative_preferences,
 )
+from scripts.plot_entropy_architecture_preference import (
+    summarize_entropy_architectures,
+)
+from scripts.plot_surprisal_layer_group_preference import summarize_layer_groups
 
 
 def test_internal_batch_expands_model_layers_and_result_templates():
@@ -227,6 +231,50 @@ def test_relative_preferences_transform_averaged_scores():
     }
     result = _relative_preferences(scores, mean_rrr=0.15, mean_pca=0.15, threshold=0.05)
     assert result == {"podcast": 1, "fmri": -1, "all": 0}
+
+
+def test_entropy_architecture_summary_excludes_random_and_weights_models_equally():
+    rows = []
+    model_scores = {
+        "gpt2": (0.1, 0.2),
+        "gpt2-xl": (0.2, 0.4),
+        "gpt-j-6b": (0.3, 0.6),
+        "llama3-8b": (0.4, 0.8),
+        "roberta-large": (0.4, 0.2),
+        "random-gpt2-xl": (0.01, 1.0),
+    }
+    for model, (pca, rrr) in model_scores.items():
+        for layer in (0, 1):
+            rows.append({
+                "model": model, "layer": layer, "rank": 4,
+                "task": "self_entropy", "pca_score": pca, "rrr_score": rrr,
+            })
+    result = summarize_entropy_architectures(pd.DataFrame(rows), threshold=0.05)
+    causal = result.set_index("architecture").loc["causal"]
+    roberta = result.set_index("architecture").loc["roberta"]
+    assert causal["n_models"] == 4
+    assert causal["n_layers"] == 8
+    assert causal["pca_score"] == 0.25
+    assert causal["rrr_score"] == 0.5
+    assert causal["relative_preference"] == 1
+    assert roberta["relative_preference"] == -1
+
+
+def test_smooth_layer_group_preference_preserves_delta_direction():
+    rows = []
+    for layer, pca, rrr in ((0, 0.1, 0.2), (3, 0.1, 0.2), (6, 0.1, 0.2),
+                            (9, 0.076653, -0.020039), (12, 0.076653, -0.020039)):
+        rows.append({
+            "model": "gpt2", "layer": layer, "rank": 1,
+            "task": "self_surprisal", "pca_score": pca, "rrr_score": rrr,
+        })
+    result = summarize_layer_groups(
+        pd.DataFrame(rows), threshold=0.05,
+        grouping="first-three-vs-final-two", normalization_tau=0.05,
+    ).set_index("layer_group")
+    assert result.loc["first three depths", "smooth_relative_preference"] > 0
+    assert result.loc["final two depths", "smooth_relative_preference"] < 0
+    assert np.isfinite(result["smooth_relative_preference"]).all()
 
 
 def test_generic_bootstrap_pools_and_orders_paired_outer_folds(tmp_path):

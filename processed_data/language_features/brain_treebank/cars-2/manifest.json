@@ -59,6 +59,15 @@
       "unit": "bits",
       "word_aggregation": "sum_bpe_tokens",
       "first_token": "missing"
+    },
+    "lexical_norms": {
+      "version": "1",
+      "coverage": {
+        "concreteness": 10059
+      },
+      "resources": [
+        "concreteness"
+      ]
     }
   },
   "feature_providers": {
@@ -106,7 +115,11 @@
     "left_dependents": "ud",
     "right_dependents": "ud",
     "open_dependencies": "ud",
-    "dependency_locality_cost": "ud"
+    "dependency_locality_cost": "ud",
+    "concreteness": "lexical_norms",
+    "concreteness_available": "lexical_norms",
+    "concreteness_match_level": "lexical_norms",
+    "concreteness_match_key": "lexical_norms"
   },
   "feature_coverage": {
     "native_lemma": {
@@ -288,6 +301,22 @@
     "dependency_locality_cost": {
       "available": 10760,
       "total": 10760
+    },
+    "concreteness": {
+      "available": 10059,
+      "total": 10760
+    },
+    "concreteness_available": {
+      "available": 10760,
+      "total": 10760
+    },
+    "concreteness_match_level": {
+      "available": 10760,
+      "total": 10760
+    },
+    "concreteness_match_key": {
+      "available": 10760,
+      "total": 10760
     }
   },
   "config": {
@@ -336,6 +365,16 @@
       "unit": "bits",
       "word_aggregation": "sum_bpe_tokens",
       "first_token": "missing"
+    },
+    "cars2_concreteness": {
+      "provider": "lexical_norms",
+      "resource": "concreteness",
+      "features": [
+        "concreteness",
+        "concreteness_available",
+        "concreteness_match_level",
+        "concreteness_match_key"
+      ]
     }
   }
 }

@@ -288,9 +288,10 @@ make language-decoding-bootstrap CMD="uv run python" LANGUAGE_DECODING_DATASET=a
 This mode performs no cross-dataset averaging or bootstrap. It writes
 `within_dataset_relative_rank.csv` and per-task PNG/SVG overlays under
 `results/language_decoding_bootstrap/plots/within_dataset_comparison/`. Each plot has
-separate Podcast, Cars 2, and fMRI relative-preference lines and confidence bands for
-task/rank cells available in all three datasets; stars retain each dataset's independent
-within-dataset FDR result.
+separate Podcast, Cars 2, and fMRI relative-preference lines for task/rank cells
+available in all three datasets; stars retain each dataset's independent within-dataset
+FDR result. Confidence intervals remain in the CSV and individual-dataset plots but are
+not drawn on the combined comparison.
 
 To generate the same cross-dataset mean curves without bootstrap inference or
 significance markers, run:

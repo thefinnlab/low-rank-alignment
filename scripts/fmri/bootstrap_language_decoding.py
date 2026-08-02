@@ -593,12 +593,6 @@ def _plot_combined_relative(frame: pd.DataFrame, destination: Path) -> None:
             ranks, dataset_frame["relative_preference"], marker="o", markersize=3,
             linewidth=1.6, color=color, label=label, zorder=4,
         )
-        axis.fill_between(
-            ranks,
-            dataset_frame["relative_ci_low"].to_numpy(float),
-            dataset_frame["relative_ci_high"].to_numpy(float),
-            color=color, alpha=.13, linewidth=0, zorder=2,
-        )
         significant = dataset_frame["significant_rrr_gt_pca"].astype(bool).to_numpy()
         if significant.any():
             axis.scatter(
