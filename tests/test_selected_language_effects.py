@@ -1,6 +1,7 @@
 import numpy as np
 import pandas as pd
 
+import scripts.bootstrap_selected_language_effects as selected_effects
 from scripts.bootstrap_selected_language_effects import (
     _run_jobs,
     _standard_job,
@@ -68,3 +69,23 @@ def test_multiple_workers_match_serial_results_and_print_progress(capsys):
     parallel = _run_jobs(payloads, 2)
     assert "with 2 worker(s)" in capsys.readouterr().err
     assert serial == parallel
+
+
+def test_block_lookups_are_precomputed_outside_repetition_loop(monkeypatch):
+    truth = np.arange(12, dtype=float)
+    reverse = truth[::-1]
+    groups = {"all": {
+        "gpt2": [{"pair": _pair(truth, reverse)}],
+        "gpt2-xl-batch": [{"pair": _pair(truth, reverse)}],
+    }}
+    original = selected_effects._block_lookup
+    calls = 0
+
+    def counted(block_id):
+        nonlocal calls
+        calls += 1
+        return original(block_id)
+
+    monkeypatch.setattr(selected_effects, "_block_lookup", counted)
+    bootstrap_groups(groups, 25, np.random.default_rng(7))
+    assert calls == 4  # Once per unit for coverage validation and once for cached lookup.

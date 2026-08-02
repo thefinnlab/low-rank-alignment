@@ -91,11 +91,15 @@ def _common_blocks(groups: list[dict[str, list[dict]]]) -> np.ndarray:
     return reference
 
 
-def _method_score(pair: dict, method: str, sampled_blocks: np.ndarray | None) -> float:
+def _method_score(
+    pair: dict, method: str, sampled_blocks: np.ndarray | None,
+    lookup: dict[str, np.ndarray] | None = None,
+) -> float:
     if sampled_blocks is None:
         rows = np.arange(len(pair["y_true"]))
     else:
-        _, lookup = _block_lookup(pair["block_id"])
+        if lookup is None:
+            _, lookup = _block_lookup(pair["block_id"])
         rows = np.concatenate([lookup[str(block)] for block in sampled_blocks])
     return _score("continuous", pair["y_true"][rows], pair[method][rows])
 
@@ -113,7 +117,8 @@ def _observed_group(group: dict[str, list[dict]]) -> tuple[float, float]:
 
 
 def _draw_group(
-    group: dict[str, list[dict]], sampled_blocks: np.ndarray, rng: np.random.Generator
+    group: dict[str, list[dict]], sampled_blocks: np.ndarray, rng: np.random.Generator,
+    lookups: dict[int, dict[str, np.ndarray]],
 ) -> tuple[float, float]:
     models = np.asarray(sorted(group))
     sampled_models = rng.choice(models, size=len(models), replace=True)
@@ -122,14 +127,30 @@ def _draw_group(
         records = group[str(model)]
         sampled_layers = rng.choice(len(records), size=len(records), replace=True)
         sampled_units.append((records, sampled_layers))
+    pair_scores = {}
+    for records, sampled_layers in sampled_units:
+        for layer in np.unique(sampled_layers):
+            pair = records[int(layer)]["pair"]
+            key = id(pair)
+            if key not in pair_scores:
+                rows = np.concatenate([
+                    lookups[key][str(block)] for block in sampled_blocks
+                ])
+                pair_scores[key] = {
+                    method: _score(
+                        "continuous", pair["y_true"][rows], pair[method][rows]
+                    )
+                    for method in ("rrr", "pca")
+                }
     result = {}
     for method in ("rrr", "pca"):
-        model_scores = []
-        for records, sampled_layers in sampled_units:
-            model_scores.append(float(np.mean([
-                _method_score(records[int(layer)]["pair"], method, sampled_blocks)
+        model_scores = [
+            float(np.mean([
+                pair_scores[id(records[int(layer)]["pair"])][method]
                 for layer in sampled_layers
-            ])))
+            ]))
+            for records, sampled_layers in sampled_units
+        ]
         result[method] = float(np.mean(model_scores))
     return result["rrr"], result["pca"]
 
@@ -143,6 +164,12 @@ def bootstrap_groups(
     if not len(blocks):
         raise ValueError("Cannot bootstrap an empty group")
     observed = {}
+    lookups = {
+        id(record["pair"]): _block_lookup(record["pair"]["block_id"])[1]
+        for group in groups.values()
+        for records in group.values()
+        for record in records
+    }
     boots = {name: np.full(repeats, np.nan) for name in groups}
     for name, group in groups.items():
         rrr, pca = _observed_group(group)
@@ -151,7 +178,7 @@ def bootstrap_groups(
     for repeat in range(repeats):
         sampled_blocks = rng.choice(blocks, size=len(blocks), replace=True)
         for name, group in groups.items():
-            rrr, pca = _draw_group(group, sampled_blocks, rng)
+            rrr, pca = _draw_group(group, sampled_blocks, rng, lookups)
             boots[name][repeat] = smooth_preference(rrr, pca, tau)
     return {name: observed[name] | {"bootstrap": boots[name]} for name in groups}, blocks
 
