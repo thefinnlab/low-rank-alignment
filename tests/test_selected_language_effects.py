@@ -2,6 +2,8 @@ import numpy as np
 import pandas as pd
 
 from scripts.bootstrap_selected_language_effects import (
+    _run_jobs,
+    _standard_job,
     apply_dataset_rank_fdr,
     bootstrap_groups,
     smooth_preference,
@@ -50,3 +52,19 @@ def test_fdr_family_is_dataset_rank_specific_and_uses_available_rows():
     result = apply_dataset_rank_fdr(frame)
     np.testing.assert_allclose(result.q_value, [0.02, 0.04, 0.04, 0.04])
     assert result.significant.tolist() == [True, True, True, False]
+
+
+def test_multiple_workers_match_serial_results_and_print_progress(capsys):
+    truth = np.arange(12, dtype=float)
+    reverse = truth[::-1]
+    group = {"gpt2-xl-batch": [{"pair": _pair(truth, reverse)}]}
+    payloads = [
+        (_standard_job, ("podcast", rank, "sentence_position", group, 5,
+                         0.05, 0.05, rank, None, "config.yml"))
+        for rank in (1, 2)
+    ]
+    serial = _run_jobs(payloads, 1)
+    assert "2/2 cells" in capsys.readouterr().err
+    parallel = _run_jobs(payloads, 2)
+    assert "with 2 worker(s)" in capsys.readouterr().err
+    assert serial == parallel

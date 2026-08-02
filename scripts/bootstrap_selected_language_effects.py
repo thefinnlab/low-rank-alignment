@@ -5,8 +5,11 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import sys
+import time
+from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
 
 import matplotlib
@@ -59,6 +62,10 @@ def _args() -> argparse.Namespace:
                         help="Optional run name for sentence position and concreteness")
     parser.add_argument("--entropy-run-name", default="predictability-context-quick-noiu")
     parser.add_argument("--config-dir", default="configs/language_decoding/internal")
+    parser.add_argument(
+        "--jobs", type=int, default=int(os.environ.get("SLURM_CPUS_PER_TASK", "1")),
+        help="Worker processes (default: SLURM_CPUS_PER_TASK, otherwise 1)",
+    )
     parser.add_argument("--no-plots", action="store_true")
     return parser.parse_args()
 
@@ -212,8 +219,79 @@ def _coverage_entry(dataset: str, task: str, run_name: str | None,
     }
 
 
+def _standard_job(payload: tuple) -> list[dict]:
+    dataset, rank, task, group, repeats, tau, alpha, seed, run_name, config = payload
+    result, _ = bootstrap_groups(
+        {"all": group}, repeats, np.random.default_rng(seed), tau,
+    )
+    return [_row(
+        dataset, rank, task, f"{task}:rrr_gt_pca", "all_real_models",
+        result["all"], group, alpha, run_name, config,
+    )]
+
+
+def _entropy_job(payload: tuple) -> list[dict]:
+    dataset, rank, all_models, repeats, tau, alpha, seed, run_name, config = payload
+    causal = {model: records for model, records in all_models.items() if model in CAUSAL_MODELS}
+    roberta = {model: records for model, records in all_models.items() if model in ROBERTA_MODELS}
+    result, _ = bootstrap_groups(
+        {"causal": causal, "roberta": roberta}, repeats,
+        np.random.default_rng(seed), tau,
+    )
+    rows = [
+        _row(
+            dataset, rank, "self_entropy", f"self_entropy:{name}:rrr_gt_pca", name,
+            result[name], group, alpha, run_name, config,
+        )
+        for name, group in (("causal", causal), ("roberta", roberta))
+    ]
+    contrast_boot = result["causal"]["bootstrap"] - result["roberta"]["bootstrap"]
+    contrast = result["causal"]["smooth_effect"] - result["roberta"]["smooth_effect"]
+    rows.append({
+        "dataset": dataset, "rank": rank, "task": "self_entropy",
+        "hypothesis": "self_entropy:causal_gt_roberta", "model_group": "causal_minus_roberta",
+        "rrr_score": np.nan, "pca_score": np.nan, "smooth_effect": contrast,
+        **_inference(contrast, contrast_boot, alpha),
+        "n_models": len(causal) + len(roberta),
+        "n_layers": sum(map(len, causal.values())) + sum(map(len, roberta.values())),
+        "models": ";".join(sorted(causal | roberta)),
+        "run_name": run_name, "config": config,
+    })
+    return rows
+
+
+def _run_jobs(payloads: list[tuple], jobs: int) -> list[dict]:
+    """Run independent rank cells and print elapsed-time/ETA progress."""
+    total = len(payloads)
+    if not total:
+        return []
+    started = time.monotonic()
+    print(f"[bootstrap] starting {total} dataset/task/rank cells with {jobs} worker(s)",
+          file=sys.stderr, flush=True)
+    results = []
+
+    def consume(iterator) -> None:
+        for completed, cell_rows in enumerate(iterator, start=1):
+            results.extend(cell_rows)
+            elapsed = time.monotonic() - started
+            eta = elapsed / completed * (total - completed)
+            print(
+                f"[bootstrap] {completed}/{total} cells ({completed / total:.0%}); "
+                f"elapsed {elapsed:.1f}s; ETA {eta:.1f}s",
+                file=sys.stderr, flush=True,
+            )
+
+    if jobs == 1:
+        consume(function(payload) for function, payload in payloads)
+    else:
+        # executor.map preserves payload order, so results remain deterministic.
+        with ProcessPoolExecutor(max_workers=jobs) as executor:
+            futures = [executor.submit(function, payload) for function, payload in payloads]
+            consume(future.result() for future in futures)
+    return results
+
+
 def run_analysis(args: argparse.Namespace) -> tuple[pd.DataFrame, dict]:
-    rows = []
     coverage = []
     seed_sequence = np.random.SeedSequence(args.seed)
     seeds = iter(seed_sequence.spawn(10000))
@@ -250,45 +328,26 @@ def run_analysis(args: argparse.Namespace) -> tuple[pd.DataFrame, dict]:
         raise RuntimeError("Required held-out prediction artifacts are absent. Coverage report:\n" +
                            json.dumps(report, indent=2))
 
+    payloads = []
     for dataset in DATASETS:
         config, task_cells = discovered[dataset]
         for task in ("sentence_position", "concreteness"):
             for rank, group in sorted(task_cells[task].items()):
-                result, _ = bootstrap_groups(
-                    {"all": group}, args.bootstrap_repeats,
-                    np.random.default_rng(next(seeds)), args.normalization_tau,
-                )
-                rows.append(_row(
-                    dataset, rank, task, f"{task}:rrr_gt_pca", "all_real_models",
-                    result["all"], group, args.alpha, args.standard_run_name, config,
-                ))
+                seed = int(next(seeds).generate_state(1)[0])
+                payloads.append((_standard_job, (
+                    dataset, rank, task, group, args.bootstrap_repeats,
+                    args.normalization_tau, args.alpha, seed,
+                    args.standard_run_name, config,
+                )))
 
         for rank, all_models in sorted(task_cells["self_entropy"].items()):
-            causal = {model: records for model, records in all_models.items() if model in CAUSAL_MODELS}
-            roberta = {model: records for model, records in all_models.items() if model in ROBERTA_MODELS}
-            if not causal or not roberta:
-                continue
-            result, _ = bootstrap_groups(
-                {"causal": causal, "roberta": roberta}, args.bootstrap_repeats,
-                np.random.default_rng(next(seeds)), args.normalization_tau,
-            )
-            for name, group in (("causal", causal), ("roberta", roberta)):
-                rows.append(_row(
-                    dataset, rank, "self_entropy", f"self_entropy:{name}:rrr_gt_pca", name,
-                    result[name], group, args.alpha, args.entropy_run_name, config,
-                ))
-            contrast_boot = result["causal"]["bootstrap"] - result["roberta"]["bootstrap"]
-            contrast = result["causal"]["smooth_effect"] - result["roberta"]["smooth_effect"]
-            rows.append({
-                "dataset": dataset, "rank": rank, "task": "self_entropy",
-                "hypothesis": "self_entropy:causal_gt_roberta", "model_group": "causal_minus_roberta",
-                "rrr_score": np.nan, "pca_score": np.nan, "smooth_effect": contrast,
-                **_inference(contrast, contrast_boot, args.alpha),
-                "n_models": len(causal) + len(roberta),
-                "n_layers": sum(map(len, causal.values())) + sum(map(len, roberta.values())),
-                "models": ";".join(sorted(causal | roberta)),
-                "run_name": args.entropy_run_name, "config": config,
-            })
+            seed = int(next(seeds).generate_state(1)[0])
+            payloads.append((_entropy_job, (
+                dataset, rank, all_models, args.bootstrap_repeats,
+                args.normalization_tau, args.alpha, seed,
+                args.entropy_run_name, config,
+            )))
+    rows = _run_jobs(payloads, args.jobs)
     return apply_dataset_rank_fdr(pd.DataFrame(rows), args.alpha), {"coverage": coverage}
 
 
@@ -341,7 +400,8 @@ def main() -> None:
     for value in (args.standard_run_name, args.entropy_run_name):
         if value and not re.fullmatch(r"[A-Za-z0-9._-]+", value):
             raise ValueError("Run names may contain only letters, numbers, '.', '_', and '-'")
-    if args.bootstrap_repeats < 1 or not 0 < args.alpha < 1 or args.normalization_tau <= 0:
+    if (args.bootstrap_repeats < 1 or args.jobs < 1
+            or not 0 < args.alpha < 1 or args.normalization_tau <= 0):
         raise ValueError("repeats and tau must be positive, and alpha must be between zero and one")
     frame, report = run_analysis(args)
     output = Path(args.output_dir)
@@ -356,6 +416,7 @@ def main() -> None:
         "model_groups": {"standard": list(STANDARD_MODELS), "causal": list(CAUSAL_MODELS),
                          "roberta": list(ROBERTA_MODELS), "excluded": list(EXCLUDED_MODELS)},
         "bootstrap_repeats": args.bootstrap_repeats, "seed": args.seed, "alpha": args.alpha,
+        "jobs": args.jobs,
         "bootstrap": "paired sentence blocks; equal model weights; layers nested within model",
         "smooth_formula": "2*(RRR-PCA)/(sqrt(RRR^2+tau^2)+sqrt(PCA^2+tau^2))",
         "normalization_tau": args.normalization_tau,
