@@ -18,6 +18,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+from matplotlib.lines import Line2D
 from statsmodels.stats.multitest import multipletests
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -330,8 +331,7 @@ def run_analysis(args: argparse.Namespace) -> tuple[pd.DataFrame, dict]:
         task_cells = {
             "sentence_position": _records_by_cell(standard, "sentence_position", STANDARD_MODELS),
             "self_entropy": _records_by_cell(entropy, "self_entropy", STANDARD_MODELS),
-            "concreteness": (_records_by_cell(standard, "concreteness", STANDARD_MODELS)
-                             if dataset != "cars-2" else {}),
+            "concreteness": _records_by_cell(standard, "concreteness", STANDARD_MODELS),
         }
         entropy_testable = {
             rank: group for rank, group in task_cells["self_entropy"].items()
@@ -346,8 +346,6 @@ def run_analysis(args: argparse.Namespace) -> tuple[pd.DataFrame, dict]:
                 dataset, task, args.entropy_run_name if task == "self_entropy" else args.standard_run_name,
                 task_cells[task], required,
             )
-            if dataset == "cars-2" and task == "concreteness":
-                entry["status"] = "unavailable_by_design"
             coverage.append(entry)
     missing = [item for item in coverage if item["status"] == "missing_heldout_predictions"]
     if missing:
@@ -387,18 +385,21 @@ def _save_figure(fig, destination: Path) -> None:
 
 
 def _plot(frame: pd.DataFrame, hypotheses: list[str], title: str, destination: Path,
-          group_styles: dict[str, str] | None = None) -> None:
+          group_styles: dict[str, dict[str, object]] | None = None) -> None:
     apply_publication_style()
     fig, axis = plt.subplots(figsize=(6.2, 3.8))
     selected = frame.loc[frame["hypothesis"].isin(hypotheses)]
+    multiple_groups = selected["model_group"].nunique() > 1
     for (dataset, group), values in selected.groupby(["dataset", "model_group"]):
         values = values.sort_values("rank")
         ranks = values["rank"].to_numpy(float)
         effects = values["smooth_effect"].to_numpy(float)
+        style = (group_styles or {}).get(group, {})
         axis.semilogx(ranks, effects, color=DATASET_COLORS[dataset],
-                      linestyle=(group_styles or {}).get(group, "-"), marker="o",
+                      linestyle=style.get("linestyle", "-"),
+                      marker=style.get("marker", "o"),
                       markersize=3.2, linewidth=1.6,
-                      label=f"{dataset} · {group}" if len(set(selected.model_group)) > 1 else dataset)
+                      label="_nolegend_" if multiple_groups else dataset)
         axis.fill_between(ranks, values["ci_low"].to_numpy(float),
                           values["ci_high"].to_numpy(float), color=DATASET_COLORS[dataset],
                           alpha=.16, linewidth=0)
@@ -409,14 +410,42 @@ def _plot(frame: pd.DataFrame, hypotheses: list[str], title: str, destination: P
     axis.set_xlabel("Rank $k$ (log scale)")
     axis.set_ylabel("Smooth RRR preference")
     axis.set_title(title)
-    axis.legend(loc="best", fontsize=7)
+    if multiple_groups:
+        dataset_handles = [
+            Line2D([0], [0], color=DATASET_COLORS[dataset], linewidth=2.2, label=dataset)
+            for dataset in DATASETS if dataset in set(selected["dataset"])
+        ]
+        architecture_handles = [
+            Line2D(
+                [0], [0], color="black", linewidth=2.2,
+                linestyle=style.get("linestyle", "-"),
+                marker=style.get("marker", "o"), markersize=5,
+                label=group.capitalize(),
+            )
+            for group, style in (group_styles or {}).items()
+            if group in set(selected["model_group"])
+        ]
+        dataset_legend = axis.legend(
+            handles=dataset_handles, title="Dataset", loc="upper left",
+            fontsize=7, title_fontsize=7, handlelength=2.8,
+        )
+        axis.add_artist(dataset_legend)
+        axis.legend(
+            handles=architecture_handles, title="Architecture", loc="upper right",
+            fontsize=7, title_fontsize=7, handlelength=3.8,
+        )
+    else:
+        axis.legend(loc="best", fontsize=7)
     _save_figure(fig, destination)
 
 
 def write_plots(frame: pd.DataFrame, output: Path) -> None:
     _plot(frame, ["sentence_position:rrr_gt_pca"], "Sentence position", output / "sentence_position")
     _plot(frame, ["self_entropy:causal:rrr_gt_pca", "self_entropy:roberta:rrr_gt_pca"],
-          "Self-entropy", output / "self_entropy_groups", {"causal": "-", "roberta": "--"})
+          "Self-entropy", output / "self_entropy_groups", {
+              "causal": {"linestyle": "-", "marker": "o"},
+              "roberta": {"linestyle": (0, (5, 2)), "marker": "s"},
+          })
     _plot(frame, ["self_entropy:causal_gt_roberta"], "Self-entropy: causal minus RoBERTa",
           output / "self_entropy_causal_minus_roberta")
     _plot(frame, ["concreteness:rrr_gt_pca"], "Concreteness", output / "concreteness")

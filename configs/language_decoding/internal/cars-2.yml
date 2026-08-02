@@ -2,7 +2,7 @@ dataset: cars-2
 device: auto
 refresh: false
 
-# Cars 2 has no IU labels or expanded lexical/emotion norms. These tasks are the
+# Cars 2 has no IU labels or expanded emotion norms. These tasks are the
 # discussed interpretable features present across its completed token artifact.
 tasks:
   - surprisal
@@ -19,6 +19,7 @@ tasks:
   - word_duration
   - pre_word_pause
   - post_word_pause
+  - concreteness
   - dependency_depth
   - dependency_length
 
