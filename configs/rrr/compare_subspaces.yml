@@ -1,76 +1,73 @@
-output_name: subspace_reproducibility
-cca_ranks:
-  - 1
-  - 2
-  - 4
-  - 8
-  - 16
-  - 32
-#   - 64
-#   - 128
-rsa_ranks:
-  - 1
-  - 2
-  - 4
-  - 8
-  - 16
-  - 32
-  - 64
-  - 128
+analysis_name: podcast_cross_dataset_spaces
+output_root: results/subspace_comparisons
+evaluation_dataset: podcast
+max_rank: 128
+include_pca: false
+geometries: [span, weighted]
 shared_corr_threshold: 0.2
 rsm_metric: cosine
-refresh: true
-save_ambient_axes: false
-save_rsm_vectors: false
-include_self: false
+refresh: false
 
-runs:
-  - name: podcast_gpt2xl_l0
-    rrr_config: configs/rrr/gpt2-xl/cross_subject.yml
-    unit_dir: results/gpt2-xl-batch_layer0_offset0/rrr
+# The aliases below are used both in each model's datasets list and in the
+# heatmap hierarchy. `ieeg_words` uses saved neural-analysis word selections and
+# outer folds. `fmri_words` evaluates ordinary word embeddings from held-out
+# fMRI stories, without Lanczos resampling or FIR expansion.
+datasets:
+  podcast:
+    loader: ieeg_words
+    dataset: podcast
+    data_root: data/
+    results_root: results
+    subjects: [1, 2, 3, 4, 5, 6, 7, 8, 9]
 
-  - name: podcast_gpt2xl_l24
-    rrr_config: configs/rrr/gpt2-xl/cross_subject.yml
-    unit_dir: results/gpt2-xl-batch_layer24_offset0/rrr
+  cars-2:
+    loader: ieeg_words
+    dataset: brain_treebank
+    data_root: data/brain-treebank
+    results_root: results
+    per_dataset_config:
+      movie: cars-2
+    subjects: [3, 7, 10]
+    shared_word_selection: true
 
-  - name: podcast_gpt2xl_l48
-    rrr_config: configs/rrr/gpt2-xl/cross_subject.yml
-    unit_dir: results/gpt2-xl-batch_layer48_offset0/rrr
+  fmri:
+    loader: fmri_words
+    results_root: results
+    fmri_repo_root: data/deep-fMRI-dataset
+    embedding_root: data/fmri/stimuli
+    sessions: [1, 2, 3, 4, 5]
+    pooling: mean
+    num_folds: 5
 
-  - name: cars2_gpt2xl_l0
-    rrr_config: configs/brain_treebank/cars_2/rrr/gpt2-xl/cross_subject.yml
-    unit_dir: results/gpt2-xl-batch_layer0_offset0/movie-cars-2/rrr
+# Keys are canonical embedding/result directory names. Each object deliberately
+# has only offsets, layers, and factor-generating datasets.
+models:
+  gpt2:
+    offsets: [0]
+    layers: [0, 3, 6, 9, 12]
+    datasets: [podcast, cars-2, fmri]
 
-  - name: cars2_gpt2xl_l24
-    rrr_config: configs/brain_treebank/cars_2/rrr/gpt2-xl/cross_subject.yml
-    unit_dir: results/gpt2-xl-batch_layer24_offset0/movie-cars-2/rrr
+  gpt2-xl-batch:
+    offsets: [0]
+    layers: [0, 12, 24, 36, 48]
+    datasets: [podcast, cars-2, fmri]
 
-  - name: cars2_gpt2xl_l48
-    rrr_config: configs/brain_treebank/cars_2/rrr/gpt2-xl/cross_subject.yml
-    unit_dir: results/gpt2-xl-batch_layer48_offset0/movie-cars-2/rrr
+  gpt-j-6b:
+    offsets: [0]
+    layers: [0, 7, 14, 21, 28]
+    datasets: [podcast, cars-2, fmri]
 
-  # PCA siblings are separate runs so the batch analysis writes RRR-to-PCA,
-  # PCA-to-RRR, and PCA-to-PCA comparisons in addition to RRR-to-RRR.
-  # - name: podcast_gpt2xl_l0_pca
-  #   rrr_config: configs/rrr/gpt2-xl/cross_subject.yml
-  #   unit_dir: results/gpt2-xl-batch_layer0_offset0/pca
+  llama3-8b:
+    offsets: [0]
+    layers: [0, 8, 16, 24, 32]
+    datasets: [podcast, cars-2, fmri]
 
-  # - name: podcast_gpt2xl_l24_pca
-  #   rrr_config: configs/rrr/gpt2-xl/cross_subject.yml
-  #   unit_dir: results/gpt2-xl-batch_layer24_offset0/pca
+  roberta-large:
+    offsets: [0]
+    layers: [0, 6, 12, 18, 24]
+    datasets: [podcast, cars-2, fmri]
 
-  # - name: podcast_gpt2xl_l48_pca
-  #   rrr_config: configs/rrr/gpt2-xl/cross_subject.yml
-  #   unit_dir: results/gpt2-xl-batch_layer48_offset0/pca
-
-  # - name: cars2_gpt2xl_l0_pca
-  #   rrr_config: configs/brain_treebank/cars_2/rrr/gpt2-xl/cross_subject.yml
-  #   unit_dir: results/gpt2-xl-batch_layer0_offset0/movie-cars-2/pca
-
-  # - name: cars2_gpt2xl_l24_pca
-  #   rrr_config: configs/brain_treebank/cars_2/rrr/gpt2-xl/cross_subject.yml
-  #   unit_dir: results/gpt2-xl-batch_layer24_offset0/movie-cars-2/pca
-
-  # - name: cars2_gpt2xl_l48_pca
-  #   rrr_config: configs/brain_treebank/cars_2/rrr/gpt2-xl/cross_subject.yml
-  #   unit_dir: results/gpt2-xl-batch_layer48_offset0/movie-cars-2/pca
+  random-gpt2-xl:
+    offsets: [0]
+    layers: [0, 12, 24, 36, 48]
+    datasets: [podcast, cars-2, fmri]

@@ -522,35 +522,102 @@ class SubspaceComparisonRun:
 
 @dataclass
 class SubspaceComparisonConfig:
-    """Parameters for pairwise RRR/PCA subspace reproducibility analysis."""
+    """Parameters for ordered comparisons of saved RRR/PCA spaces."""
 
-    runs: list[SubspaceComparisonRun] = field(default_factory=list)
-    cca_ranks: list[int] = field(default_factory=lambda: [1, 2, 4, 8, 16, 32, 64, 128])
-    rsa_ranks: list[int] = field(default_factory=lambda: [1, 2, 4, 8, 16, 32, 64, 128])
-    output_name: str = "subspace_reproducibility"
+    analysis_name: str = "subspace_comparison"
+    output_root: str = "results/subspace_comparisons"
+    evaluation_dataset: str = "podcast"
+    datasets: dict[str, dict] = field(default_factory=dict)
+    models: dict[str, dict] = field(default_factory=dict)
+    max_rank: int = 128
+    include_pca: bool = False
+    geometries: list[str] = field(default_factory=lambda: ["span", "weighted"])
+    ridge_alphas: list[float] | None = None
     refresh: bool = False
     shared_corr_threshold: float = 0.2
     rsm_metric: str = "cosine"
-    save_ambient_axes: bool = False
-    save_rsm_vectors: bool = False
-    include_self: bool = False
 
     def __post_init__(self):
         self.validate()
 
     def validate(self):
-        if not self.runs:
-            raise ValueError("SubspaceComparisonConfig.runs must contain at least one run")
-        names = [run.name for run in self.runs]
-        duplicates = sorted({name for name in names if names.count(name) > 1})
-        if duplicates:
-            raise ValueError(f"Duplicate subspace comparison run name(s): {duplicates}")
-        for field_name in ("cca_ranks", "rsa_ranks"):
-            ranks = getattr(self, field_name)
-            if any(int(rank) < 1 for rank in ranks):
-                raise ValueError(f"{field_name} must contain positive integer ranks")
-        if not self.output_name:
-            raise ValueError("output_name must be non-empty")
+        if not self.analysis_name.strip():
+            raise ValueError("analysis_name must be non-empty")
+        if not self.output_root:
+            raise ValueError("output_root must be non-empty")
+        if not self.datasets:
+            raise ValueError("datasets must contain at least one dataset")
+        if self.evaluation_dataset not in self.datasets:
+            raise ValueError(
+                f"evaluation_dataset {self.evaluation_dataset!r} is absent from datasets"
+            )
+        if not self.models:
+            raise ValueError("models must contain at least one model")
+        if isinstance(self.max_rank, bool) or int(self.max_rank) < 1:
+            raise ValueError("max_rank must be a positive integer")
+        allowed_loaders = {"ieeg_words", "fmri_words"}
+        for name, spec in self.datasets.items():
+            if not str(name).strip() or not isinstance(spec, dict):
+                raise ValueError("dataset names must be non-empty and map to objects")
+            loader = spec.get("loader", "ieeg_words")
+            if loader not in allowed_loaders:
+                raise ValueError(
+                    f"Dataset {name!r} loader must be one of {sorted(allowed_loaders)}"
+                )
+            required = (
+                {"loader", "dataset", "data_root", "results_root", "subjects"}
+                if loader == "ieeg_words"
+                else {
+                    "loader",
+                    "results_root",
+                    "fmri_repo_root",
+                    "embedding_root",
+                    "sessions",
+                }
+            )
+            missing = sorted(required - set(spec))
+            if missing:
+                raise ValueError(f"Dataset {name!r} is missing required fields {missing}")
+            if loader == "ieeg_words" and not spec["subjects"]:
+                raise ValueError(f"Dataset {name!r} subjects must be non-empty")
+            if loader == "fmri_words" and not spec["sessions"]:
+                raise ValueError(f"Dataset {name!r} sessions must be non-empty")
+        for name, spec in self.models.items():
+            if not str(name).strip() or not isinstance(spec, dict):
+                raise ValueError("model names must be non-empty and map to objects")
+            required = {"offsets", "layers", "datasets"}
+            if set(spec) != required:
+                raise ValueError(
+                    f"Model {name!r} must contain exactly {sorted(required)}, "
+                    f"got {sorted(spec)}"
+                )
+            if not spec["offsets"] or any(isinstance(x, bool) for x in spec["offsets"]):
+                raise ValueError(f"Model {name!r} offsets must contain integers")
+            if not all(isinstance(x, int) for x in spec["offsets"]):
+                raise ValueError(f"Model {name!r} offsets must contain integers")
+            if not spec["layers"] or not all(
+                isinstance(x, int) and not isinstance(x, bool) for x in spec["layers"]
+            ):
+                raise ValueError(f"Model {name!r} layers must contain integers")
+            if not spec["datasets"] or any(
+                dataset not in self.datasets for dataset in spec["datasets"]
+            ):
+                raise ValueError(
+                    f"Model {name!r} datasets must reference configured datasets"
+                )
+            for field_name in required:
+                if len(set(spec[field_name])) != len(spec[field_name]):
+                    raise ValueError(
+                        f"Model {name!r} {field_name} must not contain duplicates"
+                    )
+        if not self.geometries or set(self.geometries) - {"span", "weighted"}:
+            raise ValueError("geometries must be drawn from ['span', 'weighted']")
+        if len(set(self.geometries)) != len(self.geometries):
+            raise ValueError("geometries must not contain duplicates")
+        if self.ridge_alphas is not None and (
+            not self.ridge_alphas or any(float(alpha) <= 0 for alpha in self.ridge_alphas)
+        ):
+            raise ValueError("ridge_alphas must contain positive values")
         if self.rsm_metric not in {"cosine", "euclidean"}:
             raise ValueError("rsm_metric must be either 'cosine' or 'euclidean'")
 

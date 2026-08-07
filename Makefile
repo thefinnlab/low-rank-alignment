@@ -28,6 +28,7 @@ LANGUAGE_DECODING_BOOTSTRAP_REPEATS ?= 10000
 LANGUAGE_DECODING_BOOTSTRAP_ARGS ?=
 LANGUAGE_RECONSTRUCTION_CONFIG ?= configs/rrr/language_reconstruction.yml
 LANGUAGE_AXIS_ENCODING_CONFIG ?= configs/rrr/language_axis_encoding.yml
+SUBSPACE_COMPARISON_CONFIG ?= configs/rrr/compare_subspaces.yml
 LANGUAGE_FEATURE_CONFIG ?= configs/language_features/podcast.yml
 SURPRISAL_CONFIGS ?= configs/language_features/podcast.yml configs/language_features/brain_treebank.yml configs/language_features/fmri.yml
 SELF_SURPRISAL_CONFIG ?= configs/language_features/self_surprisal.yml
@@ -218,6 +219,11 @@ rrr:
 ## Filter with RANK_SATURATION_ARGS="--condition internal_rrr" (or cross_dataset).
 rank-saturation:
 	uv run python scripts/rrr/plot_rank_saturation.py $(RANK_SATURATION_ARGS)
+## Compare configured saved RRR/PCA spaces over a shared evaluation stimulus.
+## Use CMD="uv run python" for a local run.
+compare-subspaces:
+	mkdir -p logs
+	$(CMD) scripts/rrr/compare_subspaces.py --config $(SUBSPACE_COMPARISON_CONFIG) $(OVERRIDES)
 
 ## Decode linguistic targets from saved RRR input subspaces
 ## Usage:

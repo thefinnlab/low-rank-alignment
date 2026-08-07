@@ -15,7 +15,6 @@ from src.core.config import (
     ScriptMode,
     SignificanceConfig,
     SubspaceComparisonConfig,
-    SubspaceComparisonRun,
     get_results_dir,
 )
 from src.core.registry import DatasetContext
@@ -239,33 +238,69 @@ class TestDictToDataclass:
         with pytest.raises(ValueError, match="requires save_b_matrices=True"):
             RRRConfig(save_rrr_corr_per_target=True)
 
-    def test_subspace_comparison_config_converts_run_dicts(self):
+    def test_subspace_comparison_config_preserves_model_and_dataset_mappings(self):
         config = dict_to_dataclass(
             {
-                "runs": [
-                    {
-                        "name": "podcast",
-                        "rrr_config": "configs/rrr/gpt2-xl/cross_subject.yml",
-                        "unit_dir": "results/run/rrr",
+                "analysis_name": "example",
+                "evaluation_dataset": "podcast",
+                "datasets": {
+                    "podcast": {
+                        "loader": "ieeg_words",
+                        "dataset": "podcast",
+                        "data_root": "data/",
+                        "results_root": "results",
+                        "subjects": [1],
                     }
-                ],
-                "cca_ranks": [1, 2],
-                "rsa_ranks": [1],
+                },
+                "models": {
+                    "gpt2": {
+                        "offsets": [0, 1],
+                        "layers": [0, 6],
+                        "datasets": ["podcast"],
+                    }
+                },
+                "max_rank": 32,
             },
             SubspaceComparisonConfig,
         )
 
-        assert isinstance(config.runs[0], SubspaceComparisonRun)
-        assert config.runs[0].name == "podcast"
-        assert config.cca_ranks == [1, 2]
+        assert config.models["gpt2"]["offsets"] == [0, 1]
+        assert config.datasets["podcast"]["loader"] == "ieeg_words"
+        assert config.max_rank == 32
 
-    def test_subspace_comparison_config_rejects_duplicate_names(self):
-        with pytest.raises(ValueError, match="Duplicate"):
+    def test_subspace_comparison_config_requires_exact_model_fields(self):
+        with pytest.raises(ValueError, match="exactly"):
             SubspaceComparisonConfig(
-                runs=[
-                    SubspaceComparisonRun("same", "a.yml", "a/rrr"),
-                    SubspaceComparisonRun("same", "b.yml", "b/rrr"),
-                ]
+                datasets={
+                    "podcast": {
+                        "loader": "ieeg_words",
+                        "dataset": "podcast",
+                        "data_root": "data/",
+                        "results_root": "results",
+                        "subjects": [1],
+                    }
+                },
+                models={
+                    "gpt2": {
+                        "offsets": [0],
+                        "layers": [0],
+                        "datasets": ["podcast"],
+                        "extra": True,
+                    }
+                },
+            )
+
+    def test_subspace_comparison_config_rejects_incomplete_dataset_metadata(self):
+        with pytest.raises(ValueError, match="missing required fields"):
+            SubspaceComparisonConfig(
+                datasets={"podcast": {"loader": "ieeg_words"}},
+                models={
+                    "gpt2": {
+                        "offsets": [0],
+                        "layers": [0],
+                        "datasets": ["podcast"],
+                    }
+                },
             )
 
 
