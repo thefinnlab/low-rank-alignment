@@ -9,8 +9,10 @@ from typing import Callable
 
 import numpy as np
 import pandas as pd
+import torch
+from himalaya.backend import get_backend, set_backend
+from himalaya.ridge import RidgeCV as HimalayaRidgeCV
 from scipy.stats import sem
-from sklearn.linear_model import RidgeCV
 
 from src.core.config import SubspaceComparisonConfig, get_results_dir
 from src.core.registry import get_dataset_adapter, resolve_dataset_context
@@ -19,14 +21,8 @@ from src.utils.data_loaders import selection_after_offset
 from src.utils.embeddings import load_embeddings
 from src.utils.encoding import apply_offset, load_encoding_results
 from src.utils.fmri import load_story_embeddings, resolve_fmri_stories
-from src.utils.language_reconstruction import orthonormal_factor, reconstruction_metrics
-from src.utils.subspace_compare import (
-    aggregate_subspace_basis,
-    projected_rsm,
-    rsa_lower_triangle_correlations,
-    score_cca_alignment,
-    score_procrustes_alignment,
-)
+from src.utils.language_reconstruction import orthonormal_factor
+from src.utils.subspace_compare import aggregate_subspace_basis
 
 
 DIRECTED_METRICS = (
@@ -45,15 +41,9 @@ SYMMETRIC_METRICS = (
     "direct_cka",
     "rsa_pearson",
     "rsa_spearman",
-    "cca_first_test_corr",
-    "cca_median_test_corr",
-    "cca_mean_all_test_corr",
-    "cca_mean_top10_test_corr",
-    "cca_test_shared_dim_pr",
-    "cca_n_test_corr_ge_threshold",
 )
 ALL_METRICS = DIRECTED_METRICS + SYMMETRIC_METRICS
-
+METRIC_IMPLEMENTATION = "torch_cuda_himalaya_shared_alpha_5fold_v2"
 
 @dataclass(frozen=True)
 class EvaluationView:
@@ -529,6 +519,10 @@ def align_views(left: EvaluationView, right: EvaluationView):
         raise ValueError("Source evaluation view contains duplicate canonical IDs")
     if len(np.unique(right.ids)) != len(right.ids):
         raise ValueError("Target evaluation view contains duplicate canonical IDs")
+    if np.array_equal(left.ids.astype(str), right.ids.astype(str)):
+        if len(left.ids) < 4:
+            raise ValueError("Fewer than four common evaluation rows remain after alignment")
+        return left.ids.astype(str), left.values, right.values
     left_rows = {str(identifier): i for i, identifier in enumerate(left.ids)}
     right_rows = {str(identifier): i for i, identifier in enumerate(right.ids)}
     common = [str(identifier) for identifier in left.ids if str(identifier) in right_rows]
@@ -541,71 +535,252 @@ def align_views(left: EvaluationView, right: EvaluationView):
     )
 
 
-def _linear_cka(left: np.ndarray, right: np.ndarray) -> float:
-    left = np.asarray(left, dtype=np.float64) - np.mean(left, axis=0, keepdims=True)
-    right = np.asarray(right, dtype=np.float64) - np.mean(right, axis=0, keepdims=True)
-    numerator = np.linalg.norm(left.T @ right, ord="fro") ** 2
-    denominator = np.linalg.norm(left.T @ left, ord="fro") * np.linalg.norm(
-        right.T @ right, ord="fro"
+def configure_metric_backend(device: str = "cuda") -> torch.device:
+    """Configure the Himalaya/Torch backend used by pairwise metric scoring."""
+    if device not in {"cpu", "cuda"}:
+        raise ValueError(f"Metric device must be 'cpu' or 'cuda', got {device!r}")
+    if device == "cuda" and not torch.cuda.is_available():
+        raise RuntimeError(
+            "Subspace comparison metrics require CUDA, but torch.cuda.is_available() "
+            "is false. Run this analysis on a CUDA worker."
+        )
+    backend_name = "torch_cuda" if device == "cuda" else "torch"
+    if get_backend().name != backend_name:
+        set_backend(backend_name)
+    return torch.device(device)
+
+
+def _metric_tensor(values, device: torch.device) -> torch.Tensor:
+    if isinstance(values, torch.Tensor):
+        return values.to(device=device, dtype=torch.float64)
+    return torch.as_tensor(values, dtype=torch.float64, device=device)
+
+
+def project_subspace(values, factor, *, device: str = "cuda") -> torch.Tensor:
+    """Project one evaluation view through a saved factor on the metric device."""
+    metric_device = configure_metric_backend(device)
+    return _metric_tensor(values, metric_device) @ _metric_tensor(factor, metric_device)
+
+
+def _pearson(left: torch.Tensor, right: torch.Tensor) -> torch.Tensor:
+    left_centered = left - torch.mean(left)
+    right_centered = right - torch.mean(right)
+    denominator = torch.linalg.vector_norm(left_centered) * torch.linalg.vector_norm(
+        right_centered
     )
-    return float(numerator / denominator) if denominator > 0 else float("nan")
+    if float(denominator) == 0.0:
+        return torch.full((), torch.nan, dtype=left.dtype, device=left.device)
+    return torch.sum(left_centered * right_centered) / denominator
+
+
+def _linear_cka(left: torch.Tensor, right: torch.Tensor) -> torch.Tensor:
+    left = left - torch.mean(left, dim=0, keepdim=True)
+    right = right - torch.mean(right, dim=0, keepdim=True)
+    numerator = torch.linalg.matrix_norm(left.T @ right, ord="fro") ** 2
+    denominator = torch.linalg.matrix_norm(
+        left.T @ left, ord="fro"
+    ) * torch.linalg.matrix_norm(right.T @ right, ord="fro")
+    if float(denominator) == 0.0:
+        return torch.full((), torch.nan, dtype=left.dtype, device=left.device)
+    return numerator / denominator
+
+
+def _reconstruction_metrics(
+    target: torch.Tensor, prediction: torch.Tensor
+) -> dict[str, float]:
+    residual = torch.sum((target - prediction) ** 2)
+    centered_target = target - torch.mean(target, dim=0, keepdim=True)
+    denominator = torch.sum(centered_target**2)
+    r2 = 1.0 - residual / denominator if float(denominator) > 0 else torch.nan
+
+    target_centered = target - torch.mean(target, dim=0, keepdim=True)
+    prediction_centered = prediction - torch.mean(prediction, dim=0, keepdim=True)
+    coordinate_denominators = torch.linalg.vector_norm(
+        target_centered, dim=0
+    ) * torch.linalg.vector_norm(prediction_centered, dim=0)
+    valid = coordinate_denominators > 0
+    if bool(torch.any(valid)):
+        correlations = torch.sum(target_centered * prediction_centered, dim=0)[valid]
+        correlations = correlations / coordinate_denominators[valid]
+        mean_correlation = torch.mean(correlations)
+    else:
+        mean_correlation = torch.full(
+            (), torch.nan, dtype=target.dtype, device=target.device
+        )
+    return {
+        "multivariate_r2": float(r2),
+        "mean_coordinate_correlation": float(mean_correlation),
+        "linear_cka": float(_linear_cka(target, prediction)),
+    }
+
+
+def _score_procrustes(
+    source_train: torch.Tensor,
+    target_train: torch.Tensor,
+    source_test: torch.Tensor,
+    target_test: torch.Tensor,
+) -> dict[str, float]:
+    source_mean = torch.mean(source_train, dim=0)
+    target_mean = torch.mean(target_train, dim=0)
+    source_centered = source_train - source_mean
+    target_centered = target_train - target_mean
+    source_norm_sq = torch.sum(source_centered**2)
+    if float(source_norm_sq) <= torch.finfo(source_train.dtype).eps:
+        raise ValueError("Procrustes source training rows have zero variance")
+    u, singular_values, vh = torch.linalg.svd(
+        source_centered.T @ target_centered,
+        full_matrices=False,
+    )
+    rotation = u @ vh
+    scale = torch.sum(singular_values) / source_norm_sq
+    aligned_test = scale * ((source_test - source_mean) @ rotation)
+    target_centered_test = target_test - target_mean
+    residual = aligned_test - target_centered_test
+    sse = torch.sum(residual**2)
+    target_sse = torch.sum(target_centered_test**2)
+    normalized_mse = sse / target_sse if float(target_sse) > 0 else torch.nan
+    row_denominators = torch.linalg.vector_norm(
+        aligned_test, dim=1
+    ) * torch.linalg.vector_norm(target_centered_test, dim=1)
+    valid = row_denominators > 0
+    if bool(torch.any(valid)):
+        row_cosine = torch.mean(
+            torch.sum(aligned_test * target_centered_test, dim=1)[valid]
+            / row_denominators[valid]
+        )
+    else:
+        row_cosine = torch.full(
+            (), torch.nan, dtype=source_train.dtype, device=source_train.device
+        )
+    return {
+        "test_r2": float(1.0 - normalized_mse),
+        "test_normalized_mse": float(normalized_mse),
+        "test_rmse": float(torch.sqrt(torch.mean(residual**2))),
+        "scale": float(scale),
+        "test_mean_row_cosine": float(row_cosine),
+    }
+
+
+def _projected_rsm(vectors: torch.Tensor, metric: str) -> torch.Tensor:
+    if metric == "cosine":
+        norms = torch.linalg.vector_norm(vectors, dim=1, keepdim=True)
+        safe = torch.where(norms > 0, vectors / torch.clamp_min(norms, 1e-30), 0.0)
+        rsm = 1.0 - torch.clamp(safe @ safe.T, -1.0, 1.0)
+    elif metric == "euclidean":
+        rsm = torch.cdist(vectors, vectors, p=2.0)
+    else:
+        raise ValueError(f"Unknown RSM metric: {metric!r}")
+    rsm.fill_diagonal_(0.0)
+    return rsm
+
+
+def _average_ranks(values: torch.Tensor) -> torch.Tensor:
+    """Return SciPy-style average ranks without overflowing large tie groups."""
+    if values.ndim != 1:
+        raise ValueError(f"Rank input must be one-dimensional, got {values.shape}")
+    order = torch.argsort(values, stable=True)
+    sorted_values = values[order]
+    starts_group = torch.ones(len(values), dtype=torch.bool, device=values.device)
+    starts_group[1:] = sorted_values[1:] != sorted_values[:-1]
+    group_ids = torch.cumsum(starts_group.to(torch.int64), dim=0) - 1
+    counts = torch.bincount(group_ids)
+    ends = torch.cumsum(counts, dim=0)
+    starts = ends - counts
+    average_by_group = (
+        starts.to(torch.float64) + 1.0 + ends.to(torch.float64)
+    ) / 2.0
+    sorted_ranks = average_by_group[group_ids]
+    ranks = torch.empty_like(values, dtype=torch.float64)
+    ranks[order] = sorted_ranks
+    return ranks
+
+
+def _spearman(left: torch.Tensor, right: torch.Tensor) -> torch.Tensor:
+    return _pearson(_average_ranks(left), _average_ranks(right))
+
+
+def _score_rsa(
+    source_test: torch.Tensor, target_test: torch.Tensor, metric: str
+) -> dict[str, float]:
+    source_rsm = _projected_rsm(source_test, metric)
+    target_rsm = _projected_rsm(target_test, metric)
+    triangle = torch.tril_indices(
+        source_rsm.shape[0], source_rsm.shape[1], offset=-1, device=source_rsm.device
+    )
+    source_values = source_rsm[triangle[0], triangle[1]]
+    target_values = target_rsm[triangle[0], triangle[1]]
+    if source_values.numel() < 2:
+        return {"pearson": float("nan"), "spearman": float("nan")}
+    pearson = _pearson(source_values, target_values)
+    if float(torch.std(source_values)) == 0.0 or float(torch.std(target_values)) == 0.0:
+        spearman = torch.full(
+            (), torch.nan, dtype=source_values.dtype, device=source_values.device
+        )
+    else:
+        spearman = _spearman(source_values, target_values)
+    return {"pearson": float(pearson), "spearman": float(spearman)}
 
 
 def score_ordered_pair(
-    source: np.ndarray,
-    target: np.ndarray,
+    source,
+    target,
     train_idx: np.ndarray,
     test_idx: np.ndarray,
     *,
     ridge_alphas: list[float] | None,
     rsm_metric: str,
-    shared_corr_threshold: float,
+    device: str = "cpu",
 ) -> dict[str, float]:
-    """Fit all train-only mappings and score one ordered held-out comparison."""
+    """Fit and score one ordered held-out comparison with Torch/Himalaya."""
+    metric_device = configure_metric_backend(device)
+    source = _metric_tensor(source, metric_device)
+    target = _metric_tensor(target, metric_device)
+    train_idx = torch.as_tensor(train_idx, dtype=torch.long, device=metric_device)
+    test_idx = torch.as_tensor(test_idx, dtype=torch.long, device=metric_device)
+    source_train, source_test = source[train_idx], source[test_idx]
+    target_train, target_test = target[train_idx], target[test_idx]
+
     alphas = np.asarray(ridge_alphas or RIDGE_ALPHAS, dtype=float)
-    ridge = RidgeCV(alphas=alphas, cv=None, fit_intercept=True, scoring="neg_mean_squared_error")
-    ridge.fit(source[train_idx], target[train_idx])
-    prediction = ridge.predict(source[test_idx])
-    reconstruction = reconstruction_metrics(target[test_idx], prediction)
+    if np.any(alphas <= 0):
+        raise ValueError("GPU Himalaya RidgeCV requires strictly positive ridge_alphas")
+    ridge = HimalayaRidgeCV(
+        alphas=alphas,
+        cv=5,
+        fit_intercept=True,
+        solver_params={"local_alpha": False},
+    )
+    ridge.fit(source_train, target_train)
+    coefficients = _metric_tensor(ridge.coef_, metric_device)
+    intercept = _metric_tensor(ridge.intercept_, metric_device)
+    prediction = source_test @ coefficients + intercept
+    best_alphas = _metric_tensor(ridge.best_alphas_, metric_device)
+    if not bool(torch.allclose(best_alphas, best_alphas[0].expand_as(best_alphas))):
+        raise RuntimeError("Shared-alpha Himalaya RidgeCV returned inconsistent alphas")
+
+    reconstruction = _reconstruction_metrics(target_test, prediction)
     normalized_error = (
         float(1.0 - reconstruction["multivariate_r2"])
         if np.isfinite(reconstruction["multivariate_r2"])
         else float("nan")
     )
-    procrustes = score_procrustes_alignment(
-        source[train_idx], target[train_idx], source[test_idx], target[test_idx]
+    procrustes = _score_procrustes(
+        source_train, target_train, source_test, target_test
     )
-    cca = score_cca_alignment(
-        source[train_idx],
-        target[train_idx],
-        source[test_idx],
-        target[test_idx],
-        shared_corr_threshold=shared_corr_threshold,
-    )
-    rsa = rsa_lower_triangle_correlations(
-        projected_rsm(source[test_idx], metric=rsm_metric),
-        projected_rsm(target[test_idx], metric=rsm_metric),
-    )
+    rsa = _score_rsa(source_test, target_test, rsm_metric)
     return {
         "ridge_r2": reconstruction["multivariate_r2"],
         "ridge_coordinate_correlation": reconstruction["mean_coordinate_correlation"],
         "ridge_prediction_cka": reconstruction["linear_cka"],
         "ridge_normalized_error": normalized_error,
-        "ridge_alpha": float(ridge.alpha_),
+        "ridge_alpha": float(best_alphas[0]),
         "procrustes_r2": procrustes["test_r2"],
         "procrustes_normalized_mse": procrustes["test_normalized_mse"],
         "procrustes_rmse": procrustes["test_rmse"],
         "procrustes_scale": procrustes["scale"],
         "procrustes_mean_row_cosine": procrustes["test_mean_row_cosine"],
-        "direct_cka": _linear_cka(source[test_idx], target[test_idx]),
+        "direct_cka": float(_linear_cka(source_test, target_test)),
         "rsa_pearson": rsa["pearson"],
         "rsa_spearman": rsa["spearman"],
-        "cca_first_test_corr": cca["first_test_corr"],
-        "cca_median_test_corr": cca["median_test_corr"],
-        "cca_mean_all_test_corr": cca["mean_all_test_corr"],
-        "cca_mean_top10_test_corr": cca["mean_top10_test_corr"],
-        "cca_test_shared_dim_pr": cca["test_shared_dim_pr"],
-        "cca_n_test_corr_ge_threshold": float(cca["n_test_corr_ge_threshold"]),
     }
 
 
@@ -629,8 +804,13 @@ def fold_indices(
         else default
     )
     test_ids = source_safe & target_safe & default
-    test = np.asarray([i for i, value in enumerate(common_ids) if str(value) in test_ids])
-    train = np.asarray([i for i in range(len(common_ids)) if i not in set(test)], dtype=int)
+    test_mask = np.fromiter(
+        (str(value) in test_ids for value in common_ids),
+        dtype=bool,
+        count=len(common_ids),
+    )
+    test = np.flatnonzero(test_mask)
+    train = np.flatnonzero(~test_mask)
     if len(test) < 2 or len(train) < 2:
         raise ValueError(
             f"Fold {fold} has {len(train)} train and {len(test)} test rows after alignment"

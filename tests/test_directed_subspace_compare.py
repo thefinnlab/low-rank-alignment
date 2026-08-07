@@ -1,11 +1,16 @@
+import json
+
 import numpy as np
 import pandas as pd
 import joblib
 import pytest
+from himalaya.backend import set_backend
+from scipy.stats import spearmanr
 
 from src.core.config import SubspaceComparisonConfig
 import src.utils.directed_subspace_compare as directed
 from src.utils.directed_subspace_compare import (
+    ALL_METRICS,
     ComparisonSpace,
     EvaluationData,
     EvaluationView,
@@ -16,7 +21,22 @@ from src.utils.directed_subspace_compare import (
     score_ordered_pair,
     shared_ranks,
 )
-from scripts.rrr.compare_subspaces import _matrix
+from src.utils.subspace_compare import (
+    projected_rsm,
+    rsa_lower_triangle_correlations,
+    score_procrustes_alignment,
+)
+from scripts.rrr.compare_subspaces import (
+    _cached_metrics,
+    _matrix,
+    _write_matrices_and_plots,
+)
+
+
+@pytest.fixture(autouse=True)
+def _restore_himalaya_backend():
+    yield
+    set_backend("numpy")
 
 
 def _space(tmp_path, name, *, dataset="podcast", heldout=None, ranks=None):
@@ -68,6 +88,17 @@ def test_align_views_uses_canonical_ids_in_left_order():
     np.testing.assert_array_equal(ids, np.array(["10", "11", "12", "14"]))
     np.testing.assert_array_equal(left_values, left.values[[0, 1, 2, 4]])
     np.testing.assert_array_equal(right_values[:, 0], [10, 11, 12, 14])
+
+
+def test_align_views_reuses_values_when_ids_are_already_identical():
+    left = EvaluationView(ids=np.arange(5), values=np.ones((5, 2)))
+    right = EvaluationView(ids=np.arange(5), values=np.zeros((5, 3)))
+
+    ids, left_values, right_values = align_views(left, right)
+
+    np.testing.assert_array_equal(ids, ["0", "1", "2", "3", "4"])
+    assert left_values is left.values
+    assert right_values is right.values
 
 
 def test_fold_indices_intersects_both_spaces_heldout_ids(tmp_path):
@@ -122,7 +153,7 @@ def test_score_ordered_pair_recovers_rotated_scaled_space():
         np.arange(60, 80),
         ridge_alphas=[1e-8, 1e-6],
         rsm_metric="cosine",
-        shared_corr_threshold=0.2,
+        device="cpu",
     )
 
     assert result["ridge_r2"] > 0.999
@@ -131,7 +162,119 @@ def test_score_ordered_pair_recovers_rotated_scaled_space():
     )
     assert result["procrustes_r2"] > 0.999
     assert result["direct_cka"] > 0.999
-    assert result["cca_mean_all_test_corr"] > 0.999
+    assert not any(key.startswith("cca_") for key in result)
+
+
+@pytest.mark.skipif(not directed.torch.cuda.is_available(), reason="CUDA unavailable")
+def test_cuda_score_matches_torch_cpu_score():
+    rng = np.random.default_rng(23)
+    source = rng.standard_normal((50, 4))
+    target = source @ rng.standard_normal((4, 4)) + 0.01 * rng.standard_normal((50, 4))
+    kwargs = {
+        "train_idx": np.arange(40),
+        "test_idx": np.arange(40, 50),
+        "ridge_alphas": [1e-4, 1e-2, 1.0],
+        "rsm_metric": "cosine",
+    }
+
+    cpu = score_ordered_pair(source, target, device="cpu", **kwargs)
+    cuda = score_ordered_pair(source, target, device="cuda", **kwargs)
+
+    assert set(cpu) == set(cuda) == set(ALL_METRICS)
+    for metric in ALL_METRICS:
+        np.testing.assert_allclose(cuda[metric], cpu[metric], rtol=1e-9, atol=1e-9)
+
+
+def test_torch_procrustes_and_rsa_match_numpy_reference():
+    rng = np.random.default_rng(31)
+    source_train = rng.standard_normal((50, 4))
+    target_train = rng.standard_normal((50, 4))
+    source_test = rng.standard_normal((20, 4))
+    target_test = rng.standard_normal((20, 4))
+
+    torch_result = directed._score_procrustes(
+        directed._metric_tensor(source_train, directed.configure_metric_backend("cpu")),
+        directed._metric_tensor(target_train, directed.configure_metric_backend("cpu")),
+        directed._metric_tensor(source_test, directed.configure_metric_backend("cpu")),
+        directed._metric_tensor(target_test, directed.configure_metric_backend("cpu")),
+    )
+    numpy_result = score_procrustes_alignment(
+        source_train, target_train, source_test, target_test
+    )
+    for torch_key, numpy_key in (
+        ("test_r2", "test_r2"),
+        ("test_normalized_mse", "test_normalized_mse"),
+        ("test_rmse", "test_rmse"),
+        ("scale", "scale"),
+        ("test_mean_row_cosine", "test_mean_row_cosine"),
+    ):
+        np.testing.assert_allclose(torch_result[torch_key], numpy_result[numpy_key])
+
+    torch_rsa = directed._score_rsa(
+        directed._metric_tensor(source_test, directed.configure_metric_backend("cpu")),
+        directed._metric_tensor(target_test, directed.configure_metric_backend("cpu")),
+        "cosine",
+    )
+    numpy_rsa = rsa_lower_triangle_correlations(
+        projected_rsm(source_test, metric="cosine"),
+        projected_rsm(target_test, metric="cosine"),
+    )
+    np.testing.assert_allclose(torch_rsa["pearson"], numpy_rsa["pearson"])
+    np.testing.assert_allclose(torch_rsa["spearman"], numpy_rsa["spearman"])
+
+
+def test_torch_spearman_handles_large_tie_groups_without_integer_overflow():
+    left = np.repeat(np.arange(4, dtype=float), 30_000)
+    right = np.roll(left, 17_000)
+    device_name = "cuda" if directed.torch.cuda.is_available() else "cpu"
+    device = directed.configure_metric_backend(device_name)
+
+    actual = directed._spearman(
+        directed._metric_tensor(left, device),
+        directed._metric_tensor(right, device),
+    )
+
+    np.testing.assert_allclose(float(actual), spearmanr(left, right).statistic)
+
+
+def test_cuda_metric_backend_fails_without_cuda(monkeypatch):
+    monkeypatch.setattr(directed.torch.cuda, "is_available", lambda: False)
+    with pytest.raises(RuntimeError, match="require CUDA"):
+        directed.configure_metric_backend("cuda")
+
+
+def test_metric_cache_invalidates_legacy_payload(tmp_path):
+    path = tmp_path / "cell.json"
+    path.write_text('{"ridge_r2": 0.5, "cca_first_test_corr": 0.9}')
+    replacement = {metric: float(index) for index, metric in enumerate(ALL_METRICS)}
+
+    result = _cached_metrics(path, False, lambda: replacement)
+
+    assert result == replacement
+    saved = json.loads(path.read_text())
+    assert saved["metrics"] == replacement
+    assert "implementation" in saved
+
+
+def test_output_writer_removes_only_legacy_cca_metric_files(tmp_path, monkeypatch):
+    matrix_dir = tmp_path / "matrices"
+    figure_dir = tmp_path / "figures"
+    matrix_dir.mkdir()
+    figure_dir.mkdir()
+    stale = matrix_dir / "cca_mean_all_test_corr__span__k1.csv"
+    retained = matrix_dir / "notes.txt"
+    stale.write_text("old")
+    retained.write_text("keep")
+    monkeypatch.setattr(
+        "scripts.rrr.compare_subspaces.ALL_METRICS", ()
+    )
+
+    _write_matrices_and_plots(
+        pd.DataFrame(), [], [], type("Config", (), {"geometries": []})(), tmp_path
+    )
+
+    assert not stale.exists()
+    assert retained.read_text() == "keep"
 
 
 def test_fmri_word_loader_uses_heldout_words_without_temporal_resampling(monkeypatch):

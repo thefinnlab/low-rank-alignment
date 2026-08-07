@@ -29,6 +29,9 @@ LANGUAGE_DECODING_BOOTSTRAP_ARGS ?=
 LANGUAGE_RECONSTRUCTION_CONFIG ?= configs/rrr/language_reconstruction.yml
 LANGUAGE_AXIS_ENCODING_CONFIG ?= configs/rrr/language_axis_encoding.yml
 SUBSPACE_COMPARISON_CONFIG ?= configs/rrr/compare_subspaces.yml
+SUBSPACE_COMPARISON_CONFIGS ?= configs/rrr/compare_subspaces_podcast.yml \
+							  configs/rrr/compare_subspaces_cars-2.yml \
+							  configs/rrr/compare_subspaces_fmri.yml
 LANGUAGE_FEATURE_CONFIG ?= configs/language_features/podcast.yml
 SURPRISAL_CONFIGS ?= configs/language_features/podcast.yml configs/language_features/brain_treebank.yml configs/language_features/fmri.yml
 SELF_SURPRISAL_CONFIG ?= configs/language_features/self_surprisal.yml
@@ -49,6 +52,7 @@ DATA_ROOT       ?= data
 ATLAS_PATH      ?= atlases/destrieux_2009/destrieux2009_rois_lateralized.nii.gz
 OVERRIDES       ?=   # e.g. OVERRIDES="--encoding.layer=48 --n_permutations=100"
 PIPELINE_ARGS   ?=   # arguments for submit-rrr-matrix
+SUBSPACE_COMPARISON_SBATCH_ARGS ?=
 
 # For downloading model weights.
 # MODELS ?= openai-community/gpt2-xl meta-llama/Meta-Llama-3-8B openai-community/gpt2 EleutherAI/gpt-j-6b FacebookAI/roberta-large
@@ -225,6 +229,28 @@ compare-subspaces:
 	mkdir -p logs
 	$(CMD) scripts/rrr/compare_subspaces.py --config $(SUBSPACE_COMPARISON_CONFIG) $(OVERRIDES)
 
+## Submit one saved-subspace comparison job per evaluation dataset.
+## This target only runs compare_subspaces.py; it never produces missing RRR inputs.
+## Usage:
+##   make compare-subspaces-batch
+##   make compare-subspaces-batch OVERRIDES="--max_rank=16"
+##   make compare-subspaces-batch SUBSPACE_COMPARISON_SBATCH_ARGS="--time=08:00:00"
+compare-subspaces-batch:
+	@set -eu; \
+	mkdir -p logs; \
+	for config in $(SUBSPACE_COMPARISON_CONFIGS); do \
+		dataset="$${config##*compare_subspaces_}"; \
+		dataset="$${dataset%.yml}"; \
+		if [ ! -f "$$config" ]; then \
+			echo "Missing subspace comparison config: $$config" >&2; \
+			exit 2; \
+		fi; \
+		echo "Submitting subspace comparison over $$dataset: $$config"; \
+		$(SBATCH) --job-name="subspace-$$dataset-$(USR)-$(DT)" \
+			$(SUBSPACE_COMPARISON_SBATCH_ARGS) submit.sh \
+			scripts/rrr/compare_subspaces.py --config "$$config" $(OVERRIDES); \
+	done
+
 ## Decode linguistic targets from saved RRR input subspaces
 ## Usage:
 ##   make language-decoding CMD=python
@@ -391,4 +417,4 @@ sig-test:
 test:
 	python -m pytest tests/ -v
 
-.PHONY: sig sig-batch train plots rrr rrr-batch sig-rrr-batch submit-rrr-matrix sig-test test generate-embeddings generate-embeddings-batch generate-random-embeddings download-models precompute-epochs print-atlas-regions
+.PHONY: sig sig-batch train plots rrr rrr-batch sig-rrr-batch submit-rrr-matrix sig-test test generate-embeddings generate-embeddings-batch generate-random-embeddings download-models precompute-epochs print-atlas-regions compare-subspaces compare-subspaces-batch

@@ -4,7 +4,6 @@ evaluation_dataset: podcast
 max_rank: 128
 include_pca: false
 geometries: [span, weighted]
-shared_corr_threshold: 0.2
 rsm_metric: cosine
 refresh: false
 

@@ -24,12 +24,15 @@ from src.core.config import SubspaceComparisonConfig
 from src.utils.config_utils import load_config, parse_args, save_effective_config
 from src.utils.directed_subspace_compare import (
     ALL_METRICS,
+    METRIC_IMPLEMENTATION,
     SYMMETRIC_METRICS,
     align_views,
+    configure_metric_backend,
     expand_spaces,
     factor_for,
     fold_indices,
     load_evaluation_data,
+    project_subspace,
     score_ordered_pair,
     shared_ranks,
     summarize_fold_metrics,
@@ -83,9 +86,22 @@ def _cell_cache_path(output_dir, geometry, rank, source_index, target_index, fol
 
 def _cached_metrics(path: Path, refresh: bool, calculate) -> dict:
     if path.exists() and not refresh:
-        return json.loads(path.read_text(encoding="utf-8"))
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        if (
+            payload.get("implementation") == METRIC_IMPLEMENTATION
+            and set(payload.get("metrics", {})) == set(ALL_METRICS)
+        ):
+            return payload["metrics"]
     metrics = calculate()
-    _save_json(path, metrics)
+    if set(metrics) != set(ALL_METRICS):
+        raise ValueError(
+            f"Metric implementation returned {sorted(metrics)}, expected "
+            f"{sorted(ALL_METRICS)}"
+        )
+    _save_json(
+        path,
+        {"implementation": METRIC_IMPLEMENTATION, "metrics": metrics},
+    )
     return metrics
 
 
@@ -125,19 +141,20 @@ def _canonicalize_symmetric_metrics(frame: pd.DataFrame) -> pd.DataFrame:
 
 def _run_comparisons(config, spaces, ranks, evaluation, output_dir) -> pd.DataFrame:
     rows = []
+    factor_cache = {}
+
+    def cached_factor(space_index, space, rank, fold, geometry):
+        key = (space_index, rank, fold, geometry)
+        if key not in factor_cache:
+            factor_cache[key] = factor_for(
+                space, rank, fold, config.evaluation_dataset, geometry
+            )
+        return factor_cache[key]
+
     views = {
         space.key: evaluation.load_view(space.model, space.layer, space.offset)
         for space in spaces
     }
-    pair_alignments = {}
-    for source_index, source in enumerate(spaces):
-        for target_index, target in enumerate(spaces):
-            if source_index == target_index:
-                continue
-            pair_alignments[(source_index, target_index)] = align_views(
-                views[source.key], views[target.key]
-            )
-
     total = sum(
         1
         for geometry in config.geometries
@@ -163,35 +180,20 @@ def _run_comparisons(config, spaces, ranks, evaluation, output_dir) -> pd.DataFr
                 for target_index, target in enumerate(spaces):
                     if source_index == target_index:
                         continue
-                    common_ids, source_values, target_values = pair_alignments[
-                        (source_index, target_index)
-                    ]
+                    if geometry == "weighted" and (
+                        source.dataset != config.evaluation_dataset
+                        or target.dataset != config.evaluation_dataset
+                        or source.source_format != "fold_factors"
+                        or target.source_format != "fold_factors"
+                    ):
+                        continue
+                    common_ids, source_values, target_values = align_views(
+                        views[source.key], views[target.key]
+                    )
                     for fold in range(len(evaluation.fold_test_ids)):
-                        source_factor = factor_for(
-                            source, rank, fold, config.evaluation_dataset, geometry
-                        )
-                        target_factor = factor_for(
-                            target, rank, fold, config.evaluation_dataset, geometry
-                        )
-                        if source_factor is None or target_factor is None:
-                            continue
-                        if source_values.shape[1] != source_factor.shape[0]:
-                            raise ValueError(
-                                f"Ambient mismatch for {source.label}: evaluation values have "
-                                f"{source_values.shape[1]} columns but factor has "
-                                f"{source_factor.shape[0]} rows"
-                            )
-                        if target_values.shape[1] != target_factor.shape[0]:
-                            raise ValueError(
-                                f"Ambient mismatch for {target.label}: evaluation values have "
-                                f"{target_values.shape[1]} columns but factor has "
-                                f"{target_factor.shape[0]} rows"
-                            )
                         train_idx, test_idx = fold_indices(
                             common_ids, source, target, evaluation, fold
                         )
-                        source_projected = source_values @ source_factor
-                        target_projected = target_values @ target_factor
                         cache_path = _cell_cache_path(
                             output_dir,
                             geometry,
@@ -200,18 +202,49 @@ def _run_comparisons(config, spaces, ranks, evaluation, output_dir) -> pd.DataFr
                             target_index,
                             fold,
                         )
-                        metrics = _cached_metrics(
-                            cache_path,
-                            config.refresh,
-                            lambda: score_ordered_pair(
-                                source_projected,
-                                target_projected,
+
+                        def calculate_metrics():
+                            source_factor = cached_factor(
+                                source_index, source, rank, fold, geometry
+                            )
+                            target_factor = cached_factor(
+                                target_index, target, rank, fold, geometry
+                            )
+                            if source_factor is None or target_factor is None:
+                                raise RuntimeError(
+                                    "Preflight accepted a comparison factor that is "
+                                    "unavailable during scoring"
+                                )
+                            if source_values.shape[1] != source_factor.shape[0]:
+                                raise ValueError(
+                                    f"Ambient mismatch for {source.label}: evaluation "
+                                    f"values have {source_values.shape[1]} columns but "
+                                    f"factor has {source_factor.shape[0]} rows"
+                                )
+                            if target_values.shape[1] != target_factor.shape[0]:
+                                raise ValueError(
+                                    f"Ambient mismatch for {target.label}: evaluation "
+                                    f"values have {target_values.shape[1]} columns but "
+                                    f"factor has {target_factor.shape[0]} rows"
+                                )
+                            return score_ordered_pair(
+                                project_subspace(
+                                    source_values, source_factor, device="cuda"
+                                ),
+                                project_subspace(
+                                    target_values, target_factor, device="cuda"
+                                ),
                                 train_idx,
                                 test_idx,
                                 ridge_alphas=config.ridge_alphas,
                                 rsm_metric=config.rsm_metric,
-                                shared_corr_threshold=config.shared_corr_threshold,
-                            ),
+                                device="cuda",
+                            )
+
+                        metrics = _cached_metrics(
+                            cache_path,
+                            config.refresh,
+                            calculate_metrics,
                         )
                         rows.append(
                             {
@@ -373,6 +406,10 @@ def _write_matrices_and_plots(summary, spaces, ranks, config, output_dir):
     figure_dir = output_dir / "figures"
     matrix_dir.mkdir(parents=True, exist_ok=True)
     figure_dir.mkdir(parents=True, exist_ok=True)
+    for directory in (matrix_dir, figure_dir):
+        for path in directory.glob("cca_*"):
+            if path.is_file() and path.suffix in {".csv", ".npz", ".png", ".svg"}:
+                path.unlink()
     links = []
     for geometry in config.geometries:
         for rank in ranks:
@@ -403,6 +440,7 @@ def _write_matrices_and_plots(summary, spaces, ranks, config, output_dir):
 
 
 def run_config(config: SubspaceComparisonConfig) -> Path:
+    configure_metric_backend("cuda")
     output_dir = Path(config.output_root) / sanitize_name(config.analysis_name)
     save_effective_config(config, output_dir)
     spaces = expand_spaces(config)
@@ -434,6 +472,9 @@ def run_config(config: SubspaceComparisonConfig) -> Path:
                 metric: {"symmetric": metric in SYMMETRIC_METRICS}
                 for metric in ALL_METRICS
             },
+            "metric_implementation": METRIC_IMPLEMENTATION,
+            "metric_device": "cuda",
+            "ridge_cv": {"folds": 5, "shared_alpha": True},
         },
     )
     frame = _run_comparisons(config, spaces, ranks, evaluation, output_dir)

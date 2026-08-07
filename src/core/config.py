@@ -534,7 +534,6 @@ class SubspaceComparisonConfig:
     geometries: list[str] = field(default_factory=lambda: ["span", "weighted"])
     ridge_alphas: list[float] | None = None
     refresh: bool = False
-    shared_corr_threshold: float = 0.2
     rsm_metric: str = "cosine"
 
     def __post_init__(self):
