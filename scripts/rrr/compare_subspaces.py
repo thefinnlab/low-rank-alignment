@@ -142,19 +142,14 @@ def _cell_cache_path(
     )
 
 
-def _cached_metrics(
-    path: Path, refresh: bool, calculate, fallback_paths: tuple[Path, ...] = ()
-) -> dict:
-    if not refresh:
-        for candidate in (path, *fallback_paths):
-            if not candidate.exists():
-                continue
-            payload = json.loads(candidate.read_text(encoding="utf-8"))
-            if (
-                payload.get("implementation") == METRIC_IMPLEMENTATION
-                and set(payload.get("metrics", {})) == set(ALL_METRICS)
-            ):
-                return payload["metrics"]
+def _cached_metrics(path: Path, refresh: bool, calculate) -> dict:
+    if path.exists() and not refresh:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        if (
+            payload.get("implementation") == METRIC_IMPLEMENTATION
+            and set(payload.get("metrics", {})) == set(ALL_METRICS)
+        ):
+            return payload["metrics"]
     metrics = calculate()
     if set(metrics) != set(ALL_METRICS):
         raise ValueError(
@@ -279,17 +274,6 @@ def _run_comparisons(config, spaces, jobs, evaluation, output_dir) -> pd.DataFra
                 target_index,
                 fold,
             )
-            legacy_paths = ()
-            if job.source_rank == job.target_rank:
-                legacy_paths = (
-                    output_dir
-                    / "cache"
-                    / geometry
-                    / f"k{job.source_rank}"
-                    / f"source_{source_index:04d}"
-                    / f"target_{target_index:04d}_fold_{fold}.json",
-                )
-
             def calculate_metrics():
                 source_factor = cached_factor(
                     source_index, source, job.source_rank, fold, geometry
@@ -328,7 +312,6 @@ def _run_comparisons(config, spaces, jobs, evaluation, output_dir) -> pd.DataFra
                 cache_path,
                 config.refresh,
                 calculate_metrics,
-                legacy_paths,
             )
             rows.append(
                 {

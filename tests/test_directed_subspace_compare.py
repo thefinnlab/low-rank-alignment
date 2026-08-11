@@ -287,27 +287,6 @@ def test_metric_cache_invalidates_legacy_payload(tmp_path):
     assert "implementation" in saved
 
 
-def test_metric_cache_can_reuse_valid_pre_mode_cache(tmp_path):
-    new_path = tmp_path / "equal_capacity" / "cell.json"
-    old_path = tmp_path / "cache" / "cell.json"
-    old_path.parent.mkdir()
-    metrics = {metric: float(index) for index, metric in enumerate(ALL_METRICS)}
-    old_path.write_text(
-        json.dumps(
-            {"implementation": directed.METRIC_IMPLEMENTATION, "metrics": metrics}
-        )
-    )
-
-    result = _cached_metrics(
-        new_path,
-        False,
-        lambda: pytest.fail("valid fallback cache should avoid recomputation"),
-        (old_path,),
-    )
-
-    assert result == metrics
-
-
 def test_symmetric_metric_canonicalization_keeps_unordered_pairs_distinct():
     rows = []
     pair_values = {
