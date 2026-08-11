@@ -305,6 +305,31 @@
       "unit": "bits",
       "word_aggregation": "sum_bpe_tokens",
       "first_token": "missing"
+    },
+    "speaker_identity_manual": {
+      "version": "1",
+      "review_file": "podcast_speaker_review.csv",
+      "review_sha256": "242ee22091f19fe98226e942c662e950231d0cfeedc58b2674f1e0dde8899e7b",
+      "applied_at_utc": "2026-08-10T20:44:15.386028+00:00",
+      "source_turn_count": 426,
+      "deleted_turn_count": 32,
+      "spoken_phrase_count": 390,
+      "labeled_word_count": 5134,
+      "unmatched_word_count": 2,
+      "speaker_word_counts": {
+        "SPEAKER_00": 167,
+        "SPEAKER_01": 47,
+        "SPEAKER_02": 3076,
+        "SPEAKER_03": 1228,
+        "SPEAKER_04": 49,
+        "SPEAKER_05": 107,
+        "SPEAKER_06": 234,
+        "SPEAKER_07": 171,
+        "SPEAKER_08": 24,
+        "SPEAKER_09": 19,
+        "SPEAKER_10": 2,
+        "SPEAKER_11": 10
+      }
     }
   },
   "feature_providers": {
@@ -328,7 +353,7 @@
     "iu_length": "native",
     "story_position": "native",
     "story_time_position": "native",
-    "speaker_identity": "speaker_diarization",
+    "speaker_identity": "speaker_identity_manual",
     "lemma": "ud",
     "part_of_speech": "ud",
     "fine_part_of_speech": "ud",
