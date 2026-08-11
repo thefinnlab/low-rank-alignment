@@ -821,9 +821,11 @@ def fold_indices(
 def summarize_fold_metrics(frame: pd.DataFrame) -> pd.DataFrame:
     """Summarize metric folds without hiding missing or failed cells."""
     keys = [
+        "comparison_mode",
         "source_dataset", "source_offset", "source_model", "source_layer", "source_kind",
         "source_label", "target_dataset", "target_offset", "target_model", "target_layer",
-        "target_kind", "target_label", "geometry", "rank",
+        "target_kind", "target_label", "geometry", "source_rank", "target_rank",
+        "equal_capacity_rank",
     ]
     rows = []
     for values, group in frame.groupby(keys, dropna=False, sort=False):

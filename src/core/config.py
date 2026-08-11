@@ -529,6 +529,7 @@ class SubspaceComparisonConfig:
     evaluation_dataset: str = "podcast"
     datasets: dict[str, dict] = field(default_factory=dict)
     models: dict[str, dict] = field(default_factory=dict)
+    comparison_modes: list[str] = field(default_factory=lambda: ["equal_capacity"])
     max_rank: int = 128
     include_pca: bool = False
     geometries: list[str] = field(default_factory=lambda: ["span", "weighted"])
@@ -581,13 +582,31 @@ class SubspaceComparisonConfig:
                 raise ValueError(f"Dataset {name!r} subjects must be non-empty")
             if loader == "fmri_words" and not spec["sessions"]:
                 raise ValueError(f"Dataset {name!r} sessions must be non-empty")
+        allowed_modes = {
+            "equal_capacity",
+            "capacity_controlled",
+            "full_neural_space",
+        }
+        if not self.comparison_modes or set(self.comparison_modes) - allowed_modes:
+            raise ValueError(
+                "comparison_modes must be drawn from "
+                f"{sorted(allowed_modes)}"
+            )
+        if len(set(self.comparison_modes)) != len(self.comparison_modes):
+            raise ValueError("comparison_modes must not contain duplicates")
+        needs_saturation = bool(
+            {"capacity_controlled", "full_neural_space"}
+            & set(self.comparison_modes)
+        )
         for name, spec in self.models.items():
             if not str(name).strip() or not isinstance(spec, dict):
                 raise ValueError("model names must be non-empty and map to objects")
             required = {"offsets", "layers", "datasets"}
-            if set(spec) != required:
+            allowed = required | {"saturation_ranks"}
+            if not required.issubset(spec) or set(spec) - allowed:
                 raise ValueError(
-                    f"Model {name!r} must contain exactly {sorted(required)}, "
+                    f"Model {name!r} must contain exactly required fields "
+                    f"{sorted(required)} and only optional field 'saturation_ranks', "
                     f"got {sorted(spec)}"
                 )
             if not spec["offsets"] or any(isinstance(x, bool) for x in spec["offsets"]):
@@ -609,6 +628,54 @@ class SubspaceComparisonConfig:
                     raise ValueError(
                         f"Model {name!r} {field_name} must not contain duplicates"
                     )
+            saturation = spec.get("saturation_ranks")
+            if needs_saturation and not isinstance(saturation, dict):
+                raise ValueError(
+                    f"Model {name!r} requires saturation_ranks for selected "
+                    "comparison_modes"
+                )
+            if saturation is not None:
+                required_kinds = {"rrr", "pca"} if self.include_pca else {"rrr"}
+                if set(saturation) != required_kinds:
+                    raise ValueError(
+                        f"Model {name!r} saturation_ranks must contain exactly "
+                        f"{sorted(required_kinds)}"
+                    )
+                expected_datasets = set(spec["datasets"])
+                expected_layers = set(spec["layers"])
+                for kind, by_dataset in saturation.items():
+                    if (
+                        not isinstance(by_dataset, dict)
+                        or set(by_dataset) != expected_datasets
+                    ):
+                        raise ValueError(
+                            f"Model {name!r} saturation_ranks.{kind} must contain "
+                            f"exactly datasets {sorted(expected_datasets)}"
+                        )
+                    for dataset, by_layer in by_dataset.items():
+                        if not isinstance(by_layer, dict):
+                            raise ValueError(
+                                f"Model {name!r} saturation ranks for {kind}/{dataset} "
+                                "must map layers to ranks"
+                            )
+                        normalized = {
+                            int(layer): rank for layer, rank in by_layer.items()
+                        }
+                        if set(normalized) != expected_layers:
+                            raise ValueError(
+                                f"Model {name!r} saturation ranks for {kind}/{dataset} "
+                                f"must contain exactly layers {sorted(expected_layers)}"
+                            )
+                        if any(
+                            isinstance(rank, bool)
+                            or not isinstance(rank, int)
+                            or rank < 1
+                            for rank in normalized.values()
+                        ):
+                            raise ValueError(
+                                f"Model {name!r} saturation ranks for {kind}/{dataset} "
+                                "must be positive integers"
+                            )
         if not self.geometries or set(self.geometries) - {"span", "weighted"}:
             raise ValueError("geometries must be drawn from ['span', 'weighted']")
         if len(set(self.geometries)) != len(self.geometries):

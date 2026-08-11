@@ -290,6 +290,44 @@ class TestDictToDataclass:
                 },
             )
 
+    def test_subspace_comparison_config_validates_saturation_rank_schema(self):
+        dataset = {
+            "loader": "ieeg_words",
+            "dataset": "podcast",
+            "data_root": "data/",
+            "results_root": "results",
+            "subjects": [1],
+        }
+        config = SubspaceComparisonConfig(
+            datasets={"podcast": dataset},
+            comparison_modes=["capacity_controlled", "full_neural_space"],
+            models={
+                "gpt2": {
+                    "offsets": [0],
+                    "layers": [0, 6],
+                    "datasets": ["podcast"],
+                    "saturation_ranks": {
+                        "rrr": {"podcast": {0: 4, 6: 8}},
+                    },
+                }
+            },
+        )
+
+        assert config.models["gpt2"]["saturation_ranks"]["rrr"]["podcast"][6] == 8
+
+        with pytest.raises(ValueError, match="requires saturation_ranks"):
+            SubspaceComparisonConfig(
+                datasets={"podcast": dataset},
+                comparison_modes=["full_neural_space"],
+                models={
+                    "gpt2": {
+                        "offsets": [0],
+                        "layers": [0],
+                        "datasets": ["podcast"],
+                    }
+                },
+            )
+
     def test_subspace_comparison_config_rejects_incomplete_dataset_metadata(self):
         with pytest.raises(ValueError, match="missing required fields"):
             SubspaceComparisonConfig(

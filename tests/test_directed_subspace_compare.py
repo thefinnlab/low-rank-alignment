@@ -1,4 +1,5 @@
 import json
+from types import SimpleNamespace
 
 import numpy as np
 import pandas as pd
@@ -27,9 +28,12 @@ from src.utils.subspace_compare import (
     score_procrustes_alignment,
 )
 from scripts.rrr.compare_subspaces import (
+    ComparisonJob,
     _cached_metrics,
+    _canonicalize_symmetric_metrics,
     _matrix,
     _write_matrices_and_plots,
+    generate_comparison_jobs,
 )
 
 
@@ -62,6 +66,33 @@ def test_shared_ranks_uses_global_intersection_and_inclusive_cap(tmp_path):
     ]
 
     assert shared_ranks(spaces, 2) == [1, 2]
+
+
+def test_comparison_modes_generate_explicit_source_and_target_ranks(tmp_path):
+    spaces = [
+        _space(tmp_path, "a", dataset="podcast"),
+        _space(tmp_path, "b", dataset="fmri"),
+    ]
+    config = SimpleNamespace(
+        comparison_modes=[
+            "equal_capacity",
+            "capacity_controlled",
+            "full_neural_space",
+        ],
+        models={
+            "a": {"saturation_ranks": {"rrr": {"podcast": {0: 4}}}},
+            "b": {"saturation_ranks": {"rrr": {"fmri": {0: 8}}}},
+        },
+    )
+
+    jobs = generate_comparison_jobs(config, spaces, [1, 2])
+
+    assert len(jobs) == 8
+    assert ComparisonJob("equal_capacity", 0, 1, 2, 2, 2) in jobs
+    assert ComparisonJob("capacity_controlled", 0, 1, 4, 4) in jobs
+    assert ComparisonJob("capacity_controlled", 1, 0, 4, 4) in jobs
+    assert ComparisonJob("full_neural_space", 0, 1, 4, 8) in jobs
+    assert ComparisonJob("full_neural_space", 1, 0, 8, 4) in jobs
 
 
 def test_ieeg_folds_require_saved_word_provenance(tmp_path):
@@ -256,6 +287,84 @@ def test_metric_cache_invalidates_legacy_payload(tmp_path):
     assert "implementation" in saved
 
 
+def test_metric_cache_can_reuse_valid_pre_mode_cache(tmp_path):
+    new_path = tmp_path / "equal_capacity" / "cell.json"
+    old_path = tmp_path / "cache" / "cell.json"
+    old_path.parent.mkdir()
+    metrics = {metric: float(index) for index, metric in enumerate(ALL_METRICS)}
+    old_path.write_text(
+        json.dumps(
+            {"implementation": directed.METRIC_IMPLEMENTATION, "metrics": metrics}
+        )
+    )
+
+    result = _cached_metrics(
+        new_path,
+        False,
+        lambda: pytest.fail("valid fallback cache should avoid recomputation"),
+        (old_path,),
+    )
+
+    assert result == metrics
+
+
+def test_symmetric_metric_canonicalization_keeps_unordered_pairs_distinct():
+    rows = []
+    pair_values = {
+        ("a", "b"): 0.8,
+        ("a", "c"): 0.2,
+    }
+    for (left, right), value in pair_values.items():
+        for source, target in ((left, right), (right, left)):
+            row = {
+                "comparison_mode": "equal_capacity",
+                "geometry": "span",
+                "source_rank": 4,
+                "target_rank": 4,
+                "equal_capacity_rank": 4,
+                "fold": 0,
+                "source_label": source,
+                "target_label": target,
+            }
+            row.update({metric: value for metric in directed.SYMMETRIC_METRICS})
+            rows.append(row)
+
+    result = _canonicalize_symmetric_metrics(pd.DataFrame(rows))
+
+    for (left, right), expected in pair_values.items():
+        selected = result[
+            result.source_label.isin([left, right])
+            & result.target_label.isin([left, right])
+        ]
+        for metric in directed.SYMMETRIC_METRICS:
+            np.testing.assert_array_equal(selected[metric], [expected, expected])
+
+
+def test_symmetric_metric_canonicalization_matches_swapped_unequal_ranks():
+    rows = []
+    for source, target, source_rank, target_rank, value in (
+        ("a", "b", 4, 8, 0.7),
+        ("b", "a", 8, 4, 0.9),
+    ):
+        row = {
+            "comparison_mode": "full_neural_space",
+            "geometry": "span",
+            "source_rank": source_rank,
+            "target_rank": target_rank,
+            "equal_capacity_rank": None,
+            "fold": 0,
+            "source_label": source,
+            "target_label": target,
+        }
+        row.update({metric: value for metric in directed.SYMMETRIC_METRICS})
+        rows.append(row)
+
+    result = _canonicalize_symmetric_metrics(pd.DataFrame(rows))
+
+    for metric in directed.SYMMETRIC_METRICS:
+        np.testing.assert_array_equal(result[metric], [0.8, 0.8])
+
+
 def test_output_writer_removes_only_legacy_cca_metric_files(tmp_path, monkeypatch):
     matrix_dir = tmp_path / "matrices"
     figure_dir = tmp_path / "figures"
@@ -270,7 +379,11 @@ def test_output_writer_removes_only_legacy_cca_metric_files(tmp_path, monkeypatc
     )
 
     _write_matrices_and_plots(
-        pd.DataFrame(), [], [], type("Config", (), {"geometries": []})(), tmp_path
+        pd.DataFrame({"equal_capacity_rank": []}),
+        [],
+        "equal_capacity",
+        type("Config", (), {"geometries": []})(),
+        tmp_path,
     )
 
     assert not stale.exists()
@@ -326,7 +439,7 @@ def test_saved_matrix_places_source_on_rows_and_target_on_columns():
                 "source_label": "source",
                 "target_label": "target",
                 "geometry": "span",
-                "rank": 4,
+                "equal_capacity_rank": 4,
                 "ridge_r2_mean": 0.75,
                 "ridge_r2_sem": 0.1,
                 "ridge_r2_n": 5,
@@ -335,7 +448,7 @@ def test_saved_matrix_places_source_on_rows_and_target_on_columns():
     )
 
     mean, sem_values, counts = _matrix(
-        summary, ["source", "target"], "span", 4, "ridge_r2"
+        summary, ["source", "target"], "span", "ridge_r2", 4
     )
 
     assert mean[0, 1] == 0.75
