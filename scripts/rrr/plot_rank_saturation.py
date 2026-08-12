@@ -85,6 +85,11 @@ def _ancestor_with(path: Path, relative: str) -> Path:
 
 
 def _ieeg_manifest(unit: Path) -> tuple[pd.DataFrame, np.ndarray]:
+    saved_manifest = unit.parent / "target_manifest.csv"
+    if saved_manifest.exists():
+        manifest = pd.read_csv(saved_manifest)
+        lags = np.sort(manifest["lag"].unique())
+        return manifest, lags
     artifact_root = _ancestor_with(unit, "all_subject_sig.csv")
     sig = pd.read_csv(artifact_root / "all_subject_sig.csv").rename(columns={"elec": "electrode"})
     subject_root = _ancestor_with(unit, "subjects")

@@ -7,11 +7,15 @@ Sweeps over a configured rank grid. Optionally also runs PCA subspace analysis
 By default, completed rank outputs in an existing run directory are reused;
 set RRRConfig.refresh=True to recompute the full configured rank grid.
 
-Six modes controlled by RRRConfig.mode:
+Seven modes controlled by RRRConfig.mode:
 
   cross_subject (default):
     Builds global Y across all subjects (significant electrodes).
     Writes to {output_dir}/rrr/.
+
+  temporal_windows:
+    Runs independent cross-subject analyses over configured half-open lag ranges.
+    Writes to {output_dir}/temporal_window_rrr/{window_name}/{rrr,pca}/.
 
   cross_dataset:
     Loads fold-level A matrices from RRRConfig.cross_result_dir, averages them
@@ -113,6 +117,7 @@ from src.utils.subspace_compare import (
 )
 from src.utils.alpha_grids import resolve_ridge_alphas, save_alpha_diagnostics
 from src.utils.decomposition import _get_decomposition_inputs
+from src.utils.subspace_io import sanitize_name
 from src.utils.multiview_rrr import (
     fit_banded_ridge_baseline,
     load_view_bases,
@@ -1565,6 +1570,75 @@ def _build_rrr_decomposition_inputs(
     return X_raw, per_fold_baselines, prepared.test_idxs, prepared.sig_mask_flat
 
 
+def _temporal_window_target_mask(target_manifest, window) -> np.ndarray:
+    """Return target columns whose lag lies in ``[start_sec, end_sec)``."""
+    lags = target_manifest["lag"].to_numpy(dtype=float)
+    mask = (lags >= float(window.start_sec)) & (lags < float(window.end_sec))
+    if not mask.any():
+        available = np.unique(lags)
+        extent = (
+            f"[{available.min():g}, {available.max():g}]"
+            if len(available)
+            else "<none>"
+        )
+        raise ValueError(
+            f"Temporal window {window.name!r} [{window.start_sec}, "
+            f"{window.end_sec}) selects no sampled lag; available lag extent is "
+            f"{extent} seconds"
+        )
+    return mask
+
+
+def _temporal_window_dirs(rrr_dir: str, windows) -> dict[str, tuple[str, str]]:
+    """Resolve unique, filesystem-safe RRR/PCA directories for each window."""
+    result = {}
+    used = {}
+    for window in windows:
+        safe_name = sanitize_name(window.name)
+        if safe_name in used:
+            raise ValueError(
+                f"Temporal window names {used[safe_name]!r} and {window.name!r} "
+                f"both map to output directory {safe_name!r}"
+            )
+        used[safe_name] = window.name
+        root = os.path.join(rrr_dir, safe_name)
+        result[window.name] = (os.path.join(root, "rrr"), os.path.join(root, "pca"))
+    return result
+
+
+def _write_temporal_window_summary(rrr_dir: str, window_records: list[dict]) -> None:
+    """Combine completed per-window RRR/PCA summaries into one table."""
+    frames = []
+    for record in window_records:
+        for method, unit_dir in record["units"].items():
+            path = os.path.join(unit_dir, "summary.csv")
+            if not os.path.exists(path):
+                continue
+            frame = pd.read_csv(path)
+            for key, value in record["metadata"].items():
+                frame[key] = value
+            frame["method"] = method
+            frames.append(frame)
+    if not frames:
+        raise ValueError("No completed temporal-window summaries were produced")
+    columns_first = [
+        "window",
+        "start_sec",
+        "end_sec",
+        "actual_lag_min_sec",
+        "actual_lag_max_sec",
+        "n_lags",
+        "n_targets",
+        "method",
+        "k",
+    ]
+    combined = pd.concat(frames, ignore_index=True)
+    remaining = [column for column in combined.columns if column not in columns_first]
+    combined[columns_first + remaining].to_csv(
+        os.path.join(rrr_dir, "window_summary.csv"), index=False
+    )
+
+
 # ---------------------------------------------------------------------------
 # Branch: cross-subject RRR
 # ---------------------------------------------------------------------------
@@ -1622,6 +1696,127 @@ def _run_cross_subject_rrr(
         pca_ranks_by_fold=resume_plan["pca_ranks_by_fold"],
         pca_completed_pairs=resume_plan["pca_completed_pairs"],
     )
+
+
+def _run_temporal_windows_rrr(
+    config: RRRConfig,
+    enc,
+    output_dir,
+    sig_dir,
+    rrr_dir,
+    subject_ids,
+    sig_electrodes,
+    aligned_embeddings,
+    word_df,
+    word_in_glove=None,
+    shared_selection_metadata=None,
+):
+    """Run independent cross-subject RRR analyses for configured lag windows."""
+    del word_df  # Retained for the common branch-call interface.
+    window_dirs = _temporal_window_dirs(rrr_dir, config.temporal_windows)
+    n_folds = len(_load_reference_test_idxs(output_dir, subject_ids))
+    resume_plans = {}
+    for window in config.temporal_windows:
+        rrr_unit_dir, _ = window_dirs[window.name]
+        plan = _rrr_output_resume_plan(rrr_unit_dir, config, n_folds)
+        resume_plans[window.name] = plan
+
+    prepared = _get_decomposition_inputs(
+        subject_ids,
+        output_dir,
+        sig_electrodes,
+        enc,
+        aligned_embeddings,
+        compute_sig_nonsig=config.compute_sig_nonsig,
+        sig_dir=sig_dir,
+        word_in_glove=word_in_glove,
+        shared_selection_metadata=shared_selection_metadata,
+    )
+    if prepared is None:
+        return
+
+    X_raw = next(iter(prepared.embeddings.values()))
+    window_records = []
+    for window in config.temporal_windows:
+        print(
+            f"\n{'=' * 60}\nTemporal window: {window.name} "
+            f"[{window.start_sec}, {window.end_sec}) seconds"
+        )
+        target_mask = _temporal_window_target_mask(prepared.target_manifest, window)
+        target_indices = np.flatnonzero(target_mask)
+        manifest = (
+            prepared.target_manifest.loc[target_mask].copy().reset_index(drop=True)
+        )
+        manifest["original_target_index"] = target_indices
+        unique_lags = np.sort(manifest["lag"].unique())
+        rrr_unit_dir, pca_unit_dir = window_dirs[window.name]
+        window_root = os.path.dirname(rrr_unit_dir)
+        os.makedirs(window_root, exist_ok=True)
+        manifest.to_csv(os.path.join(window_root, "target_manifest.csv"), index=False)
+
+        plan = resume_plans[window.name]
+        Y_window = prepared.targets[:, target_mask]
+        sig_mask = (
+            prepared.sig_mask_flat[target_mask]
+            if prepared.sig_mask_flat is not None
+            else None
+        )
+        per_fold_baselines = build_per_fold_baselines(
+            X_raw,
+            Y_window,
+            prepared.test_idxs,
+            alphas=(
+                np.array(enc.ridge_alphas, dtype=float)
+                if enc.ridge_alphas is not None
+                else None
+            ),
+            ridge_cv_folds=enc.ridge_cv_folds,
+            ridge_solver_params=enc.ridge_solver_params,
+            ridge_y_in_cpu=enc.ridge_y_in_cpu,
+            ridge_force_cpu=enc.ridge_force_cpu,
+            alpha_policy=enc.alpha_grid,
+            alpha_cache_dir=rrr_unit_dir,
+            alpha_context={
+                "script": "run_rrr",
+                "mode": "temporal_windows",
+                "window": window.name,
+                "model": enc.model,
+                "per_model_config": enc.per_model_config,
+                "offset": enc.offset,
+            },
+            folds_to_build=plan["folds_to_build"],
+        )
+        _run_rrr_for_unit(
+            rrr_unit_dir=rrr_unit_dir,
+            X_raw=X_raw,
+            test_idxs=prepared.test_idxs,
+            per_fold_baselines=per_fold_baselines,
+            config=config,
+            sig_mask_flat=sig_mask,
+            ranks_by_fold=plan["rrr_ranks_by_fold"],
+            completed_pairs=plan["rrr_completed_pairs"],
+            pca_ranks_by_fold=plan["pca_ranks_by_fold"],
+            pca_completed_pairs=plan["pca_completed_pairs"],
+        )
+        units = {"rrr": rrr_unit_dir}
+        if config.run_pca_baseline:
+            units["pca"] = pca_unit_dir
+        window_records.append(
+            {
+                "metadata": {
+                    "window": window.name,
+                    "start_sec": float(window.start_sec),
+                    "end_sec": float(window.end_sec),
+                    "actual_lag_min_sec": float(unique_lags.min()),
+                    "actual_lag_max_sec": float(unique_lags.max()),
+                    "n_lags": int(len(unique_lags)),
+                    "n_targets": int(target_mask.sum()),
+                },
+                "units": units,
+            }
+        )
+
+    _write_temporal_window_summary(rrr_dir, window_records)
 
 
 # ---------------------------------------------------------------------------
@@ -2595,6 +2790,8 @@ def run_config(config: RRRConfig):
         rrr_base_dir = os.path.join(output_dir, "cross_dataset_rrr")
     elif config.mode == ScriptMode.MULTI_VIEW:
         rrr_base_dir = os.path.join(output_dir, "multi_view_rrr")
+    elif config.mode == ScriptMode.TEMPORAL_WINDOWS:
+        rrr_base_dir = os.path.join(output_dir, "temporal_window_rrr")
     else:
         rrr_base_dir = os.path.join(output_dir, "rrr")
 
@@ -2611,7 +2808,7 @@ def run_config(config: RRRConfig):
 
     os.makedirs(rrr_dir, exist_ok=True)
     save_effective_config(config, rrr_dir)
-    if config.run_pca_baseline:
+    if config.run_pca_baseline and config.mode != ScriptMode.TEMPORAL_WINDOWS:
         save_effective_config(config, _resolve_pca_sibling_dir(rrr_dir))
     print(f"Output dir:  {output_dir}")
     print(f"RRR dir:     {rrr_dir}")
@@ -2691,6 +2888,8 @@ def run_config(config: RRRConfig):
         _run_leave_one_subject_out_rrr(**branch_kwargs)
     elif config.mode == ScriptMode.CROSS_DATASET:
         _run_cross_dataset_rrr(**branch_kwargs)
+    elif config.mode == ScriptMode.TEMPORAL_WINDOWS:
+        _run_temporal_windows_rrr(**branch_kwargs)
     else:
         _run_cross_subject_rrr(**branch_kwargs)
 

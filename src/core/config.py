@@ -1,5 +1,6 @@
 """Dataclass configs for encoding model training and significance testing."""
 
+import math
 import os
 from dataclasses import dataclass, field
 from enum import Enum
@@ -15,6 +16,7 @@ class ScriptMode(str, Enum):
     PER_REGION = "per_region"
     LEAVE_ONE_SUBJECT_OUT = "leave_one_subject_out"
     MULTI_VIEW = "multi_view"
+    TEMPORAL_WINDOWS = "temporal_windows"
 
 
 class LanguageDecodingMode(str, Enum):
@@ -180,6 +182,15 @@ class RRRViewConfig:
 
 
 @dataclass
+class RRRTemporalWindowConfig:
+    """One half-open neural-target lag window, in seconds."""
+
+    name: str
+    start_sec: float
+    end_sec: float
+
+
+@dataclass
 class RRRConfig:
     """Parameters for raw-input Reduced Rank Regression analysis (run_rrr.py).
 
@@ -189,6 +200,7 @@ class RRRConfig:
 
     Mode → output directory mapping (default, overridable via rrr_output_dir):
         cross_subject : {output_dir}/rrr/
+        temporal_windows: {output_dir}/temporal_window_rrr/<window>/{rrr,pca}/
         per_subject   : {output_dir}/per_subject_rrr/
         per_region    : {output_dir}/per_region_rrr/
     """
@@ -209,6 +221,7 @@ class RRRConfig:
     )
     cross_source_format: str = "fold_factors"
     views: list[RRRViewConfig] = field(default_factory=list)
+    temporal_windows: list[RRRTemporalWindowConfig] = field(default_factory=list)
     subspace_aggregation: str = "extrinsic"
 
     # Full-model banded ridge used by mode=multi_view.
@@ -288,6 +301,30 @@ class RRRConfig:
         duplicates = sorted({name for name in names if names.count(name) > 1})
         if duplicates:
             raise ValueError(f"Duplicate RRR view name(s): {duplicates}")
+        if self.mode == ScriptMode.TEMPORAL_WINDOWS and not self.temporal_windows:
+            raise ValueError(
+                "RRRConfig.temporal_windows must contain at least one window"
+            )
+        window_names = [window.name for window in self.temporal_windows]
+        if any(not name or not name.strip() for name in window_names):
+            raise ValueError("Temporal window names must be non-empty")
+        duplicate_windows = sorted(
+            {name for name in window_names if window_names.count(name) > 1}
+        )
+        if duplicate_windows:
+            raise ValueError(
+                f"Duplicate temporal window name(s): {duplicate_windows}"
+            )
+        for window in self.temporal_windows:
+            bounds = (float(window.start_sec), float(window.end_sec))
+            if not all(math.isfinite(value) for value in bounds):
+                raise ValueError(
+                    f"Temporal window {window.name!r} bounds must be finite"
+                )
+            if bounds[0] >= bounds[1]:
+                raise ValueError(
+                    f"Temporal window {window.name!r} must have start_sec < end_sec"
+                )
         if any(not view.name for view in self.views):
             raise ValueError("Every RRR view name must be non-empty")
         if any(int(view.rank) < 1 for view in self.views):

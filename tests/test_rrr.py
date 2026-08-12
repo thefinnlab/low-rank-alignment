@@ -9,6 +9,7 @@ import pytest
 
 from src.utils.srrr import save_rrr_factors, save_rrr_result, load_rrr_result
 from scripts.rrr.run_rrr import _load_cross_dataset_A_by_rank
+from src.core.config import RRRTemporalWindowConfig
 
 # ---------------------------------------------------------------------------
 # Shared fixtures
@@ -32,6 +33,77 @@ def small_data(rng):
 # ---------------------------------------------------------------------------
 # TestSaveLoadRRRResult
 # ---------------------------------------------------------------------------
+
+
+class TestTemporalWindows:
+    def test_half_open_windows_allow_overlap_and_put_zero_in_post(self):
+        from scripts.rrr.run_rrr import _temporal_window_target_mask
+
+        manifest = pd.DataFrame({"lag": [-1.0, -0.5, 0.0, 0.5, 1.0]})
+        pre = _temporal_window_target_mask(
+            manifest, RRRTemporalWindowConfig("pre", -2.0, 0.0)
+        )
+        post = _temporal_window_target_mask(
+            manifest, RRRTemporalWindowConfig("post", 0.0, 2.0)
+        )
+        overlap = _temporal_window_target_mask(
+            manifest, RRRTemporalWindowConfig("overlap", -0.5, 0.5)
+        )
+
+        np.testing.assert_array_equal(pre, [True, True, False, False, False])
+        np.testing.assert_array_equal(post, [False, False, True, True, True])
+        np.testing.assert_array_equal(overlap, [False, True, True, False, False])
+
+    def test_window_bounds_clip_but_empty_window_is_rejected(self):
+        from scripts.rrr.run_rrr import _temporal_window_target_mask
+
+        manifest = pd.DataFrame({"lag": [-1.0, 0.0, 1.0]})
+        clipped = _temporal_window_target_mask(
+            manifest, RRRTemporalWindowConfig("wide", -10.0, 0.5)
+        )
+        np.testing.assert_array_equal(clipped, [True, True, False])
+        with pytest.raises(ValueError, match="selects no sampled lag"):
+            _temporal_window_target_mask(
+                manifest, RRRTemporalWindowConfig("empty", 2.0, 3.0)
+            )
+
+    def test_combined_summary_contains_window_metadata(self, tmp_path):
+        from scripts.rrr.run_rrr import _write_temporal_window_summary
+
+        rrr_dir = tmp_path / "pre" / "rrr"
+        pca_dir = tmp_path / "pre" / "pca"
+        rrr_dir.mkdir(parents=True)
+        pca_dir.mkdir(parents=True)
+        pd.DataFrame({"k": [1], "nr_corr": [0.2]}).to_csv(
+            rrr_dir / "summary.csv", index=False
+        )
+        pd.DataFrame({"k": [1], "pca_corr": [0.1]}).to_csv(
+            pca_dir / "summary.csv", index=False
+        )
+        metadata = {
+            "window": "pre",
+            "start_sec": -2.0,
+            "end_sec": 0.0,
+            "actual_lag_min_sec": -1.0,
+            "actual_lag_max_sec": -0.5,
+            "n_lags": 2,
+            "n_targets": 4,
+        }
+        _write_temporal_window_summary(
+            str(tmp_path),
+            [
+                {
+                    "metadata": metadata,
+                    "units": {"rrr": str(rrr_dir), "pca": str(pca_dir)},
+                }
+            ],
+        )
+        saved = pd.read_csv(tmp_path / "window_summary.csv")
+        assert saved[["window", "method"]].values.tolist() == [
+            ["pre", "rrr"],
+            ["pre", "pca"],
+        ]
+        assert saved["n_targets"].tolist() == [4, 4]
 
 
 class TestSaveLoadRRRResult:

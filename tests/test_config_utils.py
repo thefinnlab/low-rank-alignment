@@ -11,6 +11,7 @@ from src.core.config import (
     FMRICrossDatasetRRRConfig,
     FMRISignificanceConfig,
     RRRConfig,
+    RRRTemporalWindowConfig,
     RRRViewConfig,
     ScriptMode,
     SignificanceConfig,
@@ -187,6 +188,46 @@ class TestDictToDataclass:
         view = RRRViewConfig("same", "config.yml", "results/rrr", 2)
         with pytest.raises(ValueError, match="Duplicate RRR view"):
             RRRConfig(mode=ScriptMode.MULTI_VIEW, views=[view, view])
+
+    def test_rrr_temporal_windows_roundtrip(self):
+        config = dict_to_dataclass(
+            {
+                "mode": "temporal_windows",
+                "temporal_windows": [
+                    {"name": "pre", "start_sec": -2.0, "end_sec": 0.0},
+                    {"name": "post", "start_sec": 0.0, "end_sec": 2.0},
+                ],
+            },
+            RRRConfig,
+        )
+        assert config.mode == ScriptMode.TEMPORAL_WINDOWS
+        assert config.temporal_windows == [
+            RRRTemporalWindowConfig("pre", -2.0, 0.0),
+            RRRTemporalWindowConfig("post", 0.0, 2.0),
+        ]
+
+    def test_rrr_temporal_windows_requires_windows(self):
+        with pytest.raises(ValueError, match="at least one window"):
+            RRRConfig(mode=ScriptMode.TEMPORAL_WINDOWS)
+
+    @pytest.mark.parametrize(
+        "windows, message",
+        [
+            ([RRRTemporalWindowConfig("", -1, 0)], "non-empty"),
+            (
+                [
+                    RRRTemporalWindowConfig("same", -1, 0),
+                    RRRTemporalWindowConfig("same", 0, 1),
+                ],
+                "Duplicate temporal window",
+            ),
+            ([RRRTemporalWindowConfig("bad", 0, 0)], "start_sec < end_sec"),
+            ([RRRTemporalWindowConfig("bad", 0, float("inf"))], "finite"),
+        ],
+    )
+    def test_rrr_temporal_windows_validation(self, windows, message):
+        with pytest.raises(ValueError, match=message):
+            RRRConfig(mode=ScriptMode.TEMPORAL_WINDOWS, temporal_windows=windows)
 
     def test_alpha_grid_policy_roundtrip(self):
         config = dict_to_dataclass(

@@ -6,6 +6,7 @@ from scripts.rrr.plot_rank_saturation import (
     Analysis,
     _artifact_stem,
     _exact_family_signflip,
+    _ieeg_manifest,
     _shared_saturation_max_exponent,
     output_parts,
 )
@@ -194,6 +195,25 @@ def test_rank_saturation_output_parts_for_internal_movie_run():
     assert output_parts(analysis, root) == (
         "cars-2", "internal_rrr", "gpt2-xl-batch", "layer24"
     )
+
+
+def test_ieeg_manifest_prefers_temporal_window_manifest(tmp_path):
+    unit = tmp_path / "temporal_window_rrr" / "pre" / "rrr"
+    unit.mkdir(parents=True)
+    expected = pd.DataFrame(
+        {
+            "subject": [1, 1],
+            "electrode": ["E1", "E1"],
+            "lag": [-1.0, -0.5],
+            "original_target_index": [0, 1],
+        }
+    )
+    expected.to_csv(unit.parent / "target_manifest.csv", index=False)
+
+    manifest, lags = _ieeg_manifest(unit)
+
+    pd.testing.assert_frame_equal(manifest, expected)
+    np.testing.assert_array_equal(lags, [-1.0, -0.5])
 
 
 def test_rank_saturation_output_parts_for_cross_dataset_fmri_run():
