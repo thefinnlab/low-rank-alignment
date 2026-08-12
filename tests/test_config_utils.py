@@ -315,6 +315,39 @@ class TestDictToDataclass:
 
         assert config.models["gpt2"]["saturation_ranks"]["rrr"]["podcast"][6] == 8
 
+        config_with_unused_pca = SubspaceComparisonConfig(
+            datasets={"podcast": dataset},
+            comparison_modes=["full_neural_space"],
+            include_pca=False,
+            models={
+                "gpt2": {
+                    "offsets": [0],
+                    "layers": [0],
+                    "datasets": ["podcast"],
+                    "saturation_ranks": {
+                        "rrr": {"podcast": {0: 4}},
+                        "pca": {"podcast": {0: 16}},
+                    },
+                }
+            },
+        )
+        assert config_with_unused_pca.include_pca is False
+
+        with pytest.raises(ValueError, match="missing required kinds.*pca"):
+            SubspaceComparisonConfig(
+                datasets={"podcast": dataset},
+                comparison_modes=["full_neural_space"],
+                include_pca=True,
+                models={
+                    "gpt2": {
+                        "offsets": [0],
+                        "layers": [0],
+                        "datasets": ["podcast"],
+                        "saturation_ranks": {"rrr": {"podcast": {0: 4}}},
+                    }
+                },
+            )
+
         with pytest.raises(ValueError, match="requires saturation_ranks"):
             SubspaceComparisonConfig(
                 datasets={"podcast": dataset},

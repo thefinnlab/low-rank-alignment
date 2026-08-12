@@ -636,10 +636,18 @@ class SubspaceComparisonConfig:
                 )
             if saturation is not None:
                 required_kinds = {"rrr", "pca"} if self.include_pca else {"rrr"}
-                if set(saturation) != required_kinds:
+                known_kinds = {"rrr", "pca"}
+                missing_kinds = required_kinds - set(saturation)
+                unknown_kinds = set(saturation) - known_kinds
+                if missing_kinds:
                     raise ValueError(
-                        f"Model {name!r} saturation_ranks must contain exactly "
-                        f"{sorted(required_kinds)}"
+                        f"Model {name!r} saturation_ranks is missing required kinds "
+                        f"{sorted(missing_kinds)}"
+                    )
+                if unknown_kinds:
+                    raise ValueError(
+                        f"Model {name!r} saturation_ranks contains unknown kinds "
+                        f"{sorted(unknown_kinds)}; expected only {sorted(known_kinds)}"
                     )
                 expected_datasets = set(spec["datasets"])
                 expected_layers = set(spec["layers"])
