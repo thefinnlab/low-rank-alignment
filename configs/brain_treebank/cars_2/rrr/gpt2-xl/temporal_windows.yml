@@ -1,0 +1,19 @@
+encoding:
+  data_root: data/brain-treebank
+  dataset: brain_treebank
+  per_dataset_config: {movie: cars-2}
+  model: transformer
+  offset: 0
+  subjects: [3, 7, 10]
+  num_folds: 5
+  shared_word_selection: true
+  per_model_config:
+    model_dir: gpt2-xl-batch
+    layer: [0, 12, 24, 36, 48]
+mode: temporal_windows
+temporal_windows:
+  - {name: pre_word, start_sec: -2.0, end_sec: 0.0}
+  - {name: post_word, start_sec: 0.0, end_sec: 2.0}
+rank_grid: [1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 1600]
+refresh: true
+run_pca_baseline: true

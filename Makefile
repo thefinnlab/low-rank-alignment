@@ -53,6 +53,8 @@ ATLAS_PATH      ?= atlases/destrieux_2009/destrieux2009_rois_lateralized.nii.gz
 OVERRIDES       ?=   # e.g. OVERRIDES="--encoding.layer=48 --n_permutations=100"
 PIPELINE_ARGS   ?=   # arguments for submit-rrr-matrix
 SUBSPACE_COMPARISON_SBATCH_ARGS ?=
+TEMPORAL_WINDOW_DATASETS ?= podcast cars-2
+TEMPORAL_WINDOW_SBATCH_ARGS ?=
 
 # For downloading model weights.
 # MODELS ?= openai-community/gpt2-xl meta-llama/Meta-Llama-3-8B openai-community/gpt2 EleutherAI/gpt-j-6b FacebookAI/roberta-large
@@ -333,6 +335,52 @@ stage-language-resources:
 rrr-batch:
 	$(call run_config_list,RRR_CONFIGS,rrr,scripts/rrr/run_rrr.py)
 
+## Submit one temporal-window RRR job per model and dataset. Each config keeps
+## all sampled layers in one process, so the default submits 14 jobs rather than
+## one job per layer.
+## Usage:
+##   make temporal-windows-batch
+##   make temporal-windows-batch PIPELINE_MODELS="gpt2 gpt2-xl"
+##   make temporal-windows-batch TEMPORAL_WINDOW_DATASETS="podcast"
+##   make temporal-windows-batch TEMPORAL_WINDOW_SBATCH_ARGS="--time=24:00:00"
+temporal-windows-batch:
+	@set -eu; \
+	mkdir -p logs; \
+	if [ -z "$(strip $(PIPELINE_MODELS))" ]; then \
+		echo "PIPELINE_MODELS must contain at least one model" >&2; \
+		exit 2; \
+	fi; \
+	for dataset in $(TEMPORAL_WINDOW_DATASETS); do \
+		case "$$dataset" in \
+			podcast) config_root="configs/rrr" ;; \
+			cars-2) config_root="configs/brain_treebank/cars_2/rrr" ;; \
+			*) \
+				echo "Unsupported temporal-window dataset '$$dataset'; expected podcast or cars-2" >&2; \
+				exit 2; \
+				;; \
+		esac; \
+		for model in $(PIPELINE_MODELS); do \
+			config="$$config_root/$$model/temporal_windows.yml"; \
+			if [ ! -f "$$config" ]; then \
+				echo "Missing temporal-window config: $$config" >&2; \
+				exit 2; \
+			fi; \
+		done; \
+	done; \
+	for dataset in $(TEMPORAL_WINDOW_DATASETS); do \
+		case "$$dataset" in \
+			podcast) config_root="configs/rrr" ;; \
+			cars-2) config_root="configs/brain_treebank/cars_2/rrr" ;; \
+		esac; \
+		for model in $(PIPELINE_MODELS); do \
+			config="$$config_root/$$model/temporal_windows.yml"; \
+			echo "Submitting temporal-window RRR for $$dataset / $$model: $$config"; \
+			$(SBATCH) --job-name="rrr-windows-$$dataset-$$model-$(USR)-$(DT)" \
+				$(TEMPORAL_WINDOW_SBATCH_ARGS) submit.sh \
+				scripts/rrr/run_rrr.py --config "$$config" $(RRR_OVERRIDES); \
+		done; \
+	done
+
 ## Submit paired significance and cross-subject RRR jobs for each model.
 ## Each RRR job starts only after its model's significance job succeeds.
 ## Usage:
@@ -417,4 +465,4 @@ sig-test:
 test:
 	python -m pytest tests/ -v
 
-.PHONY: sig sig-batch train plots rrr rrr-batch sig-rrr-batch submit-rrr-matrix sig-test test generate-embeddings generate-embeddings-batch generate-random-embeddings download-models precompute-epochs print-atlas-regions compare-subspaces compare-subspaces-batch
+.PHONY: sig sig-batch train plots rrr rrr-batch temporal-windows-batch sig-rrr-batch submit-rrr-matrix sig-test test generate-embeddings generate-embeddings-batch generate-random-embeddings download-models precompute-epochs print-atlas-regions compare-subspaces compare-subspaces-batch

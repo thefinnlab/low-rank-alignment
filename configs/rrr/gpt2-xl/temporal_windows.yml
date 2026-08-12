@@ -3,14 +3,9 @@ encoding:
   model: transformer
   offset: 0
   subjects: null
-  run_name: null
-  batch: false
   per_model_config:
-    model_dir: gpt2-xl
-    layer: 24
-output_dir: null
-sig_dir: null
-rrr_output_dir: null
+    model_dir: gpt2-xl-batch
+    layer: [0, 12, 24, 36, 48]
 mode: temporal_windows
 temporal_windows:
   - name: pre_word
@@ -19,18 +14,6 @@ temporal_windows:
   - name: post_word
     start_sec: 0.0
     end_sec: 2.0
-rank_grid:
-  - 1
-  - 2
-  - 4
-  - 8
-  - 16
-  - 32
-  - 64
-  - 128
-  - 256
-  - 512
-  - 1024
-  - 1600
-refresh: false
+rank_grid: [1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 1600]
+refresh: true
 run_pca_baseline: true

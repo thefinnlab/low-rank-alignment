@@ -35,7 +35,7 @@ Reusable word-level annotations can be generated independently with `scripts/uti
 Existing non-GloVe Podcast encoding artifacts that predate saved word-row provenance can be repaired without retraining by `scripts/utilities/backfill_podcast_word_selection.py`. It reconstructs per-subject selections from the HDF5 epoch caches, requires the saved folds to partition those rows exactly, and defaults to a non-writing preflight unless `--apply` is supplied.
 
 The Makefile exposes the language probe as `make language-decoding` and also provides batch targets for releasing multiple config runs:
-`make generate-embeddings-batch`, `make sig-batch`, and `make rrr-batch`. `make sig-rrr-batch` submits paired significance and cross-subject RRR jobs for each model in `PIPELINE_MODELS`; `DATASET` selects `podcast` or `cars-2`, and each RRR job receives an `afterok` dependency on its matching significance job. Random-init embedding runs can use `make generate-random-embeddings`, which wraps `scripts/utilities/generate_random_embeddings.py`.
+`make generate-embeddings-batch`, `make sig-batch`, and `make rrr-batch`. `make temporal-windows-batch` submits one temporal-window RRR job per model and dataset across Podcast and Cars 2 by default; each job processes all of its config's sampled layers sequentially. `make sig-rrr-batch` submits paired significance and cross-subject RRR jobs for each model in `PIPELINE_MODELS`; `DATASET` selects `podcast` or `cars-2`, and each RRR job receives an `afterok` dependency on its matching significance job. Random-init embedding runs can use `make generate-random-embeddings`, which wraps `scripts/utilities/generate_random_embeddings.py`.
 
 ## Generating Embeddings
 
