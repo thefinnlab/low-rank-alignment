@@ -19,7 +19,7 @@ from src.core.config import (
     get_results_dir,
 )
 from src.core.registry import DatasetContext
-from src.utils.config_utils import (
+from src.utils.shared.config import (
     parse_override_args,
     dict_to_dataclass,
     apply_overrides,

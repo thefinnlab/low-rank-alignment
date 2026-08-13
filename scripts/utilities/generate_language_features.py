@@ -12,9 +12,9 @@ from pathlib import Path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 from src.core.config import LanguageFeatureGenerationConfig
-from src.utils.config_utils import load_config, parse_override_args
-from src.utils.config_utils import save_effective_config
-from src.utils.language_features import (
+from src.utils.shared.config import load_config, parse_override_args
+from src.utils.shared.config import save_effective_config
+from src.utils.language_features.core import (
     generate_language_features,
     hydrate_provider_resources,
     stage_language_resources,

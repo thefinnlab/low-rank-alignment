@@ -11,17 +11,15 @@ import torch
 from himalaya.backend import set_backend
 
 from src.core.config import FMRISignificanceConfig
-from src.utils.alpha_grids import resolve_ridge_alphas, save_alpha_diagnostics
-from src.utils.config_utils import (
+from src.utils.shared.alpha_grids import resolve_ridge_alphas, save_alpha_diagnostics
+from src.utils.shared.config import (
     expand_fmri_layer_configs,
     load_config,
     parse_args,
     save_effective_config,
 )
-from src.utils.encoding import extract_best_alphas, get_ridge_model_constructor
-from src.utils.fmri import (
-    bh_fdr,
-    circular_shift_pvalues,
+from src.utils.shared.encoding import extract_best_alphas, get_ridge_model_constructor
+from src.utils.shared.fmri import (
     finite_response_voxel_masks,
     load_story_embeddings,
     prepare_fmri_data,
@@ -30,7 +28,8 @@ from src.utils.fmri import (
     session_cv_splits,
     TEMPORARILY_HELD_OUT_FMRI_STORIES,
 )
-from src.utils.tensor_utils import to_numpy
+from src.utils.significance.fmri import bh_fdr, circular_shift_pvalues
+from src.utils.shared.tensors import to_numpy
 
 
 def _fit_oof(X, Y, story_slices, groups, config, output_dir):

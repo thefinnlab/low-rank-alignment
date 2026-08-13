@@ -17,8 +17,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspa
 
 from scripts.utilities.generate_language_features import expand_stimulus_configs
 from src.core.config import LanguageFeatureGenerationConfig
-from src.utils.config_utils import load_config, parse_override_args
-from src.utils.language_features import (
+from src.utils.shared.config import load_config, parse_override_args
+from src.utils.language_features.core import (
     DOCUMENT_LOADERS,
     EMPTY_SIDECAR_COLUMNS,
     PROVIDERS,
@@ -51,7 +51,7 @@ def _load_existing_tokens(output: Path, canonical: pd.DataFrame) -> pd.DataFrame
 def _write_surprisal(config: LanguageFeatureGenerationConfig) -> Path:
     hydrate_provider_resources(config)
     # Register built-in providers.
-    from src.utils import language_feature_providers as _builtins  # noqa: F401
+    from src.utils.language_features import providers as _builtins  # noqa: F401
 
     document = DOCUMENT_LOADERS[config.dataset](config)
     resource_name = config.provider_options["gpt2_surprisal"].get(

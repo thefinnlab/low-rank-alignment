@@ -17,8 +17,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspa
 from scripts.utilities.generate_language_features import expand_stimulus_configs
 from scripts.utilities.generate_surprisal import _load_existing_tokens
 from src.core.config import LanguageFeatureGenerationConfig
-from src.utils.config_utils import load_config
-from src.utils.language_features import DOCUMENT_LOADERS, PROVIDERS, hydrate_provider_resources, stage_language_resources
+from src.utils.shared.config import load_config
+from src.utils.language_features.core import DOCUMENT_LOADERS, PROVIDERS, hydrate_provider_resources, stage_language_resources
 
 
 NATIVE_COLUMNS = (
@@ -42,7 +42,7 @@ def _resources_for(config: LanguageFeatureGenerationConfig) -> dict:
 
 def _write_features(config: LanguageFeatureGenerationConfig) -> Path:
     hydrate_provider_resources(config)
-    from src.utils import language_feature_providers as _builtins  # noqa: F401
+    from src.utils.language_features import providers as _builtins  # noqa: F401
 
     document = DOCUMENT_LOADERS[config.dataset](config)
     resources = _resources_for(config)

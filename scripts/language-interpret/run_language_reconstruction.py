@@ -1,12 +1,12 @@
 """Predict saved RRR/PCA embedding subspaces from language-task variables."""
 
 from src.core.config import LanguageReconstructionConfig
-from src.utils.config_utils import (
+from src.utils.shared.config import (
     expand_per_model_layer_configs,
     load_config,
     parse_args,
 )
-from src.utils.language_reconstruction import run_language_reconstruction
+from src.utils.language_interpret.reconstruction import run_language_reconstruction
 
 
 def main():

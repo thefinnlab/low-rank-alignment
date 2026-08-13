@@ -3,7 +3,7 @@ import pandas as pd
 import pytest
 
 from src.core.config import LanguageDecodingMode, LanguageReconstructionConfig
-from src.utils.language_reconstruction import (
+from src.utils.language_interpret.reconstruction import (
     _run_fit,
     build_predictor_preprocessor,
     build_preprocessor,

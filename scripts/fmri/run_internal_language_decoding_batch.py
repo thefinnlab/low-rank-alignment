@@ -18,15 +18,15 @@ import yaml
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 from src.core.config import FMRICrossDatasetRRRConfig, LanguageDecodingConfig
-from src.utils.config_utils import expand_fmri_layer_configs, load_config
-from src.utils.fmri import load_story_embeddings, load_story_word_data, resolve_fmri_stories
-from src.utils.language_decoding import (
+from src.utils.shared.config import expand_fmri_layer_configs, load_config
+from src.utils.shared.fmri import load_story_embeddings, load_story_word_data, resolve_fmri_stories
+from src.utils.language_interpret.decoding import (
     _configure_decoder_backend,
     _decoder_metrics,
     _fit_decoder,
     _weight_payload,
 )
-from src.utils.language_tasks import get_language_task
+from src.utils.language_interpret.tasks import get_language_task
 
 
 def _args() -> argparse.Namespace:

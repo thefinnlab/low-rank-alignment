@@ -16,8 +16,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspa
 
 from scripts.utilities.generate_surprisal import _load_existing_tokens
 from src.core.config import LanguageFeatureGenerationConfig
-from src.utils.config_utils import load_config
-from src.utils.language_features import (
+from src.utils.shared.config import load_config
+from src.utils.language_features.core import (
     DOCUMENT_LOADERS,
     PROVIDERS,
     hydrate_provider_resources,
@@ -35,7 +35,7 @@ OUTPUT_COLUMNS = (
 
 def _write_concreteness(config: LanguageFeatureGenerationConfig) -> Path:
     hydrate_provider_resources(config)
-    from src.utils import language_feature_providers as _builtins  # noqa: F401
+    from src.utils.language_features import providers as _builtins  # noqa: F401
 
     if config.dataset != "brain_treebank":
         raise ValueError("The focused concreteness generator requires brain_treebank")

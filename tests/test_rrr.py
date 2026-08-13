@@ -7,7 +7,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from src.utils.srrr import save_rrr_factors, save_rrr_result, load_rrr_result
+from src.utils.rrr.core import save_rrr_factors, save_rrr_result, load_rrr_result
 from scripts.rrr.run_rrr import _load_cross_dataset_A_by_rank
 from src.core.config import RRRTemporalWindowConfig
 
@@ -199,7 +199,7 @@ class TestCrossDatasetRankBasisLoading:
 
 def _make_baselines(X, Y, test_idxs):
     """Build per_fold_baselines from raw data using a fresh ridge model."""
-    from src.utils.encoding import build_per_fold_baselines
+    from src.utils.shared.encoding import build_per_fold_baselines
 
     return build_per_fold_baselines(X, Y, test_idxs)
 
@@ -913,7 +913,7 @@ class TestRunRRRForUnit:
     ):
         import run_rrr
         from src.core.config import EncodingConfig
-        from src.utils.encoding import load_encoding_results, save_encoding_results
+        from src.utils.shared.encoding import load_encoding_results, save_encoding_results
 
         X, Y = small_data
         n = X.shape[0]
@@ -951,7 +951,7 @@ class TestRunRRRForUnit:
             assert sig_electrodes == {1: ["E1"]}
             return X, Y, np.arange(n), [["E1"]]
 
-        monkeypatch.setattr("src.utils.decomposition.build_XY_from_subjects", fake_build_xy)
+        monkeypatch.setattr("src.utils.rrr.inputs.build_XY_from_subjects", fake_build_xy)
 
         enc = EncodingConfig(ridge_alphas=[1.0, 10.0], ridge_cv_folds=2)
         result = run_rrr._get_decomposition_inputs(
@@ -972,7 +972,7 @@ class TestRunRRRForUnit:
 
     def test_shared_selection_metadata_requires_matching_subjects(self, tmp_path):
         import run_rrr
-        from src.utils.encoding import save_encoding_results
+        from src.utils.shared.encoding import save_encoding_results
 
         output_dir = tmp_path / "encoding_run"
         for sub_id in [1, 2]:
@@ -998,7 +998,7 @@ class TestRunRRRForUnit:
 
     def test_shared_selection_metadata_loads_when_all_subjects_agree(self, tmp_path):
         import run_rrr
-        from src.utils.encoding import save_encoding_results
+        from src.utils.shared.encoding import save_encoding_results
 
         output_dir = tmp_path / "encoding_run"
         for sub_id in [1, 2]:
@@ -1040,7 +1040,7 @@ class TestBuildXYFromSubjects:
 
     def test_concatenates_Y_across_subjects(self, rng, monkeypatch):
         """Y should be column-concatenation of per-subject neural responses."""
-        from src.utils.data_loaders import build_XY_from_subjects
+        from src.utils.shared.ieeg import build_XY_from_subjects
 
         n_words, n_embed, n_elecs_per_sub, n_lags = 50, 8, 3, 4
 
@@ -1066,14 +1066,14 @@ class TestBuildXYFromSubjects:
             n = data.shape[0]
             return X_sel, data.reshape(n, -1).astype(np.float32)
 
-        import src.utils.data_loaders as dl
+        import src.utils.shared.ieeg as dl
 
         monkeypatch.setattr(
             dl, "load_precomputed_epochs", _fake_load_precomputed_epochs
         )
         monkeypatch.setattr(dl, "epochs_from_cache", _fake_epochs_from_cache)
 
-        import src.utils.encoding as enc_mod
+        import src.utils.shared.encoding as enc_mod
 
         monkeypatch.setattr(enc_mod, "apply_offset", _fake_apply_offset)
 
@@ -1089,7 +1089,7 @@ class TestBuildXYFromSubjects:
         assert Y.dtype == np.float32
 
     def test_raises_when_no_sig_electrodes(self, rng):
-        from src.utils.data_loaders import build_XY_from_subjects
+        from src.utils.shared.ieeg import build_XY_from_subjects
 
         n_words, n_embed = 50, 8
         X_emb = rng.standard_normal((n_words, n_embed)).astype(np.float32)

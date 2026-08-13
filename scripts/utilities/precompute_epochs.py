@@ -22,16 +22,16 @@ import os
 
 from tqdm import tqdm
 
-from src.utils import (
+from src.utils.shared.ieeg import (
     load_raws,
-    load_embeddings,
     build_aligned_epoch_data,
     save_precomputed_epochs,
     get_precomputed_epochs_path,
 )
+from src.utils.shared.embeddings import load_embeddings
 from src.core.config import EncodingConfig
 from src.core.registry import get_dataset_adapter, resolve_dataset_context
-from src.utils.config_utils import parse_args, load_config, save_effective_config
+from src.utils.shared.config import parse_args, load_config, save_effective_config
 
 _TARGET_SFREQ = 32.0
 _TMIN = -2.0

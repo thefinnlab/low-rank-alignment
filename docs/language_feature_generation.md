@@ -31,19 +31,8 @@ Causal models use their configured tokenizer, final LM head, and initialization.
 windows are batched without changing their contexts, and the batch size halves
 automatically on CUDA OOM. The random GPT-2 XL uses its configured seed. RoBERTa uses
 the same procedure with GPT-2 small and records that fallback in `manifest.json`.
-Generate only the model-specific values, with one parallel SLURM job per model, using
-`uv run python scripts/submit_language_decoding.py --dataset all
---generate-predictability --generation-only --refresh`.
-Generate these artifacts in parallel by model and release every dependent internal
-model/dataset decoding job with
-`uv run python scripts/submit_language_decoding.py --dataset all --device cuda
---generate-predictability --tasks surprisal standardized_entropy self_surprisal self_entropy
-pre_word_pause post_word_pause iu_position sentence_position --max-rank 256 --refresh`.
-Use `--run-name predictability-context-quick` to keep this subset run's task artifacts,
-tables, plots, configuration, and metadata separate from existing all-task results.
-After decoding finishes, bootstrap each dataset's paired RRR-versus-PCA differences with
-`uv run python scripts/bootstrap_language_decoding.py --dataset <dataset> --run-name
-predictability-context-quick`; bootstrap outputs are kept under the same named identity.
+Generate these model-specific values with `make self-surprisal` or invoke
+`scripts/utilities/generate_self_surprisal.py` directly with the desired config.
 `scripts/utilities/generate_fmri_iu_features.py` (or `make fmri-iu-features`) similarly
 populates IU position, onset, end, and length from the already aligned PSST boundaries
 without rerunning audio inference or unrelated providers.
@@ -99,7 +88,7 @@ class: they remain missing and are excluded by the decoder's finite-target mask.
 
 ## Task-to-subspace reconstruction
 
-`scripts/rrr/run_language_reconstruction.py` uses any configured subset of the same
+`scripts/language-interpret/run_language_reconstruction.py` uses any configured subset of the same
 task registry as predictors of a saved RRR subspace and its automatically resolved PCA
 sibling. Unlike language decoding, missing task values are retained: continuous values
 receive fold-local median imputation plus missingness indicators, while categorical
@@ -232,87 +221,8 @@ the combined morphology string, and `aspect` are intentionally not decoding targ
 - Expanded prosody beyond word timing and pauses (F0/intensity, rate, lengthening,
   pitch reset, prominence, ToBI, and repair/false-start targets) is not yet implemented.
 - Brain Treebank artifacts can be loaded by the language decoder with dataset-specific
-  task manifests. The fMRI decoder trains on retained training-story words, tunes with
-  leave-one-session-out inner folds, and evaluates only on `wheretheressmoke`, which is
-  excluded from the fMRI ridge, RRR, and PCA fits. Only paired internal RRR and PCA
-  spaces are evaluated. Each fit saves held-out predictions and sentence identifiers.
-  `scripts/bootstrap_language_decoding.py` uses these artifacts for paired
-  sentence-block inference separately at every rank. For fMRI it resamples the held-out
-  story; for Podcast and Cars 2 it first pools the fold-held-out predictions so each
-  selected word appears once. It also reports a hierarchical cross-model result with
-  equal model-class weights and layers averaged within model; Benjamini-Hochberg FDR is
-  applied across targets independently within each rank. Passing `--dataset all`
-  additionally tests the fixed, equal-weighted mean over task/rank cells shared by
-  Podcast, Cars 2, and fMRI. Its hierarchical bootstrap shares sampled model identities
-  across datasets, samples layers within each dataset/model, and samples sentence blocks
-  independently within each dataset.
-
-Existing decoding results created before prediction saving was added must be refreshed
-once. On the cluster, submit those jobs and then run inference after they finish. For
-example, for Podcast:
-
-```bash
-uv run python scripts/submit_language_decoding.py --dataset podcast --refresh
-make language-decoding-bootstrap CMD="uv run python" LANGUAGE_DECODING_DATASET=podcast
-```
-
-The bootstrap writes `per_model_layer_rank.csv`, `cross_model_rank.csv`, analysis
-metadata, and per-target PNG/SVG rank curves under
-`results/<dataset>/language_decoding_bootstrap/`. Individual curves are grouped under
-`plots/per_model_layer/`; equal-weighted summaries are under `plots/cross_model/`.
-They use the same cyan RRR and teal PCA palette as the rank-saturation figures, with
-cyan star markers above ranks where RRR wins after rank-wise target FDR.
-Relative-preference curves under `plots/relative_preference/` transform each paired
-bootstrap replicate's already averaged RRR and PCA scores using
-`(RRR - PCA) / min(RRR, PCA)`, and display percentile confidence bands plus the same
-FDR significance markers. Both averaged scores below `0.05` map to zero by default;
-override this with `--low-performance-threshold`. Pass
-`--no-plots` to skip them. Use
-`FMRI_LANGUAGE_BOOTSTRAP_REPEATS` and `FMRI_LANGUAGE_BOOTSTRAP_ARGS` to override the
-default 10,000 draws, seed, alpha, config, output directory, or `--jobs`. The analysis
-automatically uses `SLURM_CPUS_PER_TASK` worker processes when that variable is set;
-outside SLURM it defaults to one worker. Discovery and both bootstrap stages log job
-counts, elapsed time, and an estimated time remaining to stderr.
-Pass `--summary-only` to skip all per-model/layer bootstrap jobs and generate only the
-equal-model-weighted within-dataset raw and relative summaries. This option also works
-with `--dataset all`, in which case each of the three dataset summaries is bootstrapped
-independently before the combined overlay is written.
-
-To run all three independent within-dataset analyses and make combined comparison
-plots, use:
-
-```bash
-make language-decoding-bootstrap CMD="uv run python" LANGUAGE_DECODING_DATASET=all
-```
-
-This mode performs no cross-dataset averaging or bootstrap. It writes
-`within_dataset_relative_rank.csv` and per-task PNG/SVG overlays under
-`results/language_decoding_bootstrap/plots/within_dataset_comparison/`. Each plot has
-separate Podcast, Cars 2, and fMRI relative-preference lines for task/rank cells
-available in all three datasets; stars retain each dataset's independent within-dataset
-FDR result. Confidence intervals remain in the CSV and individual-dataset plots but are
-not drawn on the combined comparison.
-
-To generate the same cross-dataset mean curves without bootstrap inference or
-significance markers, run:
-
-```bash
-uv run python scripts/plot_mean_language_decoding.py
-uv run python scripts/plot_mean_language_decoding.py --run-name predictability-context-quick
-```
-
-This writes direct means, metadata, and PNG/SVG plots under
-`results/language_decoding_mean/`, nested under the run name when provided. It keeps
-the bootstrap analysis's fixed weighting: layers are averaged within each shared model,
-models within dataset, and Podcast, Cars 2, and fMRI receive equal weight. Separate
-within-dataset curves use those same cross-dataset-shared task/rank cells and model
-identities; their values are also saved in `within_dataset_mean_rank.csv`.
-The script additionally writes `relative_preference_rank.csv` and corresponding plots.
-After the RRR and PCA curves are averaged with the hierarchy above, preference is
-`(mean RRR - mean PCA) / min(mean RRR, mean PCA)`, so `+1` means mean RRR is twice
-mean PCA and `-1` means mean PCA is twice mean RRR. Cells where both averaged scores
-are below `0.05` are set to zero by default; change this with
-`--low-performance-threshold`.
+  task manifests. The retained fMRI decoder trains on training-story words, tunes with
+  leave-one-session-out inner folds, and evaluates only on `wheretheressmoke`.
 
 ## Resource staging
 

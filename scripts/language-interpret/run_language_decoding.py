@@ -1,12 +1,12 @@
 """Decode word-aligned language features from saved RRR/PCA input subspaces."""
 
 from src.core.config import LanguageDecodingConfig
-from src.utils.config_utils import (
+from src.utils.shared.config import (
     expand_per_model_layer_configs,
     load_config,
     parse_args,
 )
-from src.utils.language_decoding import run_language_decoding
+from src.utils.language_interpret.decoding import run_language_decoding
 
 
 def main():

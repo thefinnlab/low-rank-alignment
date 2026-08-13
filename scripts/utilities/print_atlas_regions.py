@@ -22,7 +22,7 @@ from collections import Counter
 import numpy as np
 import pandas as pd
 
-from src.utils.atlas import DESTRIEUX_2009_LABELS, _lookup_atlas_labels
+from src.utils.atlas.core import DESTRIEUX_2009_LABELS, _lookup_atlas_labels
 
 
 def main():

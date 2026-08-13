@@ -12,7 +12,7 @@ import argparse
 
 from scripts.fmri.generate_embeddings import run_config
 from src.core.config import FMRIGenerateEmbeddingsConfig, GenerateEmbeddingsConfig
-from src.utils.config_utils import load_config
+from src.utils.shared.config import load_config
 
 
 def parse_args() -> argparse.Namespace:

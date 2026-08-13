@@ -14,15 +14,15 @@ import torch
 from himalaya.backend import set_backend
 
 from src.core.config import FMRICrossDatasetRRRConfig
-from src.utils.alpha_grids import resolve_ridge_alphas, save_alpha_diagnostics
-from src.utils.config_utils import (
+from src.utils.shared.alpha_grids import resolve_ridge_alphas, save_alpha_diagnostics
+from src.utils.shared.config import (
     expand_fmri_layer_configs,
     load_config,
     parse_args,
     save_effective_config,
 )
-from src.utils.encoding import extract_best_alphas, get_ridge_model_constructor
-from src.utils.fmri import (
+from src.utils.shared.encoding import extract_best_alphas, get_ridge_model_constructor
+from src.utils.shared.fmri import (
     align_fmri_stimuli,
     build_fmri_stimulus,
     columnwise_correlation,
@@ -34,12 +34,12 @@ from src.utils.fmri import (
     target_manifest,
     TEMPORARILY_HELD_OUT_FMRI_STORIES,
 )
-from src.utils.srrr import fit_dense_rrr
-from src.utils.subspace_compare import (
+from src.utils.rrr.core import fit_dense_rrr
+from src.utils.subspace_comparison.metrics import (
     aggregate_subspace_basis,
     aggregate_subspace_from_unit_dir,
 )
-from src.utils.tensor_utils import to_numpy
+from src.utils.shared.tensors import to_numpy
 
 
 @dataclass

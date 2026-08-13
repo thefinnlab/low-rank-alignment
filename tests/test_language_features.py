@@ -8,7 +8,7 @@ import pandas as pd
 import pytest
 
 from src.core.config import LanguageFeatureGenerationConfig
-from src.utils.language_feature_providers import (
+from src.utils.language_features.providers import (
     LANCASTER_COLUMNS,
     _assign_speakers_to_words,
     _canonicalize_speaker_turns,
@@ -24,7 +24,7 @@ from src.utils.language_feature_providers import (
     speaker_diarization_provider,
     swow_provider,
 )
-from src.utils.language_features import (
+from src.utils.language_features.core import (
     AnnotationResult,
     StimulusDocument,
     _canonical_tokens,
@@ -634,7 +634,7 @@ def test_generator_writes_manifest_and_reuses_identical_artifact(tmp_path):
     provider_name = "language_feature_fixture_provider"
 
     if dataset_name not in __import__(
-        "src.utils.language_features", fromlist=["DOCUMENT_LOADERS"]
+        "src.utils.language_features.core", fromlist=["DOCUMENT_LOADERS"]
     ).DOCUMENT_LOADERS:
 
         @register_document_loader(dataset_name)
@@ -643,7 +643,7 @@ def test_generator_writes_manifest_and_reuses_identical_artifact(tmp_path):
             return _document()
 
     if provider_name not in __import__(
-        "src.utils.language_features", fromlist=["PROVIDERS"]
+        "src.utils.language_features.core", fromlist=["PROVIDERS"]
     ).PROVIDERS:
 
         @register_annotation_provider(provider_name)

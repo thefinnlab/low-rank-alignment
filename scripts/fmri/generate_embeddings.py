@@ -23,8 +23,8 @@ from scripts.utilities.generate_embeddings import (
     _write_features_hdf5,
 )
 from src.core.config import FMRIGenerateEmbeddingsConfig
-from src.utils.config_utils import load_config, parse_args, save_effective_config
-from src.utils.fmri import (
+from src.utils.shared.config import load_config, parse_args, save_effective_config
+from src.utils.shared.fmri import (
     load_story_word_data,
     resolve_fmri_stories,
     TEMPORARILY_HELD_OUT_FMRI_STORIES,

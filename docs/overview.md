@@ -1,179 +1,52 @@
 # Repository Overview
 
-This repository is a neuroscience encoding analysis pipeline for studying how language-model embeddings predict intracranial EEG (iEEG) neural activity. The default dataset is the podcast stimulus, and the dataset registry also supports Brain Treebank movie stimuli by centralizing transcript loading, neural-data/cache paths, and stimulus-scoped result directories.
+This repository contains script-driven neuroscience analyses of how language-model
+embeddings predict iEEG and fMRI responses. The supported executable surface is
+`scripts/`; utilities exist to serve those workflows rather than as a standalone API.
 
-Neural preprocessing uses 70–200 Hz Hilbert amplitude. Brain Treebank attaches available MNI electrode coordinates to each MNE recording, excludes the contacts listed in `corrupted_elec.json`, applies the Podcast despiking procedure, and computes a global common-average reference over the remaining contacts before notch and high-gamma filtering. Epoch precomputation extracts word-locked windows at 512 Hz and only then resamples each aligned window to 32 Hz, avoiding quantization onto one continuous 32 Hz time grid. The resulting epoch caches are HDF5-backed so downstream analyses can load only the requested significant electrodes from disk.
+## Retained workflows
 
-The retained pipeline has three main analysis entrypoints:
+- `scripts/sig_lags/run_significance.py` performs iEEG lag-cluster significance.
+- `scripts/rrr/run_rrr.py` performs iEEG reduced-rank regression, PCA baselines,
+  cross-dataset transfer, temporal-window analyses, and multiview analyses.
+- `scripts/rrr/compare_subspaces.py` performs configured leakage-safe comparisons
+  between saved RRR/PCA spaces.
+- `scripts/fmri/` contains fMRI embedding generation, significance, RRR, and held-out
+  language-decoding workflows.
+- `scripts/language-interpret/` contains language decoding and reconstruction.
+- `scripts/utilities/` contains data preparation, embedding generation, language-feature
+  generation, plotting, and atlas-reporting entrypoints.
 
-1. **Lag-cluster significance** (`make sig`) — trains per-subject encoding models with out-of-fold predictions, builds reliable electrode-lag clusters, and scores 10,000 reproducible null draws using independent fold-local circular shifts sampled with replacement. It applies global BH-FDR either across one winning cluster per electrode (the default) or across all candidate clusters, then writes downstream-compatible significance CSVs.
-2. **Encoding model training** (`make train`) — trains ridge regression encoding models on significant electrodes. New `encoding_results.joblib` files are intentionally slim: they keep correlations, fold indices, target scalers, electrode names, run metadata, optional shared word-selection provenance, and optional arbitrary-baseline correlations, while avoiding fitted model and coefficient payloads.
-3. **RRR analysis** (`make rrr`) — fits raw-input reduced-rank regression from embeddings to neural targets, sweeps rank-k projections, and compares rank-k neural-relevance ridge predictions against fresh full-ridge fold baselines. Per-target NR correlations are saved by default, and `RRRConfig.refresh` refreshes both rank outputs and fold-level full-model metrics. `RRRConfig.orthonormalize_a_per_rank` optionally applies reduced QR to each rank-specific `A[:, :k]` before fitting the projected ridge, providing a subspace-scaling sanity check without changing saved factors. `RRRConfig.save_b_matrices` optionally saves target factors and enables raw-RRR prediction metrics; its per-target correlations are separately controlled by `save_rrr_corr_per_target`. The retained RRR script can also reuse shared word selections saved by significance/encoding runs, run a PCA subspace baseline when `RRRConfig.run_pca_baseline` is enabled, evaluate a `cross_dataset` mode from rank-specific source-run averaged RRR/PCA subspaces, and run `multi_view` analyses that project several saved RRR views at configured ranks, union their target-dataset significant electrodes, fit a fold-local Himalaya banded-ridge full model, and sweep the rank of the resulting joint neural-relevance space. Its cross-subject-only `temporal_windows` mode independently fits configured half-open lag ranges such as pre- and post-word-onset activity, writing standard RRR/PCA artifacts and target manifests under `temporal_window_rrr/<window>/` plus a combined `window_summary.csv`. Cross-dataset consumers use `subspace_aggregation: extrinsic` by default and can select `unnormalized` to preserve saved-factor magnitudes during fold aggregation. An optional circular-shift null-augmented rank check remains available through `RRRConfig.run_null_augmented`. RRR and PCA baselines save fold-level `A.npy` subspace factors for downstream comparison.
+The Makefile exposes the retained workflows. Config-driven artifact producers save
+their effective configuration beside their outputs and retain their existing result
+formats so completed runs remain reusable.
 
-`make rank-saturation` recursively discovers completed paired RRR/PCA result directories and writes combined rank curves, per-electrode or per-voxel best-rank gap panels, and machine-readable summaries under `dataset/condition/model/layer/`, where condition is `cross_dataset` or `internal_rrr`. For fMRI, only `within_fmri_rrr*` runs are internal; transferred runs such as `from_cars-2_rrr` and `from_podcast_rrr` are cross-dataset. Pass `RANK_SATURATION_ARGS="--condition internal_rrr"` or `"--condition cross_dataset"` to load and bootstrap only one condition. Independent analyses run in four worker processes by default (`--jobs 1` restores serial execution). Correlations are averaged in Fisher-z space. For iEEG, saturation is the earliest rank whose aggregate performance reaches 98.5% of the aggregate peak. For fMRI, saturation instead uses the simultaneous max-statistic equivalence-to-best test across all saved ranks, with the practical margin set to 1.5% of the best Fisher-z performance by default. Each plot uses the Figure 1a publication style, overlays RRR and PCA with their condition-specific saturation ranks, and shows the full-model performance as a horizontal baseline. Aggregate RRR-versus-PCA plots share log-scale rank ticks starting at 1 and ending at the smallest power of two covering the maximum saturation rank across all plotted datasets. iEEG responses are first averaged across folds and lags within each electrode. For fMRI, the default uncertainty bootstrap uses configurable physical-space cubes (10 mm by default); `--fmri-bootstrap-unit subject` instead computes an equal-subject-weighted performance curve and bootstraps subjects while retaining the per-voxel gap panel. Cross-model violin summaries explicitly label each distribution's arithmetic mean and show the family-level sign-flip significance star without printing the numeric p-value on the figure.
+## Source layout
 
-A separate deep-fMRI-dataset workflow lives under `scripts/fmri/` and deliberately does not generalize the iEEG dataset adapters. The external dataset repository is stored at `data/deep-fMRI-dataset/` by default. The shared story resolver temporarily and explicitly holds out `life` and `fromboyhoodtofatherhood` for every subject because their response files are missing for UTS04 and UTS09, respectively; the centralized `TEMPORARILY_HELD_OUT_FMRI_STORIES` constant is the intended place to restore them after fixing the data. `make fmri-generate-embeddings` writes one contextual-embedding artifact set per selected story. `make fmri-sig` filters each subject to voxels with finite responses at every TR of every selected training story, fits full-embedding ridge models with one scan session held out at a time, and applies per-subject BH-FDR to a deterministic within-story circular-shift null. Significance CSVs retain original voxel indices and mark filtered voxels explicitly. `make fmri-rrr` supports `source_mode: cross_dataset`, which aggregates saved iEEG RRR and optional PCA folds, and `source_mode: within_fmri`, which learns a full FIR RRR factor from all training stories, splits it by delay, and aggregates the delay factors into shared embedding bases. Both modes Lanczos-align each story and load only significant response columns once per layer, reuse those in-memory arrays across the full rank sweep, and skip valid completed baseline/rank artifacts when resuming; optional one-rank CPU prefetch can overlap design preparation with a GPU fit. The within-fMRI path also fits PCA on the TR-aligned, trimmed, story-z-scored representation immediately before FIR expansion, runs its exact SVD on CUDA when available unless configured otherwise, and can run the dense-RRR SVD either on CPU in float64 for numerical robustness or as a seeded randomized low-rank decomposition that computes only the requested leading components. Its large target-space `B` factor is omitted by default and can be explicitly saved when needed. Both paths project cached TR-aligned embeddings through each rank-specific basis and fit fMRI ridge encoders against all selected subjects' significant voxels, reporting Pearson correlation and R² beside a full-embedding ridge ceiling. fMRI-derived full FIR factors, delay blocks, PCA axes, and rank-specific bases are saved for reuse.
+- `src/core/config.py` defines configuration dataclasses for retained entrypoints.
+- `src/core/registry.py` defines embedding and dataset adapter registries.
+- `src/utils/shared/` contains configuration, embedding, iEEG/fMRI loading, ridge,
+  correlation, alpha-grid, and tensor helpers used by multiple workflows.
+- `src/utils/significance/` contains iEEG lag-cluster significance helpers.
+- `src/utils/rrr/` contains dense RRR fitting, input preparation, evaluation,
+  multiview handling, result helpers, and saved-subspace I/O.
+- `src/utils/subspace_comparison/` contains saved-space metrics and directed comparison
+  orchestration.
+- `src/utils/language_interpret/` contains decoding, reconstruction, and task registry
+  utilities shared by iEEG and fMRI scripts.
+- `src/utils/language_features/` contains the reusable annotation pipeline and built-in
+  providers.
+- `src/utils/atlas/` and `src/utils/plotting/` contain atlas and retained plotting code.
 
-The directed cross-dataset configuration matrix lives under `configs/cross_dataset/`. It covers every Podcast, Cars 2, and fMRI source/target direction for the six contextual `PIPELINE_MODELS` at layer 0 and 25%, 50%, 75%, and 100% depth. GloVe is intentionally omitted from fMRI connections. List-valued fMRI layers fan out into independent runs, and `{layer}` placeholders in artifact paths resolve per run. iEEG transfer from fMRI uses the single ambient-space basis saved at each `within_fmri_rrr/rrr/k<rank>/A.npy`; iEEG-to-iEEG and iEEG-to-fMRI transfers retain fold-factor aggregation.
+Imports use these explicit package paths. The former flat `src.utils.<module>` paths
+are intentionally unsupported.
 
-`scripts/submit_rrr_matrix.py` releases this matrix to SLURM with one job per dataset/model/stage and all five model layers processed inside that job. Within-dataset RRR jobs receive `afterok` dependencies on matching significance jobs. Every directed transfer receives dependencies on its source within-dataset RRR and its target significance job. Dataset, model, and stage filters support partial releases; cross-only releases assume prerequisite artifacts already exist. `make submit-rrr-matrix` exposes the launcher through `PIPELINE_ARGS`, and `--dry-run` prints the complete graph without submitting it.
+## Tests
 
-The fMRI preprocessing follows `data/deep-fMRI-dataset/encoding/encoding.py`: word vectors are Lanczos-resampled to TR times, stimulus columns are z-scored within each story, and delays 1–4 are concatenated by default. Unlike upstream, FIR delays are applied separately per story so story boundaries are zero-padded rather than carrying delayed features across the inter-story silence. The slice is exactly `[5 + trim : -trim]`; with the default `trim=5`, the fixed five-TR leading alignment adjustment makes the effective removal 10 TRs at the start and 5 at the end, while the configurable analysis trim itself is five TRs on both ends.
+Tests cover behavior reachable from retained scripts: configuration and layer fanout,
+data/epoch loading, embeddings, significance, RRR and multiview analysis, fMRI,
+subspace comparison, language interpretation/features, atlas lookup, and Makefile batch
+submission behavior.
 
-Downstream pairwise subspace analysis is available through `scripts/rrr/compare_subspaces.py`. Its config expands model keys across offsets, layers, and factor-generating datasets, requires every expected RRR and optional PCA artifact, and supports three mode-scoped ordered comparisons: `equal_capacity` sweeps globally shared ranks, `capacity_controlled` puts both spaces at the smaller of their configured saturation ranks, and `full_neural_space` gives each space its own configured saturation rank. Saturation ranks are declared per model, RRR/PCA kind, generating dataset, and layer. Within-evaluation iEEG factors remain fold matched; factors learned on another dataset use their extrinsic Grassmann mean. Cross-offset rows align through canonical stimulus-word IDs, and all fitted ridge and Procrustes maps are trained outside the intersected held-out rows. Pairwise projection and scoring run in float64 on CUDA; ridge uses Himalaya five-fold cross-validation with one shared alpha, while Procrustes, CKA, and RSA use Torch operations. CCA is not part of this comparison. Each mode writes global source-by-target matrices and fixed-hierarchy heatmaps ordered by generating dataset, offset, model, layer, and RRR/PCA kind, with detailed fold tables split under `<source_dataset>/<target_dataset>/`; unequal-capacity artifacts retain source and target rank matrices. Evaluation loading is dataset modular: registered iEEG stimuli use saved neural-analysis folds, while fMRI can be compared at the individual-word level on held-out stories without Lanczos or FIR expansion. Config-driven partial-support MAXVAR GCCA is available through `scripts/gcca/run_gcca.py`. It uses an explicitly configured anchor and independently ranked views, selects component-specific support and ridge values within the anchor folds, and saves calibrated per-view ambient maps, word-level scores, reliability sufficient statistics, and fold-stable axis/block diagnostics under a dataset-scoped directory. `scripts/gcca/run_encoding.py` evaluates calibrated fold-specific GCCA embeddings against the union of significant electrodes from anchor-dataset member runs. Its optional `run_rrr` mode fits fold-local RRR to each shared-dimension GCCA encoder, saves the full rank-k input factor `A`, transforms the GCCA embeddings through it, and uses a fresh ridge encoder for the final GCCA metrics. It does not refit raw-embedding baselines; instead it loads existing RRR per-target results, matches `(subject, electrode, lag)` identities, and writes direct correlation-versus-rank comparisons. The companion comparison notebook provides the interactive component explorer.
-
-Saved RRR input subspaces can also be probed with `scripts/rrr/run_language_decoding.py`. The config-driven Podcast and Brain Treebank analyses project word embeddings through within-dataset fold-matched or cross-dataset fold-averaged `A` factors, then fit fold-safe linear decoders for lexical, syntactic, predictability, sentence, intonation-unit, and narrative-progress targets. Continuous targets use batched Himalaya RidgeCV with configurable `auto`, `cuda`, or `cpu` execution; categorical targets retain scikit-learn LogisticRegressionCV on CPU. Saved multiview RRR directories are supported directly: decoding reconstructs every configured fixed-rank model view, uses their stacked projection as the full reference, and applies the final multiview factors. Cross-dataset multiview transfer first composes each fold's block-diagonal component factors with its final factor and only then aggregates the end-to-end factors. An optional PCA run path evaluates saved PCA factors through the same folds, tasks, ranks, and decoders, producing combined RRR/PCA tables and performance plots against one shared full-embedding reference. Paired runs also reconstruct held-out continuous or class-matched decision scores from the saved weights, report RRR–PCA score correlation and continuous-task error correlation by rank, and overlay both agreement measures on the task plots. It saves reduced and ambient embedding-space decoder weights at every task/subspace/rank/fold, alignment provenance, and reusable tables. The fMRI internal decoder instead trains on the retained training stories, selects regularization with leave-one-session-out inner folds, and reports metrics only on the shared `wheretheressmoke` test story, which was excluded from the fMRI ridge, RRR, and PCA fits. `scripts/submit_language_decoding.py` submits one internal RRR/PCA job per model class from dataset manifests under `configs/language_decoding/internal/`; each job processes every completed configured layer and skips incomplete RRR/PCA pairs. New targets are registered as word-aligned getter functions in `src/utils/language_tasks.py`.
-
-The complementary `scripts/rrr/run_language_reconstruction.py` linearly predicts matched-rank RRR and automatically resolved PCA representations from configurable predictor sets: registered language tasks, same-word GloVe vectors as a word-specific proxy, or their combined design. GloVe comparisons use one shared covered-word selection across conditions. Fold-local preprocessing and multi-output ridge regression evaluate both raw neurally weighted RRR coordinates and orthonormalized span coordinates; cross-dataset weighted transfer uses the rotation-invariant leading factor of the mean source-fold `A A^T` operator. Outputs include multivariate R², coordinate correlation, linear CKA, paired RRR-minus-PCA and predictor-set contrast tables, and rank plots.
-
-`scripts/rrr/run_language_axis_encoding.py` tests whether saved task-decoding axes account for neural encoding within matched-rank RRR and PCA spaces. It evaluates individual and joint task components, the representation remaining after removing the joint task span, actual task-label encoders, and matched random spans. Raw-coordinate and train-whitened projection geometries are both supported; whitening determines the split but maps both additive components back into the original rank coordinates. The supplied language-decoding run provides the exact folds, task weights, dataset configuration, and within- or cross-dataset factor aggregation.
-
-Config-driven artifact producers save their effective post-override configuration as `config.yml` in the task output directory. Existing matching configs can resume; artifact-defining mismatches require `refresh: true`. Significance and encoding retain their shared model result root and store configs in `significance/` and `encoding/` respectively.
-
-Reusable word-level annotations can be generated independently with `scripts/utilities/generate_language_features.py` (`make language-features`). Podcast, Brain Treebank, and story-batched deep-fMRI loaders produce standardized stimulus documents, and resource-bundled providers emit a word table plus span/relation/parser-token/timed-segment sidecars and a checksummed provenance manifest. All three datasets use GPT-2 small for standardized word surprisal: story-reset causal context of up to 1,024 preceding BPE tokens, subtoken surprisals summed in bits. `make self-surprisal` additionally writes model-specific word-surprisal and first-subtoken entropy artifacts for the internal language-decoding manifests. Each target uses all available real preceding context up to the configured limit, excludes left padding with an attention mask, and is processed in adaptively sized batches; causal models use their own final LM head and tokenizer (including the seeded random GPT-2 XL), while RoBERTa intentionally uses GPT-2 small for both values. The fMRI companion `scripts/utilities/generate_fmri_language_boundaries.py` uses TED2020-corrupted English Segment Any Text for sentence boundaries and the locally cached PSST speech model for intonation-unit boundaries, snapping both outputs back to the exact TextGrid word sequence. Providers cover native controls, local pyannote Community-1 speaker diarization, lexical norms, Lancaster/VAD derivatives, SWOW associations, explicit WordNet MFS variants, a common Stanza UD parse, conservative disfluency/lexical-recurrence labels, and Stanza named entities/coreference. Diarization uses exclusive speaker turns, canonicalizes anonymous clusters by first appearance, and assigns words by greatest temporal overlap while retaining the turns and coverage diagnostics for audit. The Podcast language-decoding task registry consumes the standardized token artifact after validating it against the embedding transcript; only the legacy three-way surprisal class still comes from its original CSV. See `docs/language_feature_generation.md` for the artifact contract, decoding-task inventory, resource staging, provider extension points, and feasibility catalog.
-
-Existing non-GloVe Podcast encoding artifacts that predate saved word-row provenance can be repaired without retraining by `scripts/utilities/backfill_podcast_word_selection.py`. It reconstructs per-subject selections from the HDF5 epoch caches, requires the saved folds to partition those rows exactly, and defaults to a non-writing preflight unless `--apply` is supplied.
-
-The Makefile exposes the language probe as `make language-decoding` and also provides batch targets for releasing multiple config runs:
-`make generate-embeddings-batch`, `make sig-batch`, and `make rrr-batch`. `make temporal-windows-batch` submits one temporal-window RRR job per model and dataset across Podcast and Cars 2 by default; each job processes all of its config's sampled layers sequentially. `make sig-rrr-batch` submits paired significance and cross-subject RRR jobs for each model in `PIPELINE_MODELS`; `DATASET` selects `podcast` or `cars-2`, and each RRR job receives an `afterok` dependency on its matching significance job. Random-init embedding runs can use `make generate-random-embeddings`, which wraps `scripts/utilities/generate_random_embeddings.py`.
-
-## Generating Embeddings
-
-`make generate-embeddings EMBED_CONFIG=configs/embeddings/generate_<model>.yml` runs `scripts/utilities/generate_embeddings.py`, which loads HuggingFace models through `transformers`, loads words through the active dataset adapter, and writes per-token contextual embeddings.
-
-For the repository's default `PIPELINE_MODELS`, `scripts/utilities/cache_pipeline_models.py` downloads the five required Hugging Face models into the local paths used by the embedding configs. It retains one weight serialization per model (preferring safetensors, otherwise PyTorch) plus only the configuration and tokenizer files needed for offline loading; the random GPT-2 XL control reuses GPT-2 XL and GloVe needs no Hugging Face assets. `scripts/fmri/generate_pipeline_embeddings.py` applies those same flat model configs to every story selected by the fMRI template, so model, tokenizer, layer, attention, dtype, and output-name settings remain shared across the Cars 2 and fMRI embedding runs. Pipeline embedding configs save layer 0 and the layers at 25%, 50%, 75%, and 100% model depth; GPT-2 XL retains the `gpt2-xl-batch` output name.
-
-HuggingFace generation tokenizes each transcript word independently with the same space-prefixed convention as `data/code/llm.py` for all model types, then uses a sliding window controlled by `context_window` and `stride`. Causal models use native causal attention; bidirectional models use `attention_mode=bidirectional_strict` so each target sees only preceding tokens. Set `random_init_model: true` to use a model id as the tokenizer and architecture source while initializing fresh random weights.
-
-Outputs use the existing layout:
-
-- Podcast: `data/stimuli/{output_name}/`
-- Brain Treebank: `data/stimuli/{output_name}/movie-{movie}/`
-- Files: `features.hdf5`, `transcript.tsv`, `metadata.json`, and, for podcast-compatible causal LM runs, `performance.json`
-
-Downstream configs can store list-valued `encoding.per_model_config.layer` entries. The entrypoints fan those out into one scalar-layer run at a time before deriving result directories or loading embeddings.
-
-## File Reference
-
-### Root
-
-| File | Purpose |
-|------|---------|
-| `Makefile` | Targets for retained pipeline stages and utilities: significance, encoding training, RRR, ordered subspace comparison, language decoding, plots, embedding generation, random embeddings, epoch precompute, atlas printing, and tests |
-| `submit.sh` | SLURM job submission script |
-| `pytest.ini` | Pytest config |
-| `rrr-playground.py` | Minimal Marimo playground for loading a saved single- or multiview RRR run's fold factors and matched held-out embeddings for low-rank projection |
-
-### `configs/`
-
-| Path | Purpose |
-|------|---------|
-| `configs/encoding/` | Encoding training configs |
-| `configs/significance/` | Lag-cluster significance configs |
-| `configs/rrr/` | RRR configs, including optional embedded PCA settings and an example saved-view banded RRR analysis in `multi_view.yml` |
-| `configs/rrr/language_decoding.yml` | Example podcast language-feature decoding sweep over saved RRR and optional PCA input factors |
-| `configs/language_decoding/internal/` | Dataset-specific feature sets and model/result templates for internal RRR/PCA decoding batches |
-| `configs/rrr/language_reconstruction.yml` | Example linear task-to-subspace reconstruction sweep over matched RRR/PCA ranks |
-| `configs/rrr/language_axis_encoding.yml` | Task-axis sufficiency/removal neural encoding over saved RRR/PCA decoder weights |
-| `configs/language_features/` | Podcast and Brain Treebank annotation-generation and explicit resource-staging configs |
-| `configs/rrr/compare_subspaces*.yml` | Model/dataset matrices for ordered GPU ridge, Procrustes, CKA, and RSA comparisons over saved RRR/PCA spaces, including one rank-32 job config per evaluation dataset |
-| `configs/gcca/maxvar_gcca.yml` | Example anchor/view configuration for partial-support MAXVAR GCCA and downstream score artifacts |
-| `configs/gcca/encoding.yml` | Downstream calibrated GCCA encoding and saved-RRR comparison configuration |
-| `configs/embeddings/` | HuggingFace and random-init embedding generation configs |
-| `configs/precompute_epochs/` | Epoch-cache precompute configs |
-| `configs/fmri/` | Story embedding, voxel significance, and cross-dataset RRR/PCA configs for deep-fMRI-dataset |
-| `configs/cross_dataset/` | Directed Podcast/Cars 2/fMRI transfer matrix for contextual `PIPELINE_MODELS`, plus fMRI significance and within-fMRI source configs |
-| `configs/brain_treebank/` | Brain Treebank scoped embedding, epoch, significance, training, and RRR configs; Cars 2 mirrors the podcast model-folder layout for significance and cross-subject/leave-one-subject-out RRR configs |
-
-### `scripts/`
-
-| File | Purpose |
-|------|---------|
-| `scripts/sig_lags/run_significance.py` | Cluster-based lag significance entrypoint with configurable null count, seed, and electrode- or cluster-level global FDR; writes significance CSVs, the null distribution, and per-subject test-fold index artifacts for RRR |
-| `scripts/encoding/train_encoding_models.py` | Ridge encoding training entrypoint; writes slim per-subject `encoding_results.joblib`, `corrs.npy`, optional `arbitrary_corrs.npy`, plots, and alpha diagnostics |
-| `scripts/rrr/run_rrr.py` | Raw-input RRR rank sweep with full-ridge baselines, configurable temporal-window target analyses, cross-dataset evaluation, and multiview banded-ridge analysis over saved RRR subspaces |
-| `scripts/rrr/plot_rank_saturation.py` | Recursively discover paired RRR/PCA runs and write combined full-baseline performance and per-electrode/per-voxel best-rank gap plots under a dataset/condition/model/layer hierarchy. Saturation is the earliest rank simultaneously equivalent to the best rank under an electrode- or voxel-block-bootstrap max-statistic test; iEEG uses a dataset-level practical margin derived from equal-subject full-model held-out-fold resolution, while fMRI retains a configurable fraction-of-best margin. Dataset/condition summaries show paired RRR/PCA violins, boxplots, points, and an exact model-family sign-flip test. |
-| `scripts/rrr/compare_subspaces.py` | Config-driven ordered RRR/PCA comparison matrix with leakage-safe evaluation folds, cross-dataset factor aggregation, reusable matrices/tables, and global hierarchical heatmaps |
-| `scripts/rrr/run_language_decoding.py` | Decode registered word-level language targets across saved RRR and optional PCA rank sweeps with leakage-safe within- or cross-dataset folds |
-| `scripts/rrr/run_internal_language_decoding_batch.py` | Run every completed internal RRR/PCA layer for one dataset/model manifest entry |
-| `scripts/fmri/run_internal_language_decoding_batch.py` | Train language decoders on fMRI training stories and evaluate internal RRR/PCA spaces only on `wheretheressmoke` |
-| `scripts/bootstrap_language_decoding.py` | Test Podcast, Cars 2, or held-out-story fMRI RRR-vs-PCA decoding differences with independent within-dataset paired sentence-block bootstraps at each rank and equal-model-weighted hierarchical model/layer summaries. It retains raw RRR/PCA curves and adds relative-preference curves with transformed bootstrap intervals and FDR markers. A summary-only option skips per-model/layer inference. The `all` mode runs all three within-dataset analyses without cross-dataset averaging or resampling, then overlays their relative curves for shared task/rank cells. |
-| `scripts/bootstrap_selected_language_effects.py` | Run the targeted sentence-position, self-entropy architecture, and concreteness smooth RRR-preference tests across Podcast, Cars 2, and fMRI using paired sentence blocks and equal-model, nested-layer bootstraps; supports progress-reported multiprocessing across dataset/task/rank cells and writes one rank table, dataset/rank BH-FDR results, coverage metadata, and combined publication-style plots. |
-| `scripts/plot_mean_language_decoding.py` | Quickly plot fixed within-dataset and equal-dataset mean RRR/PCA language-decoding curves for Podcast, Cars 2, and fMRI without bootstrapping. It also converts the hierarchically averaged RRR and PCA curves into relative RRR-versus-PCA preference, with a configurable low-performance threshold. All summaries use cross-dataset-shared task/rank cells and model identities, and optional run-name selection uses the same decoding-result discovery as bootstrap inference. |
-| `scripts/plot_entropy_architecture_preference.py` | Plot self-entropy or self-surprisal RRR-versus-PCA preference across Podcast, Cars 2, and fMRI, comparing an equal-weighted average of trained causal models with RoBERTa after averaging layers within each model and excluding the random model. Supports the original relative ratio or the optional smooth signed normalization. |
-| `scripts/plot_surprisal_layer_group_preference.py` | Compare self-surprisal or sentence-position RRR-versus-PCA preference between configurable sampled-depth groups (first four versus final, or first three versus final two) of trained causal models across Podcast, Cars 2, and fMRI, retaining only models with complete paired depth results. Supports direct score differences, the original relative-preference ratio, or an optional smooth signed normalization stabilized near zero by a configurable constant. |
-| `scripts/plot_bootstrap_task_smooth_preference.py` | Plot the smooth signed RRR-versus-PCA preference for a selected task and set of dataset bootstrap summaries, optionally restricting cells to a fixed number of contributing models and marking saved significant RRR-favored cells. |
-| `scripts/submit_language_decoding.py` | Submit internal language-decoding SLURM jobs for selected models across one, several, or all datasets, optionally with per-model surprisal/entropy prerequisites |
-| `scripts/rrr/run_language_reconstruction.py` | Jointly reconstruct matched-rank weighted/span RRR and PCA representations from configurable registered language-task variables |
-| `scripts/rrr/run_language_axis_encoding.py` | Encode neural responses from saved task axes, their residuals, actual labels, and matched random spans in RRR/PCA spaces |
-| `scripts/rrr/plot_language_reconstruction_task_gaps.py` | Combine selected reconstruction runs into fold-paired RRR-minus-PCA gap tables and weighted/span rank plots |
-| `scripts/gcca/run_gcca.py` | Config-driven partial-support MAXVAR GCCA; saves fold models, calibrated word representations, support/reliability tables, and stability blocks |
-| `scripts/gcca/run_encoding.py` | Evaluate calibrated GCCA ridge encodings without rebuilding baselines and compare matched targets with saved RRR runs |
-| `scripts/utilities/generate_embeddings.py` | Generate contextual HuggingFace embeddings |
-| `scripts/utilities/cache_pipeline_models.py` | Cache model and tokenizer snapshots required by the default `PIPELINE_MODELS` for offline generation |
-| `scripts/utilities/export_transcript.py` | Export a dataset adapter's normalized transcript word table for review |
-| `scripts/utilities/generate_language_features.py` | Stage pinned annotation resources and generate dataset-standard token/span/relation artifacts |
-| `scripts/utilities/generate_cars2_concreteness.py` | Add only resource-backed concreteness columns to the existing Cars 2 token artifact while preserving all other columns |
-| `scripts/utilities/generate_surprisal.py` | Resumably generate standardized GPT-2-small word surprisal and entropy across Podcast, Cars 2, and shared fMRI stories without rerunning unrelated providers |
-| `scripts/utilities/generate_self_surprisal.py` | Resumably generate per-model word surprisal and entropy artifacts used by the `self_surprisal` and `self_entropy` decoding tasks |
-| `scripts/utilities/generate_fmri_language_boundaries.py` | Batch SaT sentence segmentation and PSST IU transcription for timed deep-fMRI stories |
-| `scripts/utilities/generate_fmri_iu_features.py` | Populate fMRI word-level IU position, onset, end, and length from aligned PSST boundaries |
-| `scripts/utilities/generate_fmri_interpretable_features.py` | Populate the common fMRI decoding features from timing, sentence structure, Stanza UD syntax, and lexical norms |
-| `scripts/utilities/generate_random_embeddings.py` | Generate random-init contextual embeddings |
-| `scripts/utilities/precompute_epochs.py` | Build dataset-scoped, word-aligned 32 Hz epoch-tensor caches |
-| `scripts/utilities/generate_plots.py` | Regenerate correlation plots from existing encoding results |
-| `scripts/utilities/electrode_region_distribution.py` | Dataset-aware electrode region summaries and plots |
-| `scripts/utilities/print_atlas_regions.py` | Print atlas region labels for electrodes |
-| `scripts/utilities/download_model.py`, `download_tokenizer.py` | Cache HuggingFace model/tokenizer assets |
-| `scripts/fmri/generate_embeddings.py` | Generate contextual embeddings independently for each configured fMRI story |
-| `scripts/fmri/generate_pipeline_embeddings.py` | Generate fMRI story embeddings using the ordinary flat model configs and shared fMRI dataset settings |
-| `scripts/fmri/run_significance.py` | Session-held-out voxel significance with within-story circular-shift nulls and per-subject FDR |
-| `scripts/fmri/run_cross_dataset_rrr.py` | Evaluate aggregated cross-dataset factors or learn FIR-aware fMRI RRR and pre-FIR PCA axes on significant voxels |
-| `scripts/submit_rrr_matrix.py` | Submit filtered significance, within-RRR, and directed cross-dataset SLURM jobs with `afterok` dependencies |
-
-### `notebooks/`
-
-| File | Purpose |
-|------|---------|
-| `notebooks/rank-correlation-distributions.py` | Marimo app for comparing rank-k, reference, and null-augmented correlation distributions across electrode, lag, and cluster groupings |
-| `notebooks/fisher-ecog.py` | Marimo app for generating word-level Fisher participation-ratio features from causal LMs or Whisper ASR encoder states and optionally comparing saved features with ECoG responses |
-| `notebooks/compare-subspaces.py` | Marimo app for discovering saved RRR/PCA `A.npy` factors, comparing selected or fold-averaged RRR subspaces with principal angles and Grassmann/spectral/Fubini-Study distances, cross-rank Grassmann summaries, optional intrinsic Grassmann means, random-subspace nulls, automatically resolved cross-side PCA sibling baselines, RSA over projected transcript word embeddings, held-out Procrustes/CCA alignment within or across datasets, partial-support multiview MAXVAR GCCA with union-rank capacity, per-view ambient maps, and fold-stable axis/block diagnostics, and subplot summaries of batch CCA/RSA outputs |
-| `notebooks/rrr-srrr-review.py` | Marimo review app for RRR/SRRR outputs, including A-direction activation examples, hypothesis-feature regressions against A-direction activations, B-matrix temporal/brain-map views, and cross-fold/source comparisons |
-
-### `src/`
-
-| File | Purpose |
-|------|---------|
-| `src/core/config.py` | Dataclasses for retained entrypoints and utilities: `EncodingConfig`, `SignificanceConfig`, `RRRConfig`, subspace comparison, embedding generation, epoch precompute, and electrode-region configs |
-| `src/core/registry.py` | Embedding getter and dataset adapter registries |
-| `src/utils/config_utils.py` | YAML loading, CLI overrides, and layer fanout |
-| `src/utils/data_loaders.py` | Dataset-dispatched iEEG loading, aligned epoch extraction/cache I/O, significance loading, and X/Y assembly |
-| `src/utils/embeddings.py` | Contextual and static embedding loaders |
-| `src/utils/encoding.py` | Cross-validation ridge training, slim encoding result serialization, fold baseline training for RRR, offsets, and correlation loaders |
-| `src/utils/significance.py` | Correlation, FDR, lag-cluster scoring, and circular-shift null helpers |
-| `src/utils/alpha_grids.py`, `constants.py` | Shared ridge alpha-grid policy and diagnostics |
-| `src/utils/srrr.py`, `rrr_utils.py`, `subspace_utils.py`, `subspace_compare.py`, `subspace_io.py`, `directed_subspace_compare.py` | RRR factor fitting, result I/O, saved-space discovery, aggregation, dataset-modular ordered comparison loading, and subspace metric helpers |
-| `src/utils/gcca.py`, `multiview_rrr.py` | Config-driven partial-support GCCA orchestration and shared saved-view preparation/banded-ridge utilities for multiview RRR |
-| `src/utils/decomposition.py` | Shared multi-embedding alignment, raw neural-target, fold, and target-manifest preparation used by RRR and GCCA encoding |
-| `src/utils/language_features.py`, `language_feature_providers.py` | Standardized stimulus documents, resource staging, provider orchestration, and reusable native/lexical/WordNet/UD annotation artifacts |
-| `src/utils/language_tasks.py`, `language_decoding.py` | Extensible podcast language-target registry plus saved-RRR projection, linear decoding, artifact, and plot orchestration |
-| `src/utils/language_reconstruction.py` | Fold-local task/GloVe predictor preprocessing, weighted/span factor preparation, reconstruction metrics, and paired RRR/PCA and predictor-set summaries |
-| `src/utils/language_axis_encoding.py` | Raw/whitened task-span decomposition, residual/random controls, and neural encoding from saved decoder axes |
-| `src/utils/plotting.py` | Correlation, alpha, RRR/PCA rank, and utility plots |
-| `src/utils/atlas.py` | Atlas lookup and electrode-region grouping |
-| `src/utils/fmri.py` | deep-fMRI story resolution, TextGrid loading, Lanczos/TR alignment, exact trimming/FIR preprocessing, response assembly, session folds, and null helpers |
-
-### `tests/`
-
-Focused retained-behavior tests cover:
-
-- `test_encoding.py`
-- `test_significance.py`
-- `test_rrr.py`
-- `test_config_utils.py`
-- `test_data_loaders.py`
-- `test_embeddings.py`
-- `test_dataset_registry.py`
-- `test_alpha_diagnostics.py`
-
-Additional tests cover live shared utility modules such as correlations, atlas lookup, examples, layer fanout, and embedding-generation helpers.
+See [language_feature_generation.md](language_feature_generation.md) for the reusable
+language-feature artifact contract and provider details.

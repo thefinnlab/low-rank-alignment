@@ -1,9 +1,18 @@
 """Dataclass configs for encoding model training and significance testing."""
 
+
 import math
+
+
 import os
+
+
 from dataclasses import dataclass, field
+
+
 from enum import Enum
+
+
 from typing import Any
 
 
@@ -466,53 +475,6 @@ class LanguageReconstructionConfig:
 
 
 @dataclass
-class LanguageAxisEncodingConfig:
-    """Encode neural responses from saved language-decoder task axes."""
-
-    language_decoding_run_path: str | None = None
-    output_dir: str | None = None
-    rank_grid: list[int] = field(default_factory=lambda: [32])
-    tasks: list[str] = field(
-        default_factory=lambda: [
-            "surprisal",
-            "entropy",
-            "iu_position",
-            "iu_onset",
-            "sentence_position",
-        ]
-    )
-    geometries: list[str] = field(default_factory=lambda: ["raw", "whitened"])
-    random_control_draws: int = 20
-    random_seed: int = 42
-    device: str = "auto"
-    refresh: bool = False
-
-    def __post_init__(self):
-        self.validate()
-
-    def validate(self):
-        if not self.language_decoding_run_path:
-            raise ValueError("language_decoding_run_path is required")
-        if not self.rank_grid or any(int(rank) < 1 for rank in self.rank_grid):
-            raise ValueError("rank_grid must contain positive integers")
-        if len(set(map(int, self.rank_grid))) != len(self.rank_grid):
-            raise ValueError("rank_grid must not contain duplicate ranks")
-        if not self.tasks or any(not str(task).strip() for task in self.tasks):
-            raise ValueError("tasks must contain non-empty names")
-        if len(set(self.tasks)) != len(self.tasks):
-            raise ValueError("tasks must not contain duplicate names")
-        allowed = {"raw", "whitened"}
-        if not self.geometries or set(self.geometries) - allowed:
-            raise ValueError(f"geometries must be drawn from {sorted(allowed)}")
-        if len(set(self.geometries)) != len(self.geometries):
-            raise ValueError("geometries must not contain duplicate names")
-        if isinstance(self.random_control_draws, bool) or self.random_control_draws < 0:
-            raise ValueError("random_control_draws must be a non-negative integer")
-        if self.device not in {"auto", "cpu", "cuda"}:
-            raise ValueError("device must be one of ['auto', 'cpu', 'cuda']")
-
-
-@dataclass
 class LanguageFeatureGenerationConfig:
     """Generate reusable, stimulus-aligned language annotation artifacts."""
 
@@ -731,106 +693,6 @@ class SubspaceComparisonConfig:
             raise ValueError("ridge_alphas must contain positive values")
         if self.rsm_metric not in {"cosine", "euclidean"}:
             raise ValueError("rsm_metric must be either 'cosine' or 'euclidean'")
-
-
-@dataclass
-class MaxvarGCCAViewConfig:
-    """One brain-aligned subspace view in a MAXVAR GCCA analysis."""
-
-    name: str
-    rrr_config: str
-    unit_dir: str
-    rank: int
-    kind: str | None = None
-
-
-@dataclass
-class MaxvarGCCAConfig:
-    """Configuration for anchor-scoped partial-support MAXVAR GCCA."""
-
-    anchor: str = ""
-    views: list[MaxvarGCCAViewConfig] = field(default_factory=list)
-    shared_dimensions: list[int] = field(default_factory=lambda: [1, 2, 4, 8, 16, 32])
-    ridge_alphas: list[float] = field(
-        default_factory=lambda: [0.0, 1e-6, 1e-4, 1e-2, 1e-1, 1.0]
-    )
-    support_cumulative_mass: float = 0.8
-    axis_match_correlation_threshold: float = 0.8
-    relative_neighboring_eigengap_threshold: float = 0.05
-    output_root: str = "results/maxvar_gcca"
-    output_dir: str | None = None
-    subspace_aggregation: str = "extrinsic"
-    refresh: bool = False
-
-    def __post_init__(self):
-        self.validate()
-
-    def validate(self):
-        _validate_subspace_aggregation(self.subspace_aggregation)
-        if len(self.views) < 2:
-            raise ValueError("MaxvarGCCAConfig.views must contain at least two views")
-        names = [view.name for view in self.views]
-        duplicates = sorted({name for name in names if names.count(name) > 1})
-        if duplicates:
-            raise ValueError(f"Duplicate GCCA view name(s): {duplicates}")
-        if self.anchor not in names:
-            raise ValueError("MaxvarGCCAConfig.anchor must name one configured view")
-        if any(int(view.rank) < 1 for view in self.views):
-            raise ValueError("Every GCCA view rank must be positive")
-        dimensions = [int(value) for value in self.shared_dimensions]
-        if not dimensions or any(value < 1 for value in dimensions):
-            raise ValueError("shared_dimensions must contain positive integers")
-        if max(dimensions) > sum(int(view.rank) for view in self.views):
-            raise ValueError("A shared dimension exceeds the configured union-rank upper bound")
-        if not self.ridge_alphas or any(float(value) < 0 for value in self.ridge_alphas):
-            raise ValueError("ridge_alphas must contain non-negative values")
-        if not 0 < float(self.support_cumulative_mass) <= 1:
-            raise ValueError("support_cumulative_mass must be in (0, 1]")
-        for name, value in (
-            ("axis_match_correlation_threshold", self.axis_match_correlation_threshold),
-            ("relative_neighboring_eigengap_threshold", self.relative_neighboring_eigengap_threshold),
-        ):
-            if not 0 <= float(value) <= 1:
-                raise ValueError(f"{name} must be in [0, 1]")
-        if not self.output_root or self.output_dir == "":
-            raise ValueError("output_root must be non-empty and output_dir cannot be empty")
-
-
-@dataclass
-class GCCAEncodingConfig:
-    """Downstream neural encoding from saved fold-specific GCCA scores."""
-
-    gcca_dir: str = ""
-    run_name: str = ""
-    shared_dimensions: list[int] = field(default_factory=list)
-    refresh: bool = False
-    averaging_method: str = "contribution"
-    ridge_alphas: list[float] | None = None
-    ridge_cv_folds: int = 5
-    ridge_solver_params: dict | None = None
-    ridge_y_in_cpu: bool | None = None
-    ridge_force_cpu: bool | None = None
-    alpha_grid: dict = field(default_factory=dict)
-    standardize_inputs: bool = False
-    run_rrr: bool = False
-
-    def __post_init__(self):
-        self.validate()
-
-    def validate(self):
-        if not self.gcca_dir:
-            raise ValueError("gcca_dir must be non-empty")
-        if not self.run_name or any(ch in self.run_name for ch in "/\\"):
-            raise ValueError("run_name must be a non-empty directory name")
-        allowed = {"contribution", "equal", "inner_agreement", "inverse_error", "hybrid"}
-        if self.averaging_method not in allowed:
-            raise ValueError(f"averaging_method must be one of {sorted(allowed)}")
-        if self.shared_dimensions and any(int(k) < 1 for k in self.shared_dimensions):
-            raise ValueError("shared_dimensions must contain positive integers")
-        if self.ridge_alphas is not None and (
-            not self.ridge_alphas or any(float(a) < 0 for a in self.ridge_alphas)
-        ):
-            raise ValueError("ridge_alphas must contain non-negative values")
 
 
 @dataclass

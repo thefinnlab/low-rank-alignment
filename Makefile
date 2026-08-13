@@ -14,20 +14,10 @@ SBATCH ?= sbatch
 export PYTHONPATH := $(CURDIR)
 
 # ── Config defaults (override on the command line) ────────────────────────────
-ENCODING_CONFIG ?= configs/encoding/encoding_mid.yml
 SIG_CONFIG      ?= configs/significance/significance_default.yml
 RRR_CONFIG      ?= configs/rrr/rrr_default.yml
-RANK_SATURATION_ARGS ?=
 LANGUAGE_DECODING_CONFIG ?= configs/rrr/language_decoding.yml
-LANGUAGE_DECODING_DATASET ?= podcast
-LANGUAGE_DECODING_MODELS ?= $(foreach model,$(filter-out glove,$(PIPELINE_MODELS)),$(if $(filter gpt2-xl,$(model)),gpt2-xl-batch,$(model)))
-LANGUAGE_DECODING_SUBMIT_ARGS ?=
-FMRI_LANGUAGE_BOOTSTRAP_REPEATS ?= 10000
-FMRI_LANGUAGE_BOOTSTRAP_ARGS ?=
-LANGUAGE_DECODING_BOOTSTRAP_REPEATS ?= 10000
-LANGUAGE_DECODING_BOOTSTRAP_ARGS ?=
 LANGUAGE_RECONSTRUCTION_CONFIG ?= configs/rrr/language_reconstruction.yml
-LANGUAGE_AXIS_ENCODING_CONFIG ?= configs/rrr/language_axis_encoding.yml
 SUBSPACE_COMPARISON_CONFIG ?= configs/rrr/compare_subspaces.yml
 SUBSPACE_COMPARISON_CONFIGS ?= configs/rrr/compare_subspaces_podcast.yml \
 							  configs/rrr/compare_subspaces_cars-2.yml \
@@ -35,8 +25,6 @@ SUBSPACE_COMPARISON_CONFIGS ?= configs/rrr/compare_subspaces_podcast.yml \
 LANGUAGE_FEATURE_CONFIG ?= configs/language_features/podcast.yml
 SURPRISAL_CONFIGS ?= configs/language_features/podcast.yml configs/language_features/brain_treebank.yml configs/language_features/fmri.yml
 SELF_SURPRISAL_CONFIG ?= configs/language_features/self_surprisal.yml
-GCCA_CONFIG     ?= configs/gcca/maxvar_gcca.yml
-GCCA_ENCODING_CONFIG ?= configs/gcca/encoding.yml
 PRECOMPUTE_EPOCHS_CONFIG ?= configs/precompute_epochs/precompute_epochs_default.yml
 EMBED_CONFIG    ?= configs/embeddings/generate_gpt2_xl.yml
 FMRI_EMBED_CONFIG ?= configs/fmri/generate_gpt2_xl.yml
@@ -51,14 +39,9 @@ RUN_DIR         ?=   # required for plots: RUN_DIR=results/my_run
 DATA_ROOT       ?= data
 ATLAS_PATH      ?= atlases/destrieux_2009/destrieux2009_rois_lateralized.nii.gz
 OVERRIDES       ?=   # e.g. OVERRIDES="--encoding.layer=48 --n_permutations=100"
-PIPELINE_ARGS   ?=   # arguments for submit-rrr-matrix
 SUBSPACE_COMPARISON_SBATCH_ARGS ?=
 TEMPORAL_WINDOW_DATASETS ?= podcast cars-2
 TEMPORAL_WINDOW_SBATCH_ARGS ?=
-
-# For downloading model weights.
-# MODELS ?= openai-community/gpt2-xl meta-llama/Meta-Llama-3-8B openai-community/gpt2 EleutherAI/gpt-j-6b FacebookAI/roberta-large
-# MODELS ?= meta-llama/Llama-3.1-8B
 
 # Batch config lists. Override these with whitespace-separated
 # config paths, e.g. SIG_CONFIGS="configs/a.yml configs/b.yml".
@@ -98,17 +81,6 @@ for config in $($(1)); do
 done
 endef
 
-download-models:
-	@for model in $(MODELS); do \
-		echo "Processing $$model..."; \
-		SHORT_NAME=$$(echo $$model | cut -d'/' -f2); \
-		python scripts/utilities/download_model.py \
-			--model-id=$$model \
-			--output-dir=model_cache/models/$$SHORT_NAME \
-			--token $(TOKEN) \
-			--include-tokenizer; \
-	done
-
 # ── Targets ───────────────────────────────────────────────────────────────────
 
 ## Submit (or run) the full significance pipeline
@@ -127,27 +99,6 @@ sig:
 ##   make sig-batch SIG_CONFIGS="configs/significance/a.yml configs/significance/b.yml" CMD=python
 sig-batch:
 	$(call run_config_list,SIG_CONFIGS,significance,scripts/sig_lags/run_significance.py)
-
-## Train encoding models
-## Usage:
-##   make train                                                    # default config
-##   make train ENCODING_CONFIG=configs/encoding_final.yml        # final layer
-##   make train OVERRIDES="--run_name=my_run"                     # set run name
-##   make train CMD=python                                         # run locally
-train:
-	mkdir -p logs
-	$(CMD) scripts/encoding/train_encoding_models.py --config $(ENCODING_CONFIG) $(OVERRIDES)
-
-## Fit partial-support MAXVAR GCCA over configured saved subspace views.
-## Use CMD="uv run python" for a local run.
-gcca:
-	mkdir -p logs
-	$(CMD) scripts/gcca/run_gcca.py --config $(GCCA_CONFIG) $(OVERRIDES)
-
-## Evaluate saved GCCA scores and compare matched targets with existing RRR results.
-gcca-encoding:
-	mkdir -p logs
-	$(CMD) scripts/gcca/run_encoding.py --config $(GCCA_ENCODING_CONFIG) $(OVERRIDES)
 
 ## Build dataset-scoped epoch caches used by downstream analysis.
 ## Usage:
@@ -221,10 +172,6 @@ rrr:
 	mkdir -p logs
 	$(CMD) scripts/rrr/run_rrr.py --config $(RRR_CONFIG) $(OVERRIDES)
 
-## Discover paired RRR/PCA runs and generate combined target-level rank saturation figures.
-## Filter with RANK_SATURATION_ARGS="--condition internal_rrr" (or cross_dataset).
-rank-saturation:
-	uv run python scripts/rrr/plot_rank_saturation.py $(RANK_SATURATION_ARGS)
 ## Compare configured saved RRR/PCA spaces over a shared evaluation stimulus.
 ## Use CMD="uv run python" for a local run.
 compare-subspaces:
@@ -259,36 +206,13 @@ compare-subspaces-batch:
 ##   make language-decoding LANGUAGE_DECODING_CONFIG=configs/rrr/language_decoding.yml
 language-decoding:
 	mkdir -p logs
-	$(CMD) scripts/rrr/run_language_decoding.py --config $(LANGUAGE_DECODING_CONFIG) $(OVERRIDES)
-
-## Submit one internal RRR/PCA language-decoding job per model; each job runs all
-## completed configured layers. Add --dry-run through LANGUAGE_DECODING_SUBMIT_ARGS.
-submit-language-decoding:
-	$(CMD) scripts/submit_language_decoding.py --dataset $(LANGUAGE_DECODING_DATASET) --models $(LANGUAGE_DECODING_MODELS) $(LANGUAGE_DECODING_SUBMIT_ARGS)
-
-## Paired sentence-block RRR-vs-PCA inference per fMRI rank, including an
-## equal-model-weighted hierarchical summary with layers averaged within model.
-fmri-language-decoding-bootstrap:
-	$(CMD) scripts/fmri/bootstrap_language_decoding.py --bootstrap-repeats $(FMRI_LANGUAGE_BOOTSTRAP_REPEATS) $(FMRI_LANGUAGE_BOOTSTRAP_ARGS)
-
-## Bootstrap paired internal RRR/PCA decoding results. The dataset defaults to
-## LANGUAGE_DECODING_DATASET may be podcast, cars-2, fmri, or all. The all mode
-## runs three independent within-dataset bootstraps and overlays their curves.
-## Add --summary-only through LANGUAGE_DECODING_BOOTSTRAP_ARGS to skip the
-## per-model/layer bootstrap stage.
-language-decoding-bootstrap:
-	$(CMD) scripts/bootstrap_language_decoding.py --dataset $(LANGUAGE_DECODING_DATASET) --bootstrap-repeats $(LANGUAGE_DECODING_BOOTSTRAP_REPEATS) $(LANGUAGE_DECODING_BOOTSTRAP_ARGS)
+	$(CMD) scripts/language-interpret/run_language_decoding.py --config $(LANGUAGE_DECODING_CONFIG) $(OVERRIDES)
 
 ## Predict matched-rank RRR/PCA spaces from configured language-task variables.
 ## Use CMD="uv run python" for a local run.
 language-reconstruction:
 	mkdir -p logs
-	$(CMD) scripts/rrr/run_language_reconstruction.py --config $(LANGUAGE_RECONSTRUCTION_CONFIG) $(OVERRIDES)
-
-## Test neural sufficiency/removal of saved language-decoder axes.
-language-axis-encoding:
-	mkdir -p logs
-	$(CMD) scripts/rrr/run_language_axis_encoding.py --config $(LANGUAGE_AXIS_ENCODING_CONFIG) $(OVERRIDES)
+	$(CMD) scripts/language-interpret/run_language_reconstruction.py --config $(LANGUAGE_RECONSTRUCTION_CONFIG) $(OVERRIDES)
 
 ## Generate reusable word-level language annotations and structured sidecars
 ## Usage:
@@ -443,13 +367,6 @@ sig-rrr-batch:
 		esac; \
 		echo "Submitted cross-subject RRR for $$model: $$rrr_job_id (afterok:$$sig_job_id)"; \
 	done
-
-## Submit the dependency-aware within/cross-dataset RRR matrix.
-## Usage:
-##   make submit-rrr-matrix PIPELINE_ARGS="--dry-run"
-##   make submit-rrr-matrix PIPELINE_ARGS="--datasets podcast fmri --models gpt2 gpt2-xl"
-submit-rrr-matrix:
-	python scripts/submit_rrr_matrix.py $(PIPELINE_ARGS)
 
 ## Print out regions where electrode in data are located according to an atlas
 ## Usage:

@@ -18,7 +18,7 @@ from wtpsplit import SaT
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from src.utils.fmri import load_story_word_data
+from src.utils.shared.fmri import load_story_word_data
 
 
 DEFAULT_PSST = Path(

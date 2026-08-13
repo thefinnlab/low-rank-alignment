@@ -9,8 +9,8 @@ from himalaya.backend import set_backend
 from scipy.stats import spearmanr
 
 from src.core.config import SubspaceComparisonConfig
-import src.utils.directed_subspace_compare as directed
-from src.utils.directed_subspace_compare import (
+import src.utils.subspace_comparison.directed as directed
+from src.utils.subspace_comparison.directed import (
     ALL_METRICS,
     ComparisonSpace,
     EvaluationData,
@@ -21,11 +21,6 @@ from src.utils.directed_subspace_compare import (
     load_ieeg_heldout_ids,
     score_ordered_pair,
     shared_ranks,
-)
-from src.utils.subspace_compare import (
-    projected_rsm,
-    rsa_lower_triangle_correlations,
-    score_procrustes_alignment,
 )
 from scripts.rrr.compare_subspaces import (
     ComparisonJob,
@@ -214,44 +209,6 @@ def test_cuda_score_matches_torch_cpu_score():
     assert set(cpu) == set(cuda) == set(ALL_METRICS)
     for metric in ALL_METRICS:
         np.testing.assert_allclose(cuda[metric], cpu[metric], rtol=1e-9, atol=1e-9)
-
-
-def test_torch_procrustes_and_rsa_match_numpy_reference():
-    rng = np.random.default_rng(31)
-    source_train = rng.standard_normal((50, 4))
-    target_train = rng.standard_normal((50, 4))
-    source_test = rng.standard_normal((20, 4))
-    target_test = rng.standard_normal((20, 4))
-
-    torch_result = directed._score_procrustes(
-        directed._metric_tensor(source_train, directed.configure_metric_backend("cpu")),
-        directed._metric_tensor(target_train, directed.configure_metric_backend("cpu")),
-        directed._metric_tensor(source_test, directed.configure_metric_backend("cpu")),
-        directed._metric_tensor(target_test, directed.configure_metric_backend("cpu")),
-    )
-    numpy_result = score_procrustes_alignment(
-        source_train, target_train, source_test, target_test
-    )
-    for torch_key, numpy_key in (
-        ("test_r2", "test_r2"),
-        ("test_normalized_mse", "test_normalized_mse"),
-        ("test_rmse", "test_rmse"),
-        ("scale", "scale"),
-        ("test_mean_row_cosine", "test_mean_row_cosine"),
-    ):
-        np.testing.assert_allclose(torch_result[torch_key], numpy_result[numpy_key])
-
-    torch_rsa = directed._score_rsa(
-        directed._metric_tensor(source_test, directed.configure_metric_backend("cpu")),
-        directed._metric_tensor(target_test, directed.configure_metric_backend("cpu")),
-        "cosine",
-    )
-    numpy_rsa = rsa_lower_triangle_correlations(
-        projected_rsm(source_test, metric="cosine"),
-        projected_rsm(target_test, metric="cosine"),
-    )
-    np.testing.assert_allclose(torch_rsa["pearson"], numpy_rsa["pearson"])
-    np.testing.assert_allclose(torch_rsa["spearman"], numpy_rsa["spearman"])
 
 
 def test_torch_spearman_handles_large_tie_groups_without_integer_overflow():

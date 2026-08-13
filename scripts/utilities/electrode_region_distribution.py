@@ -28,7 +28,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from src.core.registry import resolve_dataset_context
-from src.utils.atlas import DESTRIEUX_2009_LABELS, _lookup_atlas_labels
+from src.utils.atlas.core import DESTRIEUX_2009_LABELS, _lookup_atlas_labels
 
 
 EXPLICIT_REGION_KEYS = (

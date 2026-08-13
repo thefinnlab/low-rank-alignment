@@ -1,6 +1,6 @@
 import numpy as np
 
-from src.utils.subspace_io import ambient_dim, load_fold_bases, max_available_rank, sanitize_name
+from src.utils.rrr.subspace_io import ambient_dim, load_fold_bases, max_available_rank, sanitize_name
 
 
 def test_sanitize_name_replaces_path_unsafe_characters():

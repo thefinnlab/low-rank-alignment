@@ -22,8 +22,8 @@ import pandas as pd
 from tqdm import tqdm
 
 from src.core.config import SubspaceComparisonConfig
-from src.utils.config_utils import load_config, parse_args, save_effective_config
-from src.utils.directed_subspace_compare import (
+from src.utils.shared.config import load_config, parse_args, save_effective_config
+from src.utils.subspace_comparison.directed import (
     ALL_METRICS,
     METRIC_IMPLEMENTATION,
     SYMMETRIC_METRICS,
@@ -38,7 +38,7 @@ from src.utils.directed_subspace_compare import (
     shared_ranks,
     summarize_fold_metrics,
 )
-from src.utils.subspace_io import sanitize_name
+from src.utils.rrr.subspace_io import sanitize_name
 
 
 @dataclass(frozen=True)

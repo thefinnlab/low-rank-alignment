@@ -10,7 +10,7 @@ output_name to keep random-init outputs separate from pretrained outputs.
 import argparse
 
 from src.core.config import GenerateEmbeddingsConfig
-from src.utils.config_utils import load_config, parse_override_args
+from src.utils.shared.config import load_config, parse_override_args
 from scripts.utilities.generate_embeddings import generate
 
 

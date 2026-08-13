@@ -3,7 +3,7 @@
 import numpy as np
 import pandas as pd
 
-from src.utils.multiview_rrr import (
+from src.utils.rrr.multiview import (
     fit_banded_ridge_baseline,
     project_view_bands,
     union_sig_mask,

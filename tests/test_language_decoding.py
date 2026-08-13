@@ -4,8 +4,8 @@ import pytest
 import yaml
 
 from src.core.config import LanguageDecodingConfig, LanguageDecodingMode
-from src.utils.config_utils import dict_to_dataclass
-from src.utils.language_decoding import (
+from src.utils.shared.config import dict_to_dataclass
+from src.utils.language_interpret.decoding import (
     _configure_decoder_backend,
     _decoder_metrics,
     _fit_decoder,
@@ -22,7 +22,7 @@ from src.utils.language_decoding import (
     summarize_language_decoding,
     summarize_prediction_agreement,
 )
-from src.utils.language_tasks import TASK_REGISTRY, PodcastTaskContext, get_language_task
+from src.utils.language_interpret.tasks import TASK_REGISTRY, PodcastTaskContext, get_language_task
 
 
 def _task_context(tmp_path):
@@ -526,7 +526,7 @@ def test_run_subspace_decoding_loads_paths_and_validates_fold_set(
         seen_shapes.append((args[4], args[5].shape, args[-1]))
         return {"fold": args[3], "k": args[4], "subspace": args[-1]}
 
-    monkeypatch.setattr("src.utils.language_decoding._run_one_fit", capture_fit)
+    monkeypatch.setattr("src.utils.language_interpret.decoding._run_one_fit", capture_fit)
     folds = [
         (np.array([2, 3]), np.array([0, 1])),
         (np.array([0, 1]), np.array([2, 3])),
@@ -604,7 +604,7 @@ def test_cross_multiview_decoding_composes_before_aggregation(tmp_path, monkeypa
         captured.append((args[5].copy(), args[-2].copy()))
         return {"fold": args[3], "k": args[4], "subspace": args[-1]}
 
-    monkeypatch.setattr("src.utils.language_decoding._run_one_fit", capture_fit)
+    monkeypatch.setattr("src.utils.language_interpret.decoding._run_one_fit", capture_fit)
     config = LanguageDecodingConfig(
         rrr_run_path="unused",
         mode=LanguageDecodingMode.CROSS_DATASET,

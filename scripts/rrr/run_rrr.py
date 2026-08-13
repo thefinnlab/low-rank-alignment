@@ -77,48 +77,46 @@ import numpy as np
 import pandas as pd
 from tqdm import tqdm
 
-from src.utils import (
-    load_embeddings,
-)
-from src.utils.tensor_utils import to_numpy
-from src.utils.correlation import (
+from src.utils.shared.embeddings import load_embeddings
+from src.utils.shared.tensors import to_numpy
+from src.utils.shared.correlation import (
     fisher_z_mean,
 )
-from src.utils.data_loaders import load_sig_electrodes
-from src.utils.atlas import build_electrode_region_map
+from src.utils.shared.ieeg import load_sig_electrodes
+from src.utils.atlas.core import build_electrode_region_map
 from src.core.config import RRRConfig, ScriptMode, get_results_dir
 from src.core.registry import get_dataset_adapter, resolve_dataset_context
-from src.utils.config_utils import (
+from src.utils.shared.config import (
     parse_args,
     load_config,
     expand_per_model_layer_configs,
     save_effective_config,
 )
-from src.utils.embeddings import get_glove_embeddings
-from src.utils.encoding import (
+from src.utils.shared.embeddings import get_glove_embeddings
+from src.utils.shared.encoding import (
     load_encoding_results,
     build_per_fold_baselines,
 )
-from src.utils.srrr import (
+from src.utils.rrr.core import (
     fit_dense_rrr,
     save_rrr_factors,
     save_rrr_result,
 )
-from src.utils.rrr_utils import (
+from src.utils.rrr.results import (
     add_sig_nonsig_corrs,
     make_sig_split_df,
 )
-from src.utils.subspace_utils import (
+from src.utils.rrr.evaluation import (
     evaluate_input_space,
 )
-from src.utils.subspace_compare import (
+from src.utils.subspace_comparison.metrics import (
     aggregate_subspace_from_unit_dir,
     validate_aggregation_cache,
 )
-from src.utils.alpha_grids import resolve_ridge_alphas, save_alpha_diagnostics
-from src.utils.decomposition import _get_decomposition_inputs
-from src.utils.subspace_io import sanitize_name
-from src.utils.multiview_rrr import (
+from src.utils.shared.alpha_grids import resolve_ridge_alphas, save_alpha_diagnostics
+from src.utils.rrr.inputs import _get_decomposition_inputs
+from src.utils.rrr.subspace_io import sanitize_name
+from src.utils.rrr.multiview import (
     fit_banded_ridge_baseline,
     load_view_bases,
     load_view_embeddings,
@@ -1069,7 +1067,7 @@ def _build_results(
     summary = pd.DataFrame(summary_rows)
     summary.to_csv(os.path.join(unit_dir, "summary.csv"), index=False)
 
-    from src.utils.plotting import plot_rrr_rank_results
+    from src.utils.plotting.encoding import plot_rrr_rank_results
 
     display_label = (
         "RRR subspace (NR)"

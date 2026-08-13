@@ -4,18 +4,18 @@ import numpy as np
 import pytest
 import torch
 
-from src.utils.constants import (
+from src.utils.shared.constants import (
     RIDGE_ALPHAS,
     refine_alpha_grid,
     check_alpha_grid_boundaries,
 )
-from src.utils.alpha_grids import (
+from src.utils.shared.alpha_grids import (
     build_dimension_aware_alpha_grid,
     resolve_ridge_alphas,
     save_alpha_diagnostics,
 )
-from src.utils.encoding import extract_best_alphas, get_ridge_model_constructor
-from src.utils.sae import solve_regression
+from src.utils.shared.encoding import extract_best_alphas, get_ridge_model_constructor
+from src.utils.shared.regression import solve_regression
 
 
 # ---------------------------------------------------------------------------

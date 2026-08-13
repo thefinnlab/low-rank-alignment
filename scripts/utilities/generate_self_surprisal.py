@@ -24,9 +24,9 @@ from scripts.utilities.generate_embeddings import (  # noqa: E402
 )
 from scripts.utilities.generate_language_features import expand_stimulus_configs  # noqa: E402
 from src.core.config import GenerateEmbeddingsConfig, LanguageFeatureGenerationConfig  # noqa: E402
-from src.utils.config_utils import load_config  # noqa: E402
-from src.utils.language_features import DOCUMENT_LOADERS  # noqa: E402
-from src.utils.language_feature_providers import _aggregate_token_surprisal  # noqa: E402
+from src.utils.shared.config import load_config  # noqa: E402
+from src.utils.language_features.core import DOCUMENT_LOADERS  # noqa: E402
+from src.utils.language_features.providers import _aggregate_token_surprisal  # noqa: E402
 
 
 def _build_clean_context_batch(

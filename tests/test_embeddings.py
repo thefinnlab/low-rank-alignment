@@ -6,7 +6,7 @@ import pytest
 
 h5py = pytest.importorskip("h5py")
 
-from src.utils.embeddings import load_embeddings
+from src.utils.shared.embeddings import load_embeddings
 
 
 @pytest.fixture

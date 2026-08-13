@@ -3,7 +3,8 @@ import pandas as pd
 import h5py
 from types import SimpleNamespace
 
-from src.utils import fmri
+from src.utils.shared import fmri
+from src.utils.significance import fmri as fmri_significance
 
 
 def test_resolve_fmri_stories_uses_sessions_and_shared_test(tmp_path):
@@ -218,10 +219,10 @@ def test_circular_shift_null_is_deterministic_and_respects_story_bounds():
     true = rng.normal(size=(60, 3))
     predicted = true + rng.normal(scale=0.1, size=true.shape)
     slices = {"a": slice(0, 30), "b": slice(30, 60)}
-    first, first_meta = fmri.circular_shift_pvalues(
+    first, first_meta = fmri_significance.circular_shift_pvalues(
         true, predicted, slices, num_shifts=20, minimal_shift=5, seed=7, batch_size=4
     )
-    second, second_meta = fmri.circular_shift_pvalues(
+    second, second_meta = fmri_significance.circular_shift_pvalues(
         true, predicted, slices, num_shifts=20, minimal_shift=5, seed=7, batch_size=6
     )
     np.testing.assert_array_equal(first, second)
@@ -232,7 +233,9 @@ def test_circular_shift_null_is_deterministic_and_respects_story_bounds():
 
 
 def test_bh_fdr_and_target_manifest_are_subject_scoped():
-    rejected, adjusted = fmri.bh_fdr(np.array([0.001, 0.2, 0.01]), 0.05)
+    rejected, adjusted = fmri_significance.bh_fdr(
+        np.array([0.001, 0.2, 0.01]), 0.05
+    )
     assert rejected.tolist() == [True, False, True]
     assert np.all((0 <= adjusted) & (adjusted <= 1))
     manifest = fmri.target_manifest(

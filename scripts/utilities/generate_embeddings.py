@@ -32,7 +32,7 @@ from transformers import AutoConfig, AutoModel, AutoModelForCausalLM, AutoTokeni
 
 from src.core.config import GenerateEmbeddingsConfig
 from src.core.registry import get_dataset_adapter, resolve_dataset_context
-from src.utils.config_utils import load_config, parse_override_args, save_effective_config
+from src.utils.shared.config import load_config, parse_override_args, save_effective_config
 
 
 _CAUSAL_MODEL_TYPES = {

@@ -12,33 +12,30 @@ import os
 import numpy as np
 import pandas as pd
 from himalaya.backend import set_backend
-from src.utils.embeddings import get_glove_embeddings
+from src.utils.shared.embeddings import get_glove_embeddings
 import torch
-from src.utils import (
-    train_encoding,
-    load_embeddings,
-    save_subject_results,
-)
+from src.utils.shared.encoding import train_encoding, save_subject_results
+from src.utils.shared.embeddings import load_embeddings
 from src.core.config import SignificanceConfig, get_results_dir
 from src.core.registry import get_dataset_adapter, resolve_dataset_context
-from src.utils.config_utils import (
+from src.utils.shared.config import (
     parse_args,
     load_config,
     expand_per_model_layer_configs,
     save_effective_config,
 )
-from src.utils.encoding import (
+from src.utils.shared.encoding import (
     extract_best_alphas,
     get_ridge_model_constructor,
     save_encoding_results,
 )
-from src.utils.alpha_grids import resolve_ridge_alphas, save_alpha_diagnostics
-from src.utils.data_loaders import (
+from src.utils.shared.alpha_grids import resolve_ridge_alphas, save_alpha_diagnostics
+from src.utils.shared.ieeg import (
     build_word_selection_metadata,
     compute_shared_word_selection,
     load_data_from_cache,
 )
-from src.utils.significance import (
+from src.utils.significance.ieeg import (
     apply_cluster_fdr,
     compute_per_electrode_cluster_p_values,
     derive_subject_null_seed,
