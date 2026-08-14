@@ -260,7 +260,7 @@ def test_pca_sibling_resolution():
 def test_within_fmri_bases_save_fir_blocks_rank_bases_and_pre_fir_pca(
     tmp_path, monkeypatch
 ):
-    from scripts.fmri import run_cross_dataset_rrr as runner
+    from src.utils.rrr import rrr_fmri as runner
 
     pre_fir = np.column_stack(
         [np.arange(8, dtype=float), np.zeros(8), np.zeros(8)]
@@ -317,7 +317,7 @@ def test_within_fmri_bases_save_fir_blocks_rank_bases_and_pre_fir_pca(
 def test_final_ridge_skips_unused_train_prediction_and_coefficients(
     tmp_path, monkeypatch
 ):
-    from scripts.fmri import run_cross_dataset_rrr as runner
+    from src.utils.rrr import rrr_fmri as runner
 
     predictions = []
 
@@ -366,7 +366,7 @@ def test_final_ridge_skips_unused_train_prediction_and_coefficients(
 def test_cross_dataset_completed_resume_skips_embeddings_and_responses(
     tmp_path, monkeypatch
 ):
-    from scripts.fmri import run_cross_dataset_rrr as runner
+    from src.utils.rrr import rrr_fmri as runner
     from src.core.config import FMRIDataConfig, FMRICrossDatasetRRRConfig
 
     fmri_root = tmp_path / "fmri"
@@ -374,14 +374,17 @@ def test_cross_dataset_completed_resume_skips_embeddings_and_responses(
     (fmri_root / "em_data" / "sess_to_story.json").write_text(
         '{"1": [["train"], "test"]}'
     )
-    from scripts.fmri.run_significance import Artifact as SignificanceArtifact
-    from scripts.rrr.run_rrr import Artifact as IEEGArtifact, UnitSelector
+    from scripts.run_significance import Artifact as SignificanceArtifact
+    from scripts.run_rrr import Artifact as IEEGArtifact, UnitSelector
     results_root = tmp_path / "results"
-    sig = SignificanceArtifact(model="gpt2-xl", layer=24,
+    sig = SignificanceArtifact(mode="held_out_session", dataset="deep-fmri",
+                               model="gpt2-xl", layer=24,
                                results_root=results_root).begin(config={"sig": 1})
-    sig.save_field("significant_voxels",
-                   pd.DataFrame({"voxel_index": [0], "sig": [True]}),
-                   selector={"subject": "UTS01"})
+    sig.save_subject_field(
+        "target_significance", "UTS01",
+        pd.DataFrame({"subject": ["UTS01"], "target_id": [0],
+                      "target_kind": ["voxel"], "significant": [True]}),
+    )
     source = IEEGArtifact(model="gpt2-xl", layer=24,
                           results_root=results_root).begin(config={"rrr": 1})
     source.save_factors(unit=UnitSelector(method="rrr"), fold=0,
@@ -395,7 +398,7 @@ def test_cross_dataset_completed_resume_skips_embeddings_and_responses(
         significance_artifact={"mode": "held_out_session", "dataset": "deep-fmri",
                                "offset": 0, "model": "gpt2-xl", "layer": 24,
                                "variant": sig.variant},
-        ieeg_rrr_source={"mode": "cross_subject", "dataset": "podcast",
+        ieeg_rrr_source={"mode": "internal", "dataset": "podcast",
                          "offset": 0, "model": "gpt2-xl", "layer": 24,
                          "variant": source.variant},
         source_mode="cross_dataset",
@@ -408,7 +411,7 @@ def test_cross_dataset_completed_resume_skips_embeddings_and_responses(
             AssertionError("completed resume should not load embeddings")
         ),
     )
-    target = runner.Artifact.from_config(config).begin(
+    target = IEEGArtifact.from_fmri_config(config).begin(
         config=config, upstreams=[sig.identity_record(), source.identity_record()]
     )
     target.save_field("full_metrics", {
@@ -420,9 +423,9 @@ def test_cross_dataset_completed_resume_skips_embeddings_and_responses(
         "best_alphas": np.array([1.0]),
     })
 
-    result = runner.run_config(config)
+    result = runner.run_fmri(config)
 
-    results = result.load_field("summary")
+    results = result.load_field("mean_results")
     assert results[["method", "rank"]].to_dict("records") == [
         {"method": "rrr", "rank": 1}
     ]

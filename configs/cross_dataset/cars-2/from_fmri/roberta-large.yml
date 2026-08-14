@@ -1,28 +1,8 @@
-encoding:
-  data_root: data/brain-treebank
-  model: transformer
-  offset: 0
-  subjects:
-  - 3
-  - 7
-  - 10
-  batch: false
-  per_model_config:
-    model_dir: roberta-large
-    layer:
-    - 0
-    - 6
-    - 12
-    - 18
-    - 24
-  dataset: brain_treebank
-  per_dataset_config:
-    movie: cars-2
-  shared_word_selection: true
-  num_folds: 5
+dataset: brain_treebank
 mode: cross_dataset
-cross_source_format: rank_bases
-subspace_aggregation: extrinsic
+results_root: results
+plot: true
+refresh: true
 rank_grid:
 - 1
 - 2
@@ -35,20 +15,41 @@ rank_grid:
 - 256
 - 512
 - 1024
-refresh: true
-run_pca_baseline: true
-run_null_augmented: false
-results_root: results
-plot: true
 significance_artifact:
   mode: sig_lags
   dataset: brain-treebank-cars-2
   offset: 0
   model: roberta-large
   layer: '{layer}'
-fmri_rrr_source:
-  mode: within_fmri
+subspace_aggregation: extrinsic
+rrr_source:
+  mode: internal
   dataset: deep-fmri
   offset: 0
   model: roberta-large
   layer: '{layer}'
+ieeg:
+  encoding:
+    data_root: data/brain-treebank
+    model: transformer
+    offset: 0
+    subjects:
+    - 3
+    - 7
+    - 10
+    batch: false
+    per_model_config:
+      model_dir: roberta-large
+      layer:
+      - 0
+      - 6
+      - 12
+      - 18
+      - 24
+    per_dataset_config:
+      movie: cars-2
+    shared_word_selection: true
+    num_folds: 5
+  run_pca_baseline: true
+  run_null_augmented: false
+fmri: null

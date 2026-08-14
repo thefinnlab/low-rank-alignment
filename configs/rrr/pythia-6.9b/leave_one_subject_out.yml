@@ -1,16 +1,8 @@
-encoding:
-  data_root: data/
-  model: transformer
-  offset: 0
-  subjects: null
-  batch: false
-  per_model_config:
-    model_dir: pythia-6.9b
-    layer:
-    - 0
-    - 16
-    - 32
+dataset: podcast
 mode: leave_one_subject_out
+results_root: results
+plot: true
+refresh: false
 rank_grid:
 - 1
 - 2
@@ -25,13 +17,24 @@ rank_grid:
 - 1024
 - 2048
 - 4096
-refresh: false
-run_pca_baseline: true
-results_root: results
-plot: true
 significance_artifact:
   mode: sig_lags
   dataset: podcast
   offset: 0
   model: pythia-6.9b
   layer: '{layer}'
+ieeg:
+  encoding:
+    data_root: data/
+    model: transformer
+    offset: 0
+    subjects: null
+    batch: false
+    per_model_config:
+      model_dir: pythia-6.9b
+      layer:
+      - 0
+      - 16
+      - 32
+  run_pca_baseline: true
+fmri: null

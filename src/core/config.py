@@ -26,6 +26,7 @@ class ScriptMode(str, Enum):
     LEAVE_ONE_SUBJECT_OUT = "leave_one_subject_out"
     MULTI_VIEW = "multi_view"
     TEMPORAL_WINDOWS = "temporal_windows"
+    INTERNAL = "internal"
 
 
 class LanguageDecodingMode(str, Enum):

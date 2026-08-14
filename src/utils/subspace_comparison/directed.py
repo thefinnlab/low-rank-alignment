@@ -23,6 +23,9 @@ from src.utils.shared.encoding import apply_offset, load_encoding_results
 from src.utils.shared.fmri import load_story_embeddings, resolve_fmri_stories
 from src.utils.language_interpret.reconstruction import orthonormal_factor
 from src.utils.subspace_comparison.metrics import aggregate_subspace_basis
+from src.core.artifacts import normalize_dataset
+from scripts.run_rrr import Artifact as RRRArtifact
+from scripts.run_significance import Artifact as SignificanceArtifact
 
 
 DIRECTED_METRICS = (
@@ -77,6 +80,7 @@ class ComparisonSpace:
     source_format: str
     ranks: set[int]
     heldout_ids: list[np.ndarray] | None = None
+    artifact: RRRArtifact | None = None
 
     @property
     def label(self) -> str:
@@ -213,25 +217,37 @@ def expand_spaces(config: SubspaceComparisonConfig) -> list[ComparisonSpace]:
             for offset in sorted(map(int, model_spec["offsets"])):
                 for layer in sorted(map(int, model_spec["layers"])):
                     try:
-                        root = resolve_result_root(
-                            dataset_alias, dataset_spec, model, layer, offset
+                        if dataset_spec.get("loader", "ieeg_words") == "fmri_words":
+                            artifact_dataset = "deep-fmri"
+                        else:
+                            _, raw_dataset, context = _dataset_context(dataset_spec)
+                            artifact_dataset = normalize_dataset(raw_dataset, context.stimulus_id)
+                        artifact = RRRArtifact(
+                            mode="internal", dataset=artifact_dataset, offset=int(offset),
+                            model=model, layer=int(layer), results_root=dataset_spec.get(
+                                "results_root", "results"
+                            ),
                         )
+                        artifact._resolve_variant()
+                        factors = artifact.load_collection("input_factors")
+                        source_format = (
+                            "fold_factors"
+                            if any("fold" in dict(selector) for selector in factors)
+                            else "rank_bases"
+                        )
+                        root = artifact._variant_dir()
                     except Exception as exc:
                         missing.append(f"{dataset_alias}/{model}/l{layer}/o{offset}: {exc}")
                         continue
-                    source_format = (
-                        "rank_bases"
-                        if dataset_spec.get("loader", "ieeg_words") == "fmri_words"
-                        else "fold_factors"
-                    )
                     for kind in kinds:
-                        unit = root / kind
                         try:
-                            ranks = (
-                                _completed_rank_basis_ranks(unit)
-                                if source_format == "rank_bases"
-                                else _completed_fold_ranks(unit)
+                            rank_entries = artifact.load_collection(
+                                "rank_metrics", {"method": kind}
                             )
+                            ranks = {int(dict(selector)["rank"])
+                                     for selector in rank_entries}
+                            if not ranks:
+                                raise ValueError("no completed rank metrics")
                         except Exception as exc:
                             missing.append(
                                 f"{dataset_alias}/{model}/l{layer}/o{offset}/{kind}: {exc}"
@@ -245,10 +261,11 @@ def expand_spaces(config: SubspaceComparisonConfig) -> list[ComparisonSpace]:
                                 layer=layer,
                                 kind=kind,
                                 result_root=root,
-                                unit_dir=unit,
+                                unit_dir=root,
                                 source_format=source_format,
                                 ranks=ranks,
                                 heldout_ids=None,
+                                artifact=artifact,
                             )
                         )
     if missing:
@@ -278,6 +295,18 @@ def shared_ranks(spaces: list[ComparisonSpace], max_rank: int) -> list[int]:
     return selected
 
 
+def _encoding_result(space: ComparisonSpace, subject):
+    upstreams = space.artifact.load_field("upstream_identities")
+    identity = next((item for item in upstreams
+                     if item.get("script") == "run_significance"), None)
+    if identity is None:
+        raise ValueError(f"{space.label} has no significance upstream identity")
+    kwargs = {key: value for key, value in identity.items() if key != "script"}
+    kwargs["results_root"] = space.artifact.results_root
+    artifact = SignificanceArtifact(**kwargs)
+    return artifact.load_field("encoding_results", selector={"subject": str(subject)})
+
+
 def _load_reference_ieeg(config: SubspaceComparisonConfig, spaces) -> EvaluationData:
     alias = config.evaluation_dataset
     spec = config.datasets[alias]
@@ -296,8 +325,8 @@ def _load_reference_ieeg(config: SubspaceComparisonConfig, spaces) -> Evaluation
         spec.get("per_dataset_config", {}),
         spec.get("data_root", "data/"),
     )
-    reference_result_path = _encoding_result_path(reference.result_root, subjects)
-    reference_result = load_encoding_results(str(reference_result_path))
+    reference_result_path = reference.label
+    reference_result = _encoding_result(reference, subjects[0])
     reference_provenance = reference_result.get("word_selection")
     if reference_provenance is None or "epoch_selection" not in reference_provenance:
         raise ValueError(
@@ -309,16 +338,16 @@ def _load_reference_ieeg(config: SubspaceComparisonConfig, spaces) -> Evaluation
             f"epoch_selection in {reference_result_path} must contain unique 1D IDs"
         )
 
-    heldout_by_run: dict[tuple[Path, int], list[np.ndarray]] = {}
+    heldout_by_run = {}
     for space in spaces:
         if space.dataset != alias or space.source_format != "fold_factors":
             continue
-        run_key = (space.result_root, space.offset)
+        run_key = (space.artifact.variant, space.offset)
         if run_key in heldout_by_run:
             space.heldout_ids = heldout_by_run[run_key]
             continue
-        path = _encoding_result_path(space.result_root, subjects)
-        result = load_encoding_results(str(path))
+        path = space.label
+        result = _encoding_result(space, subjects[0])
         provenance = result.get("word_selection")
         required = {"epoch_selection", "analysis_selection"}
         if provenance is None or not required.issubset(provenance):
@@ -339,10 +368,9 @@ def _load_reference_ieeg(config: SubspaceComparisonConfig, spaces) -> Evaluation
             raise ValueError(
                 f"analysis_selection in {path} is inconsistent with offset {space.offset}"
             )
-        space.heldout_ids = load_ieeg_heldout_ids(
-            space.result_root,
-            subjects,
-        )
+        ids = np.asarray(provenance["analysis_selection"], dtype=int)
+        space.heldout_ids = [ids[np.asarray(test, dtype=int)]
+                             for test in result["test_idxs"]]
         heldout_by_run[run_key] = space.heldout_ids
 
     @lru_cache(maxsize=None)
@@ -467,15 +495,25 @@ def load_evaluation_data(
     raise ValueError(f"Unsupported evaluation loader: {loader}")
 
 
-@lru_cache(maxsize=None)
-def _load_raw_factor(unit_dir: str, source_format: str, rank: int, fold: int | None):
-    root = Path(unit_dir)
-    if source_format == "rank_bases":
-        return np.asarray(np.load(root / f"k{rank}" / "A.npy"), dtype=np.float32)
+def _load_raw_factor(space: ComparisonSpace, rank: int, fold: int | None):
+    if space.artifact is None:
+        root = Path(space.unit_dir)
+        if space.source_format == "rank_bases":
+            return np.asarray(np.load(root / f"k{rank}" / "A.npy"), dtype=np.float32)
+        if fold is not None:
+            return np.asarray(np.load(root / f"fold_{fold}" / "A.npy"), dtype=np.float32)
+        matrices = [np.load(path) for path in sorted(root.glob("fold_*/A.npy"))]
+        return aggregate_subspace_basis(matrices, rank=rank, method="extrinsic")
+    factors = space.artifact.load_input_factors(space.kind, rank)
+    if not factors:
+        raise FileNotFoundError(f"No {space.kind} factors in {space.label}")
     if fold is not None:
-        return np.asarray(np.load(root / f"fold_{fold}" / "A.npy"), dtype=np.float32)
-    matrices = [np.load(path) for path in sorted(root.glob("fold_*/A.npy"))]
-    return aggregate_subspace_basis(matrices, rank=rank, method="extrinsic")
+        if fold >= len(factors):
+            raise IndexError(f"{space.label} has no factor for fold {fold}")
+        return np.asarray(factors[fold], dtype=np.float32)
+    if len(factors) == 1:
+        return np.asarray(factors[0], dtype=np.float32)
+    return aggregate_subspace_basis(factors, rank=rank, method="extrinsic")
 
 
 def factor_for(
@@ -489,9 +527,7 @@ def factor_for(
     fold_matched = space.dataset == evaluation_dataset and space.source_format == "fold_factors"
     if geometry == "weighted" and not fold_matched:
         return None
-    raw = _load_raw_factor(
-        str(space.unit_dir), space.source_format, int(rank), int(fold) if fold_matched else None
-    )
+    raw = _load_raw_factor(space, int(rank), int(fold) if fold_matched else None)
     if raw.ndim != 2:
         raise ValueError(f"{space.unit_dir} factor must be 2D, got shape {raw.shape}")
     if raw.shape[1] < rank:

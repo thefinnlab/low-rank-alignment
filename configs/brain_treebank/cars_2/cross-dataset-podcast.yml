@@ -1,28 +1,7 @@
-encoding:
-  data_root: data/brain-treebank
-  dataset: brain_treebank
-  per_dataset_config:
-    movie: cars-2
-  model: transformer
-  shared_word_selection: true
-  num_folds: 5
-  per_model_config:
-    layer:
-    - 0
-    - 12
-    - 24
-    - 36
-    - 48
-    model_dir: gpt2-xl-batch
-  offset: 0
-  subjects:
-  - 3
-  - 7
-  - 10
-  sig_dir: null
-  batch: false
+dataset: brain_treebank
 mode: cross_dataset
-subspace_aggregation: extrinsic
+results_root: results
+plot: true
 refresh: true
 rank_grid:
 - 1
@@ -37,18 +16,41 @@ rank_grid:
 - 512
 - 1024
 - 1600
-run_pca_baseline: true
-results_root: results
-plot: true
 significance_artifact:
   mode: sig_lags
   dataset: brain-treebank-cars-2
   offset: 0
   model: gpt2-xl-batch
   layer: '{layer}'
-ieeg_rrr_source:
-  mode: cross_subject
+subspace_aggregation: extrinsic
+rrr_source:
+  mode: internal
   dataset: podcast
   offset: 0
   model: gpt2-xl-batch
   layer: '{layer}'
+ieeg:
+  encoding:
+    data_root: data/brain-treebank
+    per_dataset_config:
+      movie: cars-2
+    model: transformer
+    shared_word_selection: true
+    num_folds: 5
+    per_model_config:
+      layer:
+      - 0
+      - 12
+      - 24
+      - 36
+      - 48
+      model_dir: gpt2-xl-batch
+    offset: 0
+    subjects:
+    - 3
+    - 7
+    - 10
+    sig_dir: null
+    batch: false
+  run_pca_baseline: true
+fmri: null

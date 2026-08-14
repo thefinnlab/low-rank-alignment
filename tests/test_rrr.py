@@ -8,7 +8,7 @@ import pandas as pd
 import pytest
 
 from src.utils.rrr.core import save_rrr_factors, save_rrr_result, load_rrr_result
-from scripts.rrr.run_rrr import _load_cross_dataset_A_by_rank
+from src.utils.rrr.rrr_ieeg import _load_cross_dataset_A_by_rank
 from src.core.config import RRRTemporalWindowConfig
 
 # ---------------------------------------------------------------------------
@@ -37,7 +37,7 @@ def small_data(rng):
 
 class TestTemporalWindows:
     def test_half_open_windows_allow_overlap_and_put_zero_in_post(self):
-        from scripts.rrr.run_rrr import _temporal_window_target_mask
+        from src.utils.rrr.rrr_ieeg import _temporal_window_target_mask
 
         manifest = pd.DataFrame({"lag": [-1.0, -0.5, 0.0, 0.5, 1.0]})
         pre = _temporal_window_target_mask(
@@ -55,7 +55,7 @@ class TestTemporalWindows:
         np.testing.assert_array_equal(overlap, [False, True, True, False, False])
 
     def test_window_bounds_clip_but_empty_window_is_rejected(self):
-        from scripts.rrr.run_rrr import _temporal_window_target_mask
+        from src.utils.rrr.rrr_ieeg import _temporal_window_target_mask
 
         manifest = pd.DataFrame({"lag": [-1.0, 0.0, 1.0]})
         clipped = _temporal_window_target_mask(
@@ -68,7 +68,7 @@ class TestTemporalWindows:
             )
 
     def test_combined_summary_contains_window_metadata(self, tmp_path):
-        from scripts.rrr.run_rrr import Artifact
+        from scripts.run_rrr import Artifact
         artifact = Artifact(mode="temporal_windows", results_root=tmp_path).begin(
             config={"windows": ["pre"]}
         )
@@ -84,10 +84,10 @@ class TestTemporalWindows:
         saved = pd.DataFrame([{**metadata, "method": "rrr", "k": 1, "nr_corr": .2},
                               {**metadata, "method": "pca", "k": 1, "pca_corr": .1}])
         artifact.save_field(
-            "mode_metadata", saved, selector={"kind": "temporal_window_summary"}
+            "metadata", saved, selector={"kind": "temporal_window_summary"}
         )
         saved = artifact.load_field(
-            "mode_metadata", selector={"kind": "temporal_window_summary"}
+            "metadata", selector={"kind": "temporal_window_summary"}
         )
         assert saved[["window", "method"]].values.tolist() == [
             ["pre", "rrr"],
@@ -135,7 +135,7 @@ class TestSaveLoadRRRResult:
 
 class TestCrossDatasetRankBasisLoading:
     def test_loads_single_saved_basis_per_rank(self, tmp_path, rng):
-        from scripts.rrr.run_rrr import Artifact
+        from scripts.run_rrr import Artifact
         expected = rng.standard_normal((12, 4)).astype(np.float32)
         source = Artifact(results_root=tmp_path).begin(config={"source": 1})
         source.save_field("input_factors", expected,
@@ -148,9 +148,9 @@ class TestCrossDatasetRankBasisLoading:
         np.testing.assert_array_equal(loaded[4], expected)
 
     def test_missing_rank_basis_reports_expected_path(self, tmp_path):
-        from scripts.rrr.run_rrr import Artifact
+        from scripts.run_rrr import Artifact
         source = Artifact(results_root=tmp_path).begin(config={"source": 1})
-        with pytest.raises(KeyError, match="input_factors"):
+        with pytest.raises(ValueError, match="no rrr factors"):
             _load_cross_dataset_A_by_rank(
                 source, "rrr", [4], source_format="rank_bases"
             )

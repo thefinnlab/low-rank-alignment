@@ -1,8 +1,8 @@
 # Analysis Artifacts
 
-Core analysis results are owned by an `Artifact` class defined in the script that
-produces them. Consumers import that concrete class; there is no generic artifact
-reference in configuration or public APIs.
+Core analysis results are owned by the unified `Artifact` classes in
+`scripts/run_significance.py` and `scripts/run_rrr.py`. Consumers use generic
+artifact identity blocks; the dataset selects the underlying implementation.
 
 The canonical identity is:
 
@@ -10,8 +10,7 @@ The canonical identity is:
 results/<script>/<mode>/<dataset>/offset-<offset>/<model>/layer-<layer>/
 ```
 
-The current script components are filename stems: `run_significance`, `run_rrr`,
-and `run_cross_dataset_rrr`. Dataset components are `podcast`,
+The script components are `run_significance` and `run_rrr`. Dataset components are `podcast`,
 `brain-treebank-<stimulus>`, and `deep-fmri`. fMRI always uses `offset-0`.
 GloVe dimensions are part of the model (`glove-300`) and its layer is
 `layer-none`. Configured model directory names are otherwise preserved.
@@ -43,11 +42,16 @@ factors when configured. `refresh: false` reuses those checkpoints;
 
 ## Dependencies
 
-iEEG RRR constructs `scripts.sig_lags.run_significance.Artifact` from the explicit
-`significance_artifact` config block. Cross-dataset RRR sources use mutually
-exclusive `ieeg_rrr_source` or `fmri_rrr_source` blocks containing the selected
-producer's constructor arguments. fMRI RRR similarly constructs the fMRI
-significance Artifact and, for cross-dataset runs, the iEEG RRR Artifact.
+RRR constructs the unified significance Artifact from `significance_artifact`.
+Cross-dataset and multiview inputs use generic `rrr_source`/`source` identities;
+there are no modality-named dependency fields. `internal` identifies the ordinary
+within-dataset RRR producer for both modalities.
+
+Significance exposes complete subject-keyed `target_significance` tables with
+`target_id`, `target_kind`, and `significant` columns. RRR exposes common factor,
+metric, target-manifest, and mean-result fields. `load_input_factors()` always
+returns a list: one matrix per iEEG fold or a one-element fMRI rank-basis set.
+`load_mean_results()` preserves additional modality-specific metric columns.
 
 Language decoding and reconstruction remain on their legacy interfaces and are
 explicitly deferred from this refactor.
@@ -55,8 +59,8 @@ explicitly deferred from this refactor.
 ## Legacy migration
 
 `scripts/utilities/migrate_results.py` is dry-run by default. It inventories legacy
-trees, emits a YAML mapping template for identities it cannot prove, and copies
-only mappings supplied by the operator when `--apply` is given. Copies are
-checksum-verified, differing destinations are rejected, identical destinations
-are skipped, and repeated application is idempotent. Canonical script roots are
-always excluded from legacy discovery.
+trees, emits a YAML mapping template for identities it cannot prove, and converts
+recognized files into loadable unified Artifact fields when `--apply` is given.
+Source checksums are recorded, differing reruns are rejected, identical reruns are
+skipped, and incomplete legacy runs remain partial manifests. Canonical script
+roots are excluded from legacy discovery.

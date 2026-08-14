@@ -12,13 +12,7 @@ import torch
 from himalaya.backend import set_backend
 
 from src.core.config import FMRISignificanceConfig
-from src.core.artifacts import ArtifactStore, normalize_model
 from src.utils.shared.alpha_grids import resolve_ridge_alphas
-from src.utils.shared.config import (
-    expand_fmri_layer_configs,
-    load_config,
-    parse_args,
-)
 from src.utils.shared.encoding import extract_best_alphas, get_ridge_model_constructor
 from src.utils.shared.fmri import (
     finite_response_voxel_masks,
@@ -31,66 +25,6 @@ from src.utils.shared.fmri import (
 )
 from src.utils.significance.fmri import bh_fdr, circular_shift_pvalues
 from src.utils.shared.tensors import to_numpy
-
-
-class Artifact(ArtifactStore):
-    """Storage contract for held-out-session fMRI significance."""
-
-    SCRIPT = "run_significance"
-    FIELD_CONTRACT = {
-        "effective_config": True,
-        "significant_voxels": True,
-        "ridge_alphas": True,
-        "null_metadata": True,
-        "voxel_filter": True,
-        "run_metadata": True,
-        "alpha_diagnostics": False,
-        "plots": False,
-    }
-
-    def __init__(self, *, mode="held_out_session", dataset="deep-fmri", offset=0,
-                 model="gpt2-xl", layer=24, variant=None, results_root="results"):
-        self._init_store(mode=mode, dataset=dataset, offset=offset, model=model,
-                         layer=layer, variant=variant, results_root=results_root)
-
-    @classmethod
-    def from_config(cls, config):
-        return cls(model=normalize_model(config.model_dir), layer=config.layer,
-                   results_root=getattr(config, "results_root", "results"))
-
-    def save_subject(self, subject, **fields):
-        selector = {"subject": str(subject)}
-        overwrite = fields.pop("overwrite", False)
-        for field, value in fields.items():
-            if value is not None:
-                if field == "plots":
-                    buffer = io.BytesIO()
-                    value.savefig(buffer, format="png", dpi=160)
-                    plt.close(value)
-                    value = buffer.getvalue()
-                self.save_field(field, value, selector=selector, overwrite=overwrite)
-
-    def load_artifacts(self, fields, selectors=None):
-        selectors = selectors or {}
-        subject_fields = {"significant_voxels", "ridge_alphas", "null_metadata",
-                          "voxel_filter", "alpha_diagnostics", "plots"}
-        for field in fields:
-            if field in subject_fields:
-                filters = ({"subject": selectors["subjects"]}
-                           if selectors.get("subjects") else None)
-                collection = self.load_collection(field, filters)
-                setattr(self, field, {
-                    dict(selector)["subject"]: value
-                    for selector, value in collection.items()
-                })
-            else:
-                setattr(self, field, self.load_field(field))
-        return self
-
-    def save_artifacts(self, *, effective_config, run_metadata, plot=True,
-                       overwrite=False):
-        self.save_field("effective_config", effective_config, overwrite=overwrite)
-        self.save_field("run_metadata", run_metadata, overwrite=overwrite)
 
 
 def _fit_oof(X, Y, story_slices, groups, config):
@@ -184,11 +118,12 @@ def _analyze_subject_block(subjects, config, embeddings, train_stories, groups, 
     return prepared, predictions, best_alphas
 
 
-def run_config(config: FMRISignificanceConfig) -> None:
+def run_fmri(config: FMRISignificanceConfig):
+    from scripts.run_significance import Artifact
     config.validate()
     if torch.cuda.is_available():
         set_backend("torch_cuda")
-    artifact = Artifact.from_config(config).begin(config=config, refresh=config.refresh)
+    artifact = Artifact.from_fmri_config(config).begin(config=config, refresh=config.refresh)
     train_stories, test_stories, groups = resolve_fmri_stories(
         config.fmri.fmri_repo_root, config.fmri.sessions
     )
@@ -205,7 +140,7 @@ def run_config(config: FMRISignificanceConfig) -> None:
     retained_counts = {
         subject: int(mask.sum()) for subject, mask in voxel_masks.items()
     }
-    subject_fields = ("significant_voxels", "ridge_alphas", "null_metadata", "voxel_filter")
+    subject_fields = ("target_significance", "significance_details")
     completed_subjects = {
         subject for subject in config.fmri.subjects
         if not config.refresh and all(
@@ -296,19 +231,28 @@ def run_config(config: FMRISignificanceConfig) -> None:
                 true, predicted, story_slices, observed
             )
             plot_payload = figure
-        artifact.save_subject(
-            subject,
-            significant_voxels=significance,
-            ridge_alphas={"voxel_indices": retained_indices,
-                          "folds": list(best_alphas)},
-            null_metadata=null_info,
-            voxel_filter=voxel_filter,
-            alpha_diagnostics=(
-                {"best_alphas": list(best_alphas)} if config.ridge.log_alphas else None
-            ),
-            plots=plot_payload,
-            overwrite=config.refresh,
-        )
+        targets = significance.rename(columns={
+            "voxel_index": "target_id", "sig": "significant"
+        }).copy()
+        targets["target_kind"] = "voxel"
+        artifact.save_subject_field("target_significance", subject, targets,
+                                    overwrite=config.refresh)
+        artifact.save_subject_field("significance_details", subject, {
+            "ridge_alphas": {"voxel_indices": retained_indices,
+                             "folds": list(best_alphas)},
+            "null_metadata": null_info,
+            "voxel_filter": voxel_filter,
+        }, overwrite=config.refresh)
+        if config.ridge.log_alphas:
+            artifact.save_subject_field("diagnostics", subject,
+                                        {"best_alphas": list(best_alphas)},
+                                        overwrite=config.refresh)
+        if plot_payload is not None:
+            buffer = io.BytesIO()
+            plot_payload.savefig(buffer, format="png", dpi=160)
+            plt.close(plot_payload)
+            artifact.save_subject_field("plots", subject, buffer.getvalue(),
+                                        overwrite=config.refresh)
         print(
             f"{subject}: {int(significant.sum()):,}/{int(voxel_mask.sum()):,} "
             "retained voxels significant"
@@ -335,22 +279,12 @@ def run_config(config: FMRISignificanceConfig) -> None:
             subject: int((~mask).sum()) for subject, mask in voxel_masks.items()
         },
     }
-    artifact.save_artifacts(effective_config=asdict(config), run_metadata=metadata,
-                            plot=getattr(config, "plot", True), overwrite=True)
+    artifact.save_field("effective_config", asdict(config), overwrite=True)
+    artifact.save_field("run_metadata", {**metadata, "method": "held_out_session"},
+                        overwrite=True)
     subject_selectors = [{"subject": str(subject)} for subject in config.fmri.subjects]
     artifact.mark_complete({
         field: subject_selectors
-        for field in ("significant_voxels", "ridge_alphas", "null_metadata", "voxel_filter")
+        for field in ("target_significance", "significance_details")
     })
     return artifact
-
-
-def main() -> None:
-    args, overrides = parse_args(__doc__)
-    config = load_config(args.config, overrides, FMRISignificanceConfig)
-    for layer_config in expand_fmri_layer_configs(config):
-        run_config(layer_config)
-
-
-if __name__ == "__main__":
-    main()

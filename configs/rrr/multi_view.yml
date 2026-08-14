@@ -1,14 +1,7 @@
-encoding:
-  data_root: data/
-  dataset: podcast
-  model: transformer
-  offset: 0
-  subjects: null
-  per_model_config:
-    model_dir: gpt2-xl-batch
-    layer: 24
+dataset: podcast
 mode: multi_view
-subspace_aggregation: extrinsic
+results_root: results
+plot: true
 refresh: true
 rank_grid:
 - 1
@@ -22,164 +15,173 @@ rank_grid:
 - 256
 - 512
 - 576
-banded_ridge_alphas: null
-banded_ridge_solver_params:
-  n_iter: 500
-  random_state: 43
-save_rrr_corr_per_target: true
-save_b_matrices: true
-run_pca_baseline: false
-run_null_augmented: false
-views:
-- name: podcast_gptj6b_l0
-  rank: 32
-  ieeg_rrr_source:
-    mode: cross_subject
-    dataset: podcast
-    offset: 0
-    model: gpt-j-6b
-    layer: 0
-- name: podcast_gptj6b_l14
-  rank: 32
-  ieeg_rrr_source:
-    mode: cross_subject
-    dataset: podcast
-    offset: 0
-    model: gpt-j-6b
-    layer: 14
-- name: podcast_gptj6b_l28
-  rank: 32
-  ieeg_rrr_source:
-    mode: cross_subject
-    dataset: podcast
-    offset: 0
-    model: gpt-j-6b
-    layer: 28
-- name: podcast_gpt2xl_l0
-  rank: 32
-  ieeg_rrr_source:
-    mode: cross_subject
-    dataset: podcast
-    offset: 0
-    model: gpt2-xl-batch
-    layer: 0
-- name: podcast_gpt2xl_l24
-  rank: 32
-  ieeg_rrr_source:
-    mode: cross_subject
-    dataset: podcast
-    offset: 0
-    model: gpt2-xl-batch
-    layer: 24
-- name: podcast_gpt2xl_l48
-  rank: 32
-  ieeg_rrr_source:
-    mode: cross_subject
-    dataset: podcast
-    offset: 0
-    model: gpt2-xl-batch
-    layer: 48
-- name: podcast_gpt2_l0
-  rank: 32
-  ieeg_rrr_source:
-    mode: cross_subject
-    dataset: podcast
-    offset: 0
-    model: gpt2
-    layer: 0
-- name: podcast_gpt2_l6
-  rank: 32
-  ieeg_rrr_source:
-    mode: cross_subject
-    dataset: podcast
-    offset: 0
-    model: gpt2
-    layer: 6
-- name: podcast_gpt2_l12
-  rank: 32
-  ieeg_rrr_source:
-    mode: cross_subject
-    dataset: podcast
-    offset: 0
-    model: gpt2
-    layer: 12
-- name: podcast_llama3_8b_l0
-  rank: 32
-  ieeg_rrr_source:
-    mode: cross_subject
-    dataset: podcast
-    offset: 0
-    model: llama3-8b
-    layer: 0
-- name: podcast_llama3_8b_l16
-  rank: 32
-  ieeg_rrr_source:
-    mode: cross_subject
-    dataset: podcast
-    offset: 0
-    model: llama3-8b
-    layer: 16
-- name: podcast_llama3_8b_l32
-  rank: 32
-  ieeg_rrr_source:
-    mode: cross_subject
-    dataset: podcast
-    offset: 0
-    model: llama3-8b
-    layer: 32
-- name: podcast_random_gpt2xl_l0
-  rank: 32
-  ieeg_rrr_source:
-    mode: cross_subject
-    dataset: podcast
-    offset: 0
-    model: random-gpt2-xl
-    layer: 0
-- name: podcast_random_gpt2xl_l24
-  rank: 32
-  ieeg_rrr_source:
-    mode: cross_subject
-    dataset: podcast
-    offset: 0
-    model: random-gpt2-xl
-    layer: 24
-- name: podcast_random_gpt2xl_l48
-  rank: 32
-  ieeg_rrr_source:
-    mode: cross_subject
-    dataset: podcast
-    offset: 0
-    model: random-gpt2-xl
-    layer: 48
-- name: podcast_roberta_large_l0
-  rank: 32
-  ieeg_rrr_source:
-    mode: cross_subject
-    dataset: podcast
-    offset: 0
-    model: roberta-large
-    layer: 0
-- name: podcast_roberta_large_l12
-  rank: 32
-  ieeg_rrr_source:
-    mode: cross_subject
-    dataset: podcast
-    offset: 0
-    model: roberta-large
-    layer: 12
-- name: podcast_roberta_large_l24
-  rank: 32
-  ieeg_rrr_source:
-    mode: cross_subject
-    dataset: podcast
-    offset: 0
-    model: roberta-large
-    layer: 24
-results_root: results
-plot: true
 significance_artifact:
   mode: sig_lags
   dataset: podcast
   offset: 0
   model: gpt2-xl-batch
   layer: 24
+subspace_aggregation: extrinsic
+views:
+- name: podcast_gptj6b_l0
+  rank: 32
+  source:
+    mode: internal
+    dataset: podcast
+    offset: 0
+    model: gpt-j-6b
+    layer: 0
+- name: podcast_gptj6b_l14
+  rank: 32
+  source:
+    mode: internal
+    dataset: podcast
+    offset: 0
+    model: gpt-j-6b
+    layer: 14
+- name: podcast_gptj6b_l28
+  rank: 32
+  source:
+    mode: internal
+    dataset: podcast
+    offset: 0
+    model: gpt-j-6b
+    layer: 28
+- name: podcast_gpt2xl_l0
+  rank: 32
+  source:
+    mode: internal
+    dataset: podcast
+    offset: 0
+    model: gpt2-xl-batch
+    layer: 0
+- name: podcast_gpt2xl_l24
+  rank: 32
+  source:
+    mode: internal
+    dataset: podcast
+    offset: 0
+    model: gpt2-xl-batch
+    layer: 24
+- name: podcast_gpt2xl_l48
+  rank: 32
+  source:
+    mode: internal
+    dataset: podcast
+    offset: 0
+    model: gpt2-xl-batch
+    layer: 48
+- name: podcast_gpt2_l0
+  rank: 32
+  source:
+    mode: internal
+    dataset: podcast
+    offset: 0
+    model: gpt2
+    layer: 0
+- name: podcast_gpt2_l6
+  rank: 32
+  source:
+    mode: internal
+    dataset: podcast
+    offset: 0
+    model: gpt2
+    layer: 6
+- name: podcast_gpt2_l12
+  rank: 32
+  source:
+    mode: internal
+    dataset: podcast
+    offset: 0
+    model: gpt2
+    layer: 12
+- name: podcast_llama3_8b_l0
+  rank: 32
+  source:
+    mode: internal
+    dataset: podcast
+    offset: 0
+    model: llama3-8b
+    layer: 0
+- name: podcast_llama3_8b_l16
+  rank: 32
+  source:
+    mode: internal
+    dataset: podcast
+    offset: 0
+    model: llama3-8b
+    layer: 16
+- name: podcast_llama3_8b_l32
+  rank: 32
+  source:
+    mode: internal
+    dataset: podcast
+    offset: 0
+    model: llama3-8b
+    layer: 32
+- name: podcast_random_gpt2xl_l0
+  rank: 32
+  source:
+    mode: internal
+    dataset: podcast
+    offset: 0
+    model: random-gpt2-xl
+    layer: 0
+- name: podcast_random_gpt2xl_l24
+  rank: 32
+  source:
+    mode: internal
+    dataset: podcast
+    offset: 0
+    model: random-gpt2-xl
+    layer: 24
+- name: podcast_random_gpt2xl_l48
+  rank: 32
+  source:
+    mode: internal
+    dataset: podcast
+    offset: 0
+    model: random-gpt2-xl
+    layer: 48
+- name: podcast_roberta_large_l0
+  rank: 32
+  source:
+    mode: internal
+    dataset: podcast
+    offset: 0
+    model: roberta-large
+    layer: 0
+- name: podcast_roberta_large_l12
+  rank: 32
+  source:
+    mode: internal
+    dataset: podcast
+    offset: 0
+    model: roberta-large
+    layer: 12
+- name: podcast_roberta_large_l24
+  rank: 32
+  source:
+    mode: internal
+    dataset: podcast
+    offset: 0
+    model: roberta-large
+    layer: 24
+ieeg:
+  encoding:
+    data_root: data/
+    model: transformer
+    offset: 0
+    subjects: null
+    per_model_config:
+      model_dir: gpt2-xl-batch
+      layer: 24
+  banded_ridge_alphas: null
+  banded_ridge_solver_params:
+    n_iter: 500
+    random_state: 43
+  save_rrr_corr_per_target: true
+  save_b_matrices: true
+  run_pca_baseline: false
+  run_null_augmented: false
+fmri: null

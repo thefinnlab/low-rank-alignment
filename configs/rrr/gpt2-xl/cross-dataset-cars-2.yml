@@ -1,19 +1,8 @@
-encoding:
-  data_root: data/
-  model: transformer
-  offset: 0
-  subjects: null
-  batch: false
-  per_model_config:
-    model_dir: gpt2-xl-batch
-    layer:
-    - 0
-    - 12
-    - 24
-    - 36
-    - 48
+dataset: podcast
 mode: cross_dataset
-subspace_aggregation: extrinsic
+results_root: results
+plot: true
+refresh: true
 rank_grid:
 - 1
 - 2
@@ -27,25 +16,38 @@ rank_grid:
 - 512
 - 1024
 - 1600
-refresh: true
-normalize_subspace_inputs: false
-run_pca_baseline: true
-run_null_augmented: false
-null_augmented_repeats: 50
-null_augmented_reference_rank: 1600
-null_augmented_min_shift: 50
-null_augmented_seed: 42
-results_root: results
-plot: true
 significance_artifact:
   mode: sig_lags
   dataset: podcast
   offset: 0
   model: gpt2-xl-batch
   layer: '{layer}'
-ieeg_rrr_source:
-  mode: cross_subject
+subspace_aggregation: extrinsic
+rrr_source:
+  mode: internal
   dataset: brain-treebank-cars-2
   offset: 0
   model: gpt2-xl-batch
   layer: '{layer}'
+ieeg:
+  encoding:
+    data_root: data/
+    model: transformer
+    offset: 0
+    subjects: null
+    batch: false
+    per_model_config:
+      model_dir: gpt2-xl-batch
+      layer:
+      - 0
+      - 12
+      - 24
+      - 36
+      - 48
+  run_pca_baseline: true
+  run_null_augmented: false
+  null_augmented_repeats: 50
+  null_augmented_reference_rank: 1600
+  null_augmented_min_shift: 50
+  null_augmented_seed: 42
+fmri: null

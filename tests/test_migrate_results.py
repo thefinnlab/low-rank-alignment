@@ -21,7 +21,7 @@ def test_dry_run_apply_and_idempotence(tmp_path):
     (legacy / "all_subject_sig.csv").write_text("subject,elec\n1,A1\n")
     results = tmp_path / "canonical"
     dry = copy_mapping(mapping(legacy), results, apply=False)
-    assert dry["operations"][0]["action"] == "copy"
+    assert dry["operations"][0]["action"] == "convert"
     assert not results.exists()
     copy_mapping(mapping(legacy), results, apply=True)
     second = copy_mapping(mapping(legacy), results, apply=True)
@@ -67,13 +67,12 @@ def test_discovery_infers_configured_identity_and_reports_shared_root(tmp_path):
                for item in ambiguous)
 
 
-def test_shared_mapping_copies_only_the_selected_producer(tmp_path):
+def test_shared_mapping_converts_to_selected_producer(tmp_path):
     legacy = tmp_path / "legacy"
     legacy.mkdir()
     (legacy / "all_subject_sig.csv").write_text("subject,elec\n1,A1\n")
     (legacy / "summary.csv").write_text("k\n1\n")
     results = tmp_path / "canonical"
     report = copy_mapping(mapping(legacy), results, apply=True)
-    destinations = [item["destination"] for item in report["operations"]]
-    assert any(name.endswith("all_subject_sig.csv") for name in destinations)
-    assert not any(name.endswith("summary.csv") for name in destinations)
+    assert report["artifact"]["script"] == "run_significance"
+    assert all(item["action"] == "convert" for item in report["operations"])

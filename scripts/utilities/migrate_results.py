@@ -9,14 +9,17 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
-import shutil
-import tempfile
 from dataclasses import dataclass, asdict
 from pathlib import Path
 
 import yaml
+import joblib
+import numpy as np
+import pandas as pd
 
 from src.core.artifacts import normalize_dataset, normalize_model
+from scripts.run_significance import Artifact as SignificanceArtifact
+from scripts.run_rrr import Artifact as RRRArtifact, UnitSelector
 
 
 CANONICAL_SCRIPTS = {"run_significance", "run_rrr", "run_cross_dataset_rrr"}
@@ -46,7 +49,9 @@ def sha256(path: Path) -> str:
 
 
 def canonical_leaf(root: Path, item: Mapping) -> Path:
-    return (root / item.producer / item.mode / item.dataset
+    producer = "run_rrr" if item.producer == "run_cross_dataset_rrr" else item.producer
+    mode = "internal" if item.mode in {"cross_subject", "within_fmri"} else item.mode
+    return (root / producer / mode / item.dataset
             / f"offset-{item.offset}" / item.model
             / f"layer-{'none' if item.layer is None else item.layer}"
             / "variants" / item.variant)
@@ -184,56 +189,198 @@ def load_mappings(path: Path | None) -> list[Mapping]:
 
 
 def copy_mapping(item: Mapping, results_root: Path, *, apply: bool) -> dict:
+    """Convert one recognized legacy producer tree into a loadable Artifact."""
     source = Path(item.source)
-    destination = canonical_leaf(results_root, item) / "legacy"
-    operations = []
-    conflicts = []
-    for src in sorted(path for path in source.rglob("*") if path.is_file()):
-        relative = src.relative_to(source)
-        if item.producer == "run_significance" and (
-            relative.parts[0] in {"rrr", "pca", "per_subject_rrr", "per_region_rrr",
-                                  "temporal_window_rrr", "loso_rrr", "multi_view_rrr"}
-            or src.name in RRR_MARKERS
-        ):
-            continue
-        if item.producer in {"run_rrr", "run_cross_dataset_rrr"} and (
-            src.name in SIGNIFICANCE_MARKERS
-            or (relative.parts and relative.parts[0] == "subjects"
-                and src.name == "significance.csv")
-        ):
-            continue
-        dst = destination / relative
-        if dst.exists():
-            if sha256(src) == sha256(dst):
-                operations.append({"action": "skip-identical", "source": str(src),
-                                   "destination": str(dst), "sha256": sha256(src)})
-            else:
-                conflicts.append({"source": str(src), "destination": str(dst)})
+    files = sorted(path for path in source.rglob("*") if path.is_file())
+    inventory = {str(path.relative_to(source)): sha256(path) for path in files}
+    operations = [{"action": "convert", "source": str(path), "sha256": inventory[
+        str(path.relative_to(source))
+    ]} for path in files]
+    if not apply:
+        return {"mapping": asdict(item), "operations": operations}
+
+    mode = "internal" if item.mode in {"cross_subject", "within_fmri"} else item.mode
+    cls = SignificanceArtifact if item.producer == "run_significance" else RRRArtifact
+    artifact = cls(mode=mode, dataset=item.dataset, offset=item.offset,
+                   model=item.model, layer=item.layer, results_root=results_root)
+    config = _nearest_config(source, source) or {
+        "legacy_source": str(source), "legacy_identity": asdict(item)
+    }
+    upstreams = _upstreams_from_config(config)
+    artifact.begin(config=config, upstreams=upstreams, refresh=False)
+    migration_selector = {"name": "legacy_migration"}
+    if artifact.has_field("diagnostics", selector=migration_selector):
+        prior = artifact.load_field("diagnostics", selector=migration_selector)
+        if prior.get("inventory") != inventory:
+            raise FileExistsError("Differing-content migration conflict for " + str(source))
+        return {"mapping": asdict(item), "operations": [
+            {**operation, "action": "skip-identical"} for operation in operations
+        ], "artifact": artifact.identity_record()}
+
+    artifact.save_field("effective_config", config)
+    if isinstance(artifact, SignificanceArtifact):
+        _convert_significance(source, artifact)
+    else:
+        artifact.save_field("upstream_identities", upstreams)
+        _convert_rrr(source, artifact)
+    artifact.save_field("diagnostics", {"source": str(source), "inventory": inventory},
+                        selector=migration_selector)
+    manifest = artifact.manifest()
+    if isinstance(artifact, SignificanceArtifact):
+        target_entries = manifest.get("entries", {}).get("target_significance", {}).values()
+        selectors = [entry["selector"] for entry in target_entries]
+        if selectors:
+            artifact.mark_complete({"target_significance": selectors})
+    else:
+        required = {}
+        for name in ("target_manifest", "full_metrics", "rank_metrics", "mean_results"):
+            entries = manifest.get("entries", {}).get(name, {}).values()
+            selectors = [entry["selector"] for entry in entries]
+            if not selectors:
+                break
+            required[name] = selectors
         else:
-            operations.append({"action": "copy", "source": str(src),
-                               "destination": str(dst), "sha256": sha256(src)})
-    if conflicts:
-        raise FileExistsError(f"Differing-content migration conflicts: {conflicts}")
-    if apply:
-        for operation in operations:
-            if operation["action"] != "copy":
-                continue
-            src, dst = Path(operation["source"]), Path(operation["destination"])
-            dst.parent.mkdir(parents=True, exist_ok=True)
-            with tempfile.NamedTemporaryFile(dir=dst.parent, delete=False) as temporary:
-                temp_path = Path(temporary.name)
-            try:
-                shutil.copy2(src, temp_path)
-                if sha256(temp_path) != operation["sha256"]:
-                    raise IOError(f"Checksum verification failed while copying {src}")
-                temp_path.replace(dst)
-            finally:
-                temp_path.unlink(missing_ok=True)
-        migration = canonical_leaf(results_root, item) / "migration.json"
-        migration.parent.mkdir(parents=True, exist_ok=True)
-        migration.write_text(json.dumps({"mapping": asdict(item), "operations": operations,
-                                         "verified": True}, indent=2), encoding="utf-8")
-    return {"mapping": asdict(item), "operations": operations}
+            artifact.mark_complete(required)
+    return {"mapping": asdict(item), "operations": operations,
+            "artifact": artifact.identity_record()}
+
+
+def _convert_significance(source: Path, artifact: SignificanceArtifact) -> None:
+    metadata_path = source / "metadata.json"
+    metadata = (json.loads(metadata_path.read_text()) if metadata_path.is_file()
+                else {"method": artifact.mode, "migrated": True})
+    artifact.save_field("run_metadata", metadata)
+    detailed_path = source / "significance_detailed.csv"
+    detailed = pd.read_csv(detailed_path) if detailed_path.is_file() else None
+    null_path = source / "cluster_null_distribution.npz"
+    null_payload = None
+    if null_path.is_file():
+        with np.load(null_path, allow_pickle=True) as loaded:
+            null_payload = {key: loaded[key] for key in loaded.files}
+        artifact.save_subject_field("null_distribution", "all", null_payload)
+
+    subjects = set()
+    for path in sorted(source.glob("subjects/*/significance.csv")):
+        subject = path.parent.name
+        frame = pd.read_csv(path).rename(columns={"voxel_index": "target_id", "sig": "significant"})
+        frame["subject"] = str(subject)
+        frame["target_kind"] = "voxel"
+        artifact.save_subject_field("target_significance", subject, frame)
+        details = {}
+        for name in ("null_metadata.json", "voxel_filter.json"):
+            candidate = path.parent / name
+            if candidate.is_file():
+                details[name.removesuffix(".json")] = json.loads(candidate.read_text())
+        alpha = path.parent / "ridge_alphas.npz"
+        if alpha.is_file():
+            with np.load(alpha, allow_pickle=True) as loaded:
+                details["ridge_alphas"] = {key: loaded[key] for key in loaded.files}
+        artifact.save_subject_field("significance_details", subject, details)
+        subjects.add(str(subject))
+
+    if not subjects and null_payload is not None and {
+        "subjects", "electrodes"
+    }.issubset(null_payload):
+        null_subjects = np.asarray(null_payload["subjects"])
+        electrodes = np.asarray(null_payload["electrodes"]).astype(str)
+        sig_path = source / "all_subject_sig.csv"
+        selected = pd.read_csv(sig_path) if sig_path.is_file() else pd.DataFrame(
+            columns=["subject", "elec"]
+        )
+        for subject in sorted(set(map(int, null_subjects))):
+            ids = electrodes[null_subjects.astype(int) == subject]
+            chosen = set(selected.loc[selected.subject == subject, "elec"].astype(str))
+            frame = pd.DataFrame({
+                "subject": str(subject), "target_id": ids, "target_kind": "electrode",
+                "significant": [item in chosen for item in ids],
+            })
+            artifact.save_subject_field("target_significance", subject, frame)
+            if detailed is not None:
+                artifact.save_subject_field(
+                    "significance_details", subject,
+                    detailed[detailed.subject == subject].reset_index(drop=True),
+                )
+            subjects.add(str(subject))
+
+    for path in sorted(source.glob("subjects/sub_*/encoding_results.joblib")):
+        subject = str(int(path.parent.name.removeprefix("sub_")))
+        artifact.save_subject_field("encoding_results", subject, joblib.load(path))
+
+
+def _upstreams_from_config(config: dict) -> list[dict]:
+    upstreams = []
+    significance = config.get("significance_artifact")
+    if isinstance(significance, dict):
+        upstreams.append({"script": "run_significance", **significance})
+    sources = []
+    for name in ("rrr_source", "ieeg_rrr_source", "fmri_rrr_source"):
+        if isinstance(config.get(name), dict):
+            sources.append(config[name])
+    for view in config.get("views", []) if isinstance(config.get("views"), list) else []:
+        for name in ("source", "ieeg_rrr_source", "fmri_rrr_source"):
+            if isinstance(view.get(name), dict):
+                sources.append(view[name])
+    for source in sources:
+        identity = dict(source)
+        if identity.get("mode") in {"cross_subject", "within_fmri"}:
+            identity["mode"] = "internal"
+        upstreams.append({"script": "run_rrr", **identity})
+    return upstreams
+
+
+def _unit_from_path(path: Path, source: Path) -> tuple[UnitSelector, int | None, int | None]:
+    parts = path.relative_to(source).parts
+    method = "pca" if any("pca" in part.lower() for part in parts) else "rrr"
+    values = {"method": method}
+    fold = rank = None
+    for part in parts:
+        if part.startswith("fold_") and part.removeprefix("fold_").isdigit():
+            fold = int(part.removeprefix("fold_"))
+        if part.startswith("k") and part.removeprefix("k").isdigit():
+            rank = int(part.removeprefix("k"))
+        if part.startswith("sub_") and part.removeprefix("sub_").isdigit():
+            values["subject"] = int(part.removeprefix("sub_"))
+        if part.startswith("held_out_sub_"):
+            values["held_out_subject"] = int(part.removeprefix("held_out_sub_"))
+    return UnitSelector(**values), fold, rank
+
+
+def _npz(path: Path) -> dict:
+    with np.load(path, allow_pickle=True) as loaded:
+        return {key: loaded[key] for key in loaded.files}
+
+
+def _convert_rrr(source: Path, artifact: RRRArtifact) -> None:
+    for path in sorted(source.rglob("A.npy")):
+        unit, fold, rank = _unit_from_path(path, source)
+        artifact.save_factors(unit=unit, fold=fold, rank=rank,
+                              input_factors=np.load(path))
+        b_path = path.with_name("B.npy")
+        if b_path.is_file():
+            artifact.save_field("target_factors", np.load(b_path),
+                                selector=artifact._selector(unit, fold=fold, rank=rank))
+    for path in sorted(source.rglob("full_model_metrics.npz")):
+        unit, fold, _ = _unit_from_path(path, source)
+        artifact.save_full_metrics(unit=unit, fold=fold, metrics=_npz(path))
+    for path in sorted(source.rglob("metrics.npz")):
+        if path.name == "full_model_metrics.npz":
+            continue
+        unit, fold, rank = _unit_from_path(path, source)
+        if path.parent.name == "full":
+            artifact.save_field("full_metrics", _npz(path))
+        elif rank is not None:
+            artifact.save_rank_metrics(unit=unit, fold=fold, rank=rank,
+                                       metrics=_npz(path))
+    for path in sorted(source.rglob("target_manifest.csv")):
+        unit, _, _ = _unit_from_path(path, source)
+        artifact.save_target_manifest(unit=unit, target_manifest=pd.read_csv(path))
+    summary_paths = sorted(source.rglob("summary.csv")) or sorted(source.rglob("grid_results.csv"))
+    for path in summary_paths:
+        unit, _, _ = _unit_from_path(path, source)
+        artifact.save_summary(unit=unit, summary=pd.read_csv(path))
+    metadata = source / "metadata.json"
+    if metadata.is_file():
+        artifact.save_field("metadata", json.loads(metadata.read_text()))
 
 
 def main() -> None:

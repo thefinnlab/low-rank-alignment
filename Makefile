@@ -91,14 +91,14 @@ endef
 ##   make sig CMD=python                                           # run locally
 sig:
 	mkdir -p logs
-	$(CMD) scripts/sig_lags/run_significance.py --config $(SIG_CONFIG) $(OVERRIDES)
+	$(CMD) scripts/run_significance.py --config $(SIG_CONFIG) $(OVERRIDES)
 
 ## Release significance runs for a list of configs
 ## Usage:
 ##   make sig-batch SIG_CONFIGS="configs/significance/a.yml configs/significance/b.yml"
 ##   make sig-batch SIG_CONFIGS="configs/significance/a.yml configs/significance/b.yml" CMD=python
 sig-batch:
-	$(call run_config_list,SIG_CONFIGS,significance,scripts/sig_lags/run_significance.py)
+	$(call run_config_list,SIG_CONFIGS,significance,scripts/run_significance.py)
 
 ## Build dataset-scoped epoch caches used by downstream analysis.
 ## Usage:
@@ -130,12 +130,12 @@ fmri-generate-embeddings:
 ## Find significant fMRI voxels from session-held-out full-embedding models.
 fmri-sig:
 	mkdir -p logs
-	$(CMD) scripts/fmri/run_significance.py --config $(FMRI_SIG_CONFIG) $(OVERRIDES)
+	$(CMD) scripts/run_significance.py --config $(FMRI_SIG_CONFIG) $(OVERRIDES)
 
 ## Evaluate cross-dataset factors or learn fMRI FIR-RRR/PCA axes on significant voxels.
 fmri-rrr:
 	mkdir -p logs
-	$(CMD) scripts/fmri/run_cross_dataset_rrr.py --config $(FMRI_RRR_CONFIG) $(OVERRIDES)
+	$(CMD) scripts/run_rrr.py --config $(FMRI_RRR_CONFIG) $(OVERRIDES)
 
 ## Release embedding-generation runs for a list of configs
 ## Usage:
@@ -170,7 +170,7 @@ plots:
 ##   make rrr CMD=python                                               # run locally
 rrr:
 	mkdir -p logs
-	$(CMD) scripts/rrr/run_rrr.py --config $(RRR_CONFIG) $(OVERRIDES)
+	$(CMD) scripts/run_rrr.py --config $(RRR_CONFIG) $(OVERRIDES)
 
 ## Compare configured saved RRR/PCA spaces over a shared evaluation stimulus.
 ## Use CMD="uv run python" for a local run.
@@ -257,7 +257,7 @@ stage-language-resources:
 ##   make rrr-batch RRR_CONFIGS="configs/rrr/rrr_cross_final.yml configs/rrr/rrr_per_subject_final.yml configs/rrr/rrr_per_region_final.yml"
 ##   make rrr-batch RRR_CONFIGS="configs/rrr/rrr_cross_final.yml configs/rrr/rrr_per_subject_final.yml" CMD=python
 rrr-batch:
-	$(call run_config_list,RRR_CONFIGS,rrr,scripts/rrr/run_rrr.py)
+	$(call run_config_list,RRR_CONFIGS,rrr,scripts/run_rrr.py)
 
 ## Submit one temporal-window RRR job per model and dataset. Each config keeps
 ## all sampled layers in one process, so the default submits 14 jobs rather than
@@ -301,11 +301,11 @@ temporal-windows-batch:
 			echo "Submitting temporal-window RRR for $$dataset / $$model: $$config"; \
 			$(SBATCH) --job-name="rrr-windows-$$dataset-$$model-$(USR)-$(DT)" \
 				$(TEMPORAL_WINDOW_SBATCH_ARGS) submit.sh \
-				scripts/rrr/run_rrr.py --config "$$config" $(RRR_OVERRIDES); \
+				scripts/run_rrr.py --config "$$config" $(RRR_OVERRIDES); \
 		done; \
 	done
 
-## Submit paired significance and cross-subject RRR jobs for each model.
+## Submit paired significance and internal RRR jobs for each model.
 ## Each RRR job starts only after its model's significance job succeeds.
 ## Usage:
 ##   make sig-rrr-batch
@@ -348,7 +348,7 @@ sig-rrr-batch:
 	for model in $(PIPELINE_MODELS); do \
 		sig_config="$$sig_root/$$model/significance.yml"; \
 		rrr_config="$$rrr_root/$$model/cross_subject.yml"; \
-		sig_submission="$$( $(SBATCH) --parsable --job-name="significance-$(USR)-$$model-$(DT)" submit.sh scripts/sig_lags/run_significance.py --config "$$sig_config" $(SIG_OVERRIDES) )"; \
+		sig_submission="$$( $(SBATCH) --parsable --job-name="significance-$(USR)-$$model-$(DT)" submit.sh scripts/run_significance.py --config "$$sig_config" $(SIG_OVERRIDES) )"; \
 		sig_job_id="$${sig_submission%%;*}"; \
 		case "$$sig_job_id" in \
 			''|*[!0-9]*) \
@@ -357,7 +357,7 @@ sig-rrr-batch:
 				;; \
 		esac; \
 		echo "Submitted significance for $$model: $$sig_job_id"; \
-		rrr_submission="$$( $(SBATCH) --parsable --dependency="afterok:$$sig_job_id" --job-name="rrr-cross-subject-$(USR)-$$model-$(DT)" submit.sh scripts/rrr/run_rrr.py --config "$$rrr_config" $(RRR_OVERRIDES) )"; \
+		rrr_submission="$$( $(SBATCH) --parsable --dependency="afterok:$$sig_job_id" --job-name="rrr-internal-$(USR)-$$model-$(DT)" submit.sh scripts/run_rrr.py --config "$$rrr_config" $(RRR_OVERRIDES) )"; \
 		rrr_job_id="$${rrr_submission%%;*}"; \
 		case "$$rrr_job_id" in \
 			''|*[!0-9]*) \
@@ -365,7 +365,7 @@ sig-rrr-batch:
 				exit 2; \
 				;; \
 		esac; \
-		echo "Submitted cross-subject RRR for $$model: $$rrr_job_id (afterok:$$sig_job_id)"; \
+		echo "Submitted internal RRR for $$model: $$rrr_job_id (afterok:$$sig_job_id)"; \
 	done
 
 ## Print out regions where electrode in data are located according to an atlas

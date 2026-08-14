@@ -122,9 +122,8 @@ def _space_metadata(space) -> dict:
         "model": space.model,
         "layer": space.layer,
         "kind": space.kind,
-        "result_root": str(space.result_root),
-        "unit_dir": str(space.unit_dir),
-        "source_format": space.source_format,
+        "artifact": space.artifact.identity_record(),
+        "factor_set": space.source_format,
         "available_ranks": sorted(space.ranks),
     }
 

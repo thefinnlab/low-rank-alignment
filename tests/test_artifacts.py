@@ -10,8 +10,8 @@ from src.core.artifacts import (
     normalize_dataset,
     normalize_model,
 )
-from scripts.sig_lags.run_significance import Artifact as SignificanceArtifact
-from scripts.rrr.run_rrr import Artifact as RRRArtifact, UnitSelector
+from scripts.run_significance import Artifact as SignificanceArtifact
+from scripts.run_rrr import Artifact as RRRArtifact, UnitSelector
 
 
 def test_canonical_identity_and_defaults(tmp_path):
@@ -32,8 +32,8 @@ def test_selective_fields_partial_completion_and_checksums(tmp_path):
     artifact = SignificanceArtifact(results_root=tmp_path).begin(
         config={"subjects": [1], "refresh": False}
     )
-    artifact.save_subject(1, encoding_results={"test_idxs": [[0]]},
-                          correlations=np.ones((1, 1, 1)))
+    artifact.save_subject_field("encoding_results", 1, {"test_idxs": [[0]]})
+    artifact.save_subject_field("correlations", 1, np.ones((1, 1, 1)))
     loaded = SignificanceArtifact(results_root=tmp_path).load_artifacts(
         ["encoding_results"], selectors={"subjects": [1]}
     )
@@ -41,8 +41,8 @@ def test_selective_fields_partial_completion_and_checksums(tmp_path):
     assert next(iter(loaded.encoding_results.values()))["test_idxs"] == [[0]]
     with pytest.raises(ArtifactIncompleteError):
         artifact.mark_complete({
-            "encoding_results": [{"subject": 1}],
-            "correlations": [{"subject": 1}],
+            "encoding_results": [{"subject": "1"}],
+            "correlations": [{"subject": "1"}],
         })
 
     manifest = artifact.manifest()
@@ -50,7 +50,7 @@ def test_selective_fields_partial_completion_and_checksums(tmp_path):
     payload = artifact._variant_dir() / entry["file"]
     payload.write_bytes(payload.read_bytes() + b"corrupt")
     with pytest.raises(ArtifactError, match="Checksum mismatch"):
-        artifact.load_field("encoding_results", selector={"subject": 1})
+        artifact.load_field("encoding_results", selector={"subject": "1"})
 
 
 def test_variant_ambiguity_and_refresh(tmp_path):

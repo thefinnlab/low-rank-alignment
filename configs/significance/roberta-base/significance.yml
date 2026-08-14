@@ -1,29 +1,33 @@
-encoding:
-  data_root: data/
-  model: transformer
-  offset: 0
-  subjects: null
-  batch: true
-  num_folds: 5
-  per_model_config:
-    model_dir: roberta-base
-    layer:
-    - 0
-    - 6
-    - 12
-blocks_per_fold: 3
-max_matching_distance: 3
-positive_fraction: 0.8
-mean_corr_threshold: 0.0
-minimal_shift: 50
-shift_step: 1
+dataset: podcast
+mode: sig_lags
+results_root: results
+plot: true
+refresh: true
 num_null_shifts: 10000
 null_seed: 42
 null_batch_size: 16
-device: null
+minimal_shift: 50
 fdr_q: 0.01
-fdr_mode: electrode
-save_weights: true
-refresh: true
-results_root: results
-plot: true
+ieeg:
+  encoding:
+    data_root: data/
+    model: transformer
+    offset: 0
+    subjects: null
+    batch: true
+    num_folds: 5
+    per_model_config:
+      model_dir: roberta-base
+      layer:
+      - 0
+      - 6
+      - 12
+  blocks_per_fold: 3
+  max_matching_distance: 3
+  positive_fraction: 0.8
+  mean_corr_threshold: 0.0
+  shift_step: 1
+  device: null
+  fdr_mode: electrode
+  save_weights: true
+fmri: null

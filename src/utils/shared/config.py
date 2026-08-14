@@ -169,6 +169,10 @@ def dict_to_dataclass(d: dict, cls):
     """
     hints = get_type_hints(cls)
     valid_fields = {f.name for f in fields(cls)}
+    if getattr(cls, "STRICT_CONFIG", False):
+        unknown = sorted(set(d) - valid_fields)
+        if unknown:
+            raise ValueError(f"Unknown {cls.__name__} fields: {unknown}")
     kwargs = {}
     for f in fields(cls):
         if f.name not in d:

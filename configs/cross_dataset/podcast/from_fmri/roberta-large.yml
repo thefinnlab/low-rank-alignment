@@ -1,20 +1,8 @@
-encoding:
-  data_root: data/
-  model: transformer
-  offset: 0
-  subjects: null
-  batch: false
-  per_model_config:
-    model_dir: roberta-large
-    layer:
-    - 0
-    - 6
-    - 12
-    - 18
-    - 24
+dataset: podcast
 mode: cross_dataset
-cross_source_format: rank_bases
-subspace_aggregation: extrinsic
+results_root: results
+plot: true
+refresh: true
 rank_grid:
 - 1
 - 2
@@ -27,20 +15,34 @@ rank_grid:
 - 256
 - 512
 - 1024
-refresh: true
-run_pca_baseline: true
-run_null_augmented: false
-results_root: results
-plot: true
 significance_artifact:
   mode: sig_lags
   dataset: podcast
   offset: 0
   model: roberta-large
   layer: '{layer}'
-fmri_rrr_source:
-  mode: within_fmri
+subspace_aggregation: extrinsic
+rrr_source:
+  mode: internal
   dataset: deep-fmri
   offset: 0
   model: roberta-large
   layer: '{layer}'
+ieeg:
+  encoding:
+    data_root: data/
+    model: transformer
+    offset: 0
+    subjects: null
+    batch: false
+    per_model_config:
+      model_dir: roberta-large
+      layer:
+      - 0
+      - 6
+      - 12
+      - 18
+      - 24
+  run_pca_baseline: true
+  run_null_augmented: false
+fmri: null

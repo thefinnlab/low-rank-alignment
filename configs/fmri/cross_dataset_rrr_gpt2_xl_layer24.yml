@@ -1,30 +1,8 @@
-fmri:
-  fmri_repo_root: data/deep-fMRI-dataset
-  embedding_root: data/fmri/stimuli
-  sessions:
-  - 1
-  - 2
-  - 3
-  - 4
-  - 5
-  subjects:
-  - UTS03
-  trim: 5
-  ndelays: 4
-ridge:
-  alphas: null
-  alpha_grid: {}
-  solver_params:
-    n_targets_batch: 4096
-    n_targets_batch_refit: 4096
-  y_in_cpu: true
-  force_cpu: false
-  log_alphas: true
-model_dir: gpt2-xl
-layer: 24
-pooling: mean
-source_mode: cross_dataset
-subspace_aggregation: extrinsic
+dataset: deep-fmri
+mode: cross_dataset
+results_root: results
+plot: true
+refresh: false
 rank_grid:
 - 1
 - 2
@@ -38,18 +16,43 @@ rank_grid:
 - 512
 - 1024
 - 1600
-refresh: false
-results_root: results
-plot: true
 significance_artifact:
   mode: held_out_session
   dataset: deep-fmri
   offset: 0
   model: gpt2-xl
   layer: 24
-ieeg_rrr_source:
-  mode: cross_subject
+subspace_aggregation: extrinsic
+rrr_source:
+  mode: internal
   dataset: podcast
   offset: 0
   model: gpt2-xl
   layer: 24
+ieeg: null
+fmri:
+  ridge:
+    alphas: null
+    alpha_grid: {}
+    solver_params:
+      n_targets_batch: 4096
+      n_targets_batch_refit: 4096
+    y_in_cpu: true
+    force_cpu: false
+    log_alphas: true
+  model_dir: gpt2-xl
+  layer: 24
+  pooling: mean
+  data:
+    fmri_repo_root: data/deep-fMRI-dataset
+    embedding_root: data/fmri/stimuli
+    sessions:
+    - 1
+    - 2
+    - 3
+    - 4
+    - 5
+    subjects:
+    - UTS03
+    trim: 5
+    ndelays: 4

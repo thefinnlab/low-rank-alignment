@@ -1,24 +1,8 @@
-encoding:
-  data_root: data/
-  model: transformer
-  offset: 0
-  subjects: null
-  per_model_config:
-    model_dir: llama3-8b
-    layer:
-    - 0
-    - 8
-    - 16
-    - 24
-    - 32
+dataset: podcast
 mode: temporal_windows
-temporal_windows:
-- name: pre_word
-  start_sec: -2.0
-  end_sec: 0.0
-- name: post_word
-  start_sec: 0.0
-  end_sec: 2.0
+results_root: results
+plot: true
+refresh: true
 rank_grid:
 - 1
 - 2
@@ -33,13 +17,32 @@ rank_grid:
 - 1024
 - 2048
 - 4096
-refresh: true
-run_pca_baseline: true
-results_root: results
-plot: true
 significance_artifact:
   mode: sig_lags
   dataset: podcast
   offset: 0
   model: llama3-8b
   layer: '{layer}'
+ieeg:
+  encoding:
+    data_root: data/
+    model: transformer
+    offset: 0
+    subjects: null
+    per_model_config:
+      model_dir: llama3-8b
+      layer:
+      - 0
+      - 8
+      - 16
+      - 24
+      - 32
+  temporal_windows:
+  - name: pre_word
+    start_sec: -2.0
+    end_sec: 0.0
+  - name: post_word
+    start_sec: 0.0
+    end_sec: 2.0
+  run_pca_baseline: true
+fmri: null

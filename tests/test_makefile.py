@@ -61,7 +61,7 @@ def test_sig_rrr_batch_submits_independent_model_dependencies(tmp_path: Path):
 
     assert result.returncode == 0, result.stderr
     assert len(submissions) == 4
-    assert "scripts/sig_lags/run_significance.py" in submissions[0]
+    assert "scripts/run_significance.py" in submissions[0]
     assert "configs/significance/gpt2/significance.yml" in submissions[0]
     assert "--num_null_shifts=100" in submissions[0]
     assert "--refresh=false" not in submissions[0]
@@ -116,4 +116,4 @@ def test_sig_rrr_batch_stops_when_significance_submission_fails(
 
     assert result.returncode != 0
     assert len(submissions) == 1
-    assert "scripts/sig_lags/run_significance.py" in submissions[0]
+    assert "scripts/run_significance.py" in submissions[0]

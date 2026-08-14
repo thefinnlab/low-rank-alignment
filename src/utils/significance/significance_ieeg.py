@@ -17,13 +17,7 @@ import torch
 from src.utils.shared.encoding import train_encoding
 from src.utils.shared.embeddings import load_embeddings
 from src.core.config import SignificanceConfig
-from src.core.artifacts import ArtifactStore, normalize_dataset, normalize_model
 from src.core.registry import get_dataset_adapter, resolve_dataset_context
-from src.utils.shared.config import (
-    parse_args,
-    load_config,
-    expand_per_model_layer_configs,
-)
 from src.utils.shared.encoding import (
     extract_best_alphas,
     get_ridge_model_constructor,
@@ -44,94 +38,12 @@ from src.utils.significance.ieeg import (
 )
 
 # ---------------------------------------------------------------------------
-# Artifact
-# ---------------------------------------------------------------------------
-
-
-class Artifact(ArtifactStore):
-    """Storage contract for iEEG lag-cluster significance results."""
-
-    SCRIPT = "run_significance"
-    FIELD_CONTRACT = {
-        "effective_config": True,
-        "significant_electrodes": True,
-        "detailed_significance": True,
-        "encoding_results": True,
-        "correlations": True,
-        "subject_checkpoint": True,
-        "cluster_null_distribution": True,
-        "alpha_diagnostics": False,
-        "plots": False,
-    }
-
-    def __init__(self, *, mode="sig_lags", dataset="podcast", offset=0,
-                 model="gpt2-xl", layer=24, variant=None, results_root="results"):
-        self._init_store(mode=mode, dataset=dataset, offset=offset, model=model,
-                         layer=layer, variant=variant, results_root=results_root)
-
-    @classmethod
-    def from_config(cls, config, dataset_context):
-        enc = config.encoding
-        model_dir = enc.per_model_config.get("model_dir", enc.model)
-        glove_dim = enc.per_model_config.get("dim")
-        return cls(
-            dataset=normalize_dataset(enc.dataset, dataset_context.stimulus_id),
-            offset=enc.offset,
-            model=normalize_model(model_dir, glove_dim=glove_dim),
-            layer=None if enc.model == "glove" else enc.per_model_config.get("layer"),
-            results_root=getattr(config, "results_root", "results"),
-        )
-
-    def save_subject(self, subject, *, encoding_results, correlations=None,
-                     alpha_diagnostics=None, checkpoint=None, overwrite=False):
-        selector = {"subject": int(subject)}
-        self.save_field("encoding_results", encoding_results, selector=selector,
-                        overwrite=overwrite)
-        if correlations is not None:
-            self.save_field("correlations", correlations, selector=selector,
-                            overwrite=overwrite)
-        if alpha_diagnostics is not None:
-            self.save_field("alpha_diagnostics", alpha_diagnostics,
-                            selector=selector, overwrite=overwrite)
-        if checkpoint is not None:
-            self.save_field("subject_checkpoint", checkpoint, selector=selector,
-                            overwrite=overwrite)
-
-    def load_artifacts(self, fields, selectors=None):
-        selectors = selectors or {}
-        for field in fields:
-            if field in {"encoding_results", "correlations", "alpha_diagnostics",
-                         "subject_checkpoint"}:
-                collection = self.load_collection(
-                    field, {"subject": selectors.get("subjects", [])}
-                ) if selectors.get("subjects") else self.load_collection(field)
-                setattr(self, field, {
-                    dict(selector)["subject"]: value
-                    for selector, value in collection.items()
-                })
-            else:
-                setattr(self, field, self.load_field(field))
-        self.complete = bool(self.manifest().get("complete"))
-        return self
-
-    def save_artifacts(self, *, effective_config, significant_electrodes,
-                       detailed_significance, cluster_null_distribution,
-                       plot=True, overwrite=False):
-        self.save_field("effective_config", effective_config, overwrite=overwrite)
-        self.save_field("significant_electrodes", significant_electrodes,
-                        overwrite=overwrite)
-        self.save_field("detailed_significance", detailed_significance,
-                        overwrite=overwrite)
-        self.save_field("cluster_null_distribution", cluster_null_distribution,
-                        overwrite=overwrite)
-
-
-# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
 
-def run_config(config: SignificanceConfig):
+def run_ieeg(config: SignificanceConfig):
+    from scripts.run_significance import Artifact
     config.validate()
     enc = config.encoding
     mean_corr_threshold = (
@@ -150,7 +62,7 @@ def run_config(config: SignificanceConfig):
     get_dataset_adapter(enc.dataset).validate_subjects_share_stimulus(
         subject_ids, enc.per_dataset_config, enc.data_root
     )
-    artifact = Artifact.from_config(config, dataset_context).begin(
+    artifact = Artifact.from_ieeg_config(config, dataset_context).begin(
         config=config, refresh=config.refresh
     )
 
@@ -211,9 +123,9 @@ def run_config(config: SignificanceConfig):
 
         checkpoint_selector = {"subject": int(bids_sub_id)}
         if (not config.refresh and artifact.has_field(
-                "subject_checkpoint", selector=checkpoint_selector)):
+                "checkpoints", selector={"subject": str(bids_sub_id)})):
             checkpoint = artifact.load_field(
-                "subject_checkpoint", selector=checkpoint_selector
+                "checkpoints", selector={"subject": str(bids_sub_id)}
             )
             all_cluster_records.extend(checkpoint["cluster_records"])
             all_lag_records.extend(checkpoint["lag_records"])
@@ -262,9 +174,9 @@ def run_config(config: SignificanceConfig):
         }
         alpha_selector = {"subject": int(bids_sub_id)}
         if (not config.refresh and
-                artifact.has_field("alpha_diagnostics", selector=alpha_selector)):
+                artifact.has_field("diagnostics", selector={"subject": str(bids_sub_id)})):
             alphas = np.asarray(artifact.load_field(
-                "alpha_diagnostics", selector=alpha_selector
+                "diagnostics", selector={"subject": str(bids_sub_id)}
             )["alpha_grid"], dtype=float)
         else:
             alphas = resolve_ridge_alphas(
@@ -438,17 +350,21 @@ def run_config(config: SignificanceConfig):
         subject_electrode_rows = [
             row for row in electrode_rows if int(row["subject"]) == int(bids_sub_id)
         ]
-        artifact.save_subject(
-            bids_sub_id, encoding_results=encoding_result, correlations=corrs,
-            alpha_diagnostics=alpha_payload,
-            checkpoint={
+        artifact.save_subject_field("encoding_results", bids_sub_id, encoding_result,
+                                    overwrite=config.refresh)
+        artifact.save_subject_field("correlations", bids_sub_id, corrs,
+                                    overwrite=config.refresh)
+        if alpha_payload is not None:
+            artifact.save_subject_field("diagnostics", bids_sub_id, alpha_payload,
+                                        overwrite=config.refresh)
+        artifact.save_subject_field(
+            "checkpoints", bids_sub_id, {
                 "cluster_records": subject_cluster_records,
                 "lag_records": subject_lag_records,
                 "null_distribution": max_per_electrode,
                 "electrode_rows": subject_electrode_rows,
                 "shift_metadata": subject_shift_metadata[int(bids_sub_id)],
-            },
-            overwrite=config.refresh,
+            }, overwrite=config.refresh,
         )
 
         # ------------------------------------------------------------------
@@ -531,34 +447,37 @@ def run_config(config: SignificanceConfig):
         fdr_mode=config.fdr_mode,
         subject_shift_metadata=subject_shift_metadata,
     )
-    artifact.save_artifacts(
-        effective_config=asdict(config), significant_electrodes=sig_pairs,
-        detailed_significance=df_detailed,
-        cluster_null_distribution=null_payload,
-        plot=getattr(config, "plot", True), overwrite=True,
-    )
+    for subject in subject_ids:
+        subject_electrodes = [
+            row["electrode"] for row in electrode_rows
+            if int(row["subject"]) == int(subject)
+        ]
+        selected = set(sig_pairs.loc[sig_pairs.subject == subject, "elec"].astype(str))
+        target_table = pd.DataFrame({
+            "subject": str(subject),
+            "target_id": list(map(str, subject_electrodes)),
+            "target_kind": "electrode",
+            "significant": [str(item) in selected for item in subject_electrodes],
+        })
+        details = df_detailed[df_detailed.subject == subject].reset_index(drop=True)
+        artifact.save_subject_field("target_significance", subject, target_table,
+                                    overwrite=True)
+        artifact.save_subject_field("significance_details", subject, details,
+                                    overwrite=True)
+    artifact.save_field("effective_config", asdict(config), overwrite=True)
+    artifact.save_field("run_metadata", {
+        "method": "sig_lags", "subjects": list(map(str, subject_ids)),
+        "fdr_mode": config.fdr_mode,
+    }, overwrite=True)
+    artifact.save_subject_field("null_distribution", "all", null_payload,
+                                overwrite=True)
     required = {
-        "encoding_results": [{"subject": int(s)} for s in subject_ids],
-        "correlations": [{"subject": int(s)} for s in subject_ids],
-        "subject_checkpoint": [{"subject": int(s)} for s in subject_ids],
+        "target_significance": [{"subject": str(s)} for s in subject_ids],
+        "significance_details": [{"subject": str(s)} for s in subject_ids],
+        "encoding_results": [{"subject": str(s)} for s in subject_ids],
+        "correlations": [{"subject": str(s)} for s in subject_ids],
+        "checkpoints": [{"subject": str(s)} for s in subject_ids],
     }
     artifact.mark_complete(required)
     print(f"Completed Artifact {artifact.identity_record()}")
     return artifact
-
-
-def main():
-    args, overrides = parse_args("Cluster-based lag significance")
-    config: SignificanceConfig = load_config(args.config, overrides, SignificanceConfig)
-    configs = expand_per_model_layer_configs(config)
-    for layer_config in configs:
-        if len(configs) > 1:
-            print(
-                f"\nComputing cluster significance for layer "
-                f"{layer_config.encoding.per_model_config['layer']}"
-            )
-        run_config(layer_config)
-
-
-if __name__ == "__main__":
-    main()

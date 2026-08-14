@@ -1,20 +1,7 @@
-encoding:
-  data_root: data/brain-treebank
-  dataset: brain_treebank
-  per_dataset_config:
-    movie: coraline
-  model: transformer
-  per_model_config:
-    layer:
-    - 0
-    - 24
-    - 48
-    model_dir: gpt2-xl
-  offset: 0
-  subjects: null
-  sig_dir: null
-  batch: false
-mode: cross_subject
+dataset: brain_treebank
+mode: internal
+results_root: results
+plot: true
 rank_grid:
 - 1
 - 2
@@ -28,12 +15,27 @@ rank_grid:
 - 512
 - 1024
 - 1600
-run_pca_baseline: true
-results_root: results
-plot: true
 significance_artifact:
   mode: sig_lags
   dataset: brain-treebank-coraline
   offset: 0
   model: gpt2-xl
   layer: '{layer}'
+ieeg:
+  encoding:
+    data_root: data/brain-treebank
+    per_dataset_config:
+      movie: coraline
+    model: transformer
+    per_model_config:
+      layer:
+      - 0
+      - 24
+      - 48
+      model_dir: gpt2-xl
+    offset: 0
+    subjects: null
+    sig_dir: null
+    batch: false
+  run_pca_baseline: true
+fmri: null
