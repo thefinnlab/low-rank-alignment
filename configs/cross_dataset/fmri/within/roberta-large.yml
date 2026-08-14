@@ -36,9 +36,6 @@ layer:
 - 18
 - 24
 pooling: mean
-significance_dir: results/fmri/roberta-large_layer{layer}/significance
-source_rrr_unit_dir: null
-output_dir: results/fmri/roberta-large_layer{layer}/within_fmri_rrr
 source_mode: within_fmri
 subspace_aggregation: extrinsic
 rrr_svd_on_cpu: false
@@ -58,3 +55,11 @@ rank_grid:
 - 512
 - 1024
 refresh: true
+results_root: results
+plot: true
+significance_artifact:
+  mode: held_out_session
+  dataset: deep-fmri
+  offset: 0
+  model: roberta-large
+  layer: '{layer}'

@@ -19,12 +19,8 @@ encoding:
   - 3
   - 7
   - 10
-  run_name: null
   sig_dir: null
   batch: false
-output_dir: null
-sig_dir: null
-rrr_output_dir: null
 mode: cross_dataset
 subspace_aggregation: extrinsic
 refresh: true
@@ -42,4 +38,17 @@ rank_grid:
 - 1024
 - 1600
 run_pca_baseline: true
-cross_result_dir: results/gpt2-xl-batch_layer48_offset0/
+results_root: results
+plot: true
+significance_artifact:
+  mode: sig_lags
+  dataset: brain-treebank-cars-2
+  offset: 0
+  model: gpt2-xl-batch
+  layer: '{layer}'
+ieeg_rrr_source:
+  mode: cross_subject
+  dataset: podcast
+  offset: 0
+  model: gpt2-xl-batch
+  layer: '{layer}'

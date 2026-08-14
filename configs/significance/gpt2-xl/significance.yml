@@ -3,18 +3,16 @@ encoding:
   model: transformer
   offset: 0
   subjects: null
-  run_name: null
   batch: true
   num_folds: 5
   per_model_config:
     model_dir: gpt2-xl-batch
     layer:
-      - 0
-      - 12
-      - 24
-      - 36
-      - 48
-output_dir: null
+    - 0
+    - 12
+    - 24
+    - 36
+    - 48
 blocks_per_fold: 3
 max_matching_distance: 3
 positive_fraction: 0.8
@@ -29,3 +27,5 @@ fdr_q: 0.01
 fdr_mode: electrode
 save_weights: true
 refresh: true
+results_root: results
+plot: true

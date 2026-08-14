@@ -9,16 +9,25 @@ encoding:
   - 3
   - 7
   - 10
-  run_name: null
   batch: false
   num_folds: 5
   shared_word_selection: true
   per_model_config:
     dim: 300
-  ridge_alphas: [10.0, 21.5, 46.4, 100.0, 215.4, 464.2, 1000.0, 2154.4, 4641.6, 10000.0, 21544.0, 46415.0, 1.0e10]
-output_dir: null
-sig_dir: null
-rrr_output_dir: null
+  ridge_alphas:
+  - 10.0
+  - 21.5
+  - 46.4
+  - 100.0
+  - 215.4
+  - 464.2
+  - 1000.0
+  - 2154.4
+  - 4641.6
+  - 10000.0
+  - 21544.0
+  - 46415.0
+  - 1.0e10
 mode: leave_one_subject_out
 rank_grid:
 - 1
@@ -33,3 +42,11 @@ rank_grid:
 - 300
 refresh: false
 run_pca_baseline: true
+results_root: results
+plot: true
+significance_artifact:
+  mode: sig_lags
+  dataset: brain-treebank-cars-2
+  offset: 0
+  model: glove-300
+  layer: null

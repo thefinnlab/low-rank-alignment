@@ -3,7 +3,6 @@ encoding:
   model: transformer
   offset: 0
   subjects: null
-  run_name: null
   batch: false
   per_model_config:
     model_dir: gpt2-xl-batch
@@ -13,11 +12,7 @@ encoding:
     - 24
     - 36
     - 48
-output_dir: null
-sig_dir: null
-rrr_output_dir: null
 mode: cross_dataset
-cross_result_dir: results/gpt2-xl-batch_layer{layer}_offset0/movie-cars-2
 cross_source_format: fold_factors
 subspace_aggregation: extrinsic
 rank_grid:
@@ -36,3 +31,17 @@ rank_grid:
 refresh: true
 run_pca_baseline: true
 run_null_augmented: false
+results_root: results
+plot: true
+significance_artifact:
+  mode: sig_lags
+  dataset: podcast
+  offset: 0
+  model: gpt2-xl-batch
+  layer: '{layer}'
+ieeg_rrr_source:
+  mode: cross_subject
+  dataset: brain-treebank-cars-2
+  offset: 0
+  model: gpt2-xl-batch
+  layer: '{layer}'

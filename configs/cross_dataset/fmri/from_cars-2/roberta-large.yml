@@ -36,9 +36,6 @@ layer:
 - 18
 - 24
 pooling: mean
-significance_dir: results/fmri/roberta-large_layer{layer}/significance
-source_rrr_unit_dir: results/roberta-large_layer{layer}_offset0/movie-cars-2/rrr
-output_dir: results/fmri/roberta-large_layer{layer}/from_cars-2_rrr
 source_mode: cross_dataset
 subspace_aggregation: extrinsic
 rrr_svd_on_cpu: false
@@ -58,3 +55,17 @@ rank_grid:
 - 512
 - 1024
 refresh: true
+results_root: results
+plot: true
+significance_artifact:
+  mode: held_out_session
+  dataset: deep-fmri
+  offset: 0
+  model: roberta-large
+  layer: '{layer}'
+ieeg_rrr_source:
+  mode: cross_subject
+  dataset: brain-treebank-cars-2
+  offset: 0
+  model: roberta-large
+  layer: '{layer}'

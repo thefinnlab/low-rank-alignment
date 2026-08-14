@@ -17,9 +17,11 @@ embeddings predict iEEG and fMRI responses. The supported executable surface is
 - `scripts/utilities/` contains data preparation, embedding generation, language-feature
   generation, plotting, and atlas-reporting entrypoints.
 
-The Makefile exposes the retained workflows. Config-driven artifact producers save
-their effective configuration beside their outputs and retain their existing result
-formats so completed runs remain reusable.
+The Makefile exposes the retained workflows. Core significance and RRR producers
+own result persistence through script-specific `Artifact` classes. Their canonical
+identity, variants, selector fields, resume behavior, and legacy migration are
+described in [artifacts.md](artifacts.md). Language decoding and reconstruction are
+temporarily deferred from that storage refactor.
 
 ## Source layout
 

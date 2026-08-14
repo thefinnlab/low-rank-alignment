@@ -143,15 +143,13 @@ class TestDictToDataclass:
         config = dict_to_dataclass(
             {
                 "mode": "cross_dataset",
-                "cross_result_dir": "results/gpt2-xl_layer24_offset0/movie-cars-2",
+                "ieeg_rrr_source": {"mode": "cross_subject", "dataset": "podcast",
+                                    "offset": 0, "model": "gpt2-xl", "layer": 24},
             },
             RRRConfig,
         )
         assert config.mode == ScriptMode.CROSS_DATASET
-        assert (
-            config.cross_result_dir
-            == "results/gpt2-xl_layer24_offset0/movie-cars-2"
-        )
+        assert config.ieeg_rrr_source["dataset"] == "podcast"
 
     def test_rrr_multi_view_roundtrip(self):
         config = dict_to_dataclass(
@@ -160,8 +158,8 @@ class TestDictToDataclass:
                 "views": [
                     {
                         "name": "layer_24",
-                        "rrr_config": "configs/rrr/source.yml",
-                        "unit_dir": "results/source/rrr",
+                        "ieeg_rrr_source": {"mode": "cross_subject", "dataset": "podcast",
+                                            "offset": 0, "model": "gpt2-xl", "layer": 24},
                         "rank": 16,
                     }
                 ],
@@ -173,8 +171,8 @@ class TestDictToDataclass:
         assert config.views == [
             RRRViewConfig(
                 name="layer_24",
-                rrr_config="configs/rrr/source.yml",
-                unit_dir="results/source/rrr",
+                ieeg_rrr_source={"mode": "cross_subject", "dataset": "podcast",
+                                 "offset": 0, "model": "gpt2-xl", "layer": 24},
                 rank=16,
             )
         ]
@@ -479,22 +477,21 @@ class TestApplyOverrides:
 
     def test_subspace_aggregation_defaults_and_validation(self):
         assert RRRConfig().subspace_aggregation == "extrinsic"
-        assert FMRICrossDatasetRRRConfig().subspace_aggregation == "extrinsic"
-        assert FMRICrossDatasetRRRConfig().rrr_svd_on_cpu is False
-        assert FMRICrossDatasetRRRConfig().rrr_use_low_rank_svd is False
-        assert FMRICrossDatasetRRRConfig().rrr_low_rank_svd_seed == 0
-        assert FMRICrossDatasetRRRConfig().rrr_save_b_matrix is False
-        assert FMRICrossDatasetRRRConfig().pca_svd_device == "auto"
-        assert FMRICrossDatasetRRRConfig().prefetch_rank_designs is False
+        fmri = FMRICrossDatasetRRRConfig(source_mode="within_fmri")
+        assert fmri.subspace_aggregation == "extrinsic"
+        assert fmri.rrr_svd_on_cpu is False
+        assert fmri.rrr_use_low_rank_svd is False
+        assert fmri.rrr_low_rank_svd_seed == 0
+        assert fmri.rrr_save_b_matrix is False
+        assert fmri.pca_svd_device == "auto"
+        assert fmri.prefetch_rank_designs is False
         with pytest.raises(ValueError, match="subspace_aggregation"):
             RRRConfig(subspace_aggregation="weighted")
         with pytest.raises(ValueError, match="pca_svd_device"):
-            FMRICrossDatasetRRRConfig(pca_svd_device="mps")
+            FMRICrossDatasetRRRConfig(source_mode="within_fmri", pca_svd_device="mps")
 
     def test_within_fmri_does_not_require_cross_dataset_source(self):
-        config = FMRICrossDatasetRRRConfig(
-            source_mode="within_fmri", source_rrr_unit_dir=""
-        )
+        config = FMRICrossDatasetRRRConfig(source_mode="within_fmri")
         assert config.source_mode == "within_fmri"
 
 
@@ -620,47 +617,38 @@ class TestExpandPerModelLayerConfigs:
         assert [c.per_model_config["layer"] for c in expanded] == [0, 24, 48]
         assert config.per_model_config["layer"] == [0, 24, 48]
 
-    def test_rrr_layer_expansion_formats_cross_source_path(self):
+    def test_rrr_layer_expansion_formats_source_constructor(self):
         config = RRRConfig(
             encoding=EncodingConfig(per_model_config={"layer": [0, 12]}),
-            cross_result_dir="results/fmri/model_layer{layer}/within_fmri_rrr",
+            fmri_rrr_source={"mode": "within_fmri", "dataset": "deep-fmri",
+                              "offset": 0, "model": "model", "layer": "{layer}"},
         )
 
         expanded = expand_per_model_layer_configs(config)
 
-        assert [item.cross_result_dir for item in expanded] == [
-            "results/fmri/model_layer0/within_fmri_rrr",
-            "results/fmri/model_layer12/within_fmri_rrr",
-        ]
+        assert [item.fmri_rrr_source["layer"] for item in expanded] == ["0", "12"]
 
 
 class TestExpandFMRILayerConfigs:
     def test_expands_layers_and_formats_artifact_paths(self):
         config = FMRICrossDatasetRRRConfig(
             layer=[0, 12],
-            significance_dir="results/model_layer{layer}/significance",
-            source_rrr_unit_dir="results/source_layer{layer}/rrr",
-            output_dir="results/model_layer{layer}/from_source",
+            significance_artifact={"layer": "{layer}"},
+            ieeg_rrr_source={"layer": "{layer}"},
         )
 
         expanded = expand_fmri_layer_configs(config)
 
         assert [item.layer for item in expanded] == [0, 12]
-        assert expanded[1].significance_dir == "results/model_layer12/significance"
-        assert expanded[1].source_rrr_unit_dir == "results/source_layer12/rrr"
-        assert expanded[1].output_dir == "results/model_layer12/from_source"
+        assert expanded[1].significance_artifact["layer"] == "12"
+        assert expanded[1].ieeg_rrr_source["layer"] == "12"
 
     def test_significance_config_uses_same_fanout(self):
-        config = FMRISignificanceConfig(
-            layer=[0, 12], output_dir="results/model_layer{layer}/significance"
-        )
+        config = FMRISignificanceConfig(layer=[0, 12])
 
         expanded = expand_fmri_layer_configs(config)
 
-        assert [(item.layer, item.output_dir) for item in expanded] == [
-            (0, "results/model_layer0/significance"),
-            (12, "results/model_layer12/significance"),
-        ]
+        assert [item.layer for item in expanded] == [0, 12]
 
 
 # ---------------------------------------------------------------------------

@@ -297,18 +297,17 @@ def test_within_fmri_bases_save_fir_blocks_rank_bases_and_pre_fir_pca(
         train_prediction=np.zeros((8, 3), dtype=np.float32),
         coefficients=np.zeros((6, 3), dtype=np.float32),
         best_alphas=np.ones(3),
+        alpha_grid=np.ones(1),
     )
 
-    bases, metadata = runner._fit_within_fmri_bases(
-        prepared, ridge_fit, ambient_dim=3, config=config, output_dir=tmp_path
+    bases, factors = runner._fit_within_fmri_bases(
+        prepared, ridge_fit, ambient_dim=3, config=config
     )
 
-    np.testing.assert_array_equal(np.load(metadata["rrr"]), fir_a)
-    assert len(metadata["rrr_delay_blocks"]) == 2
+    np.testing.assert_array_equal(factors["full_fir"], fir_a)
+    assert len(factors["delay_blocks"]) == 2
     assert abs(float(bases["rrr"][1][:, 0] @ np.array([1.0, 0.0, 0.0]))) > 0.999
     assert abs(float(bases["pca"][1][:, 0] @ np.array([1.0, 0.0, 0.0]))) > 0.999
-    assert (tmp_path / "rrr/k1/A.npy").exists()
-    assert (tmp_path / "pca/k1/A.npy").exists()
     assert fit_kwargs["svd_on_cpu"] is True
     assert fit_kwargs["use_low_rank_svd"] is True
     assert fit_kwargs["low_rank_svd_seed"] == 17
@@ -355,7 +354,6 @@ def test_final_ridge_skips_unused_train_prediction_and_coefficients(
         X_test,
         [],
         config,
-        tmp_path,
         {},
     )
 
@@ -376,30 +374,30 @@ def test_cross_dataset_completed_resume_skips_embeddings_and_responses(
     (fmri_root / "em_data" / "sess_to_story.json").write_text(
         '{"1": [["train"], "test"]}'
     )
-    significance = tmp_path / "significance" / "subjects" / "UTS01"
-    significance.mkdir(parents=True)
-    pd.DataFrame({"voxel_index": [0], "sig": [True]}).to_csv(
-        significance / "significance.csv", index=False
-    )
-    source = tmp_path / "source" / "rrr"
-    (source / "fold_0").mkdir(parents=True)
-    np.save(source / "fold_0" / "A.npy", np.ones((2, 1), dtype=np.float32))
-    output = tmp_path / "output"
-    for metrics_dir in (output / "full", output / "rrr" / "k1"):
-        metrics_dir.mkdir(parents=True)
-        np.savez_compressed(
-            metrics_dir / "metrics.npz",
-            corr_per_target=np.array([0.25]),
-            r2_per_target=np.array([0.1]),
-            best_alphas=np.array([1.0]),
-        )
+    from scripts.fmri.run_significance import Artifact as SignificanceArtifact
+    from scripts.rrr.run_rrr import Artifact as IEEGArtifact, UnitSelector
+    results_root = tmp_path / "results"
+    sig = SignificanceArtifact(model="gpt2-xl", layer=24,
+                               results_root=results_root).begin(config={"sig": 1})
+    sig.save_field("significant_voxels",
+                   pd.DataFrame({"voxel_index": [0], "sig": [True]}),
+                   selector={"subject": "UTS01"})
+    source = IEEGArtifact(model="gpt2-xl", layer=24,
+                          results_root=results_root).begin(config={"rrr": 1})
+    source.save_factors(unit=UnitSelector(method="rrr"), fold=0,
+                        input_factors=np.ones((2, 1), dtype=np.float32))
     config = FMRICrossDatasetRRRConfig(
         fmri=FMRIDataConfig(
             fmri_repo_root=str(fmri_root), sessions=[1], subjects=["UTS01"]
         ),
-        significance_dir=str(tmp_path / "significance"),
-        source_rrr_unit_dir=str(source),
-        output_dir=str(output),
+        results_root=str(results_root),
+        plot=False,
+        significance_artifact={"mode": "held_out_session", "dataset": "deep-fmri",
+                               "offset": 0, "model": "gpt2-xl", "layer": 24,
+                               "variant": sig.variant},
+        ieeg_rrr_source={"mode": "cross_subject", "dataset": "podcast",
+                         "offset": 0, "model": "gpt2-xl", "layer": 24,
+                         "variant": source.variant},
         source_mode="cross_dataset",
         rank_grid=[1],
     )
@@ -410,11 +408,21 @@ def test_cross_dataset_completed_resume_skips_embeddings_and_responses(
             AssertionError("completed resume should not load embeddings")
         ),
     )
-    monkeypatch.setattr(runner, "_plot_results", lambda *args, **kwargs: None)
+    target = runner.Artifact.from_config(config).begin(
+        config=config, upstreams=[sig.identity_record(), source.identity_record()]
+    )
+    target.save_field("full_metrics", {
+        "corr_per_target": np.array([0.25]), "r2_per_target": np.array([0.1]),
+        "best_alphas": np.array([1.0]),
+    })
+    target.save_rank_metrics(method="rrr", rank=1, metrics={
+        "corr_per_target": np.array([0.2]), "r2_per_target": np.array([0.05]),
+        "best_alphas": np.array([1.0]),
+    })
 
-    runner.run_config(config)
+    result = runner.run_config(config)
 
-    results = pd.read_csv(output / "grid_results.csv")
+    results = result.load_field("summary")
     assert results[["method", "rank"]].to_dict("records") == [
         {"method": "rrr", "rank": 1}
     ]

@@ -6,7 +6,6 @@ encoding:
   - 3
   - 7
   - 10
-  run_name: null
   batch: false
   per_model_config:
     model_dir: roberta-large
@@ -21,11 +20,7 @@ encoding:
     movie: cars-2
   shared_word_selection: true
   num_folds: 5
-output_dir: null
-sig_dir: null
-rrr_output_dir: null
 mode: cross_dataset
-cross_result_dir: results/roberta-large_layer{layer}_offset0
 cross_source_format: fold_factors
 subspace_aggregation: extrinsic
 rank_grid:
@@ -43,3 +38,17 @@ rank_grid:
 refresh: true
 run_pca_baseline: true
 run_null_augmented: false
+results_root: results
+plot: true
+significance_artifact:
+  mode: sig_lags
+  dataset: brain-treebank-cars-2
+  offset: 0
+  model: roberta-large
+  layer: '{layer}'
+ieeg_rrr_source:
+  mode: cross_subject
+  dataset: podcast
+  offset: 0
+  model: roberta-large
+  layer: '{layer}'

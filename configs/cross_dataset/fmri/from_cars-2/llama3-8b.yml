@@ -36,9 +36,6 @@ layer:
 - 24
 - 32
 pooling: mean
-significance_dir: results/fmri/llama3-8b_layer{layer}/significance
-source_rrr_unit_dir: results/llama3-8b_layer{layer}_offset0/movie-cars-2/rrr
-output_dir: results/fmri/llama3-8b_layer{layer}/from_cars-2_rrr
 source_mode: cross_dataset
 subspace_aggregation: extrinsic
 rrr_svd_on_cpu: false
@@ -60,3 +57,17 @@ rank_grid:
 - 2048
 - 4096
 refresh: true
+results_root: results
+plot: true
+significance_artifact:
+  mode: held_out_session
+  dataset: deep-fmri
+  offset: 0
+  model: llama3-8b
+  layer: '{layer}'
+ieeg_rrr_source:
+  mode: cross_subject
+  dataset: brain-treebank-cars-2
+  offset: 0
+  model: llama3-8b
+  layer: '{layer}'

@@ -36,9 +36,6 @@ layer:
 - 36
 - 48
 pooling: mean
-significance_dir: results/fmri/random-gpt2-xl_layer{layer}/significance
-source_rrr_unit_dir: null
-output_dir: results/fmri/random-gpt2-xl_layer{layer}/within_fmri_rrr
 source_mode: within_fmri
 subspace_aggregation: extrinsic
 rrr_svd_on_cpu: false
@@ -59,3 +56,11 @@ rank_grid:
 - 1024
 - 1600
 refresh: true
+results_root: results
+plot: true
+significance_artifact:
+  mode: held_out_session
+  dataset: deep-fmri
+  offset: 0
+  model: random-gpt2-xl
+  layer: '{layer}'

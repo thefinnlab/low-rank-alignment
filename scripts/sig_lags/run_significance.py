@@ -7,29 +7,28 @@ circular-shift null, and writes downstream-compatible significance CSVs.
 """
 
 import gc
-import os
+from dataclasses import asdict
 
 import numpy as np
 import pandas as pd
 from himalaya.backend import set_backend
 from src.utils.shared.embeddings import get_glove_embeddings
 import torch
-from src.utils.shared.encoding import train_encoding, save_subject_results
+from src.utils.shared.encoding import train_encoding
 from src.utils.shared.embeddings import load_embeddings
-from src.core.config import SignificanceConfig, get_results_dir
+from src.core.config import SignificanceConfig
+from src.core.artifacts import ArtifactStore, normalize_dataset, normalize_model
 from src.core.registry import get_dataset_adapter, resolve_dataset_context
 from src.utils.shared.config import (
     parse_args,
     load_config,
     expand_per_model_layer_configs,
-    save_effective_config,
 )
 from src.utils.shared.encoding import (
     extract_best_alphas,
     get_ridge_model_constructor,
-    save_encoding_results,
 )
-from src.utils.shared.alpha_grids import resolve_ridge_alphas, save_alpha_diagnostics
+from src.utils.shared.alpha_grids import resolve_ridge_alphas
 from src.utils.shared.ieeg import (
     build_word_selection_metadata,
     compute_shared_word_selection,
@@ -43,6 +42,89 @@ from src.utils.significance.ieeg import (
     reshape_fold_predictions_and_targets,
     score_fold_lag_clusters,
 )
+
+# ---------------------------------------------------------------------------
+# Artifact
+# ---------------------------------------------------------------------------
+
+
+class Artifact(ArtifactStore):
+    """Storage contract for iEEG lag-cluster significance results."""
+
+    SCRIPT = "run_significance"
+    FIELD_CONTRACT = {
+        "effective_config": True,
+        "significant_electrodes": True,
+        "detailed_significance": True,
+        "encoding_results": True,
+        "correlations": True,
+        "subject_checkpoint": True,
+        "cluster_null_distribution": True,
+        "alpha_diagnostics": False,
+        "plots": False,
+    }
+
+    def __init__(self, *, mode="sig_lags", dataset="podcast", offset=0,
+                 model="gpt2-xl", layer=24, variant=None, results_root="results"):
+        self._init_store(mode=mode, dataset=dataset, offset=offset, model=model,
+                         layer=layer, variant=variant, results_root=results_root)
+
+    @classmethod
+    def from_config(cls, config, dataset_context):
+        enc = config.encoding
+        model_dir = enc.per_model_config.get("model_dir", enc.model)
+        glove_dim = enc.per_model_config.get("dim")
+        return cls(
+            dataset=normalize_dataset(enc.dataset, dataset_context.stimulus_id),
+            offset=enc.offset,
+            model=normalize_model(model_dir, glove_dim=glove_dim),
+            layer=None if enc.model == "glove" else enc.per_model_config.get("layer"),
+            results_root=getattr(config, "results_root", "results"),
+        )
+
+    def save_subject(self, subject, *, encoding_results, correlations=None,
+                     alpha_diagnostics=None, checkpoint=None, overwrite=False):
+        selector = {"subject": int(subject)}
+        self.save_field("encoding_results", encoding_results, selector=selector,
+                        overwrite=overwrite)
+        if correlations is not None:
+            self.save_field("correlations", correlations, selector=selector,
+                            overwrite=overwrite)
+        if alpha_diagnostics is not None:
+            self.save_field("alpha_diagnostics", alpha_diagnostics,
+                            selector=selector, overwrite=overwrite)
+        if checkpoint is not None:
+            self.save_field("subject_checkpoint", checkpoint, selector=selector,
+                            overwrite=overwrite)
+
+    def load_artifacts(self, fields, selectors=None):
+        selectors = selectors or {}
+        for field in fields:
+            if field in {"encoding_results", "correlations", "alpha_diagnostics",
+                         "subject_checkpoint"}:
+                collection = self.load_collection(
+                    field, {"subject": selectors.get("subjects", [])}
+                ) if selectors.get("subjects") else self.load_collection(field)
+                setattr(self, field, {
+                    dict(selector)["subject"]: value
+                    for selector, value in collection.items()
+                })
+            else:
+                setattr(self, field, self.load_field(field))
+        self.complete = bool(self.manifest().get("complete"))
+        return self
+
+    def save_artifacts(self, *, effective_config, significant_electrodes,
+                       detailed_significance, cluster_null_distribution,
+                       plot=True, overwrite=False):
+        self.save_field("effective_config", effective_config, overwrite=overwrite)
+        self.save_field("significant_electrodes", significant_electrodes,
+                        overwrite=overwrite)
+        self.save_field("detailed_significance", detailed_significance,
+                        overwrite=overwrite)
+        self.save_field("cluster_null_distribution", cluster_null_distribution,
+                        overwrite=overwrite)
+
 
 # ---------------------------------------------------------------------------
 # Main
@@ -68,11 +150,8 @@ def run_config(config: SignificanceConfig):
     get_dataset_adapter(enc.dataset).validate_subjects_share_stimulus(
         subject_ids, enc.per_dataset_config, enc.data_root
     )
-    output_dir = config.output_dir or get_results_dir(
-        enc.model,
-        enc.offset,
-        enc.per_model_config,
-        dataset_context=dataset_context,
+    artifact = Artifact.from_config(config, dataset_context).begin(
+        config=config, refresh=config.refresh
     )
 
     # Use GPU backend if available
@@ -82,9 +161,7 @@ def run_config(config: SignificanceConfig):
     else:
         print("CUDA not available, using CPU.")
 
-    os.makedirs(output_dir, exist_ok=True)
-    save_effective_config(config, os.path.join(output_dir, "significance"))
-    print(f"Results directory: {output_dir}")
+    print(f"Artifact identity: {artifact.identity_record()}")
 
     # Load embeddings once — shared across all subjects
     aligned_embeddings, transcript_df = load_embeddings(
@@ -132,6 +209,20 @@ def run_config(config: SignificanceConfig):
         print(f"Processing subject {bids_sub_id}")
         print(f"{'='*60}")
 
+        checkpoint_selector = {"subject": int(bids_sub_id)}
+        if (not config.refresh and artifact.has_field(
+                "subject_checkpoint", selector=checkpoint_selector)):
+            checkpoint = artifact.load_field(
+                "subject_checkpoint", selector=checkpoint_selector
+            )
+            all_cluster_records.extend(checkpoint["cluster_records"])
+            all_lag_records.extend(checkpoint["lag_records"])
+            subject_nulls.append(checkpoint["null_distribution"])
+            electrode_rows.extend(checkpoint["electrode_rows"])
+            subject_shift_metadata[int(bids_sub_id)] = checkpoint["shift_metadata"]
+            print("  Reusing complete subject checkpoint")
+            continue
+
         X_arr, Y, selection, elec_names = load_data_from_cache(
             [bids_sub_id],
             enc.data_root,
@@ -169,15 +260,21 @@ def run_config(config: SignificanceConfig):
             "n_features": int(X_arr.shape[1]),
             "standardize": True,
         }
-        alpha_dir = os.path.join(output_dir, "subjects", f"sub_{bids_sub_id}")
-        alphas = resolve_ridge_alphas(
-            explicit_alphas,
-            X_arr,
-            standardize=True,
-            context=alpha_context,
-            cache_dir=alpha_dir,
-            policy=enc.alpha_grid,
-        )
+        alpha_selector = {"subject": int(bids_sub_id)}
+        if (not config.refresh and
+                artifact.has_field("alpha_diagnostics", selector=alpha_selector)):
+            alphas = np.asarray(artifact.load_field(
+                "alpha_diagnostics", selector=alpha_selector
+            )["alpha_grid"], dtype=float)
+        else:
+            alphas = resolve_ridge_alphas(
+                explicit_alphas,
+                X_arr,
+                standardize=True,
+                context=alpha_context,
+                cache_dir=None,
+                policy=enc.alpha_grid,
+            )
         model_constructor = get_ridge_model_constructor(
             alphas=alphas,
             ridge_cv_folds=enc.ridge_cv_folds,
@@ -201,34 +298,21 @@ def run_config(config: SignificanceConfig):
             num_folds=enc.num_folds,
             return_preds=True,
         )
-        os.makedirs(alpha_dir, exist_ok=True)
-        save_encoding_results(
-            {"test_idxs": test_idxs,
-             "lags": actual_lag_sec,},
-            os.path.join(alpha_dir, "encoding_results.joblib"),
-        )
+        encoding_result = {
+            "test_idxs": test_idxs, "train_idxs": tr_idxs,
+            "lags": actual_lag_sec, "scalers": scalers,
+            "elec_names": list(elec_names[0]), "subject_id": bids_sub_id,
+            "offset": enc.offset, "per_model_config": dict(enc.per_model_config),
+        }
+        if word_selection_metadata is not None:
+            encoding_result["word_selection"] = word_selection_metadata
+        alpha_payload = None
         if enc.log_alphas:
-            save_alpha_diagnostics(
-                alpha_dir,
-                alphas,
-                best_alphas=[extract_best_alphas(m) for m in models],
-                context=alpha_context,
-                policy=enc.alpha_grid,
-            )
-        if enc.shared_word_selection:
-            save_subject_results(
-                output_dir,
-                bids_sub_id,
-                corrs,
-                tr_idxs,
-                test_idxs,
-                scalers,
-                elec_names[0],
-                enc.offset,
-                actual_lag_sec,
-                per_model_config=enc.per_model_config,
-                word_selection_metadata=word_selection_metadata,
-            )
+            alpha_payload = {
+                "alpha_grid": np.asarray(alphas),
+                "best_alphas": [extract_best_alphas(m) for m in models],
+                "context": alpha_context, "policy": enc.alpha_grid,
+            }
 
         # ------------------------------------------------------------------
         # f. Build observed clusters from out-of-fold predictions
@@ -348,6 +432,25 @@ def run_config(config: SignificanceConfig):
             f"{n_elec:,} electrodes"
         )
 
+        subject_lag_records = [
+            row for row in all_lag_records if int(row["subject"]) == int(bids_sub_id)
+        ]
+        subject_electrode_rows = [
+            row for row in electrode_rows if int(row["subject"]) == int(bids_sub_id)
+        ]
+        artifact.save_subject(
+            bids_sub_id, encoding_results=encoding_result, correlations=corrs,
+            alpha_diagnostics=alpha_payload,
+            checkpoint={
+                "cluster_records": subject_cluster_records,
+                "lag_records": subject_lag_records,
+                "null_distribution": max_per_electrode,
+                "electrode_rows": subject_electrode_rows,
+                "shift_metadata": subject_shift_metadata[int(bids_sub_id)],
+            },
+            overwrite=config.refresh,
+        )
+
         # ------------------------------------------------------------------
         # i. Free memory
         # ------------------------------------------------------------------
@@ -388,17 +491,13 @@ def run_config(config: SignificanceConfig):
         row["q_value"] = rec["q_value"]
         row["sig"] = rec["sig"]
 
-    detailed_path = os.path.join(output_dir, "significance_detailed.csv")
     df_detailed = pd.DataFrame(all_lag_records)
-    df_detailed.to_csv(detailed_path, index=False)
 
     sig_pairs = (
         df_detailed[df_detailed["sig"]][["subject", "electrode"]]
         .drop_duplicates()
         .rename(columns={"electrode": "elec"})
     )
-    sig_path = os.path.join(output_dir, "all_subject_sig.csv")
-    sig_pairs.to_csv(sig_path, index=False, columns=["subject", "elec"])
 
     n_null_max = max(null.shape[0] for null in subject_nulls)
     n_total_electrodes = sum(null.shape[1] for null in subject_nulls)
@@ -412,9 +511,7 @@ def run_config(config: SignificanceConfig):
         max_per_electrode[: null.shape[0], col_start:col_stop] = null
         null_sample_counts[col_start:col_stop] = null.shape[0]
         col_start = col_stop
-    null_path = os.path.join(output_dir, "cluster_null_distribution.npz")
-    np.savez(
-        null_path,
+    null_payload = dict(
         max_per_electrode=max_per_electrode,
         null_sample_counts=null_sample_counts,
         subjects=np.array([row["subject"] for row in electrode_rows], dtype=int),
@@ -432,12 +529,22 @@ def run_config(config: SignificanceConfig):
         null_seed=int(config.null_seed),
         null_sampling_mode="iid_with_replacement_per_fold",
         fdr_mode=config.fdr_mode,
-        subject_shift_metadata=np.array(subject_shift_metadata, dtype=object),
+        subject_shift_metadata=subject_shift_metadata,
     )
-
-    print(f"\nWrote {detailed_path}  ({len(df_detailed):,} rows)")
-    print(f"Wrote {sig_path}  ({len(sig_pairs):,} electrodes)")
-    print(f"Wrote {null_path}  shape={max_per_electrode.shape}")
+    artifact.save_artifacts(
+        effective_config=asdict(config), significant_electrodes=sig_pairs,
+        detailed_significance=df_detailed,
+        cluster_null_distribution=null_payload,
+        plot=getattr(config, "plot", True), overwrite=True,
+    )
+    required = {
+        "encoding_results": [{"subject": int(s)} for s in subject_ids],
+        "correlations": [{"subject": int(s)} for s in subject_ids],
+        "subject_checkpoint": [{"subject": int(s)} for s in subject_ids],
+    }
+    artifact.mark_complete(required)
+    print(f"Completed Artifact {artifact.identity_record()}")
+    return artifact
 
 
 def main():

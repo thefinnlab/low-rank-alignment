@@ -228,18 +228,18 @@ def expand_per_model_layer_configs(config):
         expanded = deepcopy(config)
         expanded_encoding = getattr(expanded, "encoding", expanded)
         expanded_encoding.per_model_config["layer"] = scalar_layer
-        for field_name in (
-            "cross_result_dir",
-            "output_dir",
-            "sig_dir",
-            "rrr_output_dir",
-            "rrr_run_path",
-            "pca_run_path",
-            "fold_results_dir",
-        ):
+        for field_name in ("significance_artifact", "ieeg_rrr_source",
+                           "fmri_rrr_source"):
             value = getattr(expanded, field_name, None)
-            if isinstance(value, str) and "{layer}" in value:
-                setattr(expanded, field_name, value.format(layer=scalar_layer))
+            if isinstance(value, dict):
+                setattr(expanded, field_name,
+                        _format_nested_templates(value, layer=scalar_layer))
+        for view in getattr(expanded, "views", []):
+            for field_name in ("ieeg_rrr_source", "fmri_rrr_source"):
+                value = getattr(view, field_name, None)
+                if isinstance(value, dict):
+                    setattr(view, field_name,
+                            _format_nested_templates(value, layer=scalar_layer))
         configs.append(expanded)
     return configs
 
@@ -254,12 +254,25 @@ def expand_fmri_layer_configs(config):
     for scalar_layer in layer:
         expanded = deepcopy(config)
         expanded.layer = scalar_layer
-        for field_name in ("output_dir", "significance_dir", "source_rrr_unit_dir"):
+        for field_name in ("significance_artifact", "ieeg_rrr_source"):
             value = getattr(expanded, field_name, None)
-            if isinstance(value, str) and "{layer}" in value:
-                setattr(expanded, field_name, value.format(layer=scalar_layer))
+            if isinstance(value, dict):
+                setattr(expanded, field_name,
+                        _format_nested_templates(value, layer=scalar_layer))
         configs.append(expanded)
     return configs
+
+
+def _format_nested_templates(value, **parts):
+    """Format string leaves in constructor-argument blocks."""
+    if isinstance(value, dict):
+        return {key: _format_nested_templates(item, **parts)
+                for key, item in value.items()}
+    if isinstance(value, list):
+        return [_format_nested_templates(item, **parts) for item in value]
+    if isinstance(value, str) and "{" in value:
+        return value.format(**parts)
+    return value
 
 
 def parse_args(description: str = ""):

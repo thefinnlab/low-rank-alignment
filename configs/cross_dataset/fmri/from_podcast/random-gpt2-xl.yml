@@ -36,9 +36,6 @@ layer:
 - 36
 - 48
 pooling: mean
-significance_dir: results/fmri/random-gpt2-xl_layer{layer}/significance
-source_rrr_unit_dir: results/random-gpt2-xl_layer{layer}_offset0/rrr
-output_dir: results/fmri/random-gpt2-xl_layer{layer}/from_podcast_rrr
 source_mode: cross_dataset
 subspace_aggregation: extrinsic
 rrr_svd_on_cpu: false
@@ -59,3 +56,17 @@ rank_grid:
 - 1024
 - 1600
 refresh: true
+results_root: results
+plot: true
+significance_artifact:
+  mode: held_out_session
+  dataset: deep-fmri
+  offset: 0
+  model: random-gpt2-xl
+  layer: '{layer}'
+ieeg_rrr_source:
+  mode: cross_subject
+  dataset: podcast
+  offset: 0
+  model: random-gpt2-xl
+  layer: '{layer}'

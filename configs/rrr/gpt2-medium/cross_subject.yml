@@ -3,7 +3,6 @@ encoding:
   model: transformer
   offset: 0
   subjects: null
-  run_name: null
   batch: false
   per_model_config:
     model_dir: gpt2-medium
@@ -11,9 +10,6 @@ encoding:
     - 0
     - 12
     - 24
-output_dir: null
-sig_dir: null
-rrr_output_dir: null
 mode: cross_subject
 rank_grid:
 - 1
@@ -27,8 +23,6 @@ rank_grid:
 - 256
 - 512
 - 1024
-# Sanity check: QR-orthonormalize each A[:, :k] after rank selection and before
-# fitting its neural-relevance ridge model.
 orthonormalize_a_per_rank: false
 refresh: true
 run_pca_baseline: true
@@ -37,3 +31,11 @@ null_augmented_repeats: 50
 null_augmented_reference_rank: 1024
 null_augmented_min_shift: 50
 null_augmented_seed: 42
+results_root: results
+plot: true
+significance_artifact:
+  mode: sig_lags
+  dataset: podcast
+  offset: 0
+  model: gpt2-medium
+  layer: '{layer}'

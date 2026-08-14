@@ -12,12 +12,8 @@ encoding:
     model_dir: gpt2-xl
   offset: 0
   subjects: null
-  run_name: null
   sig_dir: null
   batch: false
-output_dir: null
-sig_dir: null
-rrr_output_dir: null
 mode: cross_subject
 rank_grid:
 - 1
@@ -33,3 +29,11 @@ rank_grid:
 - 1024
 - 1600
 run_pca_baseline: true
+results_root: results
+plot: true
+significance_artifact:
+  mode: sig_lags
+  dataset: brain-treebank-coraline
+  offset: 0
+  model: gpt2-xl
+  layer: '{layer}'

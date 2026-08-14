@@ -36,9 +36,6 @@ layer:
 - 24
 - 32
 pooling: mean
-significance_dir: results/fmri/llama3-8b_layer{layer}/significance
-source_rrr_unit_dir: null
-output_dir: results/fmri/llama3-8b_layer{layer}/within_fmri_rrr
 source_mode: within_fmri
 subspace_aggregation: extrinsic
 rrr_svd_on_cpu: false
@@ -60,3 +57,11 @@ rank_grid:
 - 2048
 - 4096
 refresh: true
+results_root: results
+plot: true
+significance_artifact:
+  mode: held_out_session
+  dataset: deep-fmri
+  offset: 0
+  model: llama3-8b
+  layer: '{layer}'

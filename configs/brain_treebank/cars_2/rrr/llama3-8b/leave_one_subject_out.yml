@@ -9,7 +9,6 @@ encoding:
   - 3
   - 7
   - 10
-  run_name: null
   batch: false
   num_folds: 5
   shared_word_selection: true
@@ -21,9 +20,6 @@ encoding:
     - 16
     - 24
     - 32
-output_dir: null
-sig_dir: null
-rrr_output_dir: null
 mode: leave_one_subject_out
 rank_grid:
 - 1
@@ -41,3 +37,11 @@ rank_grid:
 - 4096
 refresh: false
 run_pca_baseline: true
+results_root: results
+plot: true
+significance_artifact:
+  mode: sig_lags
+  dataset: brain-treebank-cars-2
+  offset: 0
+  model: llama3-8b
+  layer: '{layer}'

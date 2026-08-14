@@ -100,12 +100,6 @@ class EncodingConfig:
     offset: int = 0  # Word offset for aligning embeddings to neural data
     dataset: str = "podcast"
     subjects: list[int] | None = None  # None → defaults to 1–9 at runtime
-    run_name: str | None = (
-        None  # Output dir; auto-generated from model/layer/offset if None
-    )
-    sig_dir: str | None = (
-        None  # Override dir for significance CSVs; defaults to run_name/output_dir
-    )
     batch: bool = False  # Process subjects one at a time (lower peak RAM)
     ridge_alphas: list[float] | None = None  # None → use RIDGE_ALPHAS from constants.py
     ridge_cv_folds: int = 5  # Inner CV folds used by RidgeCV alpha selection.
@@ -134,9 +128,8 @@ class SignificanceConfig:
     """Parameters for significance testing (superset of encoding)."""
 
     encoding: EncodingConfig = field(default_factory=EncodingConfig)
-    output_dir: str | None = (
-        None  # Results dir; auto-generated from model/layer/offset if None
-    )
+    results_root: str = "results"
+    plot: bool = True
     blocks_per_fold: int = 5
     max_matching_distance: int = 1
     positive_fraction: float = 0.8
@@ -184,10 +177,10 @@ class RRRViewConfig:
     """One saved RRR subspace contributing a band to multiview RRR."""
 
     name: str
-    rrr_config: str
-    unit_dir: str
     rank: int
     kind: str | None = None
+    ieeg_rrr_source: dict | None = None
+    fmri_rrr_source: dict | None = None
 
 
 @dataclass
@@ -215,19 +208,12 @@ class RRRConfig:
     """
 
     encoding: EncodingConfig = field(default_factory=EncodingConfig)
-    output_dir: str | None = (
-        None  # Root results dir; auto from model/layer/offset if None
-    )
-    sig_dir: str | None = (
-        None  # Override dir for significance CSVs; defaults to output_dir
-    )
-    rrr_output_dir: str | None = (
-        None  # Override for RRR root subdir; default depends on mode
-    )
+    results_root: str = "results"
+    plot: bool = True
+    significance_artifact: dict = field(default_factory=dict)
     mode: ScriptMode = ScriptMode.CROSS_SUBJECT
-    cross_result_dir: str | None = (
-        None  # Source results run root for mode=cross_dataset.
-    )
+    ieeg_rrr_source: dict | None = None
+    fmri_rrr_source: dict | None = None
     cross_source_format: str = "fold_factors"
     views: list[RRRViewConfig] = field(default_factory=list)
     temporal_windows: list[RRRTemporalWindowConfig] = field(default_factory=list)
@@ -338,6 +324,18 @@ class RRRConfig:
             raise ValueError("Every RRR view name must be non-empty")
         if any(int(view.rank) < 1 for view in self.views):
             raise ValueError("Every RRR view rank must be positive")
+        for view in self.views:
+            if bool(view.ieeg_rrr_source) == bool(view.fmri_rrr_source):
+                raise ValueError(
+                    f"RRR view {view.name!r} must define exactly one of "
+                    "ieeg_rrr_source or fmri_rrr_source"
+                )
+        if self.mode == ScriptMode.CROSS_DATASET:
+            if bool(self.ieeg_rrr_source) == bool(self.fmri_rrr_source):
+                raise ValueError(
+                    "mode=cross_dataset requires exactly one of ieeg_rrr_source "
+                    "or fmri_rrr_source"
+                )
 
 
 @dataclass
@@ -813,7 +811,8 @@ class FMRISignificanceConfig:
     model_dir: str = "gpt2-xl"
     layer: int | list[int] = 24
     pooling: str = "mean"
-    output_dir: str = "results/fmri/gpt2-xl_layer24/significance"
+    results_root: str = "results"
+    plot: bool = True
     batch_subjects: bool = False
     num_null_shifts: int = 10000
     null_seed: int = 42
@@ -847,9 +846,10 @@ class FMRICrossDatasetRRRConfig:
     model_dir: str = "gpt2-xl"
     layer: int | list[int] = 24
     pooling: str = "mean"
-    significance_dir: str = "results/fmri/gpt2-xl_layer24/significance"
-    source_rrr_unit_dir: str = "results/gpt2-xl_layer24_offset0/rrr"
-    output_dir: str = "results/fmri/gpt2-xl_layer24/cross_dataset_rrr"
+    results_root: str = "results"
+    plot: bool = True
+    significance_artifact: dict = field(default_factory=dict)
+    ieeg_rrr_source: dict | None = None
     source_mode: str = "cross_dataset"
     subspace_aggregation: str = "extrinsic"
     rrr_svd_on_cpu: bool = False
@@ -878,8 +878,8 @@ class FMRICrossDatasetRRRConfig:
             raise ValueError("rank_grid must not contain duplicates")
         if self.pca_svd_device not in {"auto", "cpu", "cuda"}:
             raise ValueError("pca_svd_device must be one of ['auto', 'cpu', 'cuda']")
-        if self.source_mode == "cross_dataset" and not self.source_rrr_unit_dir:
-            raise ValueError("source_rrr_unit_dir is required")
+        if self.source_mode == "cross_dataset" and not self.ieeg_rrr_source:
+            raise ValueError("ieeg_rrr_source is required")
 
     def __post_init__(self):
         self.validate()

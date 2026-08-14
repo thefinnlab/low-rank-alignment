@@ -3,12 +3,9 @@ encoding:
   model: glove
   offset: 0
   subjects: null
-  run_name: null
   batch: false
   per_model_config:
     dim: 300
-output_dir: null
-rrr_output_dir: null
 mode: leave_one_subject_out
 rank_grid:
 - 1
@@ -23,3 +20,11 @@ rank_grid:
 - 300
 refresh: false
 run_pca_baseline: true
+results_root: results
+plot: true
+significance_artifact:
+  mode: sig_lags
+  dataset: podcast
+  offset: 0
+  model: glove-300
+  layer: null

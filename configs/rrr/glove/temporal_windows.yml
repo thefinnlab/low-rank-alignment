@@ -7,8 +7,30 @@ encoding:
     dim: 300
 mode: temporal_windows
 temporal_windows:
-  - {name: pre_word, start_sec: -2.0, end_sec: 0.0}
-  - {name: post_word, start_sec: 0.0, end_sec: 2.0}
-rank_grid: [1, 2, 4, 8, 16, 32, 64, 128, 256, 300]
+- name: pre_word
+  start_sec: -2.0
+  end_sec: 0.0
+- name: post_word
+  start_sec: 0.0
+  end_sec: 2.0
+rank_grid:
+- 1
+- 2
+- 4
+- 8
+- 16
+- 32
+- 64
+- 128
+- 256
+- 300
 refresh: true
 run_pca_baseline: true
+results_root: results
+plot: true
+significance_artifact:
+  mode: sig_lags
+  dataset: podcast
+  offset: 0
+  model: glove-300
+  layer: null

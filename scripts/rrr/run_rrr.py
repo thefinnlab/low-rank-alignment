@@ -1,77 +1,9 @@
-"""
-run_rrr.py — Raw-Input Reduced Rank Regression + optional PCA baseline.
-
-Performs RRR directly from raw embeddings to neural targets — no SVD projection.
-Sweeps over a configured rank grid. Optionally also runs PCA subspace analysis
-(when RRRConfig.run_pca_baseline=True) using the same rank grid and data splits.
-By default, completed rank outputs in an existing run directory are reused;
-set RRRConfig.refresh=True to recompute the full configured rank grid.
-
-Seven modes controlled by RRRConfig.mode:
-
-  cross_subject (default):
-    Builds global Y across all subjects (significant electrodes).
-    Writes to {output_dir}/rrr/.
-
-  temporal_windows:
-    Runs independent cross-subject analyses over configured half-open lag ranges.
-    Writes to {output_dir}/temporal_window_rrr/{window_name}/{rrr,pca}/.
-
-  cross_dataset:
-    Loads fold-level A matrices from RRRConfig.cross_result_dir, averages them
-    into one source-dataset subspace, and evaluates rank-k NR ridge models on
-    the configured target dataset folds.
-    Writes to {output_dir}/cross_dataset_rrr/{source_name}/.
-
-  multi_view:
-    Projects configured saved RRR views at fixed ranks, using raw fold-matched
-    A matrices within the target dataset and one fold-aggregated SVD basis for
-    cross-dataset views. Fits a banded-ridge full model before the usual RRR
-    rank sweep.
-    Writes to {output_dir}/multi_view_rrr/.
-
-  per_subject:
-    Runs independently per subject.
-    Writes to {output_dir}/per_subject_rrr/subjects/sub_{id}/.
-
-  per_region:
-    Runs independently per atlas region.
-    Writes to {output_dir}/per_region_rrr/regions/{region}/.
-
-  leave_one_subject_out:
-    For each held-out subject, trains RRR on the remaining n-1 subjects, then
-    evaluates transfer of the learned A matrix to the held-out subject alongside
-    a within-subject baseline.
-    Writes to {output_dir}/loso_rrr/held_out_sub_{id}/{train_subjects,transfer,baseline}/.
-
-Output layout per unit:
-    {unit_dir}/
-        grid_results.csv
-        summary.csv
-        rank_analysis.png
-        fold_{f}/
-            A.npy                     (RRR only; full-rank input factors)
-            B.npy                     (optional full-rank target factors)
-            full_model_metrics.npz    (full ridge baseline, saved once per fold)
-        k{k}/fold_{f}/
-            metrics.npz               (per-rank metrics including *_per_target arrays)
-
-Metrics (per k, per fold in grid_results.csv):
-    RRR model  : rrr_corr, rrr_r2
-    NR ridge   : nr_corr, nr_r2
-    Effective rank: effective_rank
-
-Full model (saved once per fold, not duplicated across k):
-    full_corr, full_r2, full_corr_per_target  → fold_{f}/full_model_metrics.npz
-
-Optional per-target correlation arrays (only in metrics.npz):
-    nr_corr_per_target  (RRRConfig.save_nr_corr_per_target=True by default)
-    rrr_corr_per_target (RRRConfig.save_rrr_corr_per_target=False by default)
-"""
+"""Raw-input RRR and optional PCA analyses with manifest-backed artifacts."""
 
 import json
-import os
+import io
 import time
+from dataclasses import asdict, dataclass
 
 import numpy as np
 import pandas as pd
@@ -82,25 +14,21 @@ from src.utils.shared.tensors import to_numpy
 from src.utils.shared.correlation import (
     fisher_z_mean,
 )
-from src.utils.shared.ieeg import load_sig_electrodes
 from src.utils.atlas.core import build_electrode_region_map
-from src.core.config import RRRConfig, ScriptMode, get_results_dir
+from src.core.config import RRRConfig, ScriptMode
+from src.core.artifacts import (
+    ArtifactStore, content_sha256, normalize_dataset, normalize_model,
+)
 from src.core.registry import get_dataset_adapter, resolve_dataset_context
 from src.utils.shared.config import (
     parse_args,
     load_config,
     expand_per_model_layer_configs,
-    save_effective_config,
 )
 from src.utils.shared.embeddings import get_glove_embeddings
-from src.utils.shared.encoding import (
-    load_encoding_results,
-    build_per_fold_baselines,
-)
+from src.utils.shared.encoding import build_per_fold_baselines
 from src.utils.rrr.core import (
     fit_dense_rrr,
-    save_rrr_factors,
-    save_rrr_result,
 )
 from src.utils.rrr.results import (
     add_sig_nonsig_corrs,
@@ -110,23 +38,174 @@ from src.utils.rrr.evaluation import (
     evaluate_input_space,
 )
 from src.utils.subspace_comparison.metrics import (
-    aggregate_subspace_from_unit_dir,
-    validate_aggregation_cache,
+    aggregate_subspace_basis,
 )
-from src.utils.shared.alpha_grids import resolve_ridge_alphas, save_alpha_diagnostics
+from src.utils.shared.alpha_grids import resolve_ridge_alphas
 from src.utils.rrr.inputs import _get_decomposition_inputs
-from src.utils.rrr.subspace_io import sanitize_name
 from src.utils.rrr.multiview import (
     fit_banded_ridge_baseline,
-    load_view_bases,
-    load_view_embeddings,
     project_view_bands,
-    resolve_rrr_views,
-    target_dataset_key,
     union_sig_mask,
-    union_view_significance,
 )
 from himalaya.scoring import correlation_score, r2_score
+from scripts.sig_lags.run_significance import Artifact as SignificanceArtifact
+
+
+@dataclass(frozen=True)
+class UnitSelector:
+    """Logical RRR result unit; it intentionally contains no storage location."""
+
+    method: str = "rrr"
+    subject: int | None = None
+    region: str | None = None
+    temporal_window: str | None = None
+    held_out_subject: int | None = None
+    loso_phase: str | None = None
+    cross_dataset_source: str | None = None
+
+    def mapping(self) -> dict:
+        return {key: value for key, value in asdict(self).items() if value is not None}
+
+
+class Artifact(ArtifactStore):
+    """Complete storage contract for iEEG RRR and PCA results."""
+
+    SCRIPT = "run_rrr"
+    FIELD_CONTRACT = {
+        "effective_config": True,
+        "upstream_identities": True,
+        "target_manifest": True,
+        "input_factors": True,
+        "target_factors": False,
+        "full_metrics": True,
+        "rank_metrics": True,
+        "summary": True,
+        "diagnostics": False,
+        "plots": False,
+        "mode_metadata": False,
+    }
+
+    def __init__(self, *, mode="cross_subject", dataset="podcast", offset=0,
+                 model="gpt2-xl", layer=24, variant=None, results_root="results"):
+        self._init_store(mode=mode, dataset=dataset, offset=offset, model=model,
+                         layer=layer, variant=variant, results_root=results_root)
+
+    @classmethod
+    def from_config(cls, config, dataset_context):
+        enc = config.encoding
+        model_dir = enc.per_model_config.get("model_dir", enc.model)
+        artifact = cls(
+            mode=config.mode.value,
+            dataset=normalize_dataset(enc.dataset, dataset_context.stimulus_id),
+            offset=enc.offset,
+            model=normalize_model(model_dir, glove_dim=enc.per_model_config.get("dim")),
+            layer=None if enc.model == "glove" else enc.per_model_config.get("layer"),
+            results_root=config.results_root,
+        )
+        artifact.variant_extras = (
+            {"atlas_sha256": content_sha256(config.atlas_path)}
+            if config.atlas_path else {}
+        )
+        return artifact
+
+    @staticmethod
+    def _selector(unit, **extra):
+        result = unit.mapping() if isinstance(unit, UnitSelector) else dict(unit)
+        result.update({key: value for key, value in extra.items() if value is not None})
+        return result
+
+    def save_factors(self, *, unit, fold, input_factors, target_factors=None,
+                     overwrite=False):
+        selector = self._selector(unit, fold=int(fold))
+        self.save_field("input_factors", input_factors, selector=selector,
+                        overwrite=overwrite)
+        if target_factors is not None:
+            self.save_field("target_factors", target_factors, selector=selector,
+                            overwrite=overwrite)
+
+    def load_factors(self, *, unit, fold):
+        selector = self._selector(unit, fold=int(fold))
+        result = {"input_factors": self.load_field("input_factors", selector=selector)}
+        if self.has_field("target_factors", selector=selector):
+            result["target_factors"] = self.load_field("target_factors", selector=selector)
+        return result
+
+    def save_rank_metrics(self, *, unit, rank, fold, metrics, overwrite=False):
+        self.save_field("rank_metrics", metrics,
+                        selector=self._selector(unit, rank=int(rank), fold=int(fold)),
+                        overwrite=overwrite)
+
+    def load_rank_metrics(self, *, unit, rank, fold):
+        return self.load_field("rank_metrics",
+                               selector=self._selector(unit, rank=int(rank), fold=int(fold)))
+
+    def save_full_metrics(self, *, unit, fold, metrics, overwrite=False):
+        self.save_field("full_metrics", metrics,
+                        selector=self._selector(unit, fold=int(fold)), overwrite=overwrite)
+
+    def save_summary(self, *, unit, summary, overwrite=False):
+        self.save_field("summary", summary, selector=self._selector(unit), overwrite=overwrite)
+
+    def load_summary(self, *, unit):
+        return self.load_field("summary", selector=self._selector(unit))
+
+    def save_target_manifest(self, *, unit, target_manifest, overwrite=False):
+        self.save_field("target_manifest", target_manifest,
+                        selector=self._selector(unit), overwrite=overwrite)
+
+    def save_diagnostics(self, *, unit, diagnostics, rank=None, fold=None, overwrite=False):
+        self.save_field("diagnostics", diagnostics,
+                        selector=self._selector(unit, rank=rank, fold=fold), overwrite=overwrite)
+
+    def save_plot(self, *, unit, name, figure, overwrite=False):
+        buffer = io.BytesIO()
+        figure.savefig(buffer, format="png", dpi=150, bbox_inches="tight")
+        self.save_field("plots", buffer.getvalue(),
+                        selector=self._selector(unit, name=name), overwrite=overwrite)
+        import matplotlib.pyplot as plt
+        plt.close(figure)
+
+    def resume_plan(self, *, unit, ranks, folds, require_target_factors=False,
+                    require_input_factors=True, required_metric_keys=None, refresh=False):
+        completed = set()
+        for fold in folds:
+            factor_selector = self._selector(unit, fold=int(fold))
+            factors = (not require_input_factors or
+                       self.has_field("input_factors", selector=factor_selector))
+            targets = (not require_target_factors or
+                       self.has_field("target_factors", selector=factor_selector))
+            for rank in ranks:
+                metric_selector = self._selector(unit, rank=int(rank), fold=int(fold))
+                metrics_ok = self.has_field("rank_metrics", selector=metric_selector)
+                if metrics_ok and required_metric_keys:
+                    metrics_ok = set(required_metric_keys).issubset(
+                        self.load_field("rank_metrics", selector=metric_selector)
+                    )
+                if not refresh and factors and targets and metrics_ok:
+                    completed.add((int(rank), int(fold)))
+        ranks_by_fold = {
+            int(fold): [int(rank) for rank in ranks if (int(rank), int(fold)) not in completed]
+            for fold in folds
+        }
+        return {
+            "completed_pairs": completed,
+            "ranks_by_fold": ranks_by_fold,
+            "folds_to_build": {fold for fold, pending in ranks_by_fold.items() if pending},
+        }
+
+    def load_artifacts(self, fields, selectors=None):
+        selectors = selectors or {}
+        for field in fields:
+            if field in {"effective_config", "upstream_identities"}:
+                setattr(self, field, self.load_field(field))
+            else:
+                setattr(self, field, self.load_collection(field, selectors))
+        return self
+
+    def save_artifacts(self, *, effective_config, upstream_identities,
+                       plot=True, overwrite=False):
+        self.save_field("effective_config", effective_config, overwrite=overwrite)
+        self.save_field("upstream_identities", upstream_identities, overwrite=overwrite)
 
 # ---------------------------------------------------------------------------
 # Shared helpers
@@ -134,41 +213,27 @@ from himalaya.scoring import correlation_score, r2_score
 
 
 def _save_full_model_metrics_once(
-    unit_dir: str,
+    artifact: Artifact,
+    unit: UnitSelector,
     fold_f: int,
     Y_test: np.ndarray,
     Y_hat_full: np.ndarray,
     *,
     refresh: bool = False,
 ) -> None:
-    """Save full-model metrics once per fold, overwriting them during refresh."""
-    fold_dir = os.path.join(unit_dir, f"fold_{fold_f}")
-    os.makedirs(fold_dir, exist_ok=True)
-    path = os.path.join(fold_dir, "full_model_metrics.npz")
-    if os.path.exists(path) and not refresh:
+    """Save full-model metrics once per fold."""
+    selector = artifact._selector(unit, fold=int(fold_f))
+    if artifact.has_field("full_metrics", selector=selector) and not refresh:
         return
     corr_arr = to_numpy(correlation_score(Y_test, Y_hat_full))
     r2_arr = to_numpy(r2_score(Y_test, Y_hat_full))
-    np.savez(
-        path,
-        full_corr=float(fisher_z_mean(corr_arr)),
-        full_r2=float(r2_arr.mean()),
-        full_corr_per_target=corr_arr,
+    artifact.save_full_metrics(
+        unit=unit, fold=fold_f,
+        metrics={"full_corr": float(fisher_z_mean(corr_arr)),
+                 "full_r2": float(r2_arr.mean()),
+                 "full_corr_per_target": corr_arr},
+        overwrite=refresh,
     )
-
-
-def _resolve_pca_sibling_dir(rrr_unit_dir: str) -> str:
-    """Return the PCA output dir that mirrors a given RRR unit dir."""
-    for rrr_part, pca_part in [
-        ("multi_view_rrr", "multi_view_pca"),
-        ("cross_dataset_rrr", "cross_dataset_pca"),
-        ("per_subject_rrr", "per_subject_pca"),
-        ("per_region_rrr", "per_region_pca"),
-        ("/rrr", "/pca"),
-    ]:
-        if rrr_part in rrr_unit_dir:
-            return rrr_unit_dir.replace(rrr_part, pca_part, 1)
-    return rrr_unit_dir + "_pca"
 
 
 def _strip_per_target_and_add_sig_nonsig(
@@ -200,36 +265,41 @@ def _strip_per_target_and_add_sig_nonsig(
         del metrics[array_key]
 
 
-def _load_existing_grid(unit_dir: str) -> pd.DataFrame:
-    """Load prior grid results if present; otherwise return an empty frame."""
-    path = os.path.join(unit_dir, "grid_results.csv")
-    if not os.path.exists(path):
-        return pd.DataFrame()
-    return pd.read_csv(path)
+def _load_existing_grid(artifact: Artifact, unit: UnitSelector) -> pd.DataFrame:
+    """Build prior grid rows from manifest-recorded rank metrics."""
+    entries = artifact.load_collection("rank_metrics", unit.mapping())
+    rows = []
+    for selector_items, metrics in entries.items():
+        selector = dict(selector_items)
+        scalar_metrics = {}
+        for key, value in metrics.items():
+            array = np.asarray(value)
+            if array.ndim == 0:
+                scalar_metrics[key] = array.item()
+        rows.append({"k": int(selector["rank"]), "fold": int(selector["fold"]),
+                     **scalar_metrics})
+    return pd.DataFrame(rows)
 
 
-def _load_reference_test_idxs(output_dir: str, subject_ids) -> list:
-    enc_results = load_encoding_results(
-        os.path.join(
-            output_dir, "subjects", f"sub_{subject_ids[0]}", "encoding_results.joblib"
-        )
-    )
-    return enc_results["test_idxs"]
+def _reference_encoding_results(significance, subject_ids) -> dict:
+    try:
+        return significance.encoding_results[int(subject_ids[0])]
+    except (AttributeError, KeyError) as exc:
+        raise ValueError(
+            f"SignificanceArtifact lacks encoding results for subject {subject_ids[0]}"
+        ) from exc
 
 
-def _load_shared_word_selection_metadata(output_dir: str, subject_ids: list[int]) -> dict:
+def _load_shared_word_selection_metadata(significance, subject_ids: list[int]) -> dict:
     """Load and validate shared word-selection metadata from encoding results."""
     reference = None
     for sub_id in subject_ids:
-        path = os.path.join(
-            output_dir, "subjects", f"sub_{sub_id}", "encoding_results.joblib"
-        )
-        enc_results = load_encoding_results(path)
+        enc_results = significance.encoding_results[int(sub_id)]
         metadata = enc_results.get("word_selection")
         if metadata is None:
             raise ValueError(
                 "RRRConfig.encoding.shared_word_selection=True requires "
-                f"word_selection metadata in {path}. Re-run significance or encoding "
+                f"word_selection metadata for subject {sub_id}. Re-run significance "
                 "with shared_word_selection enabled."
             )
         stored_subjects = [int(s) for s in metadata.get("subjects", [])]
@@ -240,7 +310,7 @@ def _load_shared_word_selection_metadata(output_dir: str, subject_ids: list[int]
             )
         if metadata.get("mode") != "shared_intersection":
             raise ValueError(
-                f"Expected shared_intersection word selection in {path}, "
+                f"Expected shared_intersection word selection for subject {sub_id}, "
                 f"got {metadata.get('mode')!r}."
             )
         if reference is None:
@@ -257,75 +327,6 @@ def _load_shared_word_selection_metadata(output_dir: str, subject_ids: list[int]
     return reference
 
 
-def _metrics_path(unit_dir: str, k: int, fold_f: int) -> str:
-    return os.path.join(unit_dir, f"k{k}", f"fold_{fold_f}", "metrics.npz")
-
-
-def _fold_factors_exist(unit_dir: str, fold_f: int, require_b: bool = True) -> bool:
-    fold_dir = os.path.join(unit_dir, f"fold_{fold_f}")
-    paths = [os.path.join(fold_dir, "A.npy")]
-    if require_b:
-        paths.append(os.path.join(fold_dir, "B.npy"))
-    return all(os.path.exists(path) for path in paths)
-
-
-def _completed_pairs_from_artifacts(
-    unit_dir: str,
-    rank_grid: list[int],
-    n_folds: int,
-    require_factors: bool = False,
-    require_b: bool = True,
-    required_metric_keys: "set[str] | None" = None,
-) -> set[tuple[int, int]]:
-    """Completed (k, fold) pairs based on artifact files, not grid_results.csv."""
-    completed: set[tuple[int, int]] = set()
-    for k in rank_grid:
-        for fold_f in range(n_folds):
-            metrics_path = _metrics_path(unit_dir, k, fold_f)
-            if not os.path.exists(metrics_path):
-                continue
-            if require_factors and not _fold_factors_exist(
-                unit_dir, fold_f, require_b=require_b
-            ):
-                continue
-            if required_metric_keys:
-                try:
-                    with np.load(metrics_path, allow_pickle=True) as metrics:
-                        if not required_metric_keys.issubset(set(metrics.files)):
-                            continue
-                except Exception:
-                    continue
-            completed.add((k, fold_f))
-    return completed
-
-
-def _ranks_by_fold_to_run(
-    unit_dir: str,
-    rank_grid: list[int],
-    n_folds: int,
-    refresh: bool,
-    require_factors: bool = False,
-    require_b: bool = True,
-    required_metric_keys: "set[str] | None" = None,
-) -> tuple[dict[int, list[int]], set[tuple[int, int]]]:
-    """Return per-fold ranks to compute plus (k, fold) pairs reusable from disk."""
-    if refresh:
-        return {fold_f: list(rank_grid) for fold_f in range(n_folds)}, set()
-    completed = _completed_pairs_from_artifacts(
-        unit_dir,
-        rank_grid,
-        n_folds,
-        require_factors=require_factors,
-        require_b=require_b,
-        required_metric_keys=required_metric_keys,
-    )
-    ranks_by_fold = {
-        fold_f: [k for k in rank_grid if (k, fold_f) not in completed]
-        for fold_f in range(n_folds)
-    }
-    return ranks_by_fold, completed
-
-
 def _folds_to_build_from_ranks(ranks_by_fold: dict[int, list[int]]) -> set[int]:
     return {fold_f for fold_f, ranks in ranks_by_fold.items() if ranks}
 
@@ -335,84 +336,45 @@ def _X_for_fold(X_raw, fold_f: int) -> np.ndarray:
     return np.asarray(X_raw[fold_f] if isinstance(X_raw, list) else X_raw)
 
 
-def _unit_ranks_by_fold_to_run(
-    unit_dir: str,
-    rank_grid: list[int],
-    n_folds: int,
-    refresh: bool,
-    require_factors: bool,
-    require_b: bool = True,
-    required_metric_keys: "set[str] | None" = None,
-) -> tuple[dict[int, list[int]], set[tuple[int, int]]]:
-    return _ranks_by_fold_to_run(
-        unit_dir,
-        rank_grid,
-        n_folds,
-        refresh=refresh,
-        require_factors=require_factors,
-        require_b=require_b,
-        required_metric_keys=required_metric_keys,
-    )
-
-
 def _rrr_output_resume_plan(
-    rrr_unit_dir: str,
+    artifact: Artifact,
+    unit: UnitSelector,
     config: RRRConfig,
     n_folds: int,
 ) -> dict:
-    rrr_ranks_by_fold, rrr_completed_pairs = _unit_ranks_by_fold_to_run(
-        rrr_unit_dir,
-        config.rank_grid,
-        n_folds,
+    rrr_plan = artifact.resume_plan(
+        unit=unit,
+        ranks=config.rank_grid,
+        folds=range(n_folds),
         refresh=config.refresh,
-        require_factors=True,
-        require_b=config.save_b_matrices,
+        require_target_factors=config.save_b_matrices,
         required_metric_keys=(
             {"null_aug_corr_per_target", "null_aug_r2_per_target"}
             if config.run_null_augmented
             else None
         ),
     )
-    folds_needed = _folds_to_build_from_ranks(rrr_ranks_by_fold)
+    folds_needed = set(rrr_plan["folds_to_build"])
     pca_ranks_by_fold = None
     pca_completed_pairs = None
 
     if config.run_pca_baseline:
-        pca_unit_dir = _resolve_pca_sibling_dir(rrr_unit_dir)
-        pca_ranks_by_fold, pca_completed_pairs = _unit_ranks_by_fold_to_run(
-            pca_unit_dir,
-            config.rank_grid,
-            n_folds,
+        pca_plan = artifact.resume_plan(
+            unit=UnitSelector(**{**unit.mapping(), "method": "pca"}),
+            ranks=config.rank_grid,
+            folds=range(n_folds),
             refresh=config.refresh,
-            require_factors=False,
         )
-        folds_needed |= _folds_to_build_from_ranks(pca_ranks_by_fold)
+        pca_ranks_by_fold = pca_plan["ranks_by_fold"]
+        pca_completed_pairs = pca_plan["completed_pairs"]
+        folds_needed |= pca_plan["folds_to_build"]
 
     return {
         "folds_to_build": folds_needed,
-        "rrr_ranks_by_fold": rrr_ranks_by_fold,
-        "rrr_completed_pairs": rrr_completed_pairs,
+        "rrr_ranks_by_fold": rrr_plan["ranks_by_fold"],
+        "rrr_completed_pairs": rrr_plan["completed_pairs"],
         "pca_ranks_by_fold": pca_ranks_by_fold,
         "pca_completed_pairs": pca_completed_pairs,
-    }
-
-
-def _transfer_output_resume_plan(
-    transfer_dir: str,
-    config: RRRConfig,
-    n_folds: int,
-) -> dict:
-    ranks_by_fold, completed_pairs = _unit_ranks_by_fold_to_run(
-        transfer_dir,
-        config.rank_grid,
-        n_folds,
-        refresh=config.refresh,
-        require_factors=False,
-    )
-    return {
-        "folds_to_build": _folds_to_build_from_ranks(ranks_by_fold),
-        "ranks_by_fold": ranks_by_fold,
-        "completed_pairs": completed_pairs,
     }
 
 
@@ -430,19 +392,21 @@ def _scalar_from_metric(metrics: dict, key: str) -> "float | None":
     return None
 
 
-def _row_from_metrics_file(
-    unit_dir: str,
+def _row_from_metrics(
+    artifact: Artifact,
+    unit: UnitSelector,
     k: int,
     fold_f: int,
     primary_label: str,
     sig_mask_flat: "np.ndarray | None",
     include_effective_rank: bool = False,
 ) -> dict:
-    metrics = dict(np.load(_metrics_path(unit_dir, k, fold_f), allow_pickle=True))
+    metrics = artifact.load_rank_metrics(unit=unit, rank=k, fold=fold_f)
     row = {"fold": fold_f, "k": k}
 
-    if include_effective_rank and _fold_factors_exist(unit_dir, fold_f, require_b=False):
-        A_full = np.load(os.path.join(unit_dir, f"fold_{fold_f}", "A.npy"))
+    factor_selector = artifact._selector(unit, fold=int(fold_f))
+    if include_effective_rank and artifact.has_field("input_factors", selector=factor_selector):
+        A_full = artifact.load_factors(unit=unit, fold=fold_f)["input_factors"]
         A_k = A_full[:, :k]
         sv = np.linalg.svd(A_k, compute_uv=False)
         row["effective_rank"] = (
@@ -502,7 +466,8 @@ def _merge_grid_rows(
     new_rows: list[dict],
     completed_pairs: set[tuple[int, int]],
     rank_grid: list[int],
-    unit_dir: "str | None" = None,
+    artifact: "Artifact | None" = None,
+    unit: "UnitSelector | None" = None,
     primary_label: "str | None" = None,
     sig_mask_flat: "np.ndarray | None" = None,
     include_effective_rank: bool = False,
@@ -524,12 +489,13 @@ def _merge_grid_rows(
         grid_pairs = set(zip(prior["k"].astype(int), prior["fold"].astype(int)))
         parts.append(prior)
     missing_grid_pairs = completed_pairs - grid_pairs
-    if missing_grid_pairs and unit_dir is not None and primary_label is not None:
+    if missing_grid_pairs and artifact is not None and unit is not None and primary_label is not None:
         parts.append(
             pd.DataFrame(
                 [
-                    _row_from_metrics_file(
-                        unit_dir,
+                    _row_from_metrics(
+                        artifact,
+                        unit,
                         k,
                         fold_f,
                         primary_label,
@@ -572,7 +538,8 @@ def _run_common_subspace_fold_k(
     ridge_y_in_cpu: bool | None,
     ridge_force_cpu: bool | None,
     device: str,
-    unit_dir: str,
+    artifact: Artifact,
+    unit: UnitSelector,
     primary_label: str,
     full_corr_per_target: "np.ndarray | None" = None,
     null_augmented_config: "RRRConfig | None" = None,
@@ -585,7 +552,7 @@ def _run_common_subspace_fold_k(
     (primary_label='pca') after the reduction matrix A_full is known.
 
     Saves per-rank metrics (including *_per_target arrays) to
-    {unit_dir}/k{k}/fold_{fold_f}/metrics.npz.
+    the logical rank/fold selector.
 
     Returns a metrics dict with per-target arrays stripped (for grid_results.csv).
     """
@@ -595,7 +562,6 @@ def _run_common_subspace_fold_k(
 
     X_proj_train = X_train @ A_k
     X_proj_test = X_test @ A_k
-    rank_dir = os.path.join(unit_dir, f"k{k}", f"fold_{fold_f}")
     context = {
         "script": "run_rrr",
         "role": primary_label,
@@ -604,14 +570,16 @@ def _run_common_subspace_fold_k(
         "n_features": int(X_proj_train.shape[1]),
         "standardize": bool(standardize_subspace_inputs),
     }
-    resolved_alphas = resolve_ridge_alphas(
-        alphas,
-        X_proj_train,
-        standardize=standardize_subspace_inputs,
-        context=context,
-        cache_dir=os.path.join(rank_dir, f"{primary_label}_alpha"),
-        policy=alpha_policy,
-    )
+    diagnostic_selector = artifact._selector(unit, rank=int(k), fold=int(fold_f))
+    if artifact.has_field("diagnostics", selector=diagnostic_selector):
+        resolved_alphas = np.asarray(
+            artifact.load_field("diagnostics", selector=diagnostic_selector)["alpha_grid"]
+        )
+    else:
+        resolved_alphas = resolve_ridge_alphas(
+            alphas, X_proj_train, standardize=standardize_subspace_inputs,
+            context=context, cache_dir=None, policy=alpha_policy,
+        )
     result = evaluate_input_space(
         X_proj_train,
         X_proj_test,
@@ -627,12 +595,11 @@ def _run_common_subspace_fold_k(
         return_alphas=True,
         device=device,
     )
-    save_alpha_diagnostics(
-        os.path.join(rank_dir, f"{primary_label}_alpha"),
-        resolved_alphas,
-        best_alphas=result[f"{primary_label}_best_alphas"],
-        context=context,
-        policy=alpha_policy,
+    artifact.save_diagnostics(
+        unit=unit, rank=k, fold=fold_f,
+        diagnostics={"alpha_grid": resolved_alphas,
+                     "best_alphas": result[f"{primary_label}_best_alphas"],
+                     "context": context, "policy": alpha_policy or {}},
     )
 
     metrics = {
@@ -669,12 +636,13 @@ def _run_common_subspace_fold_k(
                 ridge_y_in_cpu=ridge_y_in_cpu,
                 ridge_force_cpu=ridge_force_cpu,
                 device=device,
-                unit_dir=unit_dir,
+                artifact=artifact,
+                unit=unit,
                 config=null_augmented_config,
             )
         )
 
-    save_rrr_result(unit_dir, k=k, fold=fold_f, metrics=metrics)
+    artifact.save_rank_metrics(unit=unit, rank=k, fold=fold_f, metrics=metrics)
     _strip_per_target_and_add_sig_nonsig(metrics, sig_mask_flat)
     for artifact_key in (
         "null_aug_shifts_train",
@@ -687,7 +655,8 @@ def _run_common_subspace_fold_k(
 
 def _run_subspace_rank_loop_for_fold(
     *,
-    unit_dir: str,
+    artifact: Artifact,
+    unit: UnitSelector,
     A_full: np.ndarray,
     ranks_to_run: list[int],
     X_raw: np.ndarray,
@@ -725,7 +694,7 @@ def _run_subspace_rank_loop_for_fold(
     Y_hat_full = baseline["Y_hat_full_test"]
 
     _save_full_model_metrics_once(
-        unit_dir, fold_f, Y_test, Y_hat_full, refresh=refresh
+        artifact, unit, fold_f, Y_test, Y_hat_full, refresh=refresh
     )
     full_corr_per_target = to_numpy(correlation_score(Y_test, Y_hat_full))
     full_corr = float(fisher_z_mean(full_corr_per_target))
@@ -762,7 +731,8 @@ def _run_subspace_rank_loop_for_fold(
             ridge_y_in_cpu,
             ridge_force_cpu,
             device,
-            unit_dir,
+            artifact,
+            unit,
             primary_label=primary_label,
             full_corr_per_target=full_corr_per_target,
             null_augmented_config=null_augmented_config,
@@ -770,8 +740,7 @@ def _run_subspace_rank_loop_for_fold(
             orthonormalize_a_per_rank=orthonormalize_a_per_rank,
         )
 
-        metrics_path = os.path.join(unit_dir, f"k{k}", f"fold_{fold_f}", "metrics.npz")
-        existing = dict(np.load(metrics_path, allow_pickle=True))
+        existing = artifact.load_rank_metrics(unit=unit, rank=k, fold=fold_f)
         existing["full_corr"] = full_corr
         existing["full_r2"] = full_r2
         existing["effective_rank"] = np.array(effective_rank, dtype=np.int64)
@@ -814,7 +783,9 @@ def _run_subspace_rank_loop_for_fold(
                 row["rrr_corr_sig"] = rrr_corr_sig
                 row["rrr_corr_nonsig"] = rrr_corr_nonsig
 
-        np.savez(metrics_path, **existing)
+        artifact.save_rank_metrics(
+            unit=unit, rank=k, fold=fold_f, metrics=existing, overwrite=True
+        )
         rows.append(row)
 
     return rows
@@ -885,7 +856,8 @@ def _run_null_augmented_fold_k(
     ridge_y_in_cpu: bool | None,
     ridge_force_cpu: bool | None,
     device: str,
-    unit_dir: str,
+    artifact: Artifact,
+    unit: UnitSelector,
     config: RRRConfig,
 ) -> dict:
     """Evaluate null-augmented models by appending shifted omitted coordinates."""
@@ -944,7 +916,6 @@ def _run_null_augmented_fold_k(
         train_shifts[repeat_i] = train_shift
         test_shifts[repeat_i] = test_shift
 
-        rank_dir = os.path.join(unit_dir, f"k{k}", f"fold_{fold_f}")
         context = {
             "script": "run_rrr",
             "role": "null_aug",
@@ -1012,9 +983,13 @@ def _run_null_augmented_fold_k(
 def _build_results(
     df: pd.DataFrame,
     sig_mask_flat: "np.ndarray | None",
-    unit_dir: str,
+    artifact: Artifact,
+    unit: UnitSelector,
     primary_label: str,
-) -> None:
+    *,
+    plot: bool = True,
+    overwrite: bool = False,
+) -> pd.DataFrame:
     """Build summary CSV and rank analysis plots from grid results DataFrame."""
 
     def _is_corr_mean_col(col: str) -> bool:
@@ -1065,7 +1040,7 @@ def _build_results(
             )
         summary_rows.append(row)
     summary = pd.DataFrame(summary_rows)
-    summary.to_csv(os.path.join(unit_dir, "summary.csv"), index=False)
+    artifact.save_summary(unit=unit, summary=summary, overwrite=True)
 
     from src.utils.plotting.encoding import plot_rrr_rank_results
 
@@ -1074,23 +1049,24 @@ def _build_results(
         if primary_label == "nr" and "rrr_corr" in df.columns
         else primary_label.upper()
     )
-    title_base = f"{display_label}: perf vs rank ({os.path.basename(unit_dir)})"
-    plot_rrr_rank_results(
-        summary,
-        grid_df=df,
-        title=title_base,
-        save_path=os.path.join(unit_dir, "rank_analysis.png"),
-        primary_label=primary_label,
-    )
-    if sig_mask_flat is not None:
+    title_base = f"{display_label}: perf vs rank"
+    if plot:
+        figure = plot_rrr_rank_results(
+            summary, grid_df=df, title=title_base, primary_label=primary_label,
+        )
+        artifact.save_plot(unit=unit, name="rank_analysis", figure=figure,
+                           overwrite=True)
+    if plot and sig_mask_flat is not None:
         for split in ("sig", "nonsig"):
-            plot_rrr_rank_results(
+            figure = plot_rrr_rank_results(
                 make_sig_split_df(summary, split),
                 grid_df=make_sig_split_df(df, split),
                 title=f"{title_base} ({split} targets)",
-                save_path=os.path.join(unit_dir, f"rank_analysis_{split}.png"),
                 primary_label=primary_label,
             )
+            artifact.save_plot(unit=unit, name=f"rank_analysis_{split}",
+                               figure=figure, overwrite=True)
+    return summary
 
 
 # ---------------------------------------------------------------------------
@@ -1099,7 +1075,8 @@ def _build_results(
 
 
 def _run_rrr_for_unit(
-    rrr_unit_dir: str,
+    artifact: Artifact,
+    unit: UnitSelector,
     X_raw: "np.ndarray | list[np.ndarray]",
     test_idxs: list,
     per_fold_baselines: list,
@@ -1117,7 +1094,7 @@ def _run_rrr_for_unit(
         - NR ridge from k-dim RRR subspace (via A matrix projection)
 
     Args:
-        rrr_unit_dir: Root output directory for this unit.
+        artifact: Producing script's result abstraction.
         X_raw: (n_words, n_embed) raw embedding matrix.
         test_idxs: List of test index arrays, one per fold.
         per_fold_baselines: Output of build_per_fold_baselines.
@@ -1127,8 +1104,6 @@ def _run_rrr_for_unit(
     Returns:
         DataFrame of per-(fold, k) metrics for grid_results.csv.
     """
-    os.makedirs(rrr_unit_dir, exist_ok=True)
-
     enc = config.encoding
     alphas = np.array(enc.ridge_alphas) if enc.ridge_alphas is not None else None
 
@@ -1142,21 +1117,18 @@ def _run_rrr_for_unit(
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
-    existing_grid = _load_existing_grid(rrr_unit_dir)
+    existing_grid = _load_existing_grid(artifact, unit)
     if ranks_by_fold is None or completed_pairs is None:
-        ranks_by_fold, completed_pairs = _unit_ranks_by_fold_to_run(
-            rrr_unit_dir,
-            config.rank_grid,
-            n_folds,
-            refresh=config.refresh,
-            require_factors=True,
-            require_b=config.save_b_matrices,
+        plan = artifact.resume_plan(
+            unit=unit, ranks=config.rank_grid, folds=range(n_folds),
+            refresh=config.refresh, require_target_factors=config.save_b_matrices,
             required_metric_keys=(
                 {"null_aug_corr_per_target", "null_aug_r2_per_target"}
                 if config.run_null_augmented
                 else None
             ),
         )
+        ranks_by_fold, completed_pairs = plan["ranks_by_fold"], plan["completed_pairs"]
     total_to_run = sum(len(ranks) for ranks in ranks_by_fold.values())
     if completed_pairs:
         print(f"  Reusing {len(completed_pairs)} completed fold/rank pair(s)")
@@ -1169,18 +1141,20 @@ def _run_rrr_for_unit(
             [],
             completed_pairs,
             config.rank_grid,
-            unit_dir=rrr_unit_dir,
+            artifact=artifact,
+            unit=unit,
             primary_label="nr",
             sig_mask_flat=sig_mask_flat,
             include_effective_rank=True,
         )
-        df.to_csv(os.path.join(rrr_unit_dir, "grid_results.csv"), index=False)
-        _build_results(df, sig_mask_flat, rrr_unit_dir, primary_label="nr")
+        _build_results(df, sig_mask_flat, artifact, unit, primary_label="nr",
+                       plot=config.plot, overwrite=config.refresh)
         if config.run_pca_baseline:
-            pca_unit_dir = _resolve_pca_sibling_dir(rrr_unit_dir)
-            print(f"\nRunning PCA baseline → {pca_unit_dir}")
+            pca_unit = UnitSelector(**{**unit.mapping(), "method": "pca"})
+            print("\nRunning PCA baseline")
             _run_pca_for_unit(
-                pca_unit_dir=pca_unit_dir,
+                artifact=artifact,
+                unit=pca_unit,
                 X_raw=X_raw,
                 test_idxs=test_idxs,
                 per_fold_baselines=per_fold_baselines,
@@ -1197,6 +1171,7 @@ def _run_rrr_for_unit(
                 refresh=config.refresh,
                 ranks_by_fold=pca_ranks_by_fold,
                 completed_pairs=pca_completed_pairs,
+                plot=config.plot,
             )
         return df
 
@@ -1219,15 +1194,14 @@ def _run_rrr_for_unit(
 
         # Fit or load RRR once per fold; truncate to each k below.
         max_k = min(X_train.shape[1], Y_train.shape[1])
-        fold_dir = os.path.join(rrr_unit_dir, f"fold_{fold_f}")
-        a_path = os.path.join(fold_dir, "A.npy")
-        b_path = os.path.join(fold_dir, "B.npy")
-        required_factors_exist = _fold_factors_exist(
-            rrr_unit_dir, fold_f, require_b=config.save_b_matrices
-        )
+        factor_selector = artifact._selector(unit, fold=int(fold_f))
+        required_factors_exist = artifact.has_field("input_factors", selector=factor_selector)
+        if config.save_b_matrices:
+            required_factors_exist &= artifact.has_field("target_factors", selector=factor_selector)
         if not config.refresh and required_factors_exist:
-            A_full = np.load(a_path)
-            B_full = np.load(b_path) if config.save_b_matrices else None
+            factors = artifact.load_factors(unit=unit, fold=fold_f)
+            A_full = factors["input_factors"]
+            B_full = factors.get("target_factors")
             factors_too_small = A_full.shape[1] < max_k or (
                 B_full is not None and B_full.shape[1] < max_k
             )
@@ -1246,7 +1220,9 @@ def _run_rrr_for_unit(
                 B_full = (
                     rrr_result["B_dense"] if config.save_b_matrices else None
                 )
-                save_rrr_factors(rrr_unit_dir, fold=fold_f, A=A_full, B=B_full)
+                artifact.save_factors(unit=unit, fold=fold_f,
+                                      input_factors=A_full, target_factors=B_full,
+                                      overwrite=True)
             else:
                 print("  Loaded existing fold factors")
         else:
@@ -1261,13 +1237,13 @@ def _run_rrr_for_unit(
             )
             A_full = rrr_result["A_dense"]
             B_full = rrr_result["B_dense"] if config.save_b_matrices else None
-            if config.refresh and not config.save_b_matrices and os.path.exists(b_path):
-                os.remove(b_path)
-            save_rrr_factors(rrr_unit_dir, fold=fold_f, A=A_full, B=B_full)
+            artifact.save_factors(unit=unit, fold=fold_f, input_factors=A_full,
+                                  target_factors=B_full, overwrite=config.refresh)
 
         all_rows.extend(
             _run_subspace_rank_loop_for_fold(
-                unit_dir=rrr_unit_dir,
+                artifact=artifact,
+                unit=unit,
                 A_full=A_full,
                 B_full=B_full,
                 ranks_to_run=ranks_to_run,
@@ -1300,20 +1276,22 @@ def _run_rrr_for_unit(
         all_rows,
         completed_pairs,
         config.rank_grid,
-        unit_dir=rrr_unit_dir,
+        artifact=artifact,
+        unit=unit,
         primary_label="nr",
         sig_mask_flat=sig_mask_flat,
         include_effective_rank=True,
     )
-    df.to_csv(os.path.join(rrr_unit_dir, "grid_results.csv"), index=False)
-    _build_results(df, sig_mask_flat, rrr_unit_dir, primary_label="nr")
+    _build_results(df, sig_mask_flat, artifact, unit, primary_label="nr",
+                   plot=config.plot, overwrite=config.refresh)
 
     # Optionally run PCA baseline using the same data splits
     if config.run_pca_baseline:
-        pca_unit_dir = _resolve_pca_sibling_dir(rrr_unit_dir)
-        print(f"\nRunning PCA baseline → {pca_unit_dir}")
+        pca_unit = UnitSelector(**{**unit.mapping(), "method": "pca"})
+        print("\nRunning PCA baseline")
         _run_pca_for_unit(
-            pca_unit_dir=pca_unit_dir,
+            artifact=artifact,
+            unit=pca_unit,
             X_raw=X_raw,
             test_idxs=test_idxs,
             per_fold_baselines=per_fold_baselines,
@@ -1330,13 +1308,15 @@ def _run_rrr_for_unit(
             refresh=config.refresh,
             ranks_by_fold=pca_ranks_by_fold,
             completed_pairs=pca_completed_pairs,
+            plot=config.plot,
         )
 
     return df
 
 
 def _run_pca_for_unit(
-    pca_unit_dir: str,
+    artifact: Artifact,
+    unit: UnitSelector,
     X_raw: "np.ndarray | list[np.ndarray]",
     test_idxs: list,
     per_fold_baselines: list,
@@ -1353,6 +1333,7 @@ def _run_pca_for_unit(
     refresh: bool = False,
     ranks_by_fold: "dict[int, list[int]] | None" = None,
     completed_pairs: "set[tuple[int, int]] | None" = None,
+    plot: bool = True,
 ) -> pd.DataFrame:
     """PCA subspace analysis for one unit — structurally parallel to _run_rrr_for_unit.
 
@@ -1364,7 +1345,7 @@ def _run_pca_for_unit(
     handled by the same shared helpers.
 
     Args:
-        pca_unit_dir: Root output directory for this unit.
+        artifact: Producing script's result abstraction.
         X_raw: (n_words, n_embed) raw embedding matrix.
         test_idxs: List of test index arrays, one per fold.
         per_fold_baselines: Output of build_per_fold_baselines.
@@ -1376,18 +1357,12 @@ def _run_pca_for_unit(
     Returns:
         DataFrame of per-(fold, k) metrics for grid_results.csv.
     """
-    os.makedirs(pca_unit_dir, exist_ok=True)
-
     n_folds = len(test_idxs)
-    existing_grid = _load_existing_grid(pca_unit_dir)
+    existing_grid = _load_existing_grid(artifact, unit)
     if ranks_by_fold is None or completed_pairs is None:
-        ranks_by_fold, completed_pairs = _unit_ranks_by_fold_to_run(
-            pca_unit_dir,
-            rank_grid,
-            n_folds,
-            refresh=refresh,
-            require_factors=False,
-        )
+        plan = artifact.resume_plan(unit=unit, ranks=rank_grid,
+                                    folds=range(n_folds), refresh=refresh)
+        ranks_by_fold, completed_pairs = plan["ranks_by_fold"], plan["completed_pairs"]
     total_to_run = sum(len(ranks) for ranks in ranks_by_fold.values())
     if completed_pairs:
         print(f"  Reusing {len(completed_pairs)} completed PCA fold/rank pair(s)")
@@ -1400,12 +1375,13 @@ def _run_pca_for_unit(
             [],
             completed_pairs,
             rank_grid,
-            unit_dir=pca_unit_dir,
+            artifact=artifact,
+            unit=unit,
             primary_label="pca",
             sig_mask_flat=sig_mask_flat,
         )
-        df.to_csv(os.path.join(pca_unit_dir, "grid_results.csv"), index=False)
-        _build_results(df, sig_mask_flat, pca_unit_dir, primary_label="pca")
+        _build_results(df, sig_mask_flat, artifact, unit, primary_label="pca",
+                       plot=plot, overwrite=refresh)
         return df
 
     all_rows = []
@@ -1430,7 +1406,7 @@ def _run_pca_for_unit(
 
         # Save full model metrics once per fold (not per-k)
         _save_full_model_metrics_once(
-            pca_unit_dir, fold_f, Y_test, Y_hat_full, refresh=refresh
+            artifact, unit, fold_f, Y_test, Y_hat_full, refresh=refresh
         )
         full_corr = float(
             fisher_z_mean(to_numpy(correlation_score(Y_test, Y_hat_full)))
@@ -1441,15 +1417,19 @@ def _run_pca_for_unit(
         X_mean = X_train.mean(axis=0)
         _, _, Vt = np.linalg.svd(X_train - X_mean, full_matrices=False)
         A_full = Vt.T  # (n_embed, min(n_train, n_embed))
-        fold_dir = os.path.join(pca_unit_dir, f"fold_{fold_f}")
-        os.makedirs(fold_dir, exist_ok=True)
-        np.save(os.path.join(fold_dir, "A.npy"), A_full)
+        artifact.save_factors(unit=unit, fold=fold_f, input_factors=A_full,
+                              overwrite=refresh)
         max_components = A_full.shape[1]
 
         valid_ranks = [k for k in ranks_to_run if k <= max_components]
         if len(valid_ranks) < len(ranks_to_run):
             skipped = [k for k in ranks_to_run if k > max_components]
             print(f"  Skipping ranks {skipped} (> {max_components} PCA components)")
+            for k in skipped:
+                metrics = {"skipped": True, "available_components": max_components}
+                artifact.save_rank_metrics(unit=unit, rank=k, fold=fold_f,
+                                           metrics=metrics, overwrite=True)
+                all_rows.append({"fold": fold_f, "k": k, **metrics})
 
         print(f"  Running {len(valid_ranks)} rank(s): {valid_ranks}")
         for k in tqdm(valid_ranks, desc=f"  fold {fold_f}", leave=True, unit="rank"):
@@ -1470,16 +1450,15 @@ def _run_pca_for_unit(
                 ridge_y_in_cpu,
                 ridge_force_cpu,
                 device,
-                pca_unit_dir,
+                artifact,
+                unit,
                 primary_label="pca",
             )
-            metrics_path = os.path.join(
-                pca_unit_dir, f"k{k}", f"fold_{fold_f}", "metrics.npz"
-            )
-            existing = dict(np.load(metrics_path, allow_pickle=True))
+            existing = artifact.load_rank_metrics(unit=unit, rank=k, fold=fold_f)
             existing["full_corr"] = full_corr
             existing["full_r2"] = full_r2
-            np.savez(metrics_path, **existing)
+            artifact.save_rank_metrics(unit=unit, rank=k, fold=fold_f,
+                                       metrics=existing, overwrite=True)
 
             row = {
                 "fold": fold_f,
@@ -1497,12 +1476,13 @@ def _run_pca_for_unit(
         all_rows,
         completed_pairs,
         rank_grid,
-        unit_dir=pca_unit_dir,
+        artifact=artifact,
+        unit=unit,
         primary_label="pca",
         sig_mask_flat=sig_mask_flat,
     )
-    df.to_csv(os.path.join(pca_unit_dir, "grid_results.csv"), index=False)
-    _build_results(df, sig_mask_flat, pca_unit_dir, primary_label="pca")
+    _build_results(df, sig_mask_flat, artifact, unit, primary_label="pca",
+                   plot=plot, overwrite=refresh)
 
     return df
 
@@ -1514,28 +1494,27 @@ def _run_pca_for_unit(
 
 def _build_rrr_decomposition_inputs(
     subject_ids,
-    output_dir,
     sig_electrodes,
+    encoding_results,
+    detailed_significance,
     encoding_config,
     embeddings,
     word_df,
     compute_sig_nonsig=False,
-    sig_dir=None,
     word_in_glove=None,
     folds_to_build: "set[int] | None" = None,
-    alpha_cache_dir: str | None = None,
     shared_selection_metadata: "dict | None" = None,
 ):
     prepared = _get_decomposition_inputs(
         subject_ids,
-        output_dir,
         sig_electrodes,
         encoding_config,
         embeddings,
         compute_sig_nonsig=compute_sig_nonsig,
-        sig_dir=sig_dir,
         word_in_glove=word_in_glove,
         shared_selection_metadata=shared_selection_metadata,
+        encoding_results=encoding_results,
+        significance=detailed_significance,
     )
     if prepared is None:
         return None
@@ -1555,7 +1534,7 @@ def _build_rrr_decomposition_inputs(
         ridge_y_in_cpu=encoding_config.ridge_y_in_cpu,
         ridge_force_cpu=encoding_config.ridge_force_cpu,
         alpha_policy=encoding_config.alpha_grid,
-        alpha_cache_dir=alpha_cache_dir,
+        alpha_cache_dir=None,
         alpha_context={
             "script": "run_rrr",
             "model": encoding_config.model,
@@ -1565,7 +1544,8 @@ def _build_rrr_decomposition_inputs(
         folds_to_build=folds_to_build,
     )
 
-    return X_raw, per_fold_baselines, prepared.test_idxs, prepared.sig_mask_flat
+    return (X_raw, per_fold_baselines, prepared.test_idxs,
+            prepared.sig_mask_flat, prepared.target_manifest)
 
 
 def _temporal_window_target_mask(target_manifest, window) -> np.ndarray:
@@ -1587,56 +1567,6 @@ def _temporal_window_target_mask(target_manifest, window) -> np.ndarray:
     return mask
 
 
-def _temporal_window_dirs(rrr_dir: str, windows) -> dict[str, tuple[str, str]]:
-    """Resolve unique, filesystem-safe RRR/PCA directories for each window."""
-    result = {}
-    used = {}
-    for window in windows:
-        safe_name = sanitize_name(window.name)
-        if safe_name in used:
-            raise ValueError(
-                f"Temporal window names {used[safe_name]!r} and {window.name!r} "
-                f"both map to output directory {safe_name!r}"
-            )
-        used[safe_name] = window.name
-        root = os.path.join(rrr_dir, safe_name)
-        result[window.name] = (os.path.join(root, "rrr"), os.path.join(root, "pca"))
-    return result
-
-
-def _write_temporal_window_summary(rrr_dir: str, window_records: list[dict]) -> None:
-    """Combine completed per-window RRR/PCA summaries into one table."""
-    frames = []
-    for record in window_records:
-        for method, unit_dir in record["units"].items():
-            path = os.path.join(unit_dir, "summary.csv")
-            if not os.path.exists(path):
-                continue
-            frame = pd.read_csv(path)
-            for key, value in record["metadata"].items():
-                frame[key] = value
-            frame["method"] = method
-            frames.append(frame)
-    if not frames:
-        raise ValueError("No completed temporal-window summaries were produced")
-    columns_first = [
-        "window",
-        "start_sec",
-        "end_sec",
-        "actual_lag_min_sec",
-        "actual_lag_max_sec",
-        "n_lags",
-        "n_targets",
-        "method",
-        "k",
-    ]
-    combined = pd.concat(frames, ignore_index=True)
-    remaining = [column for column in combined.columns if column not in columns_first]
-    combined[columns_first + remaining].to_csv(
-        os.path.join(rrr_dir, "window_summary.csv"), index=False
-    )
-
-
 # ---------------------------------------------------------------------------
 # Branch: cross-subject RRR
 # ---------------------------------------------------------------------------
@@ -1645,9 +1575,8 @@ def _write_temporal_window_summary(rrr_dir: str, window_records: list[dict]) -> 
 def _run_cross_subject_rrr(
     config: RRRConfig,
     enc,
-    output_dir,
-    sig_dir,
-    rrr_dir,
+    artifact: Artifact,
+    significance,
     subject_ids,
     sig_electrodes,
     aligned_embeddings,
@@ -1656,34 +1585,38 @@ def _run_cross_subject_rrr(
     shared_selection_metadata=None,
 ):
     """RRR on raw embeddings using all subjects' significant electrodes."""
-    n_folds = len(_load_reference_test_idxs(output_dir, subject_ids))
-    resume_plan = _rrr_output_resume_plan(rrr_dir, config, n_folds)
+    unit = UnitSelector(method="rrr")
+    reference = _reference_encoding_results(significance, subject_ids)
+    n_folds = len(reference["test_idxs"])
+    resume_plan = _rrr_output_resume_plan(artifact, unit, config, n_folds)
     folds_to_build = resume_plan["folds_to_build"]
     if not folds_to_build:
         print(
             "  Cross-subject RRR/PCA outputs complete; skipping data/regression setup."
         )
-        return
+        return [(unit, n_folds)]
 
     results = _build_rrr_decomposition_inputs(
         subject_ids,
-        output_dir,
         sig_electrodes,
+        reference,
+        significance.detailed_significance,
         enc,
         aligned_embeddings,
         word_df,
         compute_sig_nonsig=config.compute_sig_nonsig,
-        sig_dir=sig_dir,
         word_in_glove=word_in_glove,
         folds_to_build=folds_to_build,
-        alpha_cache_dir=rrr_dir,
         shared_selection_metadata=shared_selection_metadata,
     )
     if results is None:
-        return
-    X_raw, per_fold_baselines, test_idxs, sig_mask_flat = results
+        return []
+    X_raw, per_fold_baselines, test_idxs, sig_mask_flat, target_manifest = results
+    artifact.save_target_manifest(unit=unit, target_manifest=target_manifest,
+                                  overwrite=config.refresh)
     _run_rrr_for_unit(
-        rrr_unit_dir=rrr_dir,
+        artifact=artifact,
+        unit=unit,
         X_raw=X_raw,
         test_idxs=test_idxs,
         per_fold_baselines=per_fold_baselines,
@@ -1694,14 +1627,17 @@ def _run_cross_subject_rrr(
         pca_ranks_by_fold=resume_plan["pca_ranks_by_fold"],
         pca_completed_pairs=resume_plan["pca_completed_pairs"],
     )
+    units = [(unit, n_folds)]
+    if config.run_pca_baseline:
+        units.append((UnitSelector(method="pca"), n_folds))
+    return units
 
 
 def _run_temporal_windows_rrr(
     config: RRRConfig,
     enc,
-    output_dir,
-    sig_dir,
-    rrr_dir,
+    artifact: Artifact,
+    significance,
     subject_ids,
     sig_electrodes,
     aligned_embeddings,
@@ -1711,22 +1647,22 @@ def _run_temporal_windows_rrr(
 ):
     """Run independent cross-subject RRR analyses for configured lag windows."""
     del word_df  # Retained for the common branch-call interface.
-    window_dirs = _temporal_window_dirs(rrr_dir, config.temporal_windows)
-    n_folds = len(_load_reference_test_idxs(output_dir, subject_ids))
+    reference = _reference_encoding_results(significance, subject_ids)
+    n_folds = len(reference["test_idxs"])
     resume_plans = {}
     for window in config.temporal_windows:
-        rrr_unit_dir, _ = window_dirs[window.name]
-        plan = _rrr_output_resume_plan(rrr_unit_dir, config, n_folds)
+        unit = UnitSelector(method="rrr", temporal_window=window.name)
+        plan = _rrr_output_resume_plan(artifact, unit, config, n_folds)
         resume_plans[window.name] = plan
 
     prepared = _get_decomposition_inputs(
         subject_ids,
-        output_dir,
         sig_electrodes,
+        reference,
+        significance.detailed_significance,
         enc,
         aligned_embeddings,
         compute_sig_nonsig=config.compute_sig_nonsig,
-        sig_dir=sig_dir,
         word_in_glove=word_in_glove,
         shared_selection_metadata=shared_selection_metadata,
     )
@@ -1747,10 +1683,9 @@ def _run_temporal_windows_rrr(
         )
         manifest["original_target_index"] = target_indices
         unique_lags = np.sort(manifest["lag"].unique())
-        rrr_unit_dir, pca_unit_dir = window_dirs[window.name]
-        window_root = os.path.dirname(rrr_unit_dir)
-        os.makedirs(window_root, exist_ok=True)
-        manifest.to_csv(os.path.join(window_root, "target_manifest.csv"), index=False)
+        unit = UnitSelector(method="rrr", temporal_window=window.name)
+        artifact.save_target_manifest(unit=unit, target_manifest=manifest,
+                                      overwrite=config.refresh)
 
         plan = resume_plans[window.name]
         Y_window = prepared.targets[:, target_mask]
@@ -1773,7 +1708,7 @@ def _run_temporal_windows_rrr(
             ridge_y_in_cpu=enc.ridge_y_in_cpu,
             ridge_force_cpu=enc.ridge_force_cpu,
             alpha_policy=enc.alpha_grid,
-            alpha_cache_dir=rrr_unit_dir,
+            alpha_cache_dir=None,
             alpha_context={
                 "script": "run_rrr",
                 "mode": "temporal_windows",
@@ -1785,7 +1720,8 @@ def _run_temporal_windows_rrr(
             folds_to_build=plan["folds_to_build"],
         )
         _run_rrr_for_unit(
-            rrr_unit_dir=rrr_unit_dir,
+            artifact=artifact,
+            unit=unit,
             X_raw=X_raw,
             test_idxs=prepared.test_idxs,
             per_fold_baselines=per_fold_baselines,
@@ -1796,9 +1732,9 @@ def _run_temporal_windows_rrr(
             pca_ranks_by_fold=plan["pca_ranks_by_fold"],
             pca_completed_pairs=plan["pca_completed_pairs"],
         )
-        units = {"rrr": rrr_unit_dir}
+        units = {"rrr": unit}
         if config.run_pca_baseline:
-            units["pca"] = pca_unit_dir
+            units["pca"] = UnitSelector(method="pca", temporal_window=window.name)
         window_records.append(
             {
                 "metadata": {
@@ -1814,7 +1750,20 @@ def _run_temporal_windows_rrr(
             }
         )
 
-    _write_temporal_window_summary(rrr_dir, window_records)
+    combined = []
+    returned_units = []
+    for record in window_records:
+        for method, unit in record["units"].items():
+            frame = artifact.load_summary(unit=unit).copy()
+            for key, value in record["metadata"].items():
+                frame[key] = value
+            frame["method"] = method
+            combined.append(frame)
+            returned_units.append((unit, n_folds))
+    artifact.save_field("mode_metadata", pd.concat(combined, ignore_index=True),
+                        selector={"kind": "temporal_window_summary"},
+                        overwrite=config.refresh)
+    return returned_units
 
 
 # ---------------------------------------------------------------------------
@@ -1824,23 +1773,87 @@ def _run_temporal_windows_rrr(
 
 def _run_multi_view_rrr(
     config: RRRConfig,
-    output_dir: str,
-    sig_dir: str,
-    rrr_dir: str,
+    artifact: Artifact,
+    significance: SignificanceArtifact,
     subject_ids: list[int],
-) -> None:
+) -> list[tuple[UnitSelector, int]]:
     """Fit banded ridge over saved RRR views, then run the standard RRR sweep."""
     from sklearn.preprocessing import StandardScaler
 
-    validate_aggregation_cache(
-        rrr_dir, config.subspace_aggregation, refresh=config.refresh
+    sources = {}
+    source_configs = {}
+    for view in config.views:
+        if view.ieeg_rrr_source:
+            cls = Artifact
+            kwargs = dict(view.ieeg_rrr_source)
+        else:
+            from scripts.fmri.run_cross_dataset_rrr import Artifact as cls
+            kwargs = dict(view.fmri_rrr_source or {})
+        kwargs.setdefault("results_root", config.results_root)
+        source = cls(**kwargs)
+        loaded = source.load_artifacts(
+            fields=["effective_config", "upstream_identities", "target_manifest"]
+        )
+        sources[view.name] = loaded
+        source_configs[view.name] = loaded.effective_config
+
+    sig_frame = significance.significant_electrodes
+    union = {
+        int(subject): group["elec"].astype(str).tolist()
+        for subject, group in sig_frame.groupby("subject")
+    }
+    detailed_frames = [significance.detailed_significance]
+    significance_sources = [significance.identity_record()]
+    seen_significance = {json.dumps(significance.identity_record(), sort_keys=True)}
+    for source in sources.values():
+        if source.dataset != artifact.dataset:
+            continue
+        for upstream in source.upstream_identities:
+            if upstream.get("script") != SignificanceArtifact.SCRIPT:
+                continue
+            key = json.dumps(upstream, sort_keys=True)
+            if key in seen_significance:
+                continue
+            kwargs = {name: upstream[name] for name in
+                      ("mode", "dataset", "offset", "model", "layer", "variant")}
+            kwargs["results_root"] = config.results_root
+            peer = SignificanceArtifact(**kwargs).load_artifacts(
+                ["significant_electrodes", "detailed_significance"]
+            )
+            for subject, group in peer.significant_electrodes.groupby("subject"):
+                bucket = union.setdefault(int(subject), [])
+                for electrode in group["elec"].astype(str):
+                    if electrode not in bucket:
+                        bucket.append(electrode)
+            detailed_frames.append(peer.detailed_significance)
+            significance_sources.append(peer.identity_record())
+            seen_significance.add(key)
+    target_context = resolve_dataset_context(
+        dataset=config.encoding.dataset, subject_ids=subject_ids,
+        per_dataset_config=config.encoding.per_dataset_config,
+        data_root=config.encoding.data_root,
     )
-    resolved = resolve_rrr_views(config)
-    target_key = target_dataset_key(config, subject_ids)
-    union, detailed_frames, significance_sources = union_view_significance(
-        resolved, target_key, subject_ids
-    )
-    embeddings, word_df = load_view_embeddings(config, resolved, subject_ids)
+    embeddings = {}
+    word_df = None
+    for view in config.views:
+        view_enc = source_configs[view.name]["encoding"]
+        if int(view_enc.get("offset", 0)) != int(config.encoding.offset):
+            raise ValueError(
+                f"View {view.name} uses offset {view_enc.get('offset')}; "
+                f"target uses {config.encoding.offset}"
+            )
+        values, words = load_embeddings(
+            config.encoding.data_root, view_enc["model"],
+            dataset=config.encoding.dataset,
+            per_dataset_config=config.encoding.per_dataset_config,
+            dataset_context=target_context, **view_enc.get("per_model_config", {}),
+        )
+        if word_df is not None and not np.array_equal(
+            word_df["word"].astype(str).to_numpy(), words["word"].astype(str).to_numpy()
+        ):
+            raise ValueError(f"Embedding transcript differs for view {view.name}")
+        word_df = words
+        embeddings[view.name] = np.asarray(values)
 
     enc = config.encoding
     word_in_glove = None
@@ -1851,43 +1864,65 @@ def _run_multi_view_rrr(
     shared_selection_metadata = None
     if enc.shared_word_selection:
         shared_selection_metadata = _load_shared_word_selection_metadata(
-            sig_dir, subject_ids
+            significance, subject_ids
         )
 
-    prepared = _get_decomposition_inputs(
+    reference = _reference_encoding_results(significance, subject_ids)
+    prepared_values = _build_rrr_decomposition_inputs(
         subject_ids,
-        output_dir,
         union,
+        reference,
+        significance.detailed_significance,
         enc,
-        embeddings,
+        embeddings[config.views[0].name],
+        word_df,
+        compute_sig_nonsig=config.compute_sig_nonsig,
         word_in_glove=word_in_glove,
         shared_selection_metadata=shared_selection_metadata,
     )
-    if prepared is None:
-        return
+    if prepared_values is None:
+        return []
+    _, prepared_baselines, test_idxs, sig_mask_flat, target_manifest = prepared_values
+    selection = np.asarray(reference["selection"])
     sig_mask_flat = (
-        union_sig_mask(prepared.target_manifest, detailed_frames)
+        union_sig_mask(target_manifest, detailed_frames)
         if config.compute_sig_nonsig
         else None
     )
-    bases, basis_modes = load_view_bases(
-        config,
-        resolved,
-        target_key,
-        prepared.selection,
-        prepared.test_idxs,
-    )
+    bases, basis_modes = {}, {}
+    for view in config.views:
+        source = sources[view.name]
+        rank = int(view.rank)
+        factor_items = source.load_collection("input_factors", {"method": "rrr"})
+        fold_factors = {int(dict(key)["fold"]): value for key, value in factor_items.items()
+                        if "fold" in dict(key)}
+        if source.dataset == artifact.dataset:
+            if len(fold_factors) != len(test_idxs):
+                raise ValueError(f"View {view.name} does not provide all target folds")
+            bases[view.name] = {fold: np.asarray(value)[:, :rank]
+                                for fold, value in fold_factors.items()}
+            basis_modes[view.name] = "matching_target_fold_raw"
+        else:
+            mean_basis = aggregate_subspace_basis(
+                list(fold_factors.values()), rank=rank,
+                method=config.subspace_aggregation,
+            )
+            bases[view.name] = {fold: mean_basis for fold in range(len(test_idxs))}
+            basis_modes[view.name] = f"cross_dataset_fold_{config.subspace_aggregation}"
     view_names = [view.name for view in config.views]
-    n_words = prepared.targets.shape[0]
+    n_words = len(selection)
     all_rows = np.arange(n_words, dtype=int)
     widths = [int(view.rank) for view in config.views]
     stops = np.cumsum(widths)
     band_boundaries = list(zip([0, *stops[:-1].tolist()], stops.tolist()))
     empty_design = np.empty((n_words, int(stops[-1])), dtype=np.float32)
-    fold_designs: list[np.ndarray] = [empty_design] * len(prepared.test_idxs)
-    baselines: list[dict | None] = [None] * len(prepared.test_idxs)
+    fold_designs: list[np.ndarray] = [empty_design] * len(test_idxs)
+    baselines: list[dict | None] = [None] * len(test_idxs)
+    unit = UnitSelector(method="rrr")
+    artifact.save_target_manifest(unit=unit, target_manifest=target_manifest,
+                                  overwrite=config.refresh)
     resume_plan = _rrr_output_resume_plan(
-        rrr_dir, config, len(prepared.test_idxs)
+        artifact, unit, config, len(test_idxs)
     )
     folds_to_build = resume_plan["folds_to_build"]
     explicit_banded_alphas = (
@@ -1896,25 +1931,28 @@ def _run_multi_view_rrr(
         else None
     )
 
-    for fold_f, test_idx in enumerate(prepared.test_idxs):
+    for fold_f, test_idx in enumerate(test_idxs):
         if fold_f not in folds_to_build:
             continue
         test_idx = np.asarray(test_idx, dtype=int)
         train_idx = np.setdiff1d(all_rows, test_idx, assume_unique=False)
         bands, boundaries = project_view_bands(
-            prepared.embeddings, bases, view_names, fold_f
+            embeddings, bases, view_names, fold_f
         )
         if band_boundaries != boundaries:
             raise ValueError("Multiview band boundaries differ across folds")
         X_full = np.concatenate(bands, axis=1).astype(np.float32, copy=False)
         fold_designs[fold_f] = X_full
 
-        target_scaler = StandardScaler().fit(prepared.targets[train_idx])
-        Y_train = target_scaler.transform(prepared.targets[train_idx]).astype(
+        raw_targets = prepared_baselines[fold_f]["Y_train_raw"] if "Y_train_raw" in prepared_baselines[fold_f] else None
+        baseline = prepared_baselines[fold_f]
+        Y_train = baseline["Y_train"]
+        Y_test = baseline["Y_test"]
+        if raw_targets is not None:
+            target_scaler = StandardScaler().fit(raw_targets)
+            Y_train = target_scaler.transform(raw_targets).astype(
             np.float32
-        )
-        Y_test = target_scaler.transform(prepared.targets[test_idx]).astype(np.float32)
-        alpha_dir = os.path.join(rrr_dir, f"fold_{fold_f}", "banded_full_alpha")
+            )
         alpha_context = {
             "script": "run_rrr",
             "role": "multi_view_banded_full",
@@ -1928,7 +1966,7 @@ def _run_multi_view_rrr(
             X_full[train_idx],
             standardize=False,
             context=alpha_context,
-            cache_dir=alpha_dir,
+            cache_dir=None,
             policy=enc.alpha_grid,
         )
         fitted = fit_banded_ridge_baseline(
@@ -1941,22 +1979,12 @@ def _run_multi_view_rrr(
             y_in_cpu=enc.ridge_y_in_cpu,
             force_cpu=enc.ridge_force_cpu,
         )
-        save_alpha_diagnostics(
-            alpha_dir,
-            banded_alphas,
-            best_alphas=fitted.best_alphas,
-            context=alpha_context,
-            policy=enc.alpha_grid,
-        )
-        np.savez_compressed(
-            os.path.join(rrr_dir, f"fold_{fold_f}", "banded_ridge_diagnostics.npz"),
-            view_names=np.asarray(view_names),
-            band_boundaries=np.asarray(boundaries, dtype=int),
-            deltas=fitted.deltas,
-            kernel_weights=np.exp(fitted.deltas),
-            best_alphas=fitted.best_alphas,
-            intercept=fitted.intercept,
-        )
+        artifact.save_diagnostics(unit=unit, fold=fold_f, diagnostics={
+            "view_names": view_names, "band_boundaries": boundaries,
+            "alphas": banded_alphas, "deltas": fitted.deltas,
+            "kernel_weights": np.exp(fitted.deltas),
+            "best_alphas": fitted.best_alphas, "intercept": fitted.intercept,
+        }, overwrite=config.refresh)
         baselines[fold_f] = {
             "train_idx": train_idx,
             "test_idx": test_idx,
@@ -1969,7 +1997,7 @@ def _run_multi_view_rrr(
 
     metadata = {
         "mode": "multi_view",
-        "target_dataset_key": list(target_key),
+        "target_dataset": artifact.dataset,
         "views": view_names,
         "view_ranks": {view.name: int(view.rank) for view in config.views},
         "basis_modes": basis_modes,
@@ -1977,15 +2005,16 @@ def _run_multi_view_rrr(
         "band_boundaries": band_boundaries,
         "significance_sources": significance_sources,
     }
-    with open(os.path.join(rrr_dir, "multi_view_metadata.json"), "w") as handle:
-        json.dump(metadata, handle, indent=2)
+    artifact.save_field("mode_metadata", metadata, selector={"kind": "multi_view"},
+                        overwrite=config.refresh)
 
     print(
-        f"  Multiview X: {(n_words, int(stops[-1]))}, Y: {prepared.targets.shape}, "
+        f"  Multiview X: {(n_words, int(stops[-1]))}, "
         f"bands: {dict(zip(view_names, [b - a for a, b in band_boundaries]))}"
     )
     _run_rrr_for_unit(
-        rrr_unit_dir=rrr_dir,
+        artifact=artifact,
+        unit=unit,
         X_raw=fold_designs,
         test_idxs=prepared.test_idxs,
         per_fold_baselines=baselines,
@@ -1996,6 +2025,7 @@ def _run_multi_view_rrr(
         pca_ranks_by_fold=resume_plan["pca_ranks_by_fold"],
         pca_completed_pairs=resume_plan["pca_completed_pairs"],
     )
+    return [(unit, len(test_idxs))]
 
 
 # ---------------------------------------------------------------------------
@@ -2006,9 +2036,8 @@ def _run_multi_view_rrr(
 def _run_per_subject_rrr(
     config: RRRConfig,
     enc,
-    output_dir,
-    sig_dir,
-    rrr_dir,
+    artifact: Artifact,
+    significance,
     subject_ids,
     sig_electrodes,
     aligned_embeddings,
@@ -2017,17 +2046,19 @@ def _run_per_subject_rrr(
     shared_selection_metadata=None,
 ):
     """RRR on raw embeddings independently per subject."""
+    units = []
     for sub_id in subject_ids:
         print(f"\n{'='*60}\nSubject {sub_id}")
 
-        rrr_sub_dir = os.path.join(rrr_dir, "subjects", f"sub_{sub_id}")
+        unit = UnitSelector(method="rrr", subject=int(sub_id))
         sub_sig_elecs = sig_electrodes.get(sub_id, [])
         if not sub_sig_elecs:
             print("  No significant electrodes; skipping.")
             continue
 
-        n_folds = len(_load_reference_test_idxs(output_dir, [sub_id]))
-        resume_plan = _rrr_output_resume_plan(rrr_sub_dir, config, n_folds)
+        reference = _reference_encoding_results(significance, [sub_id])
+        n_folds = len(reference["test_idxs"])
+        resume_plan = _rrr_output_resume_plan(artifact, unit, config, n_folds)
         folds_to_build = resume_plan["folds_to_build"]
         if not folds_to_build:
             print("  Subject RRR/PCA outputs complete; skipping data/regression setup.")
@@ -2035,23 +2066,25 @@ def _run_per_subject_rrr(
 
         results = _build_rrr_decomposition_inputs(
             [sub_id],
-            output_dir,
             {sub_id: sub_sig_elecs},
+            reference,
+            significance.detailed_significance,
             enc,
             aligned_embeddings,
             word_df,
             compute_sig_nonsig=config.compute_sig_nonsig,
-            sig_dir=sig_dir,
             word_in_glove=word_in_glove,
             folds_to_build=folds_to_build,
-            alpha_cache_dir=rrr_sub_dir,
             shared_selection_metadata=shared_selection_metadata,
         )
         if results is None:
             continue
-        X_raw, per_fold_baselines, test_idxs, sig_mask_flat = results
+        X_raw, per_fold_baselines, test_idxs, sig_mask_flat, target_manifest = results
+        artifact.save_target_manifest(unit=unit, target_manifest=target_manifest,
+                                      overwrite=config.refresh)
         _run_rrr_for_unit(
-            rrr_unit_dir=rrr_sub_dir,
+            artifact=artifact,
+            unit=unit,
             X_raw=X_raw,
             test_idxs=test_idxs,
             per_fold_baselines=per_fold_baselines,
@@ -2062,6 +2095,10 @@ def _run_per_subject_rrr(
             pca_ranks_by_fold=resume_plan["pca_ranks_by_fold"],
             pca_completed_pairs=resume_plan["pca_completed_pairs"],
         )
+        units.append((unit, n_folds))
+        if config.run_pca_baseline:
+            units.append((UnitSelector(method="pca", subject=int(sub_id)), n_folds))
+    return units
 
 
 # ---------------------------------------------------------------------------
@@ -2072,9 +2109,8 @@ def _run_per_subject_rrr(
 def _run_per_region_rrr(
     config: RRRConfig,
     enc,
-    output_dir,
-    sig_dir,
-    rrr_dir,
+    artifact: Artifact,
+    significance,
     subject_ids,
     sig_electrodes,
     aligned_embeddings,
@@ -2092,10 +2128,11 @@ def _run_per_region_rrr(
     )
     print(f"  Regions found: {list(electrode_region_map.keys())}")
 
+    units = []
     for region_name, sub_elec_map in electrode_region_map.items():
         print(f"\n{'='*60}\nRegion: {region_name}")
 
-        rrr_region_dir = os.path.join(rrr_dir, "regions", region_name)
+        unit = UnitSelector(method="rrr", region=region_name)
 
         per_subject_region_elecs = {
             sub_id: [e for e in elecs if e in set(sig_electrodes.get(sub_id, []))]
@@ -2110,8 +2147,9 @@ def _run_per_region_rrr(
             continue
 
         subs_in_region = list(per_subject_region_elecs.keys())
-        n_folds = len(_load_reference_test_idxs(output_dir, subs_in_region))
-        resume_plan = _rrr_output_resume_plan(rrr_region_dir, config, n_folds)
+        reference = _reference_encoding_results(significance, subs_in_region)
+        n_folds = len(reference["test_idxs"])
+        resume_plan = _rrr_output_resume_plan(artifact, unit, config, n_folds)
         folds_to_build = resume_plan["folds_to_build"]
         if not folds_to_build:
             print("  Region RRR/PCA outputs complete; skipping data/regression setup.")
@@ -2119,23 +2157,25 @@ def _run_per_region_rrr(
 
         results = _build_rrr_decomposition_inputs(
             subs_in_region,
-            output_dir,
             per_subject_region_elecs,
+            reference,
+            significance.detailed_significance,
             enc,
             aligned_embeddings,
             word_df,
             compute_sig_nonsig=config.compute_sig_nonsig,
-            sig_dir=sig_dir,
             word_in_glove=word_in_glove,
             folds_to_build=folds_to_build,
-            alpha_cache_dir=rrr_region_dir,
             shared_selection_metadata=shared_selection_metadata,
         )
         if results is None:
             continue
-        X_raw, per_fold_baselines, test_idxs, sig_mask_flat = results
+        X_raw, per_fold_baselines, test_idxs, sig_mask_flat, target_manifest = results
+        artifact.save_target_manifest(unit=unit, target_manifest=target_manifest,
+                                      overwrite=config.refresh)
         _run_rrr_for_unit(
-            rrr_unit_dir=rrr_region_dir,
+            artifact=artifact,
+            unit=unit,
             X_raw=X_raw,
             test_idxs=test_idxs,
             per_fold_baselines=per_fold_baselines,
@@ -2146,6 +2186,10 @@ def _run_per_region_rrr(
             pca_ranks_by_fold=resume_plan["pca_ranks_by_fold"],
             pca_completed_pairs=resume_plan["pca_completed_pairs"],
         )
+        units.append((unit, n_folds))
+        if config.run_pca_baseline:
+            units.append((UnitSelector(method="pca", region=region_name), n_folds))
+    return units
 
 
 # ---------------------------------------------------------------------------
@@ -2154,11 +2198,12 @@ def _run_per_region_rrr(
 
 
 def _run_loso_transfer_for_unit(
-    transfer_dir: str,
+    artifact: Artifact,
+    unit: UnitSelector,
     X_raw: np.ndarray,
     test_idxs: list,
     per_fold_baselines: list,
-    train_rrr_dir: str,
+    train_unit: UnitSelector,
     config: "RRRConfig",
     sig_mask_flat: "np.ndarray | None" = None,
     ranks_by_fold: "dict[int, list[int]] | None" = None,
@@ -2175,15 +2220,13 @@ def _run_loso_transfer_for_unit(
         X_raw: (n_words, n_embed) embedding matrix (shared across all subjects).
         test_idxs: List of test index arrays (one per fold); used only for n_folds.
         per_fold_baselines: Fold baselines built from the held-out subject's Y matrix.
-        train_rrr_dir: Directory where _run_rrr_for_unit saved A.npy files per fold.
+        train_unit: Logical selector for the trained RRR factors.
         config: RRRConfig with rank_grid and encoding settings.
         sig_mask_flat: Optional boolean mask for significant targets in held-out subject.
 
     Returns:
         DataFrame with one row per (fold, k) containing transfer metrics.
     """
-    os.makedirs(transfer_dir, exist_ok=True)
-
     import torch
 
     enc = config.encoding
@@ -2192,25 +2235,17 @@ def _run_loso_transfer_for_unit(
 
     n_folds = len(test_idxs)
 
-    existing_grid = _load_existing_grid(transfer_dir)
+    existing_grid = _load_existing_grid(artifact, unit)
     if ranks_by_fold is None or completed_pairs is None:
-        ranks_by_fold, completed_pairs = _unit_ranks_by_fold_to_run(
-            transfer_dir,
-            config.rank_grid,
-            n_folds,
-            refresh=config.refresh,
-            require_factors=False,
-        )
-    missing_a = [
-        os.path.join(train_rrr_dir, f"fold_{fold_f}", "A.npy")
-        for fold_f in range(n_folds)
-        if not os.path.exists(os.path.join(train_rrr_dir, f"fold_{fold_f}", "A.npy"))
-    ]
-    if missing_a:
-        raise FileNotFoundError(
-            "Missing train-subject RRR factor(s) needed for transfer: "
-            + ", ".join(missing_a)
-        )
+        plan = artifact.resume_plan(unit=unit, ranks=config.rank_grid,
+                                    folds=range(n_folds), refresh=config.refresh,
+                                    require_input_factors=False)
+        ranks_by_fold, completed_pairs = plan["ranks_by_fold"], plan["completed_pairs"]
+    for fold_f in range(n_folds):
+        if not artifact.has_field(
+            "input_factors", selector=artifact._selector(train_unit, fold=fold_f)
+        ):
+            raise ValueError(f"Missing train-subject RRR factors for fold {fold_f}")
     total_to_run = sum(len(ranks) for ranks in ranks_by_fold.values())
     if completed_pairs:
         print(f"  Reusing {len(completed_pairs)} completed transfer fold/rank pair(s)")
@@ -2223,12 +2258,13 @@ def _run_loso_transfer_for_unit(
             [],
             completed_pairs,
             config.rank_grid,
-            unit_dir=transfer_dir,
+            artifact=artifact,
+            unit=unit,
             primary_label="transfer",
             sig_mask_flat=sig_mask_flat,
         )
-        df.to_csv(os.path.join(transfer_dir, "grid_results.csv"), index=False)
-        _build_results(df, sig_mask_flat, transfer_dir, primary_label="transfer")
+        _build_results(df, sig_mask_flat, artifact, unit, primary_label="transfer",
+                       plot=config.plot, overwrite=config.refresh)
         return df
 
     all_rows = []
@@ -2242,8 +2278,7 @@ def _run_loso_transfer_for_unit(
         print(f"\n[Transfer fold {fold_f + 1}/{n_folds}]")
 
         # Load A matrix from training subjects (saved by _run_rrr_for_unit)
-        a_path = os.path.join(train_rrr_dir, f"fold_{fold_f}", "A.npy")
-        A_full = np.load(a_path)
+        A_full = artifact.load_factors(unit=train_unit, fold=fold_f)["input_factors"]
 
         baseline = per_fold_baselines[fold_f]
         train_idx = baseline["train_idx"]
@@ -2273,7 +2308,8 @@ def _run_loso_transfer_for_unit(
                 ridge_y_in_cpu=config.encoding.ridge_y_in_cpu,
                 ridge_force_cpu=config.encoding.ridge_force_cpu,
                 device=device,
-                unit_dir=transfer_dir,
+                artifact=artifact,
+                unit=unit,
                 primary_label="transfer",
             )
 
@@ -2291,21 +2327,21 @@ def _run_loso_transfer_for_unit(
         all_rows,
         completed_pairs,
         config.rank_grid,
-        unit_dir=transfer_dir,
+        artifact=artifact,
+        unit=unit,
         primary_label="transfer",
         sig_mask_flat=sig_mask_flat,
     )
-    df.to_csv(os.path.join(transfer_dir, "grid_results.csv"), index=False)
-    _build_results(df, sig_mask_flat, transfer_dir, primary_label="transfer")
+    _build_results(df, sig_mask_flat, artifact, unit, primary_label="transfer",
+                   plot=config.plot, overwrite=config.refresh)
     return df
 
 
 def _run_leave_one_subject_out_rrr(
     config: "RRRConfig",
     enc,
-    output_dir,
-    sig_dir,
-    rrr_dir,
+    artifact: Artifact,
+    significance,
     subject_ids,
     sig_electrodes,
     aligned_embeddings,
@@ -2320,44 +2356,48 @@ def _run_leave_one_subject_out_rrr(
       2. Evaluate transfer of the learned A matrix to the held-out subject (writes to transfer/).
       3. Run a within-subject RRR baseline on the held-out subject alone (writes to baseline/).
     """
+    units = []
     for held_out_sub in subject_ids:
         print(f"\n{'='*60}\nHeld-out subject: {held_out_sub}")
-
-        loso_sub_dir = os.path.join(rrr_dir, f"held_out_sub_{held_out_sub}")
 
         # --- Step A: train RRR on n-1 subjects ---
         train_subs = [s for s in subject_ids if s != held_out_sub]
         train_sig_elecs = {s: sig_electrodes.get(s, []) for s in train_subs}
-        test_idxs = _load_reference_test_idxs(output_dir, train_subs)
+        train_reference = _reference_encoding_results(significance, train_subs)
+        test_idxs = train_reference["test_idxs"]
         n_folds = len(test_idxs)
-        train_dir = os.path.join(loso_sub_dir, "train_subjects")
+        train_unit = UnitSelector(method="rrr", held_out_subject=int(held_out_sub),
+                                  loso_phase="train_subjects")
 
         print(f"  Training subjects: {train_subs}")
-        train_resume_plan = _rrr_output_resume_plan(train_dir, config, n_folds)
+        train_resume_plan = _rrr_output_resume_plan(artifact, train_unit, config, n_folds)
         train_folds_to_build = train_resume_plan["folds_to_build"]
         if train_folds_to_build:
             results_train = _build_rrr_decomposition_inputs(
                 train_subs,
-                output_dir,
                 train_sig_elecs,
+                train_reference,
+                significance.detailed_significance,
                 enc,
                 aligned_embeddings,
                 word_df,
                 compute_sig_nonsig=config.compute_sig_nonsig,
-                sig_dir=sig_dir,
                 word_in_glove=word_in_glove,
                 folds_to_build=train_folds_to_build,
-                alpha_cache_dir=train_dir,
                 shared_selection_metadata=shared_selection_metadata,
             )
             if results_train is None:
                 print("  No training data; skipping this held-out subject.")
                 continue
-            X_raw, per_fold_baselines_train, test_idxs, sig_mask_train = results_train
+            (X_raw, per_fold_baselines_train, test_idxs, sig_mask_train,
+             train_manifest) = results_train
+            artifact.save_target_manifest(unit=train_unit, target_manifest=train_manifest,
+                                          overwrite=config.refresh)
 
-            print(f"  Running train-subjects RRR → {train_dir}")
+            print("  Running train-subjects RRR")
             _run_rrr_for_unit(
-                rrr_unit_dir=train_dir,
+                artifact=artifact,
+                unit=train_unit,
                 X_raw=X_raw,
                 test_idxs=test_idxs,
                 per_fold_baselines=per_fold_baselines_train,
@@ -2379,12 +2419,22 @@ def _run_leave_one_subject_out_rrr(
             )
             continue
 
-        transfer_dir = os.path.join(loso_sub_dir, "transfer")
-        baseline_dir = os.path.join(loso_sub_dir, "baseline")
-        transfer_resume_plan = _transfer_output_resume_plan(
-            transfer_dir, config, n_folds
+        transfer_unit = UnitSelector(method="rrr", held_out_subject=int(held_out_sub),
+                                     loso_phase="transfer")
+        baseline_unit = UnitSelector(method="rrr", held_out_subject=int(held_out_sub),
+                                     loso_phase="baseline")
+        transfer_plan = artifact.resume_plan(
+            unit=transfer_unit, ranks=config.rank_grid, folds=range(n_folds),
+            refresh=config.refresh, require_input_factors=False,
         )
-        baseline_resume_plan = _rrr_output_resume_plan(baseline_dir, config, n_folds)
+        transfer_resume_plan = {
+            "folds_to_build": transfer_plan["folds_to_build"],
+            "ranks_by_fold": transfer_plan["ranks_by_fold"],
+            "completed_pairs": transfer_plan["completed_pairs"],
+        }
+        baseline_resume_plan = _rrr_output_resume_plan(
+            artifact, baseline_unit, config, n_folds
+        )
         held_folds_to_build = (
             transfer_resume_plan["folds_to_build"]
             | baseline_resume_plan["folds_to_build"]
@@ -2396,31 +2446,36 @@ def _run_leave_one_subject_out_rrr(
         print(f"  Building held-out subject data...")
         results_held = _build_rrr_decomposition_inputs(
             [held_out_sub],
-            output_dir,
             {held_out_sub: held_sig_elecs},
+            _reference_encoding_results(significance, [held_out_sub]),
+            significance.detailed_significance,
             enc,
             aligned_embeddings,
             word_df,
             compute_sig_nonsig=config.compute_sig_nonsig,
-            sig_dir=sig_dir,
             word_in_glove=word_in_glove,
             folds_to_build=held_folds_to_build,
-            alpha_cache_dir=os.path.join(loso_sub_dir, "held_out_alpha"),
             shared_selection_metadata=shared_selection_metadata,
         )
         if results_held is None:
             print(f"  No held-out subject data; skipping transfer/baseline.")
             continue
-        X_raw_held, per_fold_baselines_held, _, sig_mask_held = results_held
+        (X_raw_held, per_fold_baselines_held, _, sig_mask_held,
+         held_manifest) = results_held
+        artifact.save_target_manifest(unit=transfer_unit, target_manifest=held_manifest,
+                                      overwrite=config.refresh)
+        artifact.save_target_manifest(unit=baseline_unit, target_manifest=held_manifest,
+                                      overwrite=config.refresh)
 
         # --- Step C: transfer A from train subjects to held-out subject ---
-        print(f"  Running transfer evaluation → {transfer_dir}")
+        print("  Running transfer evaluation")
         _run_loso_transfer_for_unit(
-            transfer_dir=transfer_dir,
+            artifact=artifact,
+            unit=transfer_unit,
             X_raw=X_raw_held,
             test_idxs=test_idxs,
             per_fold_baselines=per_fold_baselines_held,
-            train_rrr_dir=train_dir,
+            train_unit=train_unit,
             config=config,
             sig_mask_flat=sig_mask_held,
             ranks_by_fold=transfer_resume_plan["ranks_by_fold"],
@@ -2428,9 +2483,10 @@ def _run_leave_one_subject_out_rrr(
         )
 
         # --- Step D: within-subject baseline RRR on held-out subject alone ---
-        print(f"  Running within-subject baseline RRR → {baseline_dir}")
+        print("  Running within-subject baseline RRR")
         _run_rrr_for_unit(
-            rrr_unit_dir=baseline_dir,
+            artifact=artifact,
+            unit=baseline_unit,
             X_raw=X_raw_held,
             test_idxs=test_idxs,
             per_fold_baselines=per_fold_baselines_held,
@@ -2441,6 +2497,16 @@ def _run_leave_one_subject_out_rrr(
             pca_ranks_by_fold=baseline_resume_plan["pca_ranks_by_fold"],
             pca_completed_pairs=baseline_resume_plan["pca_completed_pairs"],
         )
+        units.extend([(train_unit, n_folds), (baseline_unit, n_folds),
+                      (transfer_unit, n_folds, False, False)])
+        if config.run_pca_baseline:
+            units.extend([
+                (UnitSelector(method="pca", held_out_subject=int(held_out_sub),
+                              loso_phase="train_subjects"), n_folds),
+                (UnitSelector(method="pca", held_out_subject=int(held_out_sub),
+                              loso_phase="baseline"), n_folds),
+            ])
+    return units
 
 
 # ---------------------------------------------------------------------------
@@ -2448,56 +2514,33 @@ def _run_leave_one_subject_out_rrr(
 # ---------------------------------------------------------------------------
 
 
-def _sanitize_cross_source_name(cross_result_dir: str) -> str:
-    """Return a filesystem-safe short name for a source results directory."""
-    normalized = os.path.normpath(str(cross_result_dir))
-    name = os.path.basename(normalized) or os.path.basename(os.path.dirname(normalized))
-    safe = "".join(c if c.isalnum() or c in {"-", "_", "."} else "_" for c in name)
-    return safe or "source"
-
-
-def _cross_dataset_source_unit_dir(cross_result_dir: str, kind: str) -> str:
-    """Resolve a source run root to its RRR/PCA unit directory."""
-    if kind not in {"rrr", "pca"}:
-        raise ValueError(f"Unsupported cross-dataset source kind: {kind}")
-    return os.path.join(cross_result_dir, kind)
-
-
 def _load_cross_dataset_A_by_rank(
-    cross_result_dir: str,
+    source,
     kind: str,
     ranks: list[int],
     aggregation: str = "extrinsic",
     source_format: str = "fold_factors",
 ) -> dict[int, np.ndarray]:
-    """Load rank-specific source factors from fold runs or saved rank bases."""
-    unit_dir = _cross_dataset_source_unit_dir(cross_result_dir, kind)
+    """Load rank-specific source factors through its producing Artifact."""
     averaged = {}
     for rank in sorted(set(int(k) for k in ranks)):
         if source_format == "rank_bases":
-            path = os.path.join(unit_dir, f"k{rank}", "A.npy")
-            if not os.path.exists(path):
-                raise FileNotFoundError(
-                    f"Could not load cross-dataset {kind.upper()} rank basis from {path}."
-                )
-            averaged[rank] = np.load(path)
+            selector = {"method": kind, "rank": rank}
+            averaged[rank] = source.load_field("input_factors", selector=selector)
             continue
         if source_format != "fold_factors":
             raise ValueError(f"Unsupported cross-dataset source format: {source_format}")
-        try:
-            averaged[rank] = aggregate_subspace_from_unit_dir(
-                unit_dir, rank=rank, method=aggregation
-            )
-        except FileNotFoundError as exc:
-            raise FileNotFoundError(
-                f"Could not load cross-dataset {kind.upper()} source factors from "
-                f"{unit_dir}. Expected fold_*/A.npy under a {kind}/ unit directory."
-            ) from exc
+        collection = source.load_collection("input_factors", {"method": kind})
+        matrices = [np.asarray(matrix)[:, :rank] for matrix in collection.values()]
+        if not matrices:
+            raise ValueError(f"Source Artifact has no {kind} fold factors")
+        averaged[rank] = aggregate_subspace_basis(matrices, rank, aggregation)
     return averaged
 
 
 def _run_cross_dataset_subspace_for_unit(
-    unit_dir: str,
+    artifact: Artifact,
+    unit: UnitSelector,
     A_by_rank: dict[int, np.ndarray],
     X_raw: np.ndarray,
     test_idxs: list,
@@ -2509,8 +2552,6 @@ def _run_cross_dataset_subspace_for_unit(
     completed_pairs: "set[tuple[int, int]] | None" = None,
 ) -> pd.DataFrame:
     """Evaluate rank-specific source-dataset subspaces on target dataset folds."""
-    os.makedirs(unit_dir, exist_ok=True)
-
     for rank, A_rank in A_by_rank.items():
         if A_rank.ndim != 2:
             raise ValueError(f"Expected 2D A matrix for rank {rank}, got {A_rank.shape}")
@@ -2532,15 +2573,12 @@ def _run_cross_dataset_subspace_for_unit(
     device = "cuda" if torch.cuda.is_available() else "cpu"
     n_folds = len(test_idxs)
 
-    existing_grid = _load_existing_grid(unit_dir)
+    existing_grid = _load_existing_grid(artifact, unit)
     if ranks_by_fold is None or completed_pairs is None:
-        ranks_by_fold, completed_pairs = _unit_ranks_by_fold_to_run(
-            unit_dir,
-            config.rank_grid,
-            n_folds,
-            refresh=config.refresh,
-            require_factors=False,
-        )
+        plan = artifact.resume_plan(unit=unit, ranks=config.rank_grid,
+                                    folds=range(n_folds), refresh=config.refresh,
+                                    require_input_factors=False)
+        ranks_by_fold, completed_pairs = plan["ranks_by_fold"], plan["completed_pairs"]
     missing_ranks = sorted(
         {
             int(rank)
@@ -2569,13 +2607,14 @@ def _run_cross_dataset_subspace_for_unit(
             [],
             completed_pairs,
             config.rank_grid,
-            unit_dir=unit_dir,
+            artifact=artifact,
+            unit=unit,
             primary_label=primary_label,
             sig_mask_flat=sig_mask_flat,
             include_effective_rank=True,
         )
-        df.to_csv(os.path.join(unit_dir, "grid_results.csv"), index=False)
-        _build_results(df, sig_mask_flat, unit_dir, primary_label=primary_label)
+        _build_results(df, sig_mask_flat, artifact, unit, primary_label=primary_label,
+                       plot=config.plot, overwrite=config.refresh)
         return df
 
     all_rows = []
@@ -2591,7 +2630,8 @@ def _run_cross_dataset_subspace_for_unit(
         for rank in ranks_to_run:
             all_rows.extend(
                 _run_subspace_rank_loop_for_fold(
-                    unit_dir=unit_dir,
+                    artifact=artifact,
+                    unit=unit,
                     A_full=A_by_rank[int(rank)],
                     ranks_to_run=[int(rank)],
                     X_raw=X_raw,
@@ -2620,22 +2660,22 @@ def _run_cross_dataset_subspace_for_unit(
         all_rows,
         completed_pairs,
         config.rank_grid,
-        unit_dir=unit_dir,
+        artifact=artifact,
+        unit=unit,
         primary_label=primary_label,
         sig_mask_flat=sig_mask_flat,
         include_effective_rank=True,
     )
-    df.to_csv(os.path.join(unit_dir, "grid_results.csv"), index=False)
-    _build_results(df, sig_mask_flat, unit_dir, primary_label=primary_label)
+    _build_results(df, sig_mask_flat, artifact, unit, primary_label=primary_label,
+                   plot=config.plot, overwrite=config.refresh)
     return df
 
 
 def _run_cross_dataset_rrr(
     config: RRRConfig,
     enc,
-    output_dir,
-    sig_dir,
-    rrr_dir,
+    artifact: Artifact,
+    significance,
     subject_ids,
     sig_electrodes,
     aligned_embeddings,
@@ -2644,19 +2684,24 @@ def _run_cross_dataset_rrr(
     shared_selection_metadata=None,
 ):
     """Evaluate target-dataset NR models using rank-specific source A averages."""
-    if not config.cross_result_dir:
-        raise ValueError("RRRConfig.cross_result_dir is required for mode=cross_dataset")
-
-    validate_aggregation_cache(
-        rrr_dir, config.subspace_aggregation, refresh=config.refresh
-    )
-
-    print(
-        "Loading rank-specific cross-dataset source RRR subspaces from "
-        f"{config.cross_result_dir}"
-    )
+    if config.ieeg_rrr_source:
+        source_kwargs = dict(config.ieeg_rrr_source)
+        source_kwargs.setdefault("results_root", config.results_root)
+        source = Artifact(**source_kwargs)
+    elif config.fmri_rrr_source:
+        from scripts.fmri.run_cross_dataset_rrr import Artifact as FMRIRRRArtifact
+        source_kwargs = dict(config.fmri_rrr_source)
+        source_kwargs.setdefault("results_root", config.results_root)
+        source = FMRIRRRArtifact(**source_kwargs)
+    else:
+        raise ValueError("cross_dataset requires an explicit RRR source Artifact")
+    if source.variant is None:
+        source._resolve_variant()
+    source_identity = json.dumps(source.identity_record(), sort_keys=True)
+    unit = UnitSelector(method="rrr", cross_dataset_source=source_identity)
+    print(f"Loading source RRR subspaces from {source.identity_record()}")
     A_rrr_by_rank = _load_cross_dataset_A_by_rank(
-        config.cross_result_dir,
+        source,
         kind="rrr",
         ranks=config.rank_grid,
         aggregation=config.subspace_aggregation,
@@ -2664,30 +2709,39 @@ def _run_cross_dataset_rrr(
     )
 
     A_pca_by_rank = None
-    pca_dir = None
+    pca_unit = None
     pca_resume_plan = None
     if config.run_pca_baseline:
         print(
             "Loading rank-specific cross-dataset source PCA subspaces from "
-            f"{config.cross_result_dir}"
+            f"{source.identity_record()}"
         )
         A_pca_by_rank = _load_cross_dataset_A_by_rank(
-            config.cross_result_dir,
+            source,
             kind="pca",
             ranks=config.rank_grid,
             aggregation=config.subspace_aggregation,
             source_format=config.cross_source_format,
         )
-        pca_dir = _resolve_pca_sibling_dir(rrr_dir)
-        validate_aggregation_cache(
-            pca_dir, config.subspace_aggregation, refresh=config.refresh
-        )
+        pca_unit = UnitSelector(method="pca", cross_dataset_source=source_identity)
 
-    n_folds = len(_load_reference_test_idxs(output_dir, subject_ids))
-    rrr_resume_plan = _transfer_output_resume_plan(rrr_dir, config, n_folds)
+    reference = _reference_encoding_results(significance, subject_ids)
+    n_folds = len(reference["test_idxs"])
+    raw_plan = artifact.resume_plan(unit=unit, ranks=config.rank_grid,
+                                    folds=range(n_folds), refresh=config.refresh,
+                                    require_input_factors=False)
+    rrr_resume_plan = {"folds_to_build": raw_plan["folds_to_build"],
+                       "ranks_by_fold": raw_plan["ranks_by_fold"],
+                       "completed_pairs": raw_plan["completed_pairs"]}
     folds_to_build = set(rrr_resume_plan["folds_to_build"])
-    if config.run_pca_baseline and pca_dir is not None:
-        pca_resume_plan = _transfer_output_resume_plan(pca_dir, config, n_folds)
+    if config.run_pca_baseline and pca_unit is not None:
+        raw_pca_plan = artifact.resume_plan(
+            unit=pca_unit, ranks=config.rank_grid, folds=range(n_folds),
+            refresh=config.refresh, require_input_factors=False,
+        )
+        pca_resume_plan = {"folds_to_build": raw_pca_plan["folds_to_build"],
+                           "ranks_by_fold": raw_pca_plan["ranks_by_fold"],
+                           "completed_pairs": raw_pca_plan["completed_pairs"]}
         folds_to_build |= pca_resume_plan["folds_to_build"]
 
     if not folds_to_build:
@@ -2698,25 +2752,27 @@ def _run_cross_dataset_rrr(
 
     results = _build_rrr_decomposition_inputs(
         subject_ids,
-        output_dir,
         sig_electrodes,
+        reference,
+        significance.detailed_significance,
         enc,
         aligned_embeddings,
         word_df,
         compute_sig_nonsig=config.compute_sig_nonsig,
-        sig_dir=sig_dir,
         word_in_glove=word_in_glove,
         folds_to_build=folds_to_build,
-        alpha_cache_dir=rrr_dir,
         shared_selection_metadata=shared_selection_metadata,
     )
     if results is None:
         return
-    X_raw, per_fold_baselines, test_idxs, sig_mask_flat = results
+    X_raw, per_fold_baselines, test_idxs, sig_mask_flat, target_manifest = results
+    artifact.save_target_manifest(unit=unit, target_manifest=target_manifest,
+                                  overwrite=config.refresh)
 
-    print(f"  Running cross-dataset RRR-source evaluation → {rrr_dir}")
+    print("  Running cross-dataset RRR-source evaluation")
     _run_cross_dataset_subspace_for_unit(
-        unit_dir=rrr_dir,
+        artifact=artifact,
+        unit=unit,
         A_by_rank=A_rrr_by_rank,
         X_raw=X_raw,
         test_idxs=test_idxs,
@@ -2728,10 +2784,14 @@ def _run_cross_dataset_rrr(
         completed_pairs=rrr_resume_plan["completed_pairs"],
     )
 
-    if config.run_pca_baseline and A_pca_by_rank is not None and pca_dir is not None:
-        print(f"  Running cross-dataset PCA-source evaluation → {pca_dir}")
+    units = [(unit, n_folds, False, True)]
+    if config.run_pca_baseline and A_pca_by_rank is not None and pca_unit is not None:
+        artifact.save_target_manifest(unit=pca_unit, target_manifest=target_manifest,
+                                      overwrite=config.refresh)
+        print("  Running cross-dataset PCA-source evaluation")
         _run_cross_dataset_subspace_for_unit(
-            unit_dir=pca_dir,
+            artifact=artifact,
+            unit=pca_unit,
             A_by_rank=A_pca_by_rank,
             X_raw=X_raw,
             test_idxs=test_idxs,
@@ -2742,6 +2802,8 @@ def _run_cross_dataset_rrr(
             ranks_by_fold=pca_resume_plan["ranks_by_fold"],
             completed_pairs=pca_resume_plan["completed_pairs"],
         )
+        units.append((pca_unit, n_folds, False, True))
+    return units
 
 
 # ---------------------------------------------------------------------------
@@ -2768,78 +2830,91 @@ def run_config(config: RRRConfig):
     get_dataset_adapter(enc.dataset).validate_subjects_share_stimulus(
         subject_ids, enc.per_dataset_config, enc.data_root
     )
-    output_dir = config.output_dir or get_results_dir(
-        enc.model,
-        enc.offset,
-        enc.per_model_config,
-        dataset_context=dataset_context,
+    if not config.significance_artifact:
+        raise ValueError("RRRConfig.significance_artifact constructor arguments are required")
+    sig_kwargs = dict(config.significance_artifact)
+    sig_kwargs.setdefault("results_root", config.results_root)
+    significance = SignificanceArtifact(**sig_kwargs).load_artifacts(
+        fields=["significant_electrodes", "detailed_significance", "encoding_results"],
+        selectors={"subjects": subject_ids},
     )
-
-    # Resolve RRR output directory
-    if config.rrr_output_dir:
-        rrr_base_dir = config.rrr_output_dir
-    elif config.mode == ScriptMode.PER_REGION:
-        rrr_base_dir = os.path.join(output_dir, "per_region_rrr")
-    elif config.mode == ScriptMode.PER_SUBJECT:
-        rrr_base_dir = os.path.join(output_dir, "per_subject_rrr")
-    elif config.mode == ScriptMode.LEAVE_ONE_SUBJECT_OUT:
-        rrr_base_dir = os.path.join(output_dir, "loso_rrr")
-    elif config.mode == ScriptMode.CROSS_DATASET:
-        rrr_base_dir = os.path.join(output_dir, "cross_dataset_rrr")
-    elif config.mode == ScriptMode.MULTI_VIEW:
-        rrr_base_dir = os.path.join(output_dir, "multi_view_rrr")
-    elif config.mode == ScriptMode.TEMPORAL_WINDOWS:
-        rrr_base_dir = os.path.join(output_dir, "temporal_window_rrr")
-    else:
-        rrr_base_dir = os.path.join(output_dir, "rrr")
-
-    if config.mode == ScriptMode.CROSS_DATASET:
-        if not config.cross_result_dir:
-            raise ValueError(
-                "RRRConfig.cross_result_dir is required for mode=cross_dataset"
-            )
-        rrr_dir = os.path.join(
-            rrr_base_dir, _sanitize_cross_source_name(config.cross_result_dir)
-        )
-    else:
-        rrr_dir = rrr_base_dir
-
-    os.makedirs(rrr_dir, exist_ok=True)
-    save_effective_config(config, rrr_dir)
-    if config.run_pca_baseline and config.mode != ScriptMode.TEMPORAL_WINDOWS:
-        save_effective_config(config, _resolve_pca_sibling_dir(rrr_dir))
-    print(f"Output dir:  {output_dir}")
-    print(f"RRR dir:     {rrr_dir}")
+    upstreams = [significance.identity_record()]
+    for source_kwargs, source_cls in (
+        (config.ieeg_rrr_source, Artifact),
+        (config.fmri_rrr_source, None),
+    ):
+        if not source_kwargs:
+            continue
+        if source_cls is None:
+            from scripts.fmri.run_cross_dataset_rrr import Artifact as source_cls
+        kwargs = dict(source_kwargs)
+        kwargs.setdefault("results_root", config.results_root)
+        upstream = source_cls(**kwargs)
+        if upstream.variant is None:
+            upstream._resolve_variant()
+        upstreams.append(upstream.identity_record())
+    for view in config.views:
+        source_kwargs = view.ieeg_rrr_source or view.fmri_rrr_source
+        source_cls = Artifact
+        if view.fmri_rrr_source:
+            from scripts.fmri.run_cross_dataset_rrr import Artifact as source_cls
+        kwargs = dict(source_kwargs or {})
+        kwargs.setdefault("results_root", config.results_root)
+        upstream = source_cls(**kwargs)
+        if upstream.variant is None:
+            upstream._resolve_variant()
+        upstreams.append(upstream.identity_record())
+    artifact = Artifact.from_config(config, dataset_context)
+    artifact.begin(
+        config=config, upstreams=upstreams, refresh=config.refresh,
+        variant_extras=getattr(artifact, "variant_extras", {}),
+    )
+    artifact.save_artifacts(effective_config=asdict(config),
+                            upstream_identities=upstreams,
+                            plot=config.plot, overwrite=config.refresh)
+    print(f"Artifact:    {artifact.identity_record()}")
     print(f"Mode:        {config.mode.value}")
     if config.run_pca_baseline:
         print(f"PCA baseline: enabled (results will mirror RRR dir with 'pca' in path)")
 
-    sig_dir = config.sig_dir or output_dir
     if config.mode == ScriptMode.MULTI_VIEW:
-        _run_multi_view_rrr(
+        units = _run_multi_view_rrr(
             config=config,
-            output_dir=output_dir,
-            sig_dir=sig_dir,
-            rrr_dir=rrr_dir,
+            artifact=artifact,
+            significance=significance,
             subject_ids=subject_ids,
         )
+        required = {"target_manifest": [], "input_factors": [], "full_metrics": [],
+                    "rank_metrics": [], "summary": []}
+        if config.save_b_matrices:
+            required["target_factors"] = []
+        for unit, n_folds in units:
+            required["target_manifest"].append(unit.mapping())
+            required["summary"].append(unit.mapping())
+            for fold in range(n_folds):
+                selector = artifact._selector(unit, fold=fold)
+                required["input_factors"].append(selector)
+                required["full_metrics"].append(selector)
+                if config.save_b_matrices:
+                    required["target_factors"].append(selector)
+                for rank in config.rank_grid:
+                    required["rank_metrics"].append(
+                        artifact._selector(unit, fold=fold, rank=int(rank))
+                    )
+        artifact.mark_complete(required)
         print("\nDone.")
-        return
+        return artifact
 
     # Load significance CSV and build subject → electrode mapping
-    sig_electrodes, _ = load_sig_electrodes(
-        output_dir,
-        subject_ids,
-        sig_dir=sig_dir,
-        dataset=enc.dataset,
-        per_dataset_config=enc.per_dataset_config,
-        dataset_context=dataset_context,
-        data_root=enc.data_root,
-    )
+    sig_frame = significance.significant_electrodes
+    sig_electrodes = {
+        int(subject): group["elec"].astype(str).tolist()
+        for subject, group in sig_frame.groupby("subject")
+    }
     shared_selection_metadata = None
     if enc.shared_word_selection:
         shared_selection_metadata = _load_shared_word_selection_metadata(
-            sig_dir, subject_ids
+            significance, subject_ids
         )
         print(
             "Using saved shared word-selection metadata: "
@@ -2867,9 +2942,8 @@ def run_config(config: RRRConfig):
     branch_kwargs = dict(
         config=config,
         enc=enc,
-        output_dir=output_dir,
-        sig_dir=sig_dir,
-        rrr_dir=rrr_dir,
+        artifact=artifact,
+        significance=significance,
         subject_ids=subject_ids,
         sig_electrodes=sig_electrodes,
         aligned_embeddings=aligned_embeddings,
@@ -2879,19 +2953,45 @@ def run_config(config: RRRConfig):
     )
 
     if config.mode == ScriptMode.PER_REGION:
-        _run_per_region_rrr(**branch_kwargs)
+        units = _run_per_region_rrr(**branch_kwargs)
     elif config.mode == ScriptMode.PER_SUBJECT:
-        _run_per_subject_rrr(**branch_kwargs)
+        units = _run_per_subject_rrr(**branch_kwargs)
     elif config.mode == ScriptMode.LEAVE_ONE_SUBJECT_OUT:
-        _run_leave_one_subject_out_rrr(**branch_kwargs)
+        units = _run_leave_one_subject_out_rrr(**branch_kwargs)
     elif config.mode == ScriptMode.CROSS_DATASET:
-        _run_cross_dataset_rrr(**branch_kwargs)
+        units = _run_cross_dataset_rrr(**branch_kwargs)
     elif config.mode == ScriptMode.TEMPORAL_WINDOWS:
-        _run_temporal_windows_rrr(**branch_kwargs)
+        units = _run_temporal_windows_rrr(**branch_kwargs)
     else:
-        _run_cross_subject_rrr(**branch_kwargs)
+        units = _run_cross_subject_rrr(**branch_kwargs)
 
+    required = {field: [] for field in (
+        "target_manifest", "input_factors", "full_metrics", "rank_metrics", "summary"
+    )}
+    if config.save_b_matrices:
+        required["target_factors"] = []
+    for item in units or []:
+        unit, n_folds = item[:2]
+        require_factors = item[2] if len(item) > 2 else True
+        require_full = item[3] if len(item) > 3 else True
+        required["target_manifest"].append(unit.mapping())
+        required["summary"].append(unit.mapping())
+        for fold in range(n_folds):
+            fold_selector = artifact._selector(unit, fold=fold)
+            if require_factors:
+                required["input_factors"].append(fold_selector)
+            if require_full:
+                required["full_metrics"].append(fold_selector)
+            if require_factors and config.save_b_matrices and unit.method == "rrr":
+                required["target_factors"].append(fold_selector)
+            for rank in config.rank_grid:
+                required["rank_metrics"].append(
+                    artifact._selector(unit, fold=fold, rank=int(rank))
+                )
+    if units:
+        artifact.mark_complete(required)
     print("\nDone.")
+    return artifact
 
 
 def main():

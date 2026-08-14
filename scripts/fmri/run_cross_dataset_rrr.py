@@ -1,11 +1,10 @@
 """Evaluate cross-dataset or fMRI-derived RRR/PCA axes on deep-fMRI-dataset."""
 
-import json
+import io
 import time
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
-from dataclasses import dataclass
-from pathlib import Path
+from dataclasses import asdict, dataclass
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -14,12 +13,12 @@ import torch
 from himalaya.backend import set_backend
 
 from src.core.config import FMRICrossDatasetRRRConfig
-from src.utils.shared.alpha_grids import resolve_ridge_alphas, save_alpha_diagnostics
+from src.core.artifacts import ArtifactStore, normalize_model
+from src.utils.shared.alpha_grids import resolve_ridge_alphas
 from src.utils.shared.config import (
     expand_fmri_layer_configs,
     load_config,
     parse_args,
-    save_effective_config,
 )
 from src.utils.shared.encoding import extract_best_alphas, get_ridge_model_constructor
 from src.utils.shared.fmri import (
@@ -29,17 +28,94 @@ from src.utils.shared.fmri import (
     load_fmri_responses,
     load_story_embeddings,
     resolve_fmri_stories,
-    resolve_pca_sibling,
     session_cv_splits,
     target_manifest,
     TEMPORARILY_HELD_OUT_FMRI_STORIES,
 )
 from src.utils.rrr.core import fit_dense_rrr
-from src.utils.subspace_comparison.metrics import (
-    aggregate_subspace_basis,
-    aggregate_subspace_from_unit_dir,
-)
+from src.utils.subspace_comparison.metrics import aggregate_subspace_basis
 from src.utils.shared.tensors import to_numpy
+
+
+class Artifact(ArtifactStore):
+    """Storage contract for within-fMRI and cross-dataset fMRI RRR results."""
+
+    SCRIPT = "run_cross_dataset_rrr"
+    FIELD_CONTRACT = {
+        "effective_config": True, "upstream_identities": True,
+        "target_manifest": True, "input_factors": False,
+        "target_factors": False, "full_metrics": True,
+        "rank_metrics": True, "summary": True, "metadata": True,
+        "diagnostics": False, "plots": False,
+    }
+
+    def __init__(self, *, mode="cross_dataset", dataset="deep-fmri", offset=0,
+                 model="gpt2-xl", layer=24, variant=None, results_root="results"):
+        self._init_store(mode=mode, dataset=dataset, offset=offset, model=model,
+                         layer=layer, variant=variant, results_root=results_root)
+
+    @classmethod
+    def from_config(cls, config):
+        return cls(mode=config.source_mode, model=normalize_model(config.model_dir),
+                   layer=config.layer, results_root=config.results_root)
+
+    @staticmethod
+    def _selector(method=None, rank=None, subject=None, delay=None):
+        return {key: value for key, value in {
+            "method": method, "rank": rank, "subject": subject, "delay": delay,
+        }.items() if value is not None}
+
+    def save_rank_metrics(self, *, method, rank, metrics, overwrite=False):
+        self.save_field("rank_metrics", metrics,
+                        selector=self._selector(method, int(rank)), overwrite=overwrite)
+
+    def load_rank_metrics(self, *, method, rank):
+        return self.load_field("rank_metrics", selector=self._selector(method, int(rank)))
+
+    def save_factors(self, *, method, factors, rank=None, delay=None,
+                     target_factors=None, overwrite=False):
+        selector = self._selector(method, rank, delay=delay)
+        self.save_field("input_factors", factors, selector=selector, overwrite=overwrite)
+        if target_factors is not None:
+            self.save_field("target_factors", target_factors, selector=selector,
+                            overwrite=overwrite)
+
+    def resume_plan(self, methods, ranks, refresh=False):
+        completed = set()
+        for method in methods:
+            for rank in ranks:
+                if not refresh and self.has_field(
+                    "rank_metrics", selector=self._selector(method, int(rank))
+                ):
+                    completed.add((method, int(rank)))
+        return {"completed": completed,
+                "pending": [(method, int(rank)) for method in methods for rank in ranks
+                            if (method, int(rank)) not in completed]}
+
+    def save_plot(self, *, name, figure, overwrite=False):
+        buffer = io.BytesIO()
+        figure.savefig(buffer, format="png", dpi=180, bbox_inches="tight")
+        self.save_field("plots", buffer.getvalue(), selector={"name": name},
+                        overwrite=overwrite)
+
+    def load_artifacts(self, fields, selectors=None):
+        selectors = selectors or {}
+        scalar = {"effective_config", "upstream_identities", "target_manifest",
+                  "full_metrics", "summary", "metadata"}
+        for field in fields:
+            setattr(self, field, self.load_field(field) if field in scalar
+                    else self.load_collection(field, selectors))
+        return self
+
+    def save_artifacts(self, *, effective_config, upstream_identities,
+                       target_manifest, full_metrics, summary, metadata,
+                       plot=True, overwrite=False):
+        for field, value in {
+            "effective_config": effective_config, "upstream_identities": upstream_identities,
+            "target_manifest": target_manifest, "full_metrics": full_metrics,
+            "summary": summary, "metadata": metadata,
+        }.items():
+            self.save_field(field, value, overwrite=overwrite)
 
 
 @dataclass
@@ -50,6 +126,7 @@ class FinalRidgeFit:
     train_prediction: np.ndarray | None
     coefficients: np.ndarray | None
     best_alphas: np.ndarray
+    alpha_grid: np.ndarray
 
 
 @contextmanager
@@ -65,39 +142,6 @@ def _timed(label: str):
 def _array_summary(name: str, values: np.ndarray) -> str:
     size_gib = values.nbytes / (1024 ** 3)
     return f"{name}: shape={values.shape}, dtype={values.dtype}, size={size_gib:.2f} GiB"
-
-
-def _fold_factor_paths(unit_dir: str) -> list[Path]:
-    return sorted(Path(unit_dir).glob("fold_*/A.npy"))
-
-
-def _validate_optional_pca(rrr_dir: str) -> str | None:
-    pca_dir = resolve_pca_sibling(rrr_dir)
-    pca_paths = _fold_factor_paths(pca_dir)
-    if not pca_paths:
-        return None
-    rrr_folds = {path.parent.name for path in _fold_factor_paths(rrr_dir)}
-    pca_folds = {path.parent.name for path in pca_paths}
-    if pca_folds != rrr_folds:
-        raise ValueError(
-            f"PCA factors in {pca_dir} are partial: folds={sorted(pca_folds)}, "
-            f"RRR folds={sorted(rrr_folds)}"
-        )
-    return pca_dir
-
-
-def _load_masks(config) -> dict[str, np.ndarray]:
-    masks = {}
-    for subject in config.fmri.subjects:
-        path = Path(config.significance_dir) / "subjects" / subject / "significance.csv"
-        frame = pd.read_csv(path).sort_values("voxel_index")
-        expected = np.arange(len(frame))
-        if not np.array_equal(frame["voxel_index"].to_numpy(), expected):
-            raise ValueError(f"Non-contiguous voxel indices in {path}")
-        masks[subject] = frame["sig"].astype(bool).to_numpy()
-        if not masks[subject].any():
-            raise ValueError(f"No significant voxels found for {subject}")
-    return masks
 
 
 def _fisher_mean(values) -> float:
@@ -120,20 +164,18 @@ def _fit_final_ridge(
     X_test,
     cv,
     config,
-    cache_dir,
     context,
     *,
     return_train_prediction=False,
     return_coefficients=False,
 ):
-    Path(cache_dir).mkdir(parents=True, exist_ok=True)
     explicit = np.asarray(config.ridge.alphas) if config.ridge.alphas else None
     alphas = resolve_ridge_alphas(
         explicit,
         X_train,
         standardize=False,
         context=context,
-        cache_dir=str(cache_dir),
+        cache_dir=None,
         policy=config.ridge.alpha_grid,
     )
     model = get_ridge_model_constructor(
@@ -160,11 +202,6 @@ def _fit_final_ridge(
                 f"{coefficients.shape}; expected {(X_train.shape[1], Y_train.shape[1])}"
             )
     selected = extract_best_alphas(model)
-    if config.ridge.log_alphas:
-        save_alpha_diagnostics(
-            str(cache_dir), alphas, best_alphas=[selected], context=context,
-            policy=config.ridge.alpha_grid,
-        )
     return FinalRidgeFit(
         test_prediction=test_prediction,
         train_prediction=train_prediction,
@@ -174,35 +211,8 @@ def _fit_final_ridge(
             else None
         ),
         best_alphas=selected,
+        alpha_grid=np.asarray(alphas),
     )
-
-
-def _validate_cache_contract(output_dir: Path, config) -> None:
-    """Prevent reuse of metrics produced by another source/aggregation mode."""
-    path = output_dir / "metadata.json"
-    if config.refresh:
-        return
-    if not path.exists():
-        if config.subspace_aggregation != "extrinsic" and any(
-            item.name != "config.yml" for item in output_dir.iterdir()
-        ):
-            raise ValueError(
-                f"Existing legacy results in {output_dir} are assumed to use "
-                "'extrinsic'; set refresh=true or use a different output_dir."
-            )
-        return
-    with path.open() as handle:
-        metadata = json.load(handle)
-    existing_mode = metadata.get("source_mode", "cross_dataset")
-    existing_aggregation = metadata.get("subspace_aggregation", "extrinsic")
-    expected = (config.source_mode, config.subspace_aggregation)
-    existing = (existing_mode, existing_aggregation)
-    if existing != expected:
-        raise ValueError(
-            f"Existing results in {output_dir} use source/aggregation {existing}, "
-            f"but the configuration requests {expected}. Set refresh=true or use "
-            "a different output_dir."
-        )
 
 
 def _pca_right_singular_vectors(centered: np.ndarray, requested_device: str) -> np.ndarray:
@@ -230,8 +240,8 @@ def _pca_right_singular_vectors(centered: np.ndarray, requested_device: str) -> 
         return vt
 
 
-def _fit_within_fmri_bases(full_train, ridge_fit, ambient_dim, config, output_dir):
-    """Derive and persist shared FIR-RRR and pre-FIR PCA bases."""
+def _fit_within_fmri_bases(full_train, ridge_fit, ambient_dim, config):
+    """Derive shared FIR-RRR and pre-FIR PCA bases as scientific values."""
     ranks = sorted(set(map(int, config.rank_grid)))
     max_rank = max(ranks)
     ndelays = int(config.fmri.ndelays)
@@ -268,24 +278,11 @@ def _fit_within_fmri_bases(full_train, ridge_fit, ambient_dim, config, output_di
     )
     fir_a = np.asarray(rrr_result["A_dense"], dtype=np.float32)
     delay_blocks = list(np.split(fir_a, ndelays, axis=0))
-    source_dir = output_dir / "source_factors"
-    source_dir.mkdir(parents=True, exist_ok=True)
-    np.save(source_dir / "full_fir_A.npy", fir_a)
-    if config.rrr_save_b_matrix:
-        np.save(source_dir / "full_B.npy", rrr_result["B_dense"])
-    for delay, block in enumerate(delay_blocks, start=1):
-        delay_dir = source_dir / f"delay_{delay}"
-        delay_dir.mkdir(parents=True, exist_ok=True)
-        np.save(delay_dir / "A.npy", block)
-
     rrr_bases = {}
     for rank in ranks:
         basis = aggregate_subspace_basis(
             delay_blocks, rank=rank, method=config.subspace_aggregation
         )
-        rank_dir = output_dir / "rrr" / f"k{rank}"
-        rank_dir.mkdir(parents=True, exist_ok=True)
-        np.save(rank_dir / "A.npy", basis)
         rrr_bases[rank] = basis
 
     centered = full_train.pre_fir_stimulus - full_train.pre_fir_stimulus.mean(
@@ -299,32 +296,17 @@ def _fit_within_fmri_bases(full_train, ridge_fit, ambient_dim, config, output_di
         raise ValueError(
             f"Requested fMRI PCA rank {max_rank} exceeds available rank {pca_a.shape[1]}"
         )
-    np.save(source_dir / "pre_fir_pca_A.npy", pca_a)
     pca_bases = {}
     for rank in ranks:
         basis = pca_a[:, :rank]
-        rank_dir = output_dir / "pca" / f"k{rank}"
-        rank_dir.mkdir(parents=True, exist_ok=True)
-        np.save(rank_dir / "A.npy", basis)
         pca_bases[rank] = basis
-
-    return {"rrr": rrr_bases, "pca": pca_bases}, {
-        "rrr": str(source_dir / "full_fir_A.npy"),
-        "rrr_b": str(source_dir / "full_B.npy") if config.rrr_save_b_matrix else None,
-        "rrr_delay_blocks": [
-            str(source_dir / f"delay_{delay}" / "A.npy")
-            for delay in range(1, ndelays + 1)
-        ],
-        "pca": str(source_dir / "pre_fir_pca_A.npy"),
-        "rrr_rank_bases": {
-            str(rank): str(output_dir / "rrr" / f"k{rank}" / "A.npy")
-            for rank in ranks
-        },
-        "pca_rank_bases": {
-            str(rank): str(output_dir / "pca" / f"k{rank}" / "A.npy")
-            for rank in ranks
-        },
+    factors = {
+        "full_fir": fir_a,
+        "target": (rrr_result.get("B_dense") if config.rrr_save_b_matrix else None),
+        "delay_blocks": delay_blocks,
+        "pca_full": pca_a,
     }
+    return {"rrr": rrr_bases, "pca": pca_bases}, factors
 
 
 def _subject_summary(values, manifest):
@@ -332,101 +314,6 @@ def _subject_summary(values, manifest):
         subject: _fisher_mean(values[manifest["subject"].to_numpy() == subject])
         for subject in manifest["subject"].unique()
     }
-
-
-def _load_metric_arrays(path: Path, n_targets: int):
-    if not path.exists():
-        return None
-    with np.load(path) as saved:
-        corr = np.asarray(saved["corr_per_target"])
-        r2 = np.asarray(saved["r2_per_target"])
-        best_alphas = (
-            np.asarray(saved["best_alphas"])
-            if "best_alphas" in saved.files
-            else None
-        )
-    if corr.shape != (n_targets,) or r2.shape != (n_targets,):
-        raise ValueError(
-            f"Cached metrics in {path} have target shapes {corr.shape}/{r2.shape}; "
-            f"expected {(n_targets,)}"
-        )
-    return corr, r2, best_alphas
-
-
-def _within_factor_metadata(
-    output_dir: Path, ranks: list[int], ndelays: int, save_b: bool = False
-) -> dict:
-    source_dir = output_dir / "source_factors"
-    return {
-        "rrr": str(source_dir / "full_fir_A.npy"),
-        "rrr_b": str(source_dir / "full_B.npy") if save_b else None,
-        "rrr_delay_blocks": [
-            str(source_dir / f"delay_{delay}" / "A.npy")
-            for delay in range(1, ndelays + 1)
-        ],
-        "pca": str(source_dir / "pre_fir_pca_A.npy"),
-        "rrr_rank_bases": {
-            str(rank): str(output_dir / "rrr" / f"k{rank}" / "A.npy")
-            for rank in ranks
-        },
-        "pca_rank_bases": {
-            str(rank): str(output_dir / "pca" / f"k{rank}" / "A.npy")
-            for rank in ranks
-        },
-    }
-
-
-def _load_complete_within_bases(
-    output_dir: Path,
-    ranks: list[int],
-    ndelays: int,
-    save_b: bool = False,
-    n_targets: int | None = None,
-):
-    metadata = _within_factor_metadata(output_dir, ranks, ndelays, save_b)
-    required = [metadata["rrr"], metadata["pca"]]
-    if metadata["rrr_b"] is not None:
-        required.append(metadata["rrr_b"])
-    required.extend(metadata["rrr_delay_blocks"])
-    required.extend(metadata["rrr_rank_bases"].values())
-    required.extend(metadata["pca_rank_bases"].values())
-    if not all(Path(path).exists() for path in required):
-        return None, None
-    max_rank = max(ranks)
-    pca_full = np.load(metadata["pca"], mmap_mode="r")
-    ambient_dim = pca_full.shape[0]
-    if pca_full.ndim != 2 or pca_full.shape[1] < max_rank:
-        raise ValueError(f"Invalid cached PCA factor shape {pca_full.shape}")
-    fir_full = np.load(metadata["rrr"], mmap_mode="r")
-    if fir_full.shape != (ndelays * ambient_dim, max_rank):
-        raise ValueError(f"Invalid cached FIR-RRR factor shape {fir_full.shape}")
-    for path in metadata["rrr_delay_blocks"]:
-        shape = np.load(path, mmap_mode="r").shape
-        if shape != (ambient_dim, max_rank):
-            raise ValueError(f"Invalid cached delay-factor shape {shape} in {path}")
-    if metadata["rrr_b"] is not None:
-        b_shape = np.load(metadata["rrr_b"], mmap_mode="r").shape
-        expected_b = (n_targets, max_rank) if n_targets is not None else None
-        if len(b_shape) != 2 or b_shape[1] != max_rank or (
-            expected_b is not None and b_shape != expected_b
-        ):
-            raise ValueError(f"Invalid cached target-factor shape {b_shape}")
-    bases = {
-        "rrr": {
-            rank: np.load(metadata["rrr_rank_bases"][str(rank)]) for rank in ranks
-        },
-        "pca": {
-            rank: np.load(metadata["pca_rank_bases"][str(rank)]) for rank in ranks
-        },
-    }
-    for method, rank_bases in bases.items():
-        for rank, basis in rank_bases.items():
-            if basis.shape != (ambient_dim, rank):
-                raise ValueError(
-                    f"Invalid cached {method.upper()} rank-{rank} basis shape "
-                    f"{basis.shape}"
-                )
-    return bases, metadata
 
 
 def _build_rank_designs(aligned, train_stories, test_stories, basis, ndelays):
@@ -476,7 +363,7 @@ def _iter_rank_designs(jobs, aligned, train_stories, test_stories, ndelays, pref
             yield method, rank, train, test
 
 
-def _plot_results(frame: pd.DataFrame, output: Path):
+def _plot_results(frame: pd.DataFrame):
     fig, axes = plt.subplots(1, 2, figsize=(11, 4.5))
     for method, group in frame.groupby("method"):
         ordered = group.sort_values("rank")
@@ -493,72 +380,73 @@ def _plot_results(frame: pd.DataFrame, output: Path):
     axes[0].set_title("Primary encoding performance")
     axes[1].set_title("Variance explained")
     fig.tight_layout()
-    fig.savefig(output, dpi=180)
-    plt.close(fig)
+    return fig
 
 
-def run_config(config: FMRICrossDatasetRRRConfig) -> None:
+def run_config(config: FMRICrossDatasetRRRConfig) -> Artifact:
     config.validate()
     if torch.cuda.is_available():
         set_backend("torch_cuda")
     backend_name = "torch_cuda" if torch.cuda.is_available() else "numpy"
     device_name = torch.cuda.get_device_name(0) if torch.cuda.is_available() else "CPU"
     print(f"Backend: {backend_name} ({device_name})", flush=True)
-    output_dir = Path(config.output_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
-    save_effective_config(config, output_dir)
-    _validate_cache_contract(output_dir, config)
-    previous_metadata = {}
-    if (output_dir / "metadata.json").exists():
-        with (output_dir / "metadata.json").open() as handle:
-            previous_metadata = json.load(handle)
     ranks = list(map(int, config.rank_grid))
-    source_unit_dirs = {}
-    pca_dir = None
+    if not config.significance_artifact:
+        raise ValueError("significance_artifact constructor arguments are required")
+    from scripts.fmri.run_significance import Artifact as SignificanceArtifact
+    sig_kwargs = dict(config.significance_artifact)
+    sig_kwargs.setdefault("results_root", config.results_root)
+    significance = SignificanceArtifact(**sig_kwargs).load_artifacts(
+        fields=["significant_voxels"], selectors={"subjects": config.fmri.subjects}
+    )
+    upstreams = [significance.identity_record()]
+    source = None
     if config.source_mode == "cross_dataset":
-        rrr_paths = _fold_factor_paths(config.source_rrr_unit_dir)
-        if not rrr_paths:
-            raise FileNotFoundError(
-                f"No fold_*/A.npy factors found in {config.source_rrr_unit_dir}"
-            )
-        pca_dir = _validate_optional_pca(config.source_rrr_unit_dir)
-        source_unit_dirs["rrr"] = config.source_rrr_unit_dir
-        if pca_dir is not None:
-            source_unit_dirs["pca"] = pca_dir
+        from scripts.rrr.run_rrr import Artifact as IEEGRRRArtifact
+        source_kwargs = dict(config.ieeg_rrr_source or {})
+        source_kwargs.setdefault("results_root", config.results_root)
+        source = IEEGRRRArtifact(**source_kwargs)
+        if source.variant is None:
+            source._resolve_variant()
+        upstreams.append(source.identity_record())
+    artifact = Artifact.from_config(config)
+    artifact.begin(config=config, upstreams=upstreams, refresh=config.refresh)
+    artifact.save_field("effective_config", asdict(config), overwrite=config.refresh)
+    artifact.save_field("upstream_identities", upstreams, overwrite=config.refresh)
 
     train_stories, test_stories, groups = resolve_fmri_stories(
         config.fmri.fmri_repo_root, config.fmri.sessions
     )
     if len(test_stories) != 1:
         raise ValueError(f"Expected one shared test story, got {test_stories}")
-    masks = _load_masks(config)
+    masks = {}
+    for subject in config.fmri.subjects:
+        frame = significance.significant_voxels[str(subject)].sort_values("voxel_index")
+        expected = np.arange(len(frame))
+        if not np.array_equal(frame["voxel_index"].to_numpy(), expected):
+            raise ValueError(f"Non-contiguous voxel indices for {subject}")
+        masks[subject] = frame["sig"].astype(bool).to_numpy()
+        if not masks[subject].any():
+            raise ValueError(f"No significant voxels found for {subject}")
     manifest = target_manifest(config.fmri.subjects, masks)
-    manifest.to_csv(output_dir / "target_manifest.csv", index=False)
+    artifact.save_field("target_manifest", manifest, overwrite=config.refresh)
     n_targets = len(manifest)
 
-    method_names = ["rrr", "pca"] if config.source_mode == "within_fmri" else list(source_unit_dirs)
-    missing_jobs = [
-        (method, rank)
-        for method in method_names
-        for rank in ranks
-        if config.refresh or not (output_dir / method / f"k{rank}" / "metrics.npz").exists()
-    ]
-    full_metrics_path = output_dir / "full" / "metrics.npz"
-    cached_full = None if config.refresh else _load_metric_arrays(full_metrics_path, n_targets)
+    method_names = ["rrr", "pca"] if config.source_mode == "within_fmri" else ["rrr"]
+    if source is not None and source.load_collection("input_factors", {"method": "pca"}):
+        method_names.append("pca")
+    plan = artifact.resume_plan(method_names, ranks, refresh=config.refresh)
+    missing_jobs = plan["pending"]
+    cached_full = None
+    if not config.refresh and artifact.has_field("full_metrics"):
+        cached_full = artifact.load_field("full_metrics")
 
     bases_by_method = None
-    factor_metadata = None
-    factors_missing = False
-    if config.source_mode == "within_fmri" and not config.refresh:
-        bases_by_method, factor_metadata = _load_complete_within_bases(
-            output_dir,
-            ranks,
-            int(config.fmri.ndelays),
-            config.rrr_save_b_matrix,
-            n_targets,
-        )
-    if config.source_mode == "within_fmri" and bases_by_method is None:
-        factors_missing = True
+    factors_missing = config.source_mode == "within_fmri" and any(
+        config.refresh or not artifact.has_field(
+            "input_factors", selector=artifact._selector(method, rank)
+        ) for method in method_names for rank in ranks
+    )
 
     need_full_fit = cached_full is None or factors_missing
     need_data = need_full_fit or bool(missing_jobs)
@@ -618,7 +506,6 @@ def run_config(config: FMRICrossDatasetRRRConfig) -> None:
                 full_test.stimulus,
                 cv,
                 config,
-                output_dir / "full",
                 {
                     "script": "fmri_cross_dataset_rrr",
                     "method": "full",
@@ -632,41 +519,60 @@ def run_config(config: FMRICrossDatasetRRRConfig) -> None:
             full_test.responses, full_fit.test_prediction
         )
         full_r2_arr = _r2_per_target(full_test.responses, full_fit.test_prediction)
-        full_metrics_path.parent.mkdir(parents=True, exist_ok=True)
-        np.savez_compressed(
-            full_metrics_path,
-            corr_per_target=full_corr_arr,
-            r2_per_target=full_r2_arr,
-            best_alphas=full_fit.best_alphas,
-        )
+        artifact.save_field("full_metrics", {
+            "corr_per_target": full_corr_arr, "r2_per_target": full_r2_arr,
+            "best_alphas": full_fit.best_alphas,
+        }, overwrite=config.refresh)
+        if config.ridge.log_alphas:
+            artifact.save_field("diagnostics", {
+                "alpha_grid": full_fit.alpha_grid,
+                "best_alphas": full_fit.best_alphas,
+            }, selector={"method": "full"}, overwrite=config.refresh)
     else:
-        full_corr_arr, full_r2_arr, _ = cached_full
+        full_corr_arr = np.asarray(cached_full["corr_per_target"])
+        full_r2_arr = np.asarray(cached_full["r2_per_target"])
         print("Reusing cached full-embedding ridge metrics", flush=True)
     full_corr = _fisher_mean(full_corr_arr)
     full_r2 = float(np.mean(full_r2_arr))
 
     if factors_missing:
         with _timed("fit within-fMRI RRR and PCA bases"):
-            bases_by_method, factor_metadata = _fit_within_fmri_bases(
-                full_train, full_fit, ambient_dim, config, output_dir
+            bases_by_method, factor_values = _fit_within_fmri_bases(
+                full_train, full_fit, ambient_dim, config
             )
+        for method, rank_bases in bases_by_method.items():
+            for rank, basis in rank_bases.items():
+                artifact.save_factors(method=method, rank=rank, factors=basis,
+                                      overwrite=config.refresh)
+        artifact.save_factors(method="rrr_full_fir", factors=factor_values["full_fir"],
+                              target_factors=factor_values["target"], overwrite=config.refresh)
+        artifact.save_factors(method="pca_full", factors=factor_values["pca_full"],
+                              overwrite=config.refresh)
+        for delay, block in enumerate(factor_values["delay_blocks"], start=1):
+            artifact.save_factors(method="rrr_delay", delay=delay, factors=block,
+                                  overwrite=config.refresh)
     elif config.source_mode == "cross_dataset" and missing_jobs:
         bases_by_method = {
             method: {
-                rank: aggregate_subspace_from_unit_dir(
-                    unit_dir,
-                    rank=rank,
-                    method=config.subspace_aggregation,
-                )
+                rank: aggregate_subspace_basis([
+                    value for selector, value in source.load_collection(
+                        "input_factors", {"method": method}
+                    ).items() if "fold" in dict(selector)
+                ], rank=rank, method=config.subspace_aggregation)
                 for rank in ranks
                 if (method, rank) in missing_jobs
             }
-            for method, unit_dir in source_unit_dirs.items()
+            for method in method_names
         }
-        factor_metadata = dict(source_unit_dirs)
     elif config.source_mode == "cross_dataset":
         bases_by_method = {}
-        factor_metadata = dict(source_unit_dirs)
+    elif not factors_missing:
+        bases_by_method = {
+            method: {rank: artifact.load_field(
+                "input_factors", selector=artifact._selector(method, rank)
+            ) for rank in ranks if (method, rank) in missing_jobs}
+            for method in method_names
+        }
 
     jobs = [
         (method, rank, bases_by_method[method][rank])
@@ -687,7 +593,6 @@ def run_config(config: FMRICrossDatasetRRRConfig) -> None:
         int(config.fmri.ndelays),
         bool(config.prefetch_rank_designs),
     ):
-        metrics_path = output_dir / method / f"k{rank}" / "metrics.npz"
         if train_design.shape[1] != int(config.fmri.ndelays) * rank:
             raise ValueError(
                 f"{method.upper()} rank {rank} FIR design has shape "
@@ -700,7 +605,6 @@ def run_config(config: FMRICrossDatasetRRRConfig) -> None:
                 test_design,
                 cv,
                 config,
-                metrics_path.parent,
                 {
                     "script": "fmri_cross_dataset_rrr",
                     "method": method,
@@ -713,13 +617,16 @@ def run_config(config: FMRICrossDatasetRRRConfig) -> None:
             full_test.responses, fitted.test_prediction
         )
         r2_arr = _r2_per_target(full_test.responses, fitted.test_prediction)
-        metrics_path.parent.mkdir(parents=True, exist_ok=True)
-        np.savez_compressed(
-            metrics_path,
-            corr_per_target=corr_arr,
-            r2_per_target=r2_arr,
-            best_alphas=fitted.best_alphas,
-        )
+        artifact.save_rank_metrics(method=method, rank=rank, metrics={
+            "corr_per_target": corr_arr, "r2_per_target": r2_arr,
+            "best_alphas": fitted.best_alphas,
+        }, overwrite=config.refresh)
+        if config.ridge.log_alphas:
+            artifact.save_field("diagnostics", {
+                "alpha_grid": fitted.alpha_grid,
+                "best_alphas": fitted.best_alphas,
+            }, selector={"method": method, "rank": rank},
+                overwrite=config.refresh)
         computed_metrics[(method, rank)] = (corr_arr, r2_arr)
         print(
             f"{method.upper()} rank={rank}: "
@@ -730,14 +637,12 @@ def run_config(config: FMRICrossDatasetRRRConfig) -> None:
     rows = []
     for method in method_names:
         for rank in ranks:
-            metrics_path = output_dir / method / f"k{rank}" / "metrics.npz"
             if (method, rank) in computed_metrics:
                 corr_arr, r2_arr = computed_metrics[(method, rank)]
             else:
-                loaded = _load_metric_arrays(metrics_path, n_targets)
-                if loaded is None:
-                    raise FileNotFoundError(f"Missing expected rank metrics: {metrics_path}")
-                corr_arr, r2_arr, _ = loaded
+                loaded = artifact.load_rank_metrics(method=method, rank=rank)
+                corr_arr = np.asarray(loaded["corr_per_target"])
+                r2_arr = np.asarray(loaded["r2_per_target"])
             row = {
                 "method": method,
                 "rank": rank,
@@ -761,10 +666,14 @@ def run_config(config: FMRICrossDatasetRRRConfig) -> None:
                 )
 
     frame = pd.DataFrame(rows).sort_values(["method", "rank"])
-    frame.to_csv(output_dir / "grid_results.csv", index=False)
-    _plot_results(frame, output_dir / "rank_analysis.png")
+    artifact.save_field("summary", frame, overwrite=True)
+    if config.plot:
+        figure = _plot_results(frame)
+        artifact.save_plot(name="rank_analysis", figure=figure,
+                           overwrite=True)
+        plt.close(figure)
     metadata = {
-        "source_factors": factor_metadata,
+        "source_artifact": source.identity_record() if source is not None else None,
         "source_mode": config.source_mode,
         "subspace_aggregation": config.subspace_aggregation,
         "rrr_svd_on_cpu": config.rrr_svd_on_cpu,
@@ -794,12 +703,16 @@ def run_config(config: FMRICrossDatasetRRRConfig) -> None:
         "pre_fir_training_shape": (
             list(full_train.pre_fir_stimulus.shape)
             if full_train is not None
-            else previous_metadata.get("pre_fir_training_shape")
+            else None
         ),
         "rank_grid": ranks,
         "ceiling": "fresh_full_embedding_ridge",
     }
-    (output_dir / "metadata.json").write_text(json.dumps(metadata, indent=2))
+    artifact.save_field("metadata", metadata, overwrite=True)
+    required = {"rank_metrics": [artifact._selector(method, rank)
+                                  for method in method_names for rank in ranks]}
+    artifact.mark_complete(required)
+    return artifact
 
 
 def main() -> None:

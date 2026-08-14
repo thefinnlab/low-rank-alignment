@@ -9,7 +9,6 @@ encoding:
   - 3
   - 7
   - 10
-  run_name: null
   batch: false
   num_folds: 5
   shared_word_selection: true
@@ -19,9 +18,6 @@ encoding:
     - 0
     - 12
     - 24
-output_dir: null
-sig_dir: null
-rrr_output_dir: null
 mode: cross_subject
 rank_grid:
 - 1
@@ -43,3 +39,11 @@ null_augmented_repeats: 50
 null_augmented_reference_rank: 2048
 null_augmented_min_shift: 50
 null_augmented_seed: 42
+results_root: results
+plot: true
+significance_artifact:
+  mode: sig_lags
+  dataset: brain-treebank-cars-2
+  offset: 0
+  model: pythia-1.4b
+  layer: '{layer}'

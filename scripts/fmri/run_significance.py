@@ -1,7 +1,8 @@
 """Find fMRI voxels predicted significantly in session-held-out encoding models."""
 
 import json
-from pathlib import Path
+import io
+from dataclasses import asdict
 from tqdm import tqdm
 
 import matplotlib.pyplot as plt
@@ -11,12 +12,12 @@ import torch
 from himalaya.backend import set_backend
 
 from src.core.config import FMRISignificanceConfig
-from src.utils.shared.alpha_grids import resolve_ridge_alphas, save_alpha_diagnostics
+from src.core.artifacts import ArtifactStore, normalize_model
+from src.utils.shared.alpha_grids import resolve_ridge_alphas
 from src.utils.shared.config import (
     expand_fmri_layer_configs,
     load_config,
     parse_args,
-    save_effective_config,
 )
 from src.utils.shared.encoding import extract_best_alphas, get_ridge_model_constructor
 from src.utils.shared.fmri import (
@@ -32,7 +33,67 @@ from src.utils.significance.fmri import bh_fdr, circular_shift_pvalues
 from src.utils.shared.tensors import to_numpy
 
 
-def _fit_oof(X, Y, story_slices, groups, config, output_dir):
+class Artifact(ArtifactStore):
+    """Storage contract for held-out-session fMRI significance."""
+
+    SCRIPT = "run_significance"
+    FIELD_CONTRACT = {
+        "effective_config": True,
+        "significant_voxels": True,
+        "ridge_alphas": True,
+        "null_metadata": True,
+        "voxel_filter": True,
+        "run_metadata": True,
+        "alpha_diagnostics": False,
+        "plots": False,
+    }
+
+    def __init__(self, *, mode="held_out_session", dataset="deep-fmri", offset=0,
+                 model="gpt2-xl", layer=24, variant=None, results_root="results"):
+        self._init_store(mode=mode, dataset=dataset, offset=offset, model=model,
+                         layer=layer, variant=variant, results_root=results_root)
+
+    @classmethod
+    def from_config(cls, config):
+        return cls(model=normalize_model(config.model_dir), layer=config.layer,
+                   results_root=getattr(config, "results_root", "results"))
+
+    def save_subject(self, subject, **fields):
+        selector = {"subject": str(subject)}
+        overwrite = fields.pop("overwrite", False)
+        for field, value in fields.items():
+            if value is not None:
+                if field == "plots":
+                    buffer = io.BytesIO()
+                    value.savefig(buffer, format="png", dpi=160)
+                    plt.close(value)
+                    value = buffer.getvalue()
+                self.save_field(field, value, selector=selector, overwrite=overwrite)
+
+    def load_artifacts(self, fields, selectors=None):
+        selectors = selectors or {}
+        subject_fields = {"significant_voxels", "ridge_alphas", "null_metadata",
+                          "voxel_filter", "alpha_diagnostics", "plots"}
+        for field in fields:
+            if field in subject_fields:
+                filters = ({"subject": selectors["subjects"]}
+                           if selectors.get("subjects") else None)
+                collection = self.load_collection(field, filters)
+                setattr(self, field, {
+                    dict(selector)["subject"]: value
+                    for selector, value in collection.items()
+                })
+            else:
+                setattr(self, field, self.load_field(field))
+        return self
+
+    def save_artifacts(self, *, effective_config, run_metadata, plot=True,
+                       overwrite=False):
+        self.save_field("effective_config", effective_config, overwrite=overwrite)
+        self.save_field("run_metadata", run_metadata, overwrite=overwrite)
+
+
+def _fit_oof(X, Y, story_slices, groups, config):
     predictions = np.zeros_like(Y, dtype=np.float32)
     best_alphas = []
     outer_folds = session_cv_splits(story_slices, groups)
@@ -41,7 +102,6 @@ def _fit_oof(X, Y, story_slices, groups, config, output_dir):
     for fold, ((train_idx, test_idx), held_out_session) in tqdm(enumerate(
         zip(outer_folds, sessions)
     ), desc="folds"):
-        fold_dir = Path(output_dir) / f"fold_{fold}"
         context = {
             "script": "fmri_significance",
             "fold": fold,
@@ -54,7 +114,7 @@ def _fit_oof(X, Y, story_slices, groups, config, output_dir):
             X[train_idx],
             standardize=False,
             context=context,
-            cache_dir=str(fold_dir),
+            cache_dir=None,
             policy=config.ridge.alpha_grid,
         )
         inner = remap_inner_splits(
@@ -72,15 +132,10 @@ def _fit_oof(X, Y, story_slices, groups, config, output_dir):
         predictions[test_idx] = to_numpy(model.predict(X[test_idx])).astype(np.float32)
         selected = extract_best_alphas(model)
         best_alphas.append(selected)
-        if config.ridge.log_alphas:
-            save_alpha_diagnostics(
-                str(fold_dir), alphas, best_alphas=[selected], context=context,
-                policy=config.ridge.alpha_grid,
-            )
     return predictions, best_alphas
 
 
-def _save_acf_diagnostic(path: Path, true, predicted, story_slices, observed):
+def _acf_diagnostic_figure(true, predicted, story_slices, observed):
     voxel = int(np.nanargmax(observed))
     max_lag = 30
 
@@ -106,13 +161,10 @@ def _save_acf_diagnostic(path: Path, true, predicted, story_slices, observed):
     ax.set(xlabel="Lag (TR)", ylabel="Autocorrelation", title=f"Voxel {voxel} ACF")
     ax.legend()
     fig.tight_layout()
-    fig.savefig(path, dpi=160)
-    plt.close(fig)
+    return fig
 
 
-def _analyze_subject_block(
-    subjects, config, embeddings, train_stories, groups, voxel_masks
-):
+def _analyze_subject_block(subjects, config, embeddings, train_stories, groups, voxel_masks):
     prepared = prepare_fmri_data(
         config.fmri.fmri_repo_root,
         train_stories,
@@ -122,16 +174,12 @@ def _analyze_subject_block(
         subjects=subjects,
         voxel_masks=voxel_masks,
     )
-    block_name = subjects[0] if len(subjects) == 1 else "combined"
-    block_dir = Path(config.output_dir) / "fits" / block_name
-    block_dir.mkdir(parents=True, exist_ok=True)
     predictions, best_alphas = _fit_oof(
         prepared.stimulus,
         prepared.responses,
         prepared.story_slices,
         groups,
         config,
-        block_dir,
     )
     return prepared, predictions, best_alphas
 
@@ -140,9 +188,7 @@ def run_config(config: FMRISignificanceConfig) -> None:
     config.validate()
     if torch.cuda.is_available():
         set_backend("torch_cuda")
-    output_dir = Path(config.output_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
-    save_effective_config(config, output_dir)
+    artifact = Artifact.from_config(config).begin(config=config, refresh=config.refresh)
     train_stories, test_stories, groups = resolve_fmri_stories(
         config.fmri.fmri_repo_root, config.fmri.sessions
     )
@@ -159,6 +205,15 @@ def run_config(config: FMRISignificanceConfig) -> None:
     retained_counts = {
         subject: int(mask.sum()) for subject, mask in voxel_masks.items()
     }
+    subject_fields = ("significant_voxels", "ridge_alphas", "null_metadata", "voxel_filter")
+    completed_subjects = {
+        subject for subject in config.fmri.subjects
+        if not config.refresh and all(
+            artifact.has_field(field, selector={"subject": str(subject)})
+            for field in subject_fields
+        )
+    }
+    pending_subjects = [s for s in config.fmri.subjects if s not in completed_subjects]
     for subject, mask in voxel_masks.items():
         print(
             f"{subject}: excluding {int((~mask).sum()):,}/{len(mask):,} "
@@ -166,7 +221,7 @@ def run_config(config: FMRISignificanceConfig) -> None:
         )
     subject_payloads = {}
     if config.batch_subjects:
-        for subject in tqdm(config.fmri.subjects, desc="Running subjects"):
+        for subject in tqdm(pending_subjects, desc="Running subjects"):
             prepared, predictions, best_alphas = _analyze_subject_block(
                 [subject], config, embeddings, train_stories, groups, voxel_masks
             )
@@ -176,7 +231,7 @@ def run_config(config: FMRISignificanceConfig) -> None:
                 prepared.story_slices,
                 best_alphas,
             )
-    else:
+    elif pending_subjects:
         prepared, predictions, best_alphas = _analyze_subject_block(
             config.fmri.subjects, config, embeddings, train_stories, groups,
             voxel_masks,
@@ -193,6 +248,9 @@ def run_config(config: FMRISignificanceConfig) -> None:
             cursor = stop
 
     for subject_index, subject in enumerate(config.fmri.subjects):
+        if subject in completed_subjects:
+            print(f"{subject}: reusing complete subject checkpoint")
+            continue
         true, predicted, story_slices, best_alphas = subject_payloads[subject]
         pvalues, null_info = circular_shift_pvalues(
             true,
@@ -215,9 +273,7 @@ def run_config(config: FMRISignificanceConfig) -> None:
         full_pvalues[voxel_mask] = pvalues
         full_qvalues[voxel_mask] = qvalues
         full_significant[voxel_mask] = significant
-        subject_dir = output_dir / "subjects" / subject
-        subject_dir.mkdir(parents=True, exist_ok=True)
-        pd.DataFrame(
+        significance = pd.DataFrame(
             {
                 "subject": subject,
                 "voxel_index": np.arange(len(voxel_mask)),
@@ -227,28 +283,32 @@ def run_config(config: FMRISignificanceConfig) -> None:
                 "q_value": full_qvalues,
                 "sig": full_significant,
             }
-        ).to_csv(subject_dir / "significance.csv", index=False)
-        np.savez_compressed(
-            subject_dir / "ridge_alphas.npz",
-            voxel_indices=retained_indices,
-            **{f"fold_{fold}": values for fold, values in enumerate(best_alphas)},
         )
-        (subject_dir / "null_metadata.json").write_text(
-            json.dumps(null_info, indent=2)
-        )
-        _save_acf_diagnostic(
-            subject_dir / "acf_diagnostic.png",
-            true,
-            predicted,
-            story_slices,
-            observed,
-        )
-        (subject_dir / "voxel_filter.json").write_text(json.dumps({
+        voxel_filter = {
             "total_voxels": len(voxel_mask),
             "retained_voxels": int(voxel_mask.sum()),
             "excluded_voxels": int((~voxel_mask).sum()),
             "excluded_by_story": excluded_by_story[subject],
-        }, indent=2))
+        }
+        plot_payload = None
+        if getattr(config, "plot", True):
+            figure = _acf_diagnostic_figure(
+                true, predicted, story_slices, observed
+            )
+            plot_payload = figure
+        artifact.save_subject(
+            subject,
+            significant_voxels=significance,
+            ridge_alphas={"voxel_indices": retained_indices,
+                          "folds": list(best_alphas)},
+            null_metadata=null_info,
+            voxel_filter=voxel_filter,
+            alpha_diagnostics=(
+                {"best_alphas": list(best_alphas)} if config.ridge.log_alphas else None
+            ),
+            plots=plot_payload,
+            overwrite=config.refresh,
+        )
         print(
             f"{subject}: {int(significant.sum()):,}/{int(voxel_mask.sum()):,} "
             "retained voxels significant"
@@ -275,7 +335,14 @@ def run_config(config: FMRISignificanceConfig) -> None:
             subject: int((~mask).sum()) for subject, mask in voxel_masks.items()
         },
     }
-    (output_dir / "metadata.json").write_text(json.dumps(metadata, indent=2))
+    artifact.save_artifacts(effective_config=asdict(config), run_metadata=metadata,
+                            plot=getattr(config, "plot", True), overwrite=True)
+    subject_selectors = [{"subject": str(subject)} for subject in config.fmri.subjects]
+    artifact.mark_complete({
+        field: subject_selectors
+        for field in ("significant_voxels", "ridge_alphas", "null_metadata", "voxel_filter")
+    })
+    return artifact
 
 
 def main() -> None:
