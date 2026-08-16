@@ -5,14 +5,13 @@ from __future__ import annotations
 import io
 from copy import deepcopy
 from dataclasses import asdict, dataclass, field, fields
+from pathlib import Path
 from typing import ClassVar
 
 import numpy as np
 import pandas as pd
 
-from src.core.artifacts import (
-    ArtifactStore, content_sha256, normalize_dataset, normalize_model,
-)
+from src.core.artifacts import ArtifactStore, normalize_dataset, normalize_model
 from src.core.config import FMRICrossDatasetRRRConfig, RRRConfig, ScriptMode
 from src.core.registry import resolve_dataset_context
 from src.utils.shared.config import (
@@ -147,12 +146,18 @@ class Artifact(ArtifactStore):
     """Unified storage and loading contract for iEEG and fMRI RRR results."""
 
     SCRIPT = "run_rrr"
+    SELECTOR_ORDER = (
+        "subject", "method", "region", "temporal_window", "held_out_subject",
+        "loso_phase", "cross_dataset_source", "basis", "delay", "rank", "fold",
+        "name",
+    )
     FIELD_CONTRACT = {
         "effective_config": True, "upstream_identities": True,
         "target_manifest": True, "input_factors": False,
         "target_factors": False, "full_metrics": True,
-        "rank_metrics": True, "mean_results": True, "metadata": False,
-        "diagnostics": False, "plots": False,
+        "rank_metrics": True, "fold_results": False, "mean_results": True,
+        "metadata": False, "unit_metadata": False, "diagnostics": False,
+        "plots": False,
     }
 
     def __init__(self, *, mode="internal", dataset="podcast", offset=0,
@@ -174,7 +179,7 @@ class Artifact(ArtifactStore):
             results_root=config.results_root,
         )
         artifact.variant_extras = (
-            {"atlas_sha256": content_sha256(config.atlas_path)} if config.atlas_path else {}
+            {"atlas": Path(config.atlas_path).stem} if config.atlas_path else {}
         )
         return artifact
 
@@ -193,9 +198,11 @@ class Artifact(ArtifactStore):
 
     def save_factors(self, *, unit=None, fold=None, method=None, rank=None,
                      input_factors=None, factors=None, target_factors=None,
-                     delay=None, overwrite=False):
+                     delay=None, basis=None, overwrite=False):
         value = input_factors if input_factors is not None else factors
-        selector = self._selector(unit, fold=fold, method=method, rank=rank, delay=delay)
+        selector = self._selector(
+            unit, fold=fold, method=method, rank=rank, delay=delay, basis=basis
+        )
         self.save_field("input_factors", value, selector=selector, overwrite=overwrite)
         if target_factors is not None:
             self.save_field("target_factors", target_factors, selector=selector,
@@ -254,6 +261,20 @@ class Artifact(ArtifactStore):
             frame["r2"] = frame[f"{primary}_r2"]
         self.save_mean_results(results=frame, unit=unit, overwrite=overwrite)
 
+    def save_fold_results(self, *, results, unit=None, overwrite=False):
+        self.save_field("fold_results", results, selector=self._selector(unit),
+                        overwrite=overwrite)
+
+    def load_fold_results(self, selectors=None):
+        frames = []
+        for selector, value in self.load_collection("fold_results", selectors).items():
+            frame = value.copy() if isinstance(value, pd.DataFrame) else pd.DataFrame(value)
+            for key, item in dict(selector).items():
+                if key not in frame:
+                    frame[key] = item
+            frames.append(frame)
+        return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
+
     def load_summary(self, *, unit):
         return self.load_field("mean_results", selector=self._selector(unit))
 
@@ -262,9 +283,15 @@ class Artifact(ArtifactStore):
                         selector=self._selector(unit), overwrite=overwrite)
 
     def save_diagnostics(self, *, diagnostics, unit=None, rank=None, fold=None,
-                         overwrite=False):
+                         name=None, overwrite=False):
         self.save_field("diagnostics", diagnostics,
-                        selector=self._selector(unit, rank=rank, fold=fold),
+                        selector=self._selector(
+                            unit, rank=rank, fold=fold, name=name
+                        ),
+                        overwrite=overwrite)
+
+    def save_unit_metadata(self, *, metadata, unit=None, overwrite=False):
+        self.save_field("unit_metadata", metadata, selector=self._selector(unit),
                         overwrite=overwrite)
 
     def resume_plan(self, *, unit, ranks, folds, require_target_factors=False,

@@ -6,11 +6,9 @@ Producer scripts subclass :class:`ArtifactStore` and declare their own contracts
 
 from __future__ import annotations
 
-import hashlib
 import io
 import json
 import os
-import pickle
 import re
 import tempfile
 from dataclasses import asdict, is_dataclass
@@ -18,7 +16,7 @@ from pathlib import Path
 from typing import Any, ClassVar
 
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 _OPERATIONAL_KEYS = {"refresh", "plot", "results_root"}
 
 
@@ -51,7 +49,7 @@ def _primitive(value: Any) -> Any:
 
 
 def normalized_config(value: Any, *, drop_paths: bool = True) -> dict:
-    """Return deterministic configuration data suitable for variant hashing."""
+    """Return deterministic configuration data suitable for artifact identity."""
     raw = _primitive(value)
     if not isinstance(raw, dict):
         raise TypeError("Artifact configuration must be a dataclass or mapping")
@@ -73,22 +71,34 @@ def normalized_config(value: Any, *, drop_paths: bool = True) -> dict:
     return clean(raw)
 
 
-def content_sha256(path: str | os.PathLike[str]) -> str:
-    digest = hashlib.sha256()
-    with open(path, "rb") as handle:
-        for block in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(block)
-    return digest.hexdigest()
-
-
-def variant_digest(config: Any, upstreams: list[dict] | None = None, extras: dict | None = None) -> str:
-    payload = {
-        "config": normalized_config(config),
-        "upstreams": _primitive(upstreams or []),
-        "extras": _primitive(extras or {}),
-    }
-    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()
-    return hashlib.sha256(encoded).hexdigest()
+def readable_variant(config: Any, upstreams: list[dict] | None = None,
+                     extras: dict | None = None) -> str:
+    """Return a stable, human-readable variant path without content hashes."""
+    normalized = normalized_config(config)
+    explicit = normalized.get("variant_name")
+    if explicit:
+        return _relative_components(str(explicit), "variant name")
+    rrr_sources = [item for item in (upstreams or [])
+                   if item.get("script") == "run_rrr"]
+    if rrr_sources:
+        parts = []
+        for index, source in enumerate(rrr_sources):
+            if len(rrr_sources) > 1:
+                parts.extend((f"source-{index + 1}",))
+            else:
+                parts.extend(("source",))
+            parts.extend((
+                str(source["mode"]), str(source["dataset"]),
+                f"offset-{int(source.get('offset', 0))}", str(source["model"]),
+                f"layer-{'none' if source.get('layer') is None else int(source['layer'])}",
+            ))
+        return "/".join(_component(part, "variant component") for part in parts)
+    if normalized.get("orthonormalize_a_per_rank"):
+        return "orthonormalized"
+    if extras:
+        parts = [f"{key}-{value}" for key, value in sorted(_primitive(extras).items())]
+        return "/".join(_component(part, "variant component") for part in parts)
+    return "default"
 
 
 def normalize_dataset(dataset: str, stimulus: str | None = None) -> str:
@@ -123,10 +133,11 @@ def _component(value: Any, label: str) -> str:
     return text
 
 
-def selector_key(selector: dict | None) -> str:
-    selector = _primitive(selector or {})
-    encoded = json.dumps(selector, sort_keys=True, separators=(",", ":")).encode()
-    return hashlib.sha256(encoded).hexdigest()
+def _relative_components(value: str, label: str) -> str:
+    parts = Path(value).parts
+    if not parts or Path(value).is_absolute():
+        raise ValueError(f"Invalid {label}: {value!r}")
+    return "/".join(_component(part, label) for part in parts)
 
 
 class ArtifactStore:
@@ -134,6 +145,7 @@ class ArtifactStore:
 
     SCRIPT: ClassVar[str]
     FIELD_CONTRACT: ClassVar[dict[str, bool]]
+    SELECTOR_ORDER: ClassVar[tuple[str, ...]] = ()
 
     def _init_store(
         self,
@@ -185,7 +197,7 @@ class ArtifactStore:
     def _variant_dir(self) -> Path:
         if self.variant is None:
             self._resolve_variant()
-        return self._leaf() / "variants" / str(self.variant)
+        return self._leaf() / _relative_components(str(self.variant), "variant")
 
     def _manifest_path(self) -> Path:
         return self._variant_dir() / "manifest.json"
@@ -205,19 +217,26 @@ class ArtifactStore:
 
     def begin(self, *, config: Any, upstreams: list[dict] | None = None,
               refresh: bool = False, variant_extras: dict | None = None) -> "ArtifactStore":
-        computed = variant_digest(config, upstreams, variant_extras)
-        if self.variant is not None and self.variant != computed:
-            raise ValueError(f"Explicit variant {self.variant} does not match effective configuration {computed}")
-        self.variant = computed
+        computed = readable_variant(config, upstreams, variant_extras)
+        selected = _relative_components(str(self.variant), "variant") if self.variant else computed
+        self.variant = selected
         path = self._manifest_path()
         if path.exists() and not refresh:
             manifest = self._read_json(path)
+            expected_config = normalized_config(config)
+            expected_upstreams = _primitive(upstreams or [])
+            if (manifest.get("configuration") != expected_config
+                    or manifest.get("upstreams") != expected_upstreams):
+                raise ArtifactAmbiguityError(
+                    f"Readable variant {selected!r} already represents a different "
+                    "configuration; set an explicit variant_name"
+                )
             self.complete = bool(manifest.get("complete"))
             return self
         manifest = {
             "schema_version": SCHEMA_VERSION,
             "identity": self.identity,
-            "variant": computed,
+            "variant": selected,
             "configuration": normalized_config(config),
             "upstreams": _primitive(upstreams or []),
             "declared_fields": {
@@ -227,27 +246,27 @@ class ArtifactStore:
             "complete": False,
         }
         self._write_json(path, manifest)
-        self._update_index(computed, complete=False)
+        self._update_index(selected, complete=False)
         return self
 
     def save_field(self, field: str, value: Any, *, selector: dict | None = None,
                    overwrite: bool = False) -> None:
         self._validate_field(field)
         manifest = self._manifest()
-        key = selector_key(selector)
+        key = self._selector_key(selector)
         existing = manifest["entries"].get(field, {}).get(key)
         if existing and not overwrite:
             return
-        codec, suffix, payload = self._encode(value)
-        relative = Path("fields") / field / f"{key}{suffix}"
+        codec, suffix, payload, codec_metadata = self._encode(field, value)
+        relative = self._field_path(field, selector or {}, suffix)
         destination = self._variant_dir() / relative
         self._atomic_bytes(destination, payload)
         entry = {
             "selector": _primitive(selector or {}),
             "codec": codec,
             "file": relative.as_posix(),
-            "sha256": hashlib.sha256(payload).hexdigest(),
             "size": len(payload),
+            **codec_metadata,
         }
         manifest["entries"].setdefault(field, {})[key] = entry
         manifest["complete"] = False
@@ -256,18 +275,22 @@ class ArtifactStore:
 
     def has_field(self, field: str, *, selector: dict | None = None) -> bool:
         self._validate_field(field)
-        return selector_key(selector) in self._manifest().get("entries", {}).get(field, {})
+        return self._selector_key(selector) in self._manifest().get("entries", {}).get(field, {})
 
     def load_field(self, field: str, *, selector: dict | None = None) -> Any:
         self._validate_field(field)
-        entry = self._manifest().get("entries", {}).get(field, {}).get(selector_key(selector))
+        entry = self._manifest().get("entries", {}).get(field, {}).get(
+            self._selector_key(selector)
+        )
         if entry is None:
             raise KeyError(f"Artifact field {field!r} selector {selector or {}} is not saved")
         payload = (self._variant_dir() / entry["file"]).read_bytes()
-        digest = hashlib.sha256(payload).hexdigest()
-        if digest != entry["sha256"]:
-            raise ArtifactError(f"Checksum mismatch for field {field!r} selector {selector or {}}")
-        return self._decode(entry["codec"], payload)
+        try:
+            return self._decode(entry, payload)
+        except Exception as error:
+            raise ArtifactError(
+                f"Could not decode field {field!r} selector {selector or {}}"
+            ) from error
 
     def load_collection(self, field: str, filters: dict | None = None) -> dict:
         self._validate_field(field)
@@ -291,7 +314,7 @@ class ArtifactStore:
             required = self.FIELD_CONTRACT[field]
             selectors = required_selectors.get(field, [{}] if required else [])
             for selector in selectors:
-                if selector_key(selector) not in manifest["entries"].get(field, {}):
+                if self._selector_key(selector) not in manifest["entries"].get(field, {}):
                     missing.append((field, selector))
         if missing:
             raise ArtifactIncompleteError(f"Cannot complete Artifact; missing fields/selectors: {missing}")
@@ -310,6 +333,38 @@ class ArtifactStore:
     def _validate_field(self, field: str) -> None:
         if field not in self.FIELD_CONTRACT:
             raise ValueError(f"Unsupported {self.SCRIPT} Artifact field {field!r}; expected {sorted(self.FIELD_CONTRACT)}")
+
+    @classmethod
+    def _selector_key(cls, selector: dict | None) -> str:
+        selector = _primitive(selector or {})
+        positions = {key: index for index, key in enumerate(cls.SELECTOR_ORDER)}
+        keys = sorted(selector, key=lambda key: (
+            positions.get(key, len(positions)), key
+        ))
+        if not keys:
+            return "default"
+        return "/".join(
+            f"{_component(key, 'selector key')}-"
+            f"{_component(selector[key], 'selector value')}"
+            for key in keys
+        )
+
+    @classmethod
+    def _field_path(cls, field: str, selector: dict, suffix: str) -> Path:
+        selector = _primitive(selector)
+        name = selector.pop("name", None)
+        directory = Path(field)
+        key = cls._selector_key(selector)
+        if key != "default":
+            directory /= key
+        filename = _component(name, "field name") if name is not None else field
+        aliases = {
+            "input_factors": "factors", "target_factors": "target_factors",
+            "rank_metrics": "metrics", "full_metrics": "metrics",
+            "fold_results": "fold_results", "mean_results": "mean_results",
+        }
+        filename = aliases.get(field, filename)
+        return directory / (filename if filename.endswith(suffix) else f"{filename}{suffix}")
 
     def _update_index(self, variant: str, *, complete: bool) -> None:
         path = self._leaf() / "manifest.json"
@@ -348,39 +403,104 @@ class ArtifactStore:
         cls._atomic_bytes(path, json.dumps(value, indent=2, sort_keys=True, allow_nan=False).encode("utf-8"))
 
     @staticmethod
-    def _encode(value: Any) -> tuple[str, str, bytes]:
+    def _encode(field: str, value: Any) -> tuple[str, str, bytes, dict]:
         try:
             import numpy as np
             if isinstance(value, np.ndarray):
                 buffer = io.BytesIO()
                 np.save(buffer, value, allow_pickle=value.dtype == object)
-                return "npy", ".npy", buffer.getvalue()
+                return "npy", ".npy", buffer.getvalue(), {}
         except ImportError:
             pass
         try:
             import pandas as pd
             if isinstance(value, pd.DataFrame):
-                return "pandas-pickle", ".pkl", pickle.dumps(
-                    value, protocol=pickle.HIGHEST_PROTOCOL
-                )
+                payload = value.to_csv(index=False).encode("utf-8")
+                return "csv", ".csv", payload, {
+                    "columns": [str(column) for column in value.columns],
+                    "dtypes": {str(column): str(dtype)
+                               for column, dtype in value.dtypes.items()},
+                    "string_columns": [
+                        str(column) for column in value.columns
+                        if str(value[column].dtype) == "object"
+                        and all(isinstance(item, str) or pd.isna(item)
+                                for item in value[column])
+                    ],
+                }
         except ImportError:
             pass
+        if isinstance(value, bytes):
+            if field != "plots":
+                raise TypeError(f"Raw bytes are only supported for plot fields, not {field}")
+            return "png", ".png", value, {}
         if value is None or isinstance(value, (str, int, float, bool, list, dict)):
             try:
-                return "json", ".json", json.dumps(
-                    value, sort_keys=True, allow_nan=False
-                ).encode("utf-8")
+                payload = json.dumps(value, sort_keys=True, allow_nan=False).encode("utf-8")
+                return "json", ".json", payload, {}
             except (TypeError, ValueError):
                 pass
-        return "pickle", ".pkl", pickle.dumps(value, protocol=pickle.HIGHEST_PROTOCOL)
+        if field == "encoding_results":
+            import joblib
+            buffer = io.BytesIO()
+            joblib.dump(value, buffer)
+            return "joblib", ".joblib", buffer.getvalue(), {}
+        if isinstance(value, dict):
+            try:
+                import numpy as np
+                buffer = io.BytesIO()
+                np.savez(buffer, **value)
+                return "npz", ".npz", buffer.getvalue(), {
+                    "npz_types": {
+                        str(key): "ndarray" if isinstance(item, np.ndarray)
+                        else "python"
+                        for key, item in value.items()
+                    }
+                }
+            except (TypeError, ValueError):
+                pass
+        raise TypeError(
+            f"Artifact field {field!r} has no portable codec for {type(value).__name__}"
+        )
 
     @staticmethod
-    def _decode(codec: str, payload: bytes) -> Any:
+    def _decode(entry: dict, payload: bytes) -> Any:
+        codec = entry["codec"]
         if codec == "json":
             return json.loads(payload)
         if codec == "npy":
             import numpy as np
             return np.load(io.BytesIO(payload), allow_pickle=True)
-        if codec in {"pickle", "pandas-pickle"}:
-            return pickle.loads(payload)
+        if codec == "npz":
+            import numpy as np
+            with np.load(io.BytesIO(payload), allow_pickle=True) as loaded:
+                result = {}
+                for key in loaded.files:
+                    value = loaded[key]
+                    if (entry.get("npz_types", {}).get(key) == "python"
+                            and value.shape == ()):
+                        value = value.item()
+                    result[key] = value
+                return result
+        if codec == "csv":
+            import pandas as pd
+            frame = pd.read_csv(
+                io.BytesIO(payload),
+                dtype={column: str for column in entry.get("string_columns", [])},
+            )
+            for column, dtype in entry.get("dtypes", {}).items():
+                if column not in frame:
+                    continue
+                if dtype == "object":
+                    frame[column] = frame[column].astype(object)
+                else:
+                    try:
+                        frame[column] = frame[column].astype(dtype)
+                    except (TypeError, ValueError):
+                        pass
+            return frame
+        if codec == "png":
+            return payload
+        if codec == "joblib":
+            import joblib
+            return joblib.load(io.BytesIO(payload))
         raise ArtifactError(f"Unsupported Artifact codec {codec!r}")

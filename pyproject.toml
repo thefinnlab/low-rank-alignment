@@ -13,6 +13,7 @@ dependencies = [
     "torchvision",
     "torchaudio",
     "marimo>=0.23.10",
+    "plotly>=6.3.0",
     "matplotlib>=3.11.0",
     "nilearn>=0.13.1",
     "mne>=1.12.1",

@@ -94,6 +94,7 @@ class Artifact(ArtifactStore):
     """Unified storage contract for significant neural targets."""
 
     SCRIPT = "run_significance"
+    SELECTOR_ORDER = ("subject", "name")
     FIELD_CONTRACT = {
         "effective_config": True,
         "target_significance": False,
@@ -131,8 +132,11 @@ class Artifact(ArtifactStore):
                    model=normalize_model(config.model_dir), layer=config.layer,
                    results_root=config.results_root)
 
-    def save_subject_field(self, field, subject, value, *, overwrite=False):
-        self.save_field(field, value, selector={"subject": str(subject)},
+    def save_subject_field(self, field, subject, value, *, name=None, overwrite=False):
+        selector = {"subject": str(subject)}
+        if name is not None:
+            selector["name"] = str(name)
+        self.save_field(field, value, selector=selector,
                         overwrite=overwrite)
 
     def load_subject_field(self, field, subjects=None):

@@ -11,6 +11,7 @@ processed_data/gpt2-xl-local
 foundation_model_weights/
 gpt2-xl-local/
 model_cache/
+old_result_formatted/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

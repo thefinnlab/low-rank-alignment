@@ -28,7 +28,7 @@ def test_canonical_identity_and_defaults(tmp_path):
     assert normalize_model("glove", glove_dim=300) == "glove-300"
 
 
-def test_selective_fields_partial_completion_and_checksums(tmp_path):
+def test_selective_fields_partial_completion_and_decode_errors(tmp_path):
     artifact = SignificanceArtifact(results_root=tmp_path).begin(
         config={"subjects": [1], "refresh": False}
     )
@@ -49,23 +49,29 @@ def test_selective_fields_partial_completion_and_checksums(tmp_path):
     entry = next(iter(manifest["entries"]["encoding_results"].values()))
     payload = artifact._variant_dir() / entry["file"]
     payload.write_bytes(payload.read_bytes() + b"corrupt")
-    with pytest.raises(ArtifactError, match="Checksum mismatch"):
+    with pytest.raises(ArtifactError, match="Could not decode"):
         artifact.load_field("encoding_results", selector={"subject": "1"})
 
 
 def test_variant_ambiguity_and_refresh(tmp_path):
-    for value in (1, 2):
-        artifact = SignificanceArtifact(results_root=tmp_path).begin(
+    for value, variant in ((1, "first"), (2, "second")):
+        artifact = SignificanceArtifact(results_root=tmp_path, variant=variant).begin(
             config={"scientific_parameter": value}
         )
         artifact.save_field("effective_config", {"value": value})
     with pytest.raises(ArtifactAmbiguityError):
         SignificanceArtifact(results_root=tmp_path).load_artifacts(["effective_config"])
 
-    artifact = SignificanceArtifact(results_root=tmp_path).begin(
+    artifact = SignificanceArtifact(results_root=tmp_path, variant="first").begin(
         config={"scientific_parameter": 1}, refresh=True
     )
     assert not artifact.has_field("effective_config")
+
+
+def test_readable_variant_collision_requires_explicit_name(tmp_path):
+    SignificanceArtifact(results_root=tmp_path).begin(config={"parameter": 1})
+    with pytest.raises(ArtifactAmbiguityError, match="variant_name"):
+        SignificanceArtifact(results_root=tmp_path).begin(config={"parameter": 2})
 
 
 def test_rrr_manifest_resume_is_selector_complete(tmp_path):
@@ -81,10 +87,57 @@ def test_rrr_manifest_resume_is_selector_complete(tmp_path):
     assert plan["ranks_by_fold"] == {0: [2]}
 
 
-def test_atomic_manifest_contains_codec_and_checksum(tmp_path):
+def test_atomic_manifest_contains_codec_and_size(tmp_path):
     artifact = SignificanceArtifact(results_root=tmp_path).begin(config={"x": 1})
     artifact.save_field("effective_config", {"x": 1})
     entry = next(iter(artifact.manifest()["entries"]["effective_config"].values()))
     assert entry["codec"] == "json"
-    assert len(entry["sha256"]) == 64
+    assert entry["size"] > 0
+    assert "sha256" not in entry
     assert not list(tmp_path.rglob(".*.tmp"))
+
+
+def test_native_codecs_and_readable_selector_paths(tmp_path):
+    import pandas as pd
+
+    artifact = RRRArtifact(results_root=tmp_path).begin(config={"rank_grid": [1]})
+    unit = UnitSelector(method="rrr")
+    artifact.save_rank_metrics(
+        unit=unit, rank=1, fold=0, metrics={"corr": np.array([0.25])}
+    )
+    artifact.save_fold_results(
+        unit=unit, results=pd.DataFrame({"fold": [0], "score": [0.25]})
+    )
+    artifact.save_field(
+        "plots", b"png", selector={"subject": "UTS01", "name": "acf_diagnostic"}
+    )
+
+    files = {path.relative_to(artifact._variant_dir()).as_posix()
+             for path in artifact._variant_dir().rglob("*") if path.is_file()}
+    assert "rank_metrics/method-rrr/rank-1/fold-0/metrics.npz" in files
+    assert "fold_results/method-rrr/fold_results.csv" in files
+    assert "plots/subject-UTS01/acf_diagnostic.png" in files
+
+
+def test_selector_order_is_owned_by_each_script(tmp_path):
+    significance = SignificanceArtifact(results_root=tmp_path).begin(config={"x": 1})
+    significance.save_field(
+        "diagnostics", {"ok": True},
+        selector={"z_custom": "last", "subject": "UTS01"},
+    )
+    significance_entry = next(iter(
+        significance.manifest()["entries"]["diagnostics"].values()
+    ))
+    assert significance_entry["file"] == (
+        "diagnostics/subject-UTS01/z_custom-last/diagnostics.json"
+    )
+
+    rrr = RRRArtifact(results_root=tmp_path).begin(config={"rank_grid": [1]})
+    rrr.save_field(
+        "rank_metrics", {"corr": np.array([0.25])},
+        selector={"fold": 2, "method": "rrr", "rank": 64},
+    )
+    rrr_entry = next(iter(rrr.manifest()["entries"]["rank_metrics"].values()))
+    assert rrr_entry["file"] == (
+        "rank_metrics/method-rrr/rank-64/fold-2/metrics.npz"
+    )
