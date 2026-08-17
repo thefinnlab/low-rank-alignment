@@ -16,12 +16,14 @@ rank_grid:
 - 512
 - 1024
 - 1600
-significance_artifact:
-  mode: sig_lags
-  dataset: podcast
-  offset: 0
-  model: random-gpt2-xl
-  layer: '{layer}'
+significance_selection:
+  mode: within-layer
+  reference_artifact:
+    mode: sig_lags
+    dataset: podcast
+    offset: 0
+    model: random-gpt2-xl
+    layer: '{layer}'
 subspace_aggregation: extrinsic
 rrr_source:
   mode: internal

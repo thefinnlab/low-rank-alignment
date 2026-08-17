@@ -8,6 +8,7 @@ COVERED = [
     Path("src/utils/rrr/rrr_ieeg.py"),
     Path("src/utils/significance/significance_fmri.py"),
     Path("src/utils/rrr/rrr_fmri.py"),
+    Path("src/utils/rrr/significance.py"),
     Path("src/utils/rrr/inputs.py"),
     Path("src/utils/rrr/analysis.py"),
 ]
@@ -33,6 +34,8 @@ def test_covered_analysis_has_no_legacy_result_storage_seams():
 def test_downstream_scripts_import_the_producing_artifact_directly():
     ieeg = Path("src/utils/rrr/rrr_ieeg.py").read_text(encoding="utf-8")
     fmri = Path("src/utils/rrr/rrr_fmri.py").read_text(encoding="utf-8")
-    assert "from scripts.run_significance import Artifact as SignificanceArtifact" in ieeg
-    assert "from scripts.run_significance import Artifact as SignificanceArtifact" in fmri
+    shared = Path("src/utils/rrr/significance.py").read_text(encoding="utf-8")
+    assert "load_significance_selection" in ieeg
+    assert "load_significance_selection" in fmri
+    assert "from scripts.run_significance import Artifact as SignificanceArtifact" in shared
     assert "from scripts.run_rrr import Artifact as IEEGRRRArtifact" in fmri

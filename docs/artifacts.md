@@ -15,8 +15,10 @@ The script components are `run_significance` and `run_rrr`. Dataset components a
 GloVe dimensions are part of the model (`glove-300`) and its layer is
 `layer-none`. Configured model directory names are otherwise preserved.
 
-Each canonical leaf contains readable variant subdirectories. Ordinary runs use
-`default`; cross-dataset runs describe their upstream identity under
+Each canonical leaf contains readable variant subdirectories. RRR variants include
+`significance-<selection-mode>-<digest>`, where the stable digest identifies the
+reference and expanded selection-source set. Cross-dataset runs also describe their
+RRR upstream identity under
 `source/<mode>/<dataset>/offset-<offset>/<model>/layer-<layer>`, and specialized
 runs use names such as `orthonormalized` or `atlas-<name>`. A configuration that
 would collide at the same readable location is rejected and must supply an
@@ -55,7 +57,12 @@ figures to coexist for one subject.
 
 ## Dependencies
 
-RRR constructs the unified significance Artifact from `significance_artifact`.
+RRR resolves significance through `significance_selection`. `within-layer` uses its
+single `reference_artifact`; `cross-model-layer` selects the OR-union of its explicit
+`artifacts`, while the reference continues to provide iEEG folds and encoding
+metadata. A union artifact may set `layer` to a list, which expands to one concrete
+Artifact identity per layer. The reference and every expanded selection Artifact are
+recorded as upstreams.
 Cross-dataset and multiview inputs use generic `rrr_source`/`source` identities;
 there are no modality-named dependency fields. `internal` identifies the ordinary
 within-dataset RRR producer for both modalities.

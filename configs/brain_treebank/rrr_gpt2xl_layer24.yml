@@ -15,12 +15,14 @@ rank_grid:
 - 512
 - 1024
 - 1600
-significance_artifact:
-  mode: sig_lags
-  dataset: brain-treebank-coraline
-  offset: 0
-  model: gpt2-xl
-  layer: '{layer}'
+significance_selection:
+  mode: within-layer
+  reference_artifact:
+    mode: sig_lags
+    dataset: brain-treebank-coraline
+    offset: 0
+    model: gpt2-xl
+    layer: '{layer}'
 ieeg:
   encoding:
     data_root: data/brain-treebank

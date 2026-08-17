@@ -11,7 +11,12 @@ import numpy as np
 import pandas as pd
 
 from src.core.artifacts import ArtifactStore, normalize_dataset, normalize_model
-from src.core.config import FMRICrossDatasetRRRConfig, RRRConfig, ScriptMode
+from src.core.config import (
+    FMRICrossDatasetRRRConfig,
+    RRRConfig,
+    ScriptMode,
+    SignificanceSelectionConfig,
+)
 from src.core.registry import resolve_dataset_context
 from src.utils.shared.config import (
     expand_fmri_layer_configs,
@@ -49,7 +54,9 @@ class Config:
     plot: bool = True
     refresh: bool = False
     rank_grid: list[int] = field(default_factory=lambda: [1, 2, 5, 10, 20, 50])
-    significance_artifact: dict = field(default_factory=dict)
+    significance_selection: SignificanceSelectionConfig = field(
+        default_factory=SignificanceSelectionConfig
+    )
     rrr_source: dict | None = None
     views: list[dict] = field(default_factory=list)
     subspace_aggregation: str = "extrinsic"
@@ -91,7 +98,7 @@ class Config:
             "plot": self.plot,
             "refresh": self.refresh,
             "rank_grid": self.rank_grid,
-            "significance_artifact": deepcopy(self.significance_artifact),
+            "significance_selection": deepcopy(self.significance_selection),
             "subspace_aggregation": self.subspace_aggregation,
         })
         if self.modality == "fmri":

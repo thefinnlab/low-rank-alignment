@@ -15,12 +15,14 @@ rank_grid:
 - 256
 - 512
 - 1024
-significance_artifact:
-  mode: held_out_session
-  dataset: deep-fmri
-  offset: 0
-  model: roberta-large
-  layer: '{layer}'
+significance_selection:
+  mode: within-layer
+  reference_artifact:
+    mode: held_out_session
+    dataset: deep-fmri
+    offset: 0
+    model: roberta-large
+    layer: '{layer}'
 subspace_aggregation: extrinsic
 ieeg: null
 fmri:

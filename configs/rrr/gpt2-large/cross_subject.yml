@@ -16,12 +16,14 @@ rank_grid:
 - 512
 - 1024
 - 1280
-significance_artifact:
-  mode: sig_lags
-  dataset: podcast
-  offset: 0
-  model: gpt2-large
-  layer: '{layer}'
+significance_selection:
+  mode: within-layer
+  reference_artifact:
+    mode: sig_lags
+    dataset: podcast
+    offset: 0
+    model: gpt2-large
+    layer: '{layer}'
 ieeg:
   encoding:
     data_root: data/

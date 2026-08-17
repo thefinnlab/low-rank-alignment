@@ -9,6 +9,7 @@ from src.core.artifacts import (
     ArtifactIncompleteError,
     normalize_dataset,
     normalize_model,
+    readable_variant,
 )
 from scripts.run_significance import Artifact as SignificanceArtifact
 from scripts.run_rrr import Artifact as RRRArtifact, UnitSelector
@@ -72,6 +73,40 @@ def test_readable_variant_collision_requires_explicit_name(tmp_path):
     SignificanceArtifact(results_root=tmp_path).begin(config={"parameter": 1})
     with pytest.raises(ArtifactAmbiguityError, match="variant_name"):
         SignificanceArtifact(results_root=tmp_path).begin(config={"parameter": 2})
+
+
+def test_rrr_variant_distinguishes_significance_selection_and_source_sets():
+    reference = {"dataset": "podcast", "model": "gpt2", "layer": 12}
+    within = {
+        "significance_selection": {
+            "mode": "within-layer", "reference_artifact": reference,
+        }
+    }
+    cross = {
+        "significance_selection": {
+            "mode": "cross-model-layer",
+            "reference_artifact": reference,
+            "artifacts": [{"model": "gpt2", "layer": [0, 6, 12]}],
+        }
+    }
+    reordered_equivalent = {
+        "significance_selection": {
+            "mode": "cross-model-layer",
+            "reference_artifact": reference,
+            "artifacts": [
+                {"model": "gpt2", "layer": 12},
+                {"model": "gpt2", "layer": [6, 0]},
+            ],
+        }
+    }
+
+    within_variant = readable_variant(within)
+    cross_variant = readable_variant(cross)
+
+    assert within_variant.startswith("significance-within-layer-")
+    assert cross_variant.startswith("significance-cross-model-layer-")
+    assert within_variant != cross_variant
+    assert cross_variant == readable_variant(reordered_equivalent)
 
 
 def test_rrr_manifest_resume_is_selector_complete(tmp_path):

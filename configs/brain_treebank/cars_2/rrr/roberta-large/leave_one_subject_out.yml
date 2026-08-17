@@ -15,12 +15,14 @@ rank_grid:
 - 256
 - 512
 - 1024
-significance_artifact:
-  mode: sig_lags
-  dataset: brain-treebank-cars-2
-  offset: 0
-  model: roberta-large
-  layer: '{layer}'
+significance_selection:
+  mode: within-layer
+  reference_artifact:
+    mode: sig_lags
+    dataset: brain-treebank-cars-2
+    offset: 0
+    model: roberta-large
+    layer: '{layer}'
 ieeg:
   encoding:
     data_root: data/brain-treebank

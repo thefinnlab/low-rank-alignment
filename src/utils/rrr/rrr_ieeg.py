@@ -41,10 +41,9 @@ from src.utils.rrr.inputs import _get_decomposition_inputs
 from src.utils.rrr.multiview import (
     fit_banded_ridge_baseline,
     project_view_bands,
-    union_sig_mask,
 )
+from src.utils.rrr.significance import PreparedSignificance, load_significance_selection
 from himalaya.scoring import correlation_score, r2_score
-from scripts.run_significance import Artifact as SignificanceArtifact
 from scripts.run_rrr import Artifact, UnitSelector
 
 
@@ -1615,7 +1614,7 @@ def _run_temporal_windows_rrr(
 def _run_multi_view_rrr(
     config: RRRConfig,
     artifact: Artifact,
-    significance: SignificanceArtifact,
+    significance: PreparedSignificance,
     subject_ids: list[int],
 ) -> list[tuple[UnitSelector, int]]:
     """Fit banded ridge over saved RRR views, then run the standard RRR sweep."""
@@ -1643,32 +1642,10 @@ def _run_multi_view_rrr(
         int(subject): group["elec"].astype(str).tolist()
         for subject, group in sig_frame.groupby("subject")
     }
-    detailed_frames = [significance.detailed_significance]
-    significance_sources = [significance.identity_record()]
-    seen_significance = {json.dumps(significance.identity_record(), sort_keys=True)}
-    for source in sources.values():
-        if source.dataset != artifact.dataset:
-            continue
-        for upstream in source.upstream_identities:
-            if upstream.get("script") != SignificanceArtifact.SCRIPT:
-                continue
-            key = json.dumps(upstream, sort_keys=True)
-            if key in seen_significance:
-                continue
-            kwargs = {name: upstream[name] for name in
-                      ("mode", "dataset", "offset", "model", "layer", "variant")}
-            kwargs["results_root"] = config.results_root
-            peer = SignificanceArtifact(**kwargs).load_artifacts(
-                ["significant_electrodes", "detailed_significance"]
-            )
-            for subject, group in peer.significant_electrodes.groupby("subject"):
-                bucket = union.setdefault(int(subject), [])
-                for electrode in group["elec"].astype(str):
-                    if electrode not in bucket:
-                        bucket.append(electrode)
-            detailed_frames.append(peer.detailed_significance)
-            significance_sources.append(peer.identity_record())
-            seen_significance.add(key)
+    significance_sources = [significance.reference.identity_record()]
+    for identity in significance.source_identities:
+        if identity not in significance_sources:
+            significance_sources.append(identity)
     target_context = resolve_dataset_context(
         dataset=config.encoding.dataset, subject_ids=subject_ids,
         per_dataset_config=config.encoding.per_dataset_config,
@@ -1725,11 +1702,6 @@ def _run_multi_view_rrr(
         return []
     _, prepared_baselines, test_idxs, sig_mask_flat, target_manifest = prepared_values
     selection = np.asarray(reference["selection"])
-    sig_mask_flat = (
-        union_sig_mask(target_manifest, detailed_frames)
-        if config.compute_sig_nonsig
-        else None
-    )
     bases, basis_modes = {}, {}
     for view in config.views:
         source = sources[view.name]
@@ -2673,13 +2645,11 @@ def run_ieeg(config: RRRConfig):
     get_dataset_adapter(enc.dataset).validate_subjects_share_stimulus(
         subject_ids, enc.per_dataset_config, enc.data_root
     )
-    if not config.significance_artifact:
-        raise ValueError("RRRConfig.significance_artifact constructor arguments are required")
-    sig_kwargs = dict(config.significance_artifact)
-    sig_kwargs.setdefault("results_root", config.results_root)
-    significance = SignificanceArtifact(**sig_kwargs).load_artifacts(
-        fields=["target_significance", "significance_details", "encoding_results"],
-        selectors={"subjects": subject_ids},
+    significance = load_significance_selection(
+        config.significance_selection,
+        results_root=config.results_root,
+        subjects=subject_ids,
+        modality="ieeg",
     )
     target_frames = list(significance.target_significance.values())
     target_frame = pd.concat(target_frames, ignore_index=True)
@@ -2694,7 +2664,10 @@ def run_ieeg(config: RRRConfig):
         int(subject): value
         for subject, value in list(significance.encoding_results.items())
     })
-    upstreams = [significance.identity_record()]
+    upstreams = [significance.reference.identity_record()]
+    for identity in significance.source_identities:
+        if identity not in upstreams:
+            upstreams.append(identity)
     for source_kwargs, source_cls in (
         (config.ieeg_rrr_source, Artifact),
         (config.fmri_rrr_source, None),
@@ -2848,4 +2821,3 @@ def run_ieeg(config: RRRConfig):
         artifact.mark_complete(required)
     print("\nDone.")
     return artifact
-

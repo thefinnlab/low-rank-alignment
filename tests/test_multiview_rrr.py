@@ -1,39 +1,11 @@
 """Focused behavior tests for multiview RRR helpers."""
 
 import numpy as np
-import pandas as pd
 
 from src.utils.rrr.multiview import (
     fit_banded_ridge_baseline,
     project_view_bands,
-    union_sig_mask,
 )
-
-
-def test_union_sig_mask_ors_views_in_manifest_order():
-    manifest = pd.DataFrame(
-        [
-            {"subject": 1, "electrode": "A", "lag_index": 0},
-            {"subject": 1, "electrode": "A", "lag_index": 1},
-            {"subject": 2, "electrode": "B", "lag_index": 0},
-        ]
-    )
-    first = pd.DataFrame(
-        [
-            {"subject": 1, "electrode": "A", "lag_idx": 0, "sig": True},
-            {"subject": 2, "electrode": "B", "lag_idx": 0, "sig": False},
-        ]
-    )
-    second = pd.DataFrame(
-        [
-            {"subject": 1, "electrode": "A", "lag_idx": 1, "sig": True},
-            {"subject": 2, "electrode": "B", "lag_idx": 0, "sig": False},
-        ]
-    )
-    np.testing.assert_array_equal(
-        union_sig_mask(manifest, [first, second]),
-        np.array([True, True, False]),
-    )
 
 
 def test_project_view_bands_preserves_raw_A_and_config_order():

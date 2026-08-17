@@ -8,7 +8,7 @@ import pytest
 from scripts.run_rrr import Artifact as RRRArtifact
 from scripts.utilities.migrate_results import (
     Mapping, _abstract_legacy_dependencies, _rrr_source_from_legacy_path,
-    copy_mapping, discover_ambiguous, discover_mappings,
+    _upstreams_from_config, copy_mapping, discover_ambiguous, discover_mappings,
 )
 
 
@@ -440,3 +440,125 @@ def test_dependency_path_is_removed_from_effective_config():
         "model": "gpt2", "layer": 9,
     }
     assert original["source_rrr_unit_dir"].endswith("movie-cars-2/rrr")
+
+
+def test_legacy_significance_dependency_becomes_within_layer_selection():
+    artifact = {
+        "mode": "sig_lags", "dataset": "podcast", "offset": 0,
+        "model": "gpt2", "layer": 9,
+    }
+
+    converted = _abstract_legacy_dependencies({"significance_artifact": artifact})
+
+    assert converted == {
+        "significance_selection": {
+            "mode": "within-layer", "reference_artifact": artifact,
+        }
+    }
+    assert _upstreams_from_config(converted) == [
+        {"script": "run_significance", **artifact}
+    ]
+
+
+def test_migration_upstreams_expand_cross_model_layer_lists():
+    config = {
+        "significance_selection": {
+            "mode": "cross-model-layer",
+            "reference_artifact": {"model": "reference", "layer": 4},
+            "artifacts": [{"model": "union", "layer": [0, 2]}],
+        }
+    }
+
+    assert _upstreams_from_config(config) == [
+        {"script": "run_significance", "model": "reference", "layer": 4},
+        {"script": "run_significance", "model": "union", "layer": 0},
+        {"script": "run_significance", "model": "union", "layer": 2},
+    ]
+
+
+def test_rrr_config_infers_sibling_significance_dependency(tmp_path):
+    root = tmp_path / "results"
+    model_root = root / "gpt2_layer9_offset0"
+    rrr = model_root / "rrr"
+    significance = model_root / "significance"
+    rrr.mkdir(parents=True)
+    significance.mkdir()
+    write_rrr_config(rrr / "config.yml")
+    (significance / "config.yml").write_text(
+        "encoding:\n  dataset: podcast\n  model: transformer\n"
+        "  offset: 0\n  per_model_config:\n    model_dir: gpt2\n    layer: 9\n"
+    )
+
+    from scripts.utilities.migrate_results import _config_for_source
+    converted = _config_for_source(rrr, "run_rrr", root)
+
+    assert converted["significance_selection"] == {
+        "mode": "within-layer",
+        "reference_artifact": {
+            "mode": "sig_lags", "dataset": "podcast", "offset": 0,
+            "model": "gpt2", "layer": 9,
+        },
+    }
+
+
+def test_cross_dataset_rrr_config_also_infers_sibling_significance_dependency(tmp_path):
+    root = tmp_path / "results"
+    model_root = root / "fmri" / "gpt2_layer9"
+    rrr = model_root / "within_fmri_rrr"
+    significance = model_root / "significance"
+    rrr.mkdir(parents=True)
+    significance.mkdir()
+    (rrr / "config.yml").write_text(
+        "fmri:\n  subjects: [UTS01]\n  sessions: [1, 2]\n"
+        "model_dir: gpt2\nlayer: 9\nsource_mode: within_fmri\n"
+    )
+    (significance / "config.yml").write_text(
+        "fmri:\n  subjects: [UTS01]\n  sessions: [1, 2]\n"
+        "model_dir: gpt2\nlayer: 9\n"
+    )
+
+    from scripts.utilities.migrate_results import _config_for_source
+    converted = _config_for_source(rrr, "run_cross_dataset_rrr", root)
+
+    assert converted["significance_selection"]["reference_artifact"] == {
+        "mode": "held_out_session", "dataset": "deep-fmri", "offset": 0,
+        "model": "gpt2", "layer": 9,
+    }
+
+
+def test_legacy_rrr_import_uses_significance_selection_variant_path(tmp_path):
+    source = tmp_path / "legacy" / "rrr"
+    source.mkdir(parents=True)
+    significance = {
+        "mode": "sig_lags", "dataset": "podcast", "offset": 0,
+        "model": "gpt2", "layer": 9,
+    }
+    (source / "config.yml").write_text(
+        "encoding:\n  dataset: podcast\n  model: transformer\n"
+        "  offset: 0\n  per_model_config:\n    model_dir: gpt2\n    layer: 9\n"
+        "mode: cross_subject\n"
+        "significance_artifact:\n"
+        "  mode: sig_lags\n  dataset: podcast\n  offset: 0\n"
+        "  model: gpt2\n  layer: 9\n"
+    )
+    pd.DataFrame({"k": [1], "score": [0.1]}).to_csv(
+        source / "summary.csv", index=False
+    )
+
+    report = copy_mapping(rrr_mapping(source), tmp_path / "canonical", apply=True)
+
+    assert report["artifact"]["variant"].startswith(
+        "significance-within-layer-"
+    )
+    artifact = RRRArtifact(
+        mode="internal", dataset="podcast", offset=0, model="gpt2", layer=9,
+        variant=report["artifact"]["variant"], results_root=tmp_path / "canonical",
+    )
+    effective = artifact.load_field("effective_config")
+    assert "significance_artifact" not in effective
+    assert effective["significance_selection"] == {
+        "mode": "within-layer", "reference_artifact": significance,
+    }
+    assert artifact.load_field("upstream_identities") == [
+        {"script": "run_significance", **significance}
+    ]

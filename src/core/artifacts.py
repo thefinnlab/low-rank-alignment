@@ -7,6 +7,7 @@ Producer scripts subclass :class:`ArtifactStore` and declare their own contracts
 from __future__ import annotations
 
 import io
+import hashlib
 import json
 import os
 import re
@@ -73,15 +74,15 @@ def normalized_config(value: Any, *, drop_paths: bool = True) -> dict:
 
 def readable_variant(config: Any, upstreams: list[dict] | None = None,
                      extras: dict | None = None) -> str:
-    """Return a stable, human-readable variant path without content hashes."""
+    """Return a stable variant path with readable roles and compact selection IDs."""
     normalized = normalized_config(config)
     explicit = normalized.get("variant_name")
     if explicit:
         return _relative_components(str(explicit), "variant name")
     rrr_sources = [item for item in (upstreams or [])
                    if item.get("script") == "run_rrr"]
+    parts = []
     if rrr_sources:
-        parts = []
         for index, source in enumerate(rrr_sources):
             if len(rrr_sources) > 1:
                 parts.extend((f"source-{index + 1}",))
@@ -92,13 +93,38 @@ def readable_variant(config: Any, upstreams: list[dict] | None = None,
                 f"offset-{int(source.get('offset', 0))}", str(source["model"]),
                 f"layer-{'none' if source.get('layer') is None else int(source['layer'])}",
             ))
-        return "/".join(_component(part, "variant component") for part in parts)
-    if normalized.get("orthonormalize_a_per_rank"):
-        return "orthonormalized"
-    if extras:
-        parts = [f"{key}-{value}" for key, value in sorted(_primitive(extras).items())]
-        return "/".join(_component(part, "variant component") for part in parts)
-    return "default"
+    elif normalized.get("orthonormalize_a_per_rank"):
+        parts.append("orthonormalized")
+    elif extras:
+        parts.extend(
+            f"{key}-{value}" for key, value in sorted(_primitive(extras).items())
+        )
+
+    selection = normalized.get("significance_selection")
+    if isinstance(selection, dict) and selection.get("reference_artifact"):
+        canonical = {
+            "mode": selection.get("mode", "within-layer"),
+            "reference_artifact": selection["reference_artifact"],
+            "artifacts": [],
+        }
+        expanded = []
+        for artifact in selection.get("artifacts", []):
+            layers = artifact.get("layer")
+            for layer in layers if isinstance(layers, list) else [layers]:
+                concrete = dict(artifact)
+                concrete["layer"] = layer
+                expanded.append(concrete)
+        canonical["artifacts"] = sorted(
+            expanded,
+            key=lambda item: json.dumps(_primitive(item), sort_keys=True),
+        )
+        encoded = json.dumps(_primitive(canonical), sort_keys=True, separators=(",", ":"))
+        digest = hashlib.sha256(encoded.encode("utf-8")).hexdigest()[:10]
+        parts.append(f"significance-{canonical['mode']}-{digest}")
+
+    return "/".join(
+        _component(part, "variant component") for part in (parts or ["default"])
+    )
 
 
 def normalize_dataset(dataset: str, stimulus: str | None = None) -> str:

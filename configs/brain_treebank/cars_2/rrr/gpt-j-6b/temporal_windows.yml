@@ -17,12 +17,14 @@ rank_grid:
 - 1024
 - 2048
 - 4096
-significance_artifact:
-  mode: sig_lags
-  dataset: brain-treebank-cars-2
-  offset: 0
-  model: gpt-j-6b
-  layer: '{layer}'
+significance_selection:
+  mode: within-layer
+  reference_artifact:
+    mode: sig_lags
+    dataset: brain-treebank-cars-2
+    offset: 0
+    model: gpt-j-6b
+    layer: '{layer}'
 ieeg:
   encoding:
     data_root: data/brain-treebank

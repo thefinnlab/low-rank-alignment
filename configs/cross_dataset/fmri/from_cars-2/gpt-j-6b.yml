@@ -17,12 +17,14 @@ rank_grid:
 - 1024
 - 2048
 - 4096
-significance_artifact:
-  mode: held_out_session
-  dataset: deep-fmri
-  offset: 0
-  model: gpt-j-6b
-  layer: '{layer}'
+significance_selection:
+  mode: within-layer
+  reference_artifact:
+    mode: held_out_session
+    dataset: deep-fmri
+    offset: 0
+    model: gpt-j-6b
+    layer: '{layer}'
 subspace_aggregation: extrinsic
 rrr_source:
   mode: internal

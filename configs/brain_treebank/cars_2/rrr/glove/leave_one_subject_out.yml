@@ -14,12 +14,14 @@ rank_grid:
 - 128
 - 256
 - 300
-significance_artifact:
-  mode: sig_lags
-  dataset: brain-treebank-cars-2
-  offset: 0
-  model: glove-300
-  layer: null
+significance_selection:
+  mode: within-layer
+  reference_artifact:
+    mode: sig_lags
+    dataset: brain-treebank-cars-2
+    offset: 0
+    model: glove-300
+    layer: null
 ieeg:
   encoding:
     data_root: data/brain-treebank

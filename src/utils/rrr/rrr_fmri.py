@@ -32,11 +32,11 @@ from src.utils.shared.fmri import (
     TEMPORARILY_HELD_OUT_FMRI_STORIES,
 )
 from src.utils.rrr.core import fit_dense_rrr
+from src.utils.rrr.significance import load_significance_selection
 from src.utils.subspace_comparison.metrics import aggregate_subspace_basis
 from src.utils.shared.tensors import to_numpy
 
 
-from scripts.run_significance import Artifact as SignificanceArtifact
 from scripts.run_rrr import Artifact
 from scripts.run_rrr import Artifact as IEEGRRRArtifact
 
@@ -314,19 +314,21 @@ def run_fmri(config: FMRICrossDatasetRRRConfig) -> Artifact:
     device_name = torch.cuda.get_device_name(0) if torch.cuda.is_available() else "CPU"
     print(f"Backend: {backend_name} ({device_name})", flush=True)
     ranks = list(map(int, config.rank_grid))
-    if not config.significance_artifact:
-        raise ValueError("significance_artifact constructor arguments are required")
-    sig_kwargs = dict(config.significance_artifact)
-    sig_kwargs.setdefault("results_root", config.results_root)
-    significance = SignificanceArtifact(**sig_kwargs).load_artifacts(
-        fields=["target_significance"], selectors={"subjects": config.fmri.subjects}
+    significance = load_significance_selection(
+        config.significance_selection,
+        results_root=config.results_root,
+        subjects=config.fmri.subjects,
+        modality="fmri",
     )
     significance.significant_voxels = {
         subject: frame.rename(columns={"target_id": "voxel_index",
                                        "significant": "sig"})
         for subject, frame in significance.target_significance.items()
     }
-    upstreams = [significance.identity_record()]
+    upstreams = [significance.reference.identity_record()]
+    for identity in significance.source_identities:
+        if identity not in upstreams:
+            upstreams.append(identity)
     source = None
     if config.source_mode == "cross_dataset":
         source_kwargs = dict(config.ieeg_rrr_source or {})
@@ -639,4 +641,3 @@ def run_fmri(config: FMRICrossDatasetRRRConfig) -> Artifact:
                                   for method in method_names for rank in ranks]}
     artifact.mark_complete(required)
     return artifact
-

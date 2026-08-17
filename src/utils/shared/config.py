@@ -232,10 +232,16 @@ def expand_per_model_layer_configs(config):
         expanded = deepcopy(config)
         expanded_encoding = getattr(expanded, "encoding", expanded)
         expanded_encoding.per_model_config["layer"] = scalar_layer
-        for field_name in ("significance_artifact", "ieeg_rrr_source",
+        for field_name in ("significance_selection", "ieeg_rrr_source",
                            "fmri_rrr_source"):
             value = getattr(expanded, field_name, None)
-            if isinstance(value, dict):
+            if is_dataclass(value):
+                for nested in ("reference_artifact", "artifacts"):
+                    current = getattr(value, nested)
+                    setattr(value, nested, _format_nested_templates(
+                        current, layer=scalar_layer
+                    ))
+            elif isinstance(value, dict):
                 setattr(expanded, field_name,
                         _format_nested_templates(value, layer=scalar_layer))
         for view in getattr(expanded, "views", []):
@@ -258,9 +264,15 @@ def expand_fmri_layer_configs(config):
     for scalar_layer in layer:
         expanded = deepcopy(config)
         expanded.layer = scalar_layer
-        for field_name in ("significance_artifact", "ieeg_rrr_source"):
+        for field_name in ("significance_selection", "ieeg_rrr_source"):
             value = getattr(expanded, field_name, None)
-            if isinstance(value, dict):
+            if is_dataclass(value):
+                for nested in ("reference_artifact", "artifacts"):
+                    current = getattr(value, nested)
+                    setattr(value, nested, _format_nested_templates(
+                        current, layer=scalar_layer
+                    ))
+            elif isinstance(value, dict):
                 setattr(expanded, field_name,
                         _format_nested_templates(value, layer=scalar_layer))
         configs.append(expanded)

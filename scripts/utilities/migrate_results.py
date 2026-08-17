@@ -18,9 +18,16 @@ import joblib
 import numpy as np
 import pandas as pd
 
-from src.core.artifacts import normalize_dataset, normalize_model, readable_variant
+from src.core.artifacts import (
+    _primitive,
+    normalized_config,
+    normalize_dataset,
+    normalize_model,
+    readable_variant,
+)
 from scripts.run_significance import Artifact as SignificanceArtifact
 from scripts.run_rrr import Artifact as RRRArtifact, UnitSelector
+from src.utils.rrr.significance import expand_significance_artifact_specs
 
 
 CANONICAL_SCRIPTS = {"run_significance", "run_rrr", "run_cross_dataset_rrr"}
@@ -137,7 +144,32 @@ def _config_for_source(path: Path, producer: str, boundary: Path) -> dict | None
                 value = yaml.safe_load(candidate.read_text(encoding="utf-8")) or {}
                 if isinstance(value, dict):
                     return _abstract_legacy_dependencies(value)
-    return _nearest_config(path, boundary)
+    config = _nearest_config(path, boundary)
+    if producer not in {"run_rrr", "run_cross_dataset_rrr"} or not isinstance(config, dict):
+        return config
+    if "significance_selection" in config or "significance_artifact" in config:
+        return config
+
+    # Legacy RRR runs commonly kept significance under a sibling directory:
+    # <model-layer>/significance and <model-layer>/rrr (or *_rrr).
+    sibling = path.parent / "significance"
+    significance_config = _config_for_source(sibling, "run_significance", boundary)
+    if significance_config is None:
+        return config
+    inferred = _mapping_from_config(sibling, "run_significance", significance_config)
+    if inferred is None:
+        return config
+    reference = {
+        key: value for key, value in asdict(inferred).items()
+        if key in {"mode", "dataset", "offset", "model", "layer", "variant"}
+    }
+    reference.pop("variant", None)
+    result = deepcopy(config)
+    result["significance_selection"] = {
+        "mode": "within-layer",
+        "reference_artifact": reference,
+    }
+    return result
 
 
 def _rrr_source_from_legacy_path(value: str | Path) -> dict:
@@ -184,6 +216,17 @@ def _rrr_source_from_legacy_path(value: str | Path) -> dict:
 def _abstract_legacy_dependencies(config: dict) -> dict:
     """Replace legacy dependency directories with canonical identity blocks."""
     result = deepcopy(config)
+    legacy_significance = result.pop("significance_artifact", None)
+    if legacy_significance is not None:
+        if "significance_selection" in result:
+            raise ValueError(
+                "Legacy config defines both significance_artifact and "
+                "significance_selection"
+            )
+        result["significance_selection"] = {
+            "mode": "within-layer",
+            "reference_artifact": legacy_significance,
+        }
     sources = []
     for key in ("source_rrr_unit_dir", "cross_result_dir"):
         value = result.pop(key, None)
@@ -389,17 +432,28 @@ def _values_equal(left, right) -> bool:
         return False
 
 
-def _save_verified(artifact, field: str, value, *, selector: dict | None = None) -> None:
+def _save_verified(
+    artifact, field: str, value, *, selector: dict | None = None,
+    overwrite: bool = False,
+) -> None:
     """Save one migrated value, refusing collisions and checking its decoded value."""
     selector = selector or {}
     if artifact.has_field(field, selector=selector):
         existing = artifact.load_field(field, selector=selector)
         if not _values_equal(existing, value):
+            if overwrite:
+                artifact.save_field(field, value, selector=selector, overwrite=True)
+                decoded = artifact.load_field(field, selector=selector)
+                if not _values_equal(decoded, value):
+                    raise ValueError(
+                        f"Migration verification failed for {field} selector {selector}"
+                    )
+                return
             raise FileExistsError(
                 f"Differing migrated values for {field} selector {selector}"
             )
         return
-    artifact.save_field(field, value, selector=selector)
+    artifact.save_field(field, value, selector=selector, overwrite=overwrite)
     decoded = artifact.load_field(field, selector=selector)
     if not _values_equal(decoded, value):
         raise ValueError(f"Migration verification failed for {field} selector {selector}")
@@ -434,24 +488,41 @@ def copy_mapping(item: Mapping, results_root: Path, *, apply: bool) -> dict:
     artifact = cls(mode=mode, dataset=item.dataset, offset=item.offset,
                    model=item.model, layer=item.layer, variant=item.variant,
                    results_root=results_root)
-    artifact.begin(config=config, upstreams=upstreams, refresh=False)
     migration_selector = {
         "name": "legacy_migration",
         "source_id": _migration_source_id(source),
     }
     identical_rerun = False
+    # A prior interrupted migration may have published the new variant path
+    # before its normalized config/upstreams were updated. Reconcile only when
+    # the migration inventory proves this is the same source content.
+    if artifact.variant is not None and artifact._manifest_path().exists() and artifact.has_field(
+        "diagnostics", selector=migration_selector
+    ):
+        prior = artifact.load_field("diagnostics", selector=migration_selector)
+        if prior.get("inventory") != inventory:
+            raise FileExistsError("Differing-content migration conflict for " + str(source))
+        manifest = artifact._read_json(artifact._manifest_path())
+        manifest["configuration"] = normalized_config(config)
+        manifest["upstreams"] = _primitive(upstreams)
+        artifact._write_json(artifact._manifest_path(), manifest)
+        identical_rerun = True
+    artifact.begin(config=config, upstreams=upstreams, refresh=False)
     if artifact.has_field("diagnostics", selector=migration_selector):
         prior = artifact.load_field("diagnostics", selector=migration_selector)
         if prior.get("inventory") != inventory:
             raise FileExistsError("Differing-content migration conflict for " + str(source))
         identical_rerun = True
 
-    _save_verified(artifact, "effective_config", config)
-    if isinstance(artifact, SignificanceArtifact):
-        _convert_significance(source, artifact)
-    else:
-        _save_verified(artifact, "upstream_identities", upstreams)
-        _convert_rrr(source, artifact)
+    _save_verified(artifact, "effective_config", config, overwrite=identical_rerun)
+    if not identical_rerun:
+        if isinstance(artifact, SignificanceArtifact):
+            _convert_significance(source, artifact)
+        else:
+            _save_verified(artifact, "upstream_identities", upstreams)
+            _convert_rrr(source, artifact)
+    elif not isinstance(artifact, SignificanceArtifact):
+        _save_verified(artifact, "upstream_identities", upstreams, overwrite=identical_rerun)
     _save_verified(
         artifact, "diagnostics", {"source": str(source), "inventory": inventory},
         selector=migration_selector,
@@ -582,9 +653,20 @@ def _convert_significance(source: Path, artifact: SignificanceArtifact) -> None:
 
 def _upstreams_from_config(config: dict) -> list[dict]:
     upstreams = []
-    significance = config.get("significance_artifact")
-    if isinstance(significance, dict):
-        upstreams.append({"script": "run_significance", **significance})
+    selection = config.get("significance_selection")
+    if isinstance(selection, dict):
+        significance_specs = []
+        reference = selection.get("reference_artifact")
+        if isinstance(reference, dict):
+            significance_specs.append(reference)
+        if selection.get("mode") == "cross-model-layer":
+            significance_specs.extend(
+                expand_significance_artifact_specs(selection.get("artifacts", []))
+            )
+        for significance in significance_specs:
+            identity = {"script": "run_significance", **significance}
+            if identity not in upstreams:
+                upstreams.append(identity)
     sources = []
     for name in ("rrr_source", "ieeg_rrr_source", "fmri_rrr_source"):
         if isinstance(config.get(name), dict):

@@ -32,6 +32,9 @@ FMRI_SIG_CONFIG ?= configs/fmri/significance_gpt2_xl_layer24.yml
 FMRI_RRR_CONFIG ?= configs/fmri/cross_dataset_rrr_gpt2_xl_layer24.yml
 RANDOM_EMBED_CONFIG ?= configs/embeddings/generate_random_gpt2_xl.yml
 PIPELINE_MODELS ?= gpt-j-6b gpt2-xl llama3-8b roberta-large random-gpt2-xl gpt2 glove
+CROSS_MODEL_LAYER_MODELS ?= gpt-j-6b gpt2-xl llama3-8b roberta-large random-gpt2-xl gpt2
+CROSS_MODEL_LAYER_CARS_MODELS ?= $(CROSS_MODEL_LAYER_MODELS) gpt2-large gpt2-medium pythia-1.4b pythia-160m pythia-6.9b roberta-base
+CROSS_MODEL_LAYER_INCLUDE_FMRI ?= true
 DATASET         ?= podcast
 SIG_OVERRIDES   ?=
 RRR_OVERRIDES   ?=
@@ -259,6 +262,64 @@ stage-language-resources:
 rrr-batch:
 	$(call run_config_list,RRR_CONFIGS,rrr,scripts/run_rrr.py)
 
+## Run cross-model-layer significance-union RRR for every non-GloVe model.
+## The selected model/layer is still the model being evaluated; only its
+## significance targets are pooled across the configured model/layer artifacts.
+## Usage:
+##   make rrr-cross-model-layer-batch
+##   make rrr-cross-model-layer-batch DATASET=cars-2
+##   make rrr-cross-model-layer-batch CMD=python CROSS_MODEL_LAYER_MODELS="gpt2 gpt2-xl"
+rrr-cross-model-layer-batch:
+	@set -eu; \
+	mkdir -p logs; \
+	case "$(DATASET)" in \
+		podcast) config="configs/rrr/cross_subject_cross_model_layer.yml"; models="$(CROSS_MODEL_LAYER_MODELS)" ;; \
+		cars-2) config="configs/brain_treebank/cars_2/rrr/cross_subject_cross_model_layer.yml"; models="$(CROSS_MODEL_LAYER_CARS_MODELS)" ;; \
+		*) echo "Unsupported DATASET '$(DATASET)'; expected podcast or cars-2" >&2; exit 2 ;; \
+	esac; \
+	if [ ! -f "$$config" ]; then echo "Missing RRR config: $$config" >&2; exit 2; fi; \
+	for model in $$models; do \
+		case "$$model" in \
+			gpt-j-6b) model_dir="gpt-j-6b"; layers='[0,7,14,21,28]' ;; \
+			gpt2-xl) model_dir="gpt2-xl-batch"; layers='[0,12,24,36,48]' ;; \
+			llama3-8b) model_dir="llama3-8b"; layers='[0,8,16,24,32]' ;; \
+			roberta-large) model_dir="roberta-large"; layers='[0,6,12,18,24]' ;; \
+			random-gpt2-xl) model_dir="random-gpt2-xl"; layers='[0,12,24,36,48]' ;; \
+			gpt2) model_dir="gpt2"; layers='[0,3,6,9,12]' ;; \
+			gpt2-large) model_dir="gpt2-large"; layers='[0,18,36]' ;; \
+			gpt2-medium) model_dir="gpt2-medium"; layers='[0,12,24]' ;; \
+			pythia-1.4b) model_dir="pythia-1.4b"; layers='[0,12,24]' ;; \
+			pythia-160m) model_dir="pythia-160m"; layers='[0,6,12]' ;; \
+			pythia-6.9b) model_dir="pythia-6.9b"; layers='[0,16,32]' ;; \
+			roberta-base) model_dir="roberta-base"; layers='[0,6,12]' ;; \
+			*) echo "Unsupported non-GloVe model '$$model'" >&2; exit 2 ;; \
+		esac; \
+		echo "Submitting cross-model-layer RRR for $(DATASET) / $$model"; \
+		$(CMD) scripts/run_rrr.py --config "$$config" \
+			--ieeg.encoding.per_model_config.model_dir="$$model_dir" \
+			--ieeg.encoding.per_model_config.layer="$$layers" \
+			--significance_selection.reference_artifact.model="$$model_dir" $(RRR_OVERRIDES); \
+	done; \
+	if [ "$(CROSS_MODEL_LAYER_INCLUDE_FMRI)" = "true" ]; then \
+		fmri_config="configs/fmri/within_fmri_cross_model_layer.yml"; \
+		if [ ! -f "$$fmri_config" ]; then echo "Missing fMRI RRR config: $$fmri_config" >&2; exit 2; fi; \
+		for model in $(CROSS_MODEL_LAYER_MODELS); do \
+			case "$$model" in \
+				gpt-j-6b) model_dir="gpt-j-6b"; layers='[0,7,14,21,28]' ;; \
+				gpt2-xl) model_dir="gpt2-xl-batch"; layers='[0,12,24,36,48]' ;; \
+				llama3-8b) model_dir="llama3-8b"; layers='[0,8,16,24,32]' ;; \
+				roberta-large) model_dir="roberta-large"; layers='[0,6,12,18,24]' ;; \
+				random-gpt2-xl) model_dir="random-gpt2-xl"; layers='[0,12,24,36,48]' ;; \
+				gpt2) model_dir="gpt2"; layers='[0,3,6,9,12]' ;; \
+				*) echo "Unsupported non-GloVe fMRI model '$$model'" >&2; exit 2 ;; \
+			esac; \
+			echo "Submitting cross-model-layer fMRI RRR for $$model"; \
+			$(CMD) scripts/run_rrr.py --config "$$fmri_config" \
+				--fmri.model_dir="$$model_dir" --fmri.layer="$$layers" \
+				--significance_selection.reference_artifact.model="$$model_dir" $(RRR_OVERRIDES); \
+		done; \
+	fi
+
 ## Submit one temporal-window RRR job per model and dataset. Each config keeps
 ## all sampled layers in one process, so the default submits 14 jobs rather than
 ## one job per layer.
@@ -382,4 +443,4 @@ sig-test:
 test:
 	python -m pytest tests/ -v
 
-.PHONY: sig sig-batch train plots rrr rrr-batch temporal-windows-batch sig-rrr-batch submit-rrr-matrix sig-test test generate-embeddings generate-embeddings-batch generate-random-embeddings download-models precompute-epochs print-atlas-regions compare-subspaces compare-subspaces-batch
+.PHONY: sig sig-batch train plots rrr rrr-batch rrr-cross-model-layer-batch temporal-windows-batch sig-rrr-batch submit-rrr-matrix sig-test test generate-embeddings generate-embeddings-batch generate-random-embeddings download-models precompute-epochs print-atlas-regions compare-subspaces compare-subspaces-batch

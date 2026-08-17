@@ -30,14 +30,19 @@ def test_significance_config_dispatches_dataset_and_rejects_legacy_shape():
 
 def test_rrr_internal_mode_and_generic_source_translation():
     ieeg = RRRClientConfig(
-        significance_artifact={"dataset": "podcast"}, ieeg={"encoding": {}},
+        significance_selection={
+            "mode": "within-layer", "reference_artifact": {"dataset": "podcast"}
+        }, ieeg={"encoding": {}},
     ).selected_config()
     assert isinstance(ieeg, RRRConfig)
     assert ieeg.mode.value == "cross_subject"
 
     fmri = RRRClientConfig(
         dataset="deep-fmri", mode="cross_dataset", ieeg=None,
-        significance_artifact={"dataset": "deep-fmri"},
+        significance_selection={
+            "mode": "within-layer",
+            "reference_artifact": {"dataset": "deep-fmri"},
+        },
         rrr_source={"dataset": "podcast", "mode": "internal"},
         fmri={"data": {"subjects": ["UTS01"]}},
     ).selected_config()
@@ -63,4 +68,3 @@ def test_significance_targets_and_rrr_factor_sets_are_modality_neutral(tmp_path)
     factors = rrr.load_input_factors("rrr", rank=2)
     assert len(factors) == 2
     assert all(value.shape == (4, 2) for value in factors)
-

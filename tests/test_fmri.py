@@ -367,7 +367,9 @@ def test_cross_dataset_completed_resume_skips_embeddings_and_responses(
     tmp_path, monkeypatch
 ):
     from src.utils.rrr import rrr_fmri as runner
-    from src.core.config import FMRIDataConfig, FMRICrossDatasetRRRConfig
+    from src.core.config import (
+        FMRIDataConfig, FMRICrossDatasetRRRConfig, SignificanceSelectionConfig,
+    )
 
     fmri_root = tmp_path / "fmri"
     (fmri_root / "em_data").mkdir(parents=True)
@@ -395,9 +397,13 @@ def test_cross_dataset_completed_resume_skips_embeddings_and_responses(
         ),
         results_root=str(results_root),
         plot=False,
-        significance_artifact={"mode": "held_out_session", "dataset": "deep-fmri",
-                               "offset": 0, "model": "gpt2-xl", "layer": 24,
-                               "variant": sig.variant},
+        significance_selection=SignificanceSelectionConfig(
+            reference_artifact={
+                "mode": "held_out_session", "dataset": "deep-fmri",
+                "offset": 0, "model": "gpt2-xl", "layer": 24,
+                "variant": sig.variant,
+            }
+        ),
         ieeg_rrr_source={"mode": "internal", "dataset": "podcast",
                          "offset": 0, "model": "gpt2-xl", "layer": 24,
                          "variant": source.variant},

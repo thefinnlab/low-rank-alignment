@@ -16,12 +16,14 @@ rank_grid:
 - 512
 - 1024
 - 1600
-significance_artifact:
-  mode: held_out_session
-  dataset: deep-fmri
-  offset: 0
-  model: gpt2-xl
-  layer: 24
+significance_selection:
+  mode: within-layer
+  reference_artifact:
+    mode: held_out_session
+    dataset: deep-fmri
+    offset: 0
+    model: gpt2-xl
+    layer: 24
 subspace_aggregation: extrinsic
 ieeg: null
 fmri:

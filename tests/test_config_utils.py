@@ -14,6 +14,7 @@ from src.core.config import (
     RRRTemporalWindowConfig,
     RRRViewConfig,
     ScriptMode,
+    SignificanceSelectionConfig,
     SignificanceConfig,
     SubspaceComparisonConfig,
     get_results_dir,
@@ -633,14 +634,19 @@ class TestExpandFMRILayerConfigs:
     def test_expands_layers_and_formats_artifact_paths(self):
         config = FMRICrossDatasetRRRConfig(
             layer=[0, 12],
-            significance_artifact={"layer": "{layer}"},
+            significance_selection=SignificanceSelectionConfig(
+                mode="cross-model-layer",
+                reference_artifact={"layer": "{layer}"},
+                artifacts=[{"model": "union", "layer": [0, 6, 12]}],
+            ),
             ieeg_rrr_source={"layer": "{layer}"},
         )
 
         expanded = expand_fmri_layer_configs(config)
 
         assert [item.layer for item in expanded] == [0, 12]
-        assert expanded[1].significance_artifact["layer"] == "12"
+        assert expanded[1].significance_selection.reference_artifact["layer"] == "12"
+        assert expanded[1].significance_selection.artifacts[0]["layer"] == [0, 6, 12]
         assert expanded[1].ieeg_rrr_source["layer"] == "12"
 
     def test_significance_config_uses_same_fanout(self):

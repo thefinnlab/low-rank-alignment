@@ -100,31 +100,6 @@ def load_view_bases(config, resolved, target_key, selection, test_idxs):
             modes[view.name] = f"cross_dataset_fold_{config.subspace_aggregation}"
     return bases, modes
 
-def union_sig_mask(
-    target_manifest: pd.DataFrame,
-    detailed_frames: list[pd.DataFrame],
-) -> np.ndarray | None:
-    """Return an OR-union lag significance mask aligned to a target manifest."""
-    if not detailed_frames:
-        return None
-    significant: set[tuple[int, str, int]] = set()
-    for frame in detailed_frames:
-        required = {"subject", "electrode", "lag_idx", "sig"}
-        if not required.issubset(frame.columns):
-            raise ValueError(
-                "significance_detailed.csv must contain subject, electrode, lag_idx, sig"
-            )
-        for row in frame.loc[frame["sig"].astype(bool)].itertuples(index=False):
-            significant.add((int(row.subject), str(row.electrode), int(row.lag_idx)))
-    return np.asarray(
-        [
-            (int(row.subject), str(row.electrode), int(row.lag_index)) in significant
-            for row in target_manifest.itertuples(index=False)
-        ],
-        dtype=bool,
-    )
-
-
 def project_view_bands(
     embeddings: dict[str, np.ndarray],
     bases: dict[str, dict[int, np.ndarray]],
@@ -206,4 +181,3 @@ def fit_banded_ridge_baseline(
         best_alphas=to_numpy(model.best_alphas_),
         deltas=np.asarray(deltas),
     )
-

@@ -194,6 +194,37 @@ class RRRTemporalWindowConfig:
 
 
 @dataclass
+class SignificanceSelectionConfig:
+    """Select neural targets from one significance run or an explicit union."""
+
+    mode: str = "within-layer"
+    reference_artifact: dict = field(default_factory=dict)
+    artifacts: list[dict] = field(default_factory=list)
+
+    def validate(self):
+        # Preserve constructible defaults; executable runners require a populated
+        # selection before resolving artifacts.
+        if not self.reference_artifact and not self.artifacts:
+            return
+        if self.mode not in {"within-layer", "cross-model-layer"}:
+            raise ValueError(
+                "significance_selection.mode must be 'within-layer' or "
+                f"'cross-model-layer', got {self.mode!r}"
+            )
+        if not self.reference_artifact:
+            raise ValueError("significance_selection.reference_artifact is required")
+        if isinstance(self.reference_artifact.get("layer"), list):
+            raise ValueError("reference_artifact.layer must be a scalar")
+        if self.mode == "within-layer" and self.artifacts:
+            raise ValueError("within-layer significance selection cannot define artifacts")
+        if self.mode == "cross-model-layer" and not self.artifacts:
+            raise ValueError("cross-model-layer significance selection requires artifacts")
+
+    def __post_init__(self):
+        self.validate()
+
+
+@dataclass
 class RRRConfig:
     """Parameters for raw-input Reduced Rank Regression analysis (run_rrr.py).
 
@@ -211,7 +242,9 @@ class RRRConfig:
     encoding: EncodingConfig = field(default_factory=EncodingConfig)
     results_root: str = "results"
     plot: bool = True
-    significance_artifact: dict = field(default_factory=dict)
+    significance_selection: SignificanceSelectionConfig = field(
+        default_factory=SignificanceSelectionConfig
+    )
     mode: ScriptMode = ScriptMode.CROSS_SUBJECT
     ieeg_rrr_source: dict | None = None
     fmri_rrr_source: dict | None = None
@@ -274,6 +307,7 @@ class RRRConfig:
         self.validate()
 
     def validate(self):
+        self.significance_selection.validate()
         _validate_subspace_aggregation(self.subspace_aggregation)
         if self.cross_source_format not in {"fold_factors", "rank_bases"}:
             raise ValueError(
@@ -849,7 +883,9 @@ class FMRICrossDatasetRRRConfig:
     pooling: str = "mean"
     results_root: str = "results"
     plot: bool = True
-    significance_artifact: dict = field(default_factory=dict)
+    significance_selection: SignificanceSelectionConfig = field(
+        default_factory=SignificanceSelectionConfig
+    )
     ieeg_rrr_source: dict | None = None
     source_mode: str = "cross_dataset"
     subspace_aggregation: str = "extrinsic"
@@ -865,6 +901,7 @@ class FMRICrossDatasetRRRConfig:
     refresh: bool = False
 
     def validate(self):
+        self.significance_selection.validate()
         _validate_subspace_aggregation(self.subspace_aggregation)
         if self.source_mode not in {"cross_dataset", "within_fmri"}:
             raise ValueError(
