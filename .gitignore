@@ -190,6 +190,8 @@ cython_debug/
 .pypirc
 
 rrr/
+!src/utils/rrr/
+!src/utils/rrr/**
 pca/
 !scripts/rrr/
 !scripts/rrr/compare_subspaces.py

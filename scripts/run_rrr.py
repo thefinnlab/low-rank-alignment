@@ -5,7 +5,6 @@ from __future__ import annotations
 import io
 from copy import deepcopy
 from dataclasses import asdict, dataclass, field, fields
-from pathlib import Path
 from typing import ClassVar
 
 import numpy as np
@@ -179,7 +178,8 @@ class Artifact(ArtifactStore):
             results_root=config.results_root,
         )
         artifact.variant_extras = (
-            {"atlas": Path(config.atlas_path).stem} if config.atlas_path else {}
+            {"atlas": config.atlas_path.rsplit("/", 1)[-1].rsplit(".", 1)[0]}
+            if config.atlas_path else {}
         )
         return artifact
 
