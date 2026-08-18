@@ -284,7 +284,7 @@ rrr-cross-model-layer-batch:
 		config="$$config_root/$$model/cross_model_layer.yml"; \
 		if [ ! -f "$$config" ]; then echo "Missing RRR config: $$config" >&2; exit 2; fi; \
 		echo "Submitting cross-model-layer RRR for $(DATASET) / $$model"; \
-		$(CMD) scripts/run_rrr.py --config "$$config" $(RRR_OVERRIDES); \
+		$(if $(filter sbatch%,$(CMD)),sbatch --job-name="rrr-$(DATASET)-$$model-$(USR)-$(DT)" submit.sh,$(CMD)) scripts/run_rrr.py --config "$$config" $(RRR_OVERRIDES); \
 	done; \
 	if [ "$(CROSS_MODEL_LAYER_INCLUDE_FMRI)" = "true" ]; then \
 		fmri_config_root="configs/fmri/within_fmri_cross_model_layer"; \
@@ -292,7 +292,7 @@ rrr-cross-model-layer-batch:
 			fmri_config="$$fmri_config_root/$$model.yml"; \
 			if [ ! -f "$$fmri_config" ]; then echo "Missing fMRI RRR config: $$fmri_config" >&2; exit 2; fi; \
 			echo "Submitting cross-model-layer fMRI RRR for $$model"; \
-			$(CMD) scripts/run_rrr.py --config "$$fmri_config" $(RRR_OVERRIDES); \
+			$(if $(filter sbatch%,$(CMD)),sbatch --job-name="rrr-fmri-$$model-$(USR)-$(DT)" submit.sh,$(CMD)) scripts/run_rrr.py --config "$$fmri_config" $(RRR_OVERRIDES); \
 		done; \
 	fi
 
