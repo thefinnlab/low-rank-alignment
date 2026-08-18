@@ -31,15 +31,13 @@ def migrate_config(config: SignificanceClientConfig) -> int:
             per_dataset_config=enc.per_dataset_config,
             data_root=enc.data_root,
         )
-        shared = None
-        if enc.shared_word_selection:
-            shared = compute_shared_word_selection(
-                subjects,
-                enc.data_root,
-                dataset=enc.dataset,
-                per_dataset_config=enc.per_dataset_config,
-                dataset_context=context,
-            )
+        shared = compute_shared_word_selection(
+            subjects,
+            enc.data_root,
+            dataset=enc.dataset,
+            per_dataset_config=enc.per_dataset_config,
+            dataset_context=context,
+        )
 
         artifact = Artifact.from_ieeg_config(selected, context)
         artifact.load_artifacts(
@@ -47,8 +45,22 @@ def migrate_config(config: SignificanceClientConfig) -> int:
         )
         for subject in subjects:
             result = dict(artifact.encoding_results[str(subject)])
-            if "selection" in result:
-                continue
+            changed = False
+            word_selection = result.get("word_selection")
+            if word_selection is not None:
+                stored_epoch_selection = np.asarray(
+                    word_selection["epoch_selection"], dtype=int
+                )
+                if not np.array_equal(stored_epoch_selection, shared):
+                    raise ValueError(
+                        f"Cannot repair subject {subject}: stored word selection "
+                        "does not match the current all-subject cache intersection"
+                    )
+                updated_words = dict(word_selection)
+                if [int(s) for s in updated_words.get("subjects", [])] != subjects:
+                    updated_words["subjects"] = [int(s) for s in subjects]
+                    result["word_selection"] = updated_words
+                    changed = True
             cache = load_precomputed_epochs(
                 subject,
                 enc.data_root,
@@ -56,16 +68,17 @@ def migrate_config(config: SignificanceClientConfig) -> int:
                 per_dataset_config=enc.per_dataset_config,
                 dataset_context=context,
             )
-            selection = (
-                np.asarray(shared, dtype=int)
-                if shared is not None
-                else np.asarray(cache["selection"], dtype=int)
-            )
-            result["selection"] = selection
-            artifact.save_subject_field(
-                "encoding_results", subject, result, overwrite=True
-            )
-            migrated += 1
+            if "selection" not in result:
+                result["selection"] = np.asarray(
+                    shared if word_selection is not None else cache["selection"],
+                    dtype=int,
+                )
+                changed = True
+            if changed:
+                artifact.save_subject_field(
+                    "encoding_results", subject, result, overwrite=True
+                )
+                migrated += 1
         print(f"Updated {artifact.identity_record()} ({len(subjects)} subjects)")
     return migrated
 
