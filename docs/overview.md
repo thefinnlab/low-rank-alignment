@@ -51,7 +51,8 @@ and exactly one `ieeg` or `fmri` block. RRR uses modality-neutral `internal` and
 `cross_dataset` modes; specialized modes remain iEEG-only. RRR significance selection
 is configured uniformly across modalities as `within-layer` or as an explicit
 `cross-model-layer` union; union artifact entries may compactly list several layers
-for one model.
+for one model. Cross-model-layer batch RRR uses per-model configs so model-specific
+rank and ridge-memory settings can be retained.
 
 ## Tests
 
