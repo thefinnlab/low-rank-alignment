@@ -54,36 +54,6 @@ significance_selection:
     offset: 0
     model: gpt2
     layer: [0, 3, 6, 9, 12]
-  - mode: sig_lags
-    dataset: brain-treebank-cars-2
-    offset: 0
-    model: gpt2-large
-    layer: [0, 18, 36]
-  - mode: sig_lags
-    dataset: brain-treebank-cars-2
-    offset: 0
-    model: gpt2-medium
-    layer: [0, 12, 24]
-  - mode: sig_lags
-    dataset: brain-treebank-cars-2
-    offset: 0
-    model: pythia-1.4b
-    layer: [0, 12, 24]
-  - mode: sig_lags
-    dataset: brain-treebank-cars-2
-    offset: 0
-    model: pythia-160m
-    layer: [0, 6, 12]
-  - mode: sig_lags
-    dataset: brain-treebank-cars-2
-    offset: 0
-    model: pythia-6.9b
-    layer: [0, 16, 32]
-  - mode: sig_lags
-    dataset: brain-treebank-cars-2
-    offset: 0
-    model: roberta-base
-    layer: [0, 6, 12]
 ieeg:
   encoding:
     data_root: data/brain-treebank
@@ -113,4 +83,3 @@ ieeg:
   null_augmented_min_shift: 50
   null_augmented_seed: 42
 fmri: null
-
