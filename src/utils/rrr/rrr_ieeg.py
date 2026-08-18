@@ -992,6 +992,13 @@ def _run_rrr_for_unit(
         if config.run_pca_baseline:
             pca_unit = UnitSelector(**{**unit.mapping(), "method": "pca"})
             print("\nRunning PCA baseline")
+            artifact.save_target_manifest(
+                unit=pca_unit,
+                target_manifest=artifact.load_field(
+                    "target_manifest", selector=unit.mapping()
+                ),
+                overwrite=config.refresh,
+            )
             _run_pca_for_unit(
                 artifact=artifact,
                 unit=pca_unit,
@@ -1129,6 +1136,13 @@ def _run_rrr_for_unit(
     if config.run_pca_baseline:
         pca_unit = UnitSelector(**{**unit.mapping(), "method": "pca"})
         print("\nRunning PCA baseline")
+        artifact.save_target_manifest(
+            unit=pca_unit,
+            target_manifest=artifact.load_field(
+                "target_manifest", selector=unit.mapping()
+            ),
+            overwrite=config.refresh,
+        )
         _run_pca_for_unit(
             artifact=artifact,
             unit=pca_unit,

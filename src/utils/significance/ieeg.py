@@ -10,6 +10,8 @@ from statsmodels.stats.multitest import multipletests
 from tqdm import tqdm
 from src.utils.shared.tensors import to_numpy
 
+_FISHER_EPS = np.finfo(np.float64).eps
+
 
 def fisher_z(values):
     """Return Fisher-z transformed correlations with finite clipping."""
