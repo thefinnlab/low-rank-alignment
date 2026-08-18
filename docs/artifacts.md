@@ -88,3 +88,8 @@ directories are replaced by path-free `rrr_source` identities before configurati
 storage. Canonical script roots are excluded from legacy discovery;
 rank-saturation, subspace-comparison, multiview, and config-less nested
 cross-dataset outputs are intentionally deferred.
+
+For older iEEG significance artifacts that lack the saved stimulus-row `selection`,
+`scripts/utilities/migrate_ieeg_selection.py` performs a metadata-only repair from
+the existing epoch caches. It does not retrain significance models or recompute
+statistics.

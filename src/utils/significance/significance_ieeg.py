@@ -211,6 +211,7 @@ def run_ieeg(config: SignificanceConfig):
             return_preds=True,
         )
         encoding_result = {
+            "selection": selection,
             "test_idxs": test_idxs, "train_idxs": tr_idxs,
             "lags": actual_lag_sec, "scalers": scalers,
             "elec_names": list(elec_names[0]), "subject_id": bids_sub_id,
