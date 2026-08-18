@@ -35,6 +35,9 @@ PIPELINE_MODELS ?= gpt-j-6b gpt2-xl llama3-8b roberta-large random-gpt2-xl gpt2 
 CROSS_MODEL_LAYER_MODELS ?= gpt-j-6b gpt2-xl llama3-8b roberta-large random-gpt2-xl gpt2
 CROSS_MODEL_LAYER_CARS_MODELS ?= $(CROSS_MODEL_LAYER_MODELS) gpt2-large gpt2-medium pythia-1.4b pythia-160m pythia-6.9b roberta-base
 CROSS_MODEL_LAYER_INCLUDE_FMRI ?= true
+SIG_RRR_MODELS ?= $(CROSS_MODEL_LAYER_MODELS)
+SIG_RRR_CARS_MODELS ?= $(CROSS_MODEL_LAYER_CARS_MODELS)
+SIG_RRR_FMRI_MODELS ?= $(CROSS_MODEL_LAYER_MODELS)
 DATASET         ?= podcast
 SIG_OVERRIDES   ?=
 RRR_OVERRIDES   ?=
@@ -319,6 +322,79 @@ rrr-cross-model-layer-batch:
 				--significance_selection.reference_artifact.model="$$model_dir" $(RRR_OVERRIDES); \
 		done; \
 	fi
+
+## Submit significance for every union source, then submit dependent union RRR.
+## Supports podcast, cars-2, and deep-fMRI.
+## Usage:
+##   make sig-rrr-cross-model-layer-batch DATASET=podcast
+##   make sig-rrr-cross-model-layer-batch DATASET=cars-2
+##   make sig-rrr-cross-model-layer-batch DATASET=fmri
+##   make sig-rrr-cross-model-layer-batch DATASET=podcast SIG_RRR_MODELS="gpt2 gpt2-xl"
+sig-rrr-cross-model-layer-batch:
+	@set -eu; \
+	mkdir -p logs; \
+	case "$(DATASET)" in \
+		podcast) \
+			sig_root="configs/significance"; \
+			rrr_config="configs/rrr/cross_subject_cross_model_layer.yml"; \
+			models="$(SIG_RRR_MODELS)"; \
+			sig_override="--ieeg.encoding.shared_word_selection=true"; \
+			rrr_modality="ieeg"; \
+			;; \
+		cars-2) \
+			sig_root="configs/brain_treebank/cars_2/significance"; \
+			rrr_config="configs/brain_treebank/cars_2/rrr/cross_subject_cross_model_layer.yml"; \
+			models="$(SIG_RRR_CARS_MODELS)"; \
+			sig_override=""; \
+			rrr_modality="ieeg"; \
+			;; \
+		fmri) \
+			sig_root="configs/cross_dataset/fmri/significance"; \
+			rrr_config="configs/fmri/within_fmri_cross_model_layer.yml"; \
+			models="$(SIG_RRR_FMRI_MODELS)"; \
+			sig_override=""; \
+			rrr_modality="fmri"; \
+			;; \
+		*) echo "Unsupported DATASET '$(DATASET)'; expected podcast, cars-2, or fmri" >&2; exit 2 ;; \
+	esac; \
+	if [ ! -f "$$rrr_config" ]; then echo "Missing RRR config: $$rrr_config" >&2; exit 2; fi; \
+	sig_ids=""; \
+	for model in $$models; do \
+		if [ "$$rrr_modality" = "fmri" ]; then \
+			sig_config="$$sig_root/$$model.yml"; \
+		else \
+			sig_config="$$sig_root/$$model/significance.yml"; \
+		fi; \
+		if [ ! -f "$$sig_config" ]; then echo "Missing significance config: $$sig_config" >&2; exit 2; fi; \
+		sig_submission="$$( $(SBATCH) --parsable --job-name="sig-$(DATASET)-$$model-$(USR)-$(DT)" submit.sh scripts/run_significance.py --config "$$sig_config" $$sig_override $(SIG_OVERRIDES) )"; \
+		sig_id="$${sig_submission%%;*}"; \
+		case "$$sig_id" in ''|*[!0-9]*) echo "Could not parse significance job ID: $$sig_submission" >&2; exit 2 ;; esac; \
+		sig_ids="$${sig_ids:+$$sig_ids:}$$sig_id"; \
+		echo "Submitted significance for $$model: $$sig_id"; \
+	done; \
+	for model in $$models; do \
+		case "$$model" in \
+			gpt-j-6b) model_dir="gpt-j-6b"; layers='[0,7,14,21,28]' ;; \
+			gpt2-xl) model_dir="gpt2-xl-batch"; layers='[0,12,24,36,48]' ;; \
+			llama3-8b) model_dir="llama3-8b"; layers='[0,8,16,24,32]' ;; \
+			roberta-large) model_dir="roberta-large"; layers='[0,6,12,18,24]' ;; \
+			random-gpt2-xl) model_dir="random-gpt2-xl"; layers='[0,12,24,36,48]' ;; \
+			gpt2) model_dir="gpt2"; layers='[0,3,6,9,12]' ;; \
+			gpt2-large) model_dir="gpt2-large"; layers='[0,18,36]' ;; \
+			gpt2-medium) model_dir="gpt2-medium"; layers='[0,12,24]' ;; \
+			pythia-1.4b) model_dir="pythia-1.4b"; layers='[0,12,24]' ;; \
+			pythia-160m) model_dir="pythia-160m"; layers='[0,6,12]' ;; \
+			pythia-6.9b) model_dir="pythia-6.9b"; layers='[0,16,32]' ;; \
+			roberta-base) model_dir="roberta-base"; layers='[0,6,12]' ;; \
+			*) echo "Unsupported union model '$$model'" >&2; exit 2 ;; \
+		esac; \
+		echo "Submitting dependent union RRR for $(DATASET) / $$model"; \
+		if [ "$$rrr_modality" = "fmri" ]; then \
+			$(SBATCH) --dependency="afterok:$$sig_ids" --job-name="rrr-fmri-$$model-$(USR)-$(DT)" submit.sh scripts/run_rrr.py --config "$$rrr_config" --fmri.model_dir="$$model_dir" --fmri.layer="$$layers" --significance_selection.reference_artifact.model="$$model_dir" $(RRR_OVERRIDES); \
+		else \
+			$(SBATCH) --dependency="afterok:$$sig_ids" --job-name="rrr-$(DATASET)-$$model-$(USR)-$(DT)" submit.sh scripts/run_rrr.py --config "$$rrr_config" --ieeg.encoding.per_model_config.model_dir="$$model_dir" --ieeg.encoding.per_model_config.layer="$$layers" --significance_selection.reference_artifact.model="$$model_dir" $(RRR_OVERRIDES); \
+		fi; \
+	done
 
 ## Submit one temporal-window RRR job per model and dataset. Each config keeps
 ## all sampled layers in one process, so the default submits 14 jobs rather than
