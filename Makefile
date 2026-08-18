@@ -287,22 +287,12 @@ rrr-cross-model-layer-batch:
 		$(CMD) scripts/run_rrr.py --config "$$config" $(RRR_OVERRIDES); \
 	done; \
 	if [ "$(CROSS_MODEL_LAYER_INCLUDE_FMRI)" = "true" ]; then \
-		fmri_config="configs/fmri/within_fmri_cross_model_layer.yml"; \
-		if [ ! -f "$$fmri_config" ]; then echo "Missing fMRI RRR config: $$fmri_config" >&2; exit 2; fi; \
+		fmri_config_root="configs/fmri/within_fmri_cross_model_layer"; \
 		for model in $(CROSS_MODEL_LAYER_MODELS); do \
-			case "$$model" in \
-				gpt-j-6b) model_dir="gpt-j-6b"; layers='[0,7,14,21,28]' ;; \
-				gpt2-xl) model_dir="gpt2-xl-batch"; layers='[0,12,24,36,48]' ;; \
-				llama3-8b) model_dir="llama3-8b"; layers='[0,8,16,24,32]' ;; \
-				roberta-large) model_dir="roberta-large"; layers='[0,6,12,18,24]' ;; \
-				random-gpt2-xl) model_dir="random-gpt2-xl"; layers='[0,12,24,36,48]' ;; \
-				gpt2) model_dir="gpt2"; layers='[0,3,6,9,12]' ;; \
-				*) echo "Unsupported non-GloVe fMRI model '$$model'" >&2; exit 2 ;; \
-			esac; \
+			fmri_config="$$fmri_config_root/$$model.yml"; \
+			if [ ! -f "$$fmri_config" ]; then echo "Missing fMRI RRR config: $$fmri_config" >&2; exit 2; fi; \
 			echo "Submitting cross-model-layer fMRI RRR for $$model"; \
-			$(CMD) scripts/run_rrr.py --config "$$fmri_config" \
-				--fmri.model_dir="$$model_dir" --fmri.layer="$$layers" \
-				--significance_selection.reference_artifact.model="$$model_dir" $(RRR_OVERRIDES); \
+			$(CMD) scripts/run_rrr.py --config "$$fmri_config" $(RRR_OVERRIDES); \
 		done; \
 	fi
 
@@ -333,7 +323,7 @@ sig-rrr-cross-model-layer-batch:
 			;; \
 		fmri) \
 			sig_root="configs/cross_dataset/fmri/significance"; \
-			rrr_config="configs/fmri/within_fmri_cross_model_layer.yml"; \
+			rrr_root="configs/fmri/within_fmri_cross_model_layer"; \
 			models="$(SIG_RRR_FMRI_MODELS)"; \
 			sig_override=""; \
 			rrr_modality="fmri"; \
@@ -356,7 +346,7 @@ sig-rrr-cross-model-layer-batch:
 	done; \
 	for model in $$models; do \
 		if [ "$$rrr_modality" = "fmri" ]; then \
-			rrr_config="configs/fmri/within_fmri_cross_model_layer.yml"; \
+			rrr_config="$$rrr_root/$$model.yml"; \
 		else \
 			rrr_config="$$rrr_root/$$model/cross_model_layer.yml"; \
 		fi; \
@@ -378,7 +368,7 @@ sig-rrr-cross-model-layer-batch:
 		esac; \
 		echo "Submitting dependent union RRR for $(DATASET) / $$model"; \
 		if [ "$$rrr_modality" = "fmri" ]; then \
-			$(SBATCH) --dependency="afterok:$$sig_ids" --job-name="rrr-fmri-$$model-$(USR)-$(DT)" submit.sh scripts/run_rrr.py --config "$$rrr_config" --fmri.model_dir="$$model_dir" --fmri.layer="$$layers" --significance_selection.reference_artifact.model="$$model_dir" $(RRR_OVERRIDES); \
+			$(SBATCH) --dependency="afterok:$$sig_ids" --job-name="rrr-fmri-$$model-$(USR)-$(DT)" submit.sh scripts/run_rrr.py --config "$$rrr_config" $(RRR_OVERRIDES); \
 		else \
 			$(SBATCH) --dependency="afterok:$$sig_ids" --job-name="rrr-$(DATASET)-$$model-$(USR)-$(DT)" submit.sh scripts/run_rrr.py --config "$$rrr_config" --ieeg.encoding.per_model_config.model_dir="$$model_dir" --ieeg.encoding.per_model_config.layer="$$layers" --significance_selection.reference_artifact.model="$$model_dir" $(RRR_OVERRIDES); \
 		fi; \

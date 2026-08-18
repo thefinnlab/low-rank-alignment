@@ -63,6 +63,8 @@ ieeg:
     offset: 0
     subjects: null
     batch: false
+    ridge_solver_params:
+      n_targets_batch: 65536
     per_model_config:
       model_dir: gpt-j-6b
       layer:
@@ -78,4 +80,3 @@ ieeg:
   null_augmented_min_shift: 50
   null_augmented_seed: 42
 fmri: null
-
