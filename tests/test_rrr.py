@@ -134,6 +134,32 @@ class TestSaveLoadRRRResult:
 
 
 class TestCrossDatasetRankBasisLoading:
+    def test_cross_temporal_loader_preserves_fold_specific_factors(
+        self, tmp_path, rng
+    ):
+        from scripts.run_rrr import Artifact, UnitSelector
+        from src.utils.rrr.rrr_ieeg import _load_cross_temporal_A_by_fold
+
+        source = Artifact(mode="temporal_windows", results_root=tmp_path).begin(
+            config={"windows": ["pre"]}
+        )
+        expected = {}
+        for fold in range(2):
+            matrix = rng.standard_normal((6, 4)).astype(np.float32) + fold
+            expected[fold] = matrix[:, :2]
+            source.save_factors(
+                unit=UnitSelector(method="rrr", temporal_window="pre"),
+                fold=fold,
+                input_factors=matrix,
+            )
+
+        loaded = _load_cross_temporal_A_by_fold(
+            source, "rrr", "pre", [2], n_folds=2
+        )
+
+        np.testing.assert_array_equal(loaded[2][0], expected[0])
+        np.testing.assert_array_equal(loaded[2][1], expected[1])
+
     def test_loads_single_saved_basis_per_rank(self, tmp_path, rng):
         from scripts.run_rrr import Artifact
         expected = rng.standard_normal((12, 4)).astype(np.float32)

@@ -61,6 +61,8 @@ ieeg:
     offset: 0
     subjects: null
     batch: false
+    ridge_solver_params:
+      n_targets_batch: 65536
     per_model_config:
       model_dir: gpt2
       layer:

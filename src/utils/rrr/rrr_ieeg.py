@@ -2367,10 +2367,43 @@ def _load_cross_dataset_A_by_rank(
     return averaged
 
 
+def _load_cross_temporal_A_by_fold(
+    source: Artifact,
+    kind: str,
+    source_window: str,
+    ranks: list[int],
+    n_folds: int,
+) -> dict[int, dict[int, np.ndarray]]:
+    """Load leakage-safe, fold-matched factors for one source temporal window."""
+    result = {}
+    for rank in sorted(set(int(k) for k in ranks)):
+        by_fold = {}
+        for fold in range(n_folds):
+            selector = {
+                "method": kind,
+                "temporal_window": source_window,
+                "fold": fold,
+            }
+            if not source.has_field("input_factors", selector=selector):
+                raise ValueError(
+                    f"Source Artifact has no {kind} factors for temporal window "
+                    f"{source_window!r}, fold {fold}"
+                )
+            matrix = np.asarray(source.load_field("input_factors", selector=selector))
+            if matrix.ndim != 2 or matrix.shape[1] < rank:
+                raise ValueError(
+                    f"Source {kind} factors for temporal window {source_window!r}, "
+                    f"fold {fold} cannot provide rank {rank}; shape={matrix.shape}"
+                )
+            by_fold[fold] = matrix[:, :rank]
+        result[rank] = by_fold
+    return result
+
+
 def _run_cross_dataset_subspace_for_unit(
     artifact: Artifact,
     unit: UnitSelector,
-    A_by_rank: dict[int, np.ndarray],
+    A_by_rank: "dict[int, np.ndarray | dict[int, np.ndarray]]",
     X_raw: np.ndarray,
     test_idxs: list,
     per_fold_baselines: list,
@@ -2380,20 +2413,21 @@ def _run_cross_dataset_subspace_for_unit(
     ranks_by_fold: "dict[int, list[int]] | None" = None,
     completed_pairs: "set[tuple[int, int]] | None" = None,
 ) -> pd.DataFrame:
-    """Evaluate rank-specific source-dataset subspaces on target dataset folds."""
-    for rank, A_rank in A_by_rank.items():
-        if A_rank.ndim != 2:
-            raise ValueError(f"Expected 2D A matrix for rank {rank}, got {A_rank.shape}")
-        if A_rank.shape[0] != X_raw.shape[1]:
-            raise ValueError(
-                "Cross-dataset source A ambient dimension does not match target embeddings: "
-                f"{A_rank.shape[0]} vs {X_raw.shape[1]} for rank {rank}"
-            )
-        if A_rank.shape[1] < rank:
-            raise ValueError(
-                f"Cross-dataset source A for rank {rank} has only "
-                f"{A_rank.shape[1]} direction(s)."
-            )
+    """Evaluate rank-specific source subspaces on target folds."""
+    for rank, A_value in A_by_rank.items():
+        matrices = A_value.values() if isinstance(A_value, dict) else [A_value]
+        for A_rank in matrices:
+            if A_rank.ndim != 2:
+                raise ValueError(f"Expected 2D A matrix for rank {rank}, got {A_rank.shape}")
+            if A_rank.shape[0] != X_raw.shape[1]:
+                raise ValueError(
+                    "Source A ambient dimension does not match target embeddings: "
+                    f"{A_rank.shape[0]} vs {X_raw.shape[1]} for rank {rank}"
+                )
+            if A_rank.shape[1] < rank:
+                raise ValueError(
+                    f"Source A for rank {rank} has only {A_rank.shape[1]} direction(s)."
+                )
 
     import torch
 
@@ -2461,7 +2495,11 @@ def _run_cross_dataset_subspace_for_unit(
                 _run_subspace_rank_loop_for_fold(
                     artifact=artifact,
                     unit=unit,
-                    A_full=A_by_rank[int(rank)],
+                    A_full=(
+                        A_by_rank[int(rank)][fold_f]
+                        if isinstance(A_by_rank[int(rank)], dict)
+                        else A_by_rank[int(rank)]
+                    ),
                     ranks_to_run=[int(rank)],
                     X_raw=X_raw,
                     baseline=per_fold_baselines[fold_f],
@@ -2635,6 +2673,153 @@ def _run_cross_dataset_rrr(
     return units
 
 
+def _run_cross_temporal_windows_rrr(
+    config: RRRConfig,
+    enc,
+    artifact: Artifact,
+    significance,
+    subject_ids,
+    sig_electrodes,
+    aligned_embeddings,
+    word_df,
+    word_in_glove=None,
+    shared_selection_metadata=None,
+):
+    """Transfer fold-matched A matrices between neural target windows."""
+    del word_df
+    source_kwargs = dict(config.ieeg_rrr_source or {})
+    source_kwargs.setdefault("results_root", config.results_root)
+    source = Artifact(**source_kwargs)
+    if source.variant is None:
+        source._resolve_variant()
+    source_identity = source.identity_record()
+    print(f"Loading temporal-window subspaces from {source_identity}")
+
+    reference = _reference_encoding_results(significance, subject_ids)
+    n_folds = len(reference["test_idxs"])
+    prepared = _get_decomposition_inputs(
+        subject_ids,
+        sig_electrodes,
+        reference,
+        significance.detailed_significance,
+        enc,
+        aligned_embeddings,
+        compute_sig_nonsig=config.compute_sig_nonsig,
+        word_in_glove=word_in_glove,
+        shared_selection_metadata=shared_selection_metadata,
+    )
+    if prepared is None:
+        return []
+    X_raw = next(iter(prepared.embeddings.values()))
+    windows = {window.name: window for window in config.temporal_windows}
+    pairs = (
+        [(pair.source, pair.target) for pair in config.temporal_window_pairs]
+        if config.temporal_window_pairs
+        else [
+            (source_name, target_name)
+            for source_name in windows
+            for target_name in windows
+            if source_name != target_name
+        ]
+    )
+    if not pairs:
+        raise ValueError(
+            "cross_temporal_windows requires at least two windows or an explicit pair"
+        )
+
+    returned_units = []
+    combined = []
+    for source_window, target_window in pairs:
+        target_mask = _temporal_window_target_mask(
+            prepared.target_manifest, windows[target_window]
+        )
+        target_indices = np.flatnonzero(target_mask)
+        manifest = (
+            prepared.target_manifest.loc[target_mask].copy().reset_index(drop=True)
+        )
+        manifest["original_target_index"] = target_indices
+        Y_target = prepared.targets[:, target_mask]
+        sig_mask = (
+            prepared.sig_mask_flat[target_mask]
+            if prepared.sig_mask_flat is not None
+            else None
+        )
+        print(f"\nTemporal transfer: {source_window} -> {target_window}")
+
+        for method in (["rrr", "pca"] if config.run_pca_baseline else ["rrr"]):
+            unit = UnitSelector(
+                method=method,
+                source_temporal_window=source_window,
+                target_temporal_window=target_window,
+            )
+            plan = artifact.resume_plan(
+                unit=unit,
+                ranks=config.rank_grid,
+                folds=range(n_folds),
+                refresh=config.refresh,
+                require_input_factors=False,
+            )
+            artifact.save_target_manifest(
+                unit=unit, target_manifest=manifest, overwrite=config.refresh
+            )
+            per_fold_baselines = build_per_fold_baselines(
+                X_raw,
+                Y_target,
+                prepared.test_idxs,
+                alphas=(
+                    np.array(enc.ridge_alphas, dtype=float)
+                    if enc.ridge_alphas is not None else None
+                ),
+                ridge_cv_folds=enc.ridge_cv_folds,
+                ridge_solver_params=enc.ridge_solver_params,
+                ridge_y_in_cpu=enc.ridge_y_in_cpu,
+                ridge_force_cpu=enc.ridge_force_cpu,
+                alpha_policy=enc.alpha_grid,
+                alpha_cache_dir=None,
+                alpha_context={
+                    "script": "run_rrr",
+                    "mode": "cross_temporal_windows",
+                    "source_window": source_window,
+                    "target_window": target_window,
+                    "method": method,
+                    "model": enc.model,
+                    "per_model_config": enc.per_model_config,
+                    "offset": enc.offset,
+                },
+                folds_to_build=plan["folds_to_build"],
+            )
+            A_by_rank = _load_cross_temporal_A_by_fold(
+                source, method, source_window, config.rank_grid, n_folds
+            )
+            _run_cross_dataset_subspace_for_unit(
+                artifact=artifact,
+                unit=unit,
+                A_by_rank=A_by_rank,
+                X_raw=X_raw,
+                test_idxs=prepared.test_idxs,
+                per_fold_baselines=per_fold_baselines,
+                config=config,
+                primary_label="pca" if method == "pca" else "nr",
+                sig_mask_flat=sig_mask,
+                ranks_by_fold=plan["ranks_by_fold"],
+                completed_pairs=plan["completed_pairs"],
+            )
+            summary = artifact.load_summary(unit=unit).copy()
+            summary["source_window"] = source_window
+            summary["target_window"] = target_window
+            summary["method"] = method
+            combined.append(summary)
+            returned_units.append((unit, n_folds, False, True))
+
+    artifact.save_field(
+        "mode_metadata",
+        pd.concat(combined, ignore_index=True),
+        selector={"kind": "cross_temporal_window_summary"},
+        overwrite=config.refresh,
+    )
+    return returned_units
+
+
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
@@ -2803,6 +2988,8 @@ def run_ieeg(config: RRRConfig):
         units = _run_leave_one_subject_out_rrr(**branch_kwargs)
     elif config.mode == ScriptMode.CROSS_DATASET:
         units = _run_cross_dataset_rrr(**branch_kwargs)
+    elif config.mode == ScriptMode.CROSS_TEMPORAL_WINDOWS:
+        units = _run_cross_temporal_windows_rrr(**branch_kwargs)
     elif config.mode == ScriptMode.TEMPORAL_WINDOWS:
         units = _run_temporal_windows_rrr(**branch_kwargs)
     else:

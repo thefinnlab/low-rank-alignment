@@ -79,8 +79,10 @@ class Config:
         shared = {ScriptMode.INTERNAL, ScriptMode.CROSS_DATASET}
         if self.modality == "fmri" and self.mode not in shared:
             raise ValueError(f"RRR mode {self.mode.value!r} is unsupported for fMRI")
-        if self.mode == ScriptMode.CROSS_DATASET and not self.rrr_source:
-            raise ValueError("mode=cross_dataset requires rrr_source")
+        if self.mode in {
+            ScriptMode.CROSS_DATASET, ScriptMode.CROSS_TEMPORAL_WINDOWS
+        } and not self.rrr_source:
+            raise ValueError(f"mode={self.mode.value} requires rrr_source")
         if not self.rank_grid or any(int(rank) < 1 for rank in self.rank_grid):
             raise ValueError("rank_grid must contain positive integers")
 
@@ -140,6 +142,8 @@ class UnitSelector:
     subject: int | str | None = None
     region: str | None = None
     temporal_window: str | None = None
+    source_temporal_window: str | None = None
+    target_temporal_window: str | None = None
     held_out_subject: int | str | None = None
     loso_phase: str | None = None
     cross_dataset_source: str | None = None
@@ -153,7 +157,8 @@ class Artifact(ArtifactStore):
 
     SCRIPT = "run_rrr"
     SELECTOR_ORDER = (
-        "subject", "method", "region", "temporal_window", "held_out_subject",
+        "subject", "method", "region", "temporal_window", "source_temporal_window",
+        "target_temporal_window", "held_out_subject",
         "loso_phase", "cross_dataset_source", "basis", "delay", "rank", "fold",
         "name",
     )
@@ -163,7 +168,7 @@ class Artifact(ArtifactStore):
         "target_factors": False, "full_metrics": True,
         "rank_metrics": True, "fold_results": False, "mean_results": True,
         "metadata": False, "unit_metadata": False, "diagnostics": False,
-        "plots": False,
+        "plots": False, "mode_metadata": False
     }
 
     def __init__(self, *, mode="internal", dataset="podcast", offset=0,
