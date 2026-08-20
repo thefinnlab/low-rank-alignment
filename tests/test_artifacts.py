@@ -109,6 +109,41 @@ def test_rrr_variant_distinguishes_significance_selection_and_source_sets():
     assert cross_variant == readable_variant(reordered_equivalent)
 
 
+def test_rrr_artifact_loads_variant_from_significance_selection(tmp_path):
+    reference = {
+        "mode": "sig_lags", "dataset": "podcast", "offset": 0,
+        "model": "gpt2", "layer": 12,
+    }
+    selection = {
+        "mode": "within-layer", "reference_artifact": reference,
+    }
+    other_selection = {
+        "mode": "cross-model-layer", "reference_artifact": reference,
+        "artifacts": [{"dataset": "podcast", "model": "gpt2", "layer": [6, 12]}],
+    }
+    for value, configured_selection in ((1, selection), (2, other_selection)):
+        artifact = RRRArtifact(results_root=tmp_path).begin(config={
+            "significance_selection": configured_selection,
+            "scientific_parameter": value,
+        })
+        artifact.save_field("effective_config", {"value": value})
+
+    loaded = RRRArtifact(
+        results_root=tmp_path, significance_selection=selection
+    ).load_artifacts(["effective_config"])
+    assert loaded.effective_config == {"value": 1}
+    assert loaded.variant == readable_variant({"significance_selection": selection})
+
+
+def test_rrr_artifact_rejects_variant_and_significance_selection(tmp_path):
+    with pytest.raises(ValueError, match="mutually exclusive"):
+        RRRArtifact(
+            results_root=tmp_path,
+            variant="manual",
+            significance_selection={"reference_artifact": {"dataset": "podcast"}},
+        )
+
+
 def test_rrr_manifest_resume_is_selector_complete(tmp_path):
     artifact = RRRArtifact(results_root=tmp_path).begin(config={"rank_grid": [1, 2]})
     unit = UnitSelector(method="rrr", region="superior-temporal")

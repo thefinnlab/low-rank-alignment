@@ -10,7 +10,14 @@ from typing import ClassVar
 import numpy as np
 import pandas as pd
 
-from src.core.artifacts import ArtifactStore, normalize_dataset, normalize_model
+from src.core.artifacts import (
+    ArtifactError,
+    ArtifactStore,
+    canonical_significance_selection,
+    normalize_dataset,
+    normalize_model,
+    readable_variant,
+)
 from src.core.config import (
     FMRICrossDatasetRRRConfig,
     RRRConfig,
@@ -167,9 +174,37 @@ class Artifact(ArtifactStore):
     }
 
     def __init__(self, *, mode="internal", dataset="podcast", offset=0,
-                 model="gpt2-xl", layer=24, variant=None, results_root="results"):
+                 model="gpt2-xl", layer=24, variant=None,
+                 significance_selection=None, results_root="results"):
+        if variant is not None and significance_selection is not None:
+            raise ValueError(
+                "RRR Artifact variant and significance_selection are mutually exclusive"
+            )
+        if significance_selection is not None:
+            variant = readable_variant(
+                {"significance_selection": significance_selection}
+            )
         self._init_store(mode=mode, dataset=dataset, offset=offset, model=model,
                          layer=layer, variant=variant, results_root=results_root)
+        self.requested_significance_selection = significance_selection
+
+    def _manifest(self):
+        manifest = super()._manifest()
+        if self.requested_significance_selection is not None:
+            saved = manifest.get("configuration", {}).get("significance_selection")
+            if saved is None:
+                raise ArtifactError(
+                    "Selected RRR Artifact does not record significance_selection"
+                )
+            requested = canonical_significance_selection(
+                self.requested_significance_selection
+            )
+            if canonical_significance_selection(saved) != requested:
+                raise ArtifactError(
+                    "Selected RRR Artifact significance_selection does not match "
+                    "the requested selection"
+                )
+        return manifest
 
     @classmethod
     def from_ieeg_config(cls, config, dataset_context):

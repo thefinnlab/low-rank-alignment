@@ -336,6 +336,7 @@ def run_fmri(config: FMRICrossDatasetRRRConfig) -> Artifact:
         source = IEEGRRRArtifact(**source_kwargs)
         if source.variant is None:
             source._resolve_variant()
+        source.manifest()
         upstreams.append(source.identity_record())
     artifact = Artifact.from_fmri_config(config)
     artifact.begin(config=config, upstreams=upstreams, refresh=config.refresh)

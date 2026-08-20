@@ -1641,7 +1641,7 @@ def _run_multi_view_rrr(
             cls = Artifact
             kwargs = dict(view.ieeg_rrr_source)
         else:
-            from scripts.fmri.run_cross_dataset_rrr import Artifact as cls
+            cls = Artifact
             kwargs = dict(view.fmri_rrr_source or {})
         kwargs.setdefault("results_root", config.results_root)
         source = cls(**kwargs)
@@ -2518,10 +2518,9 @@ def _run_cross_dataset_rrr(
         source_kwargs.setdefault("results_root", config.results_root)
         source = Artifact(**source_kwargs)
     elif config.fmri_rrr_source:
-        from scripts.fmri.run_cross_dataset_rrr import Artifact as FMRIRRRArtifact
         source_kwargs = dict(config.fmri_rrr_source)
         source_kwargs.setdefault("results_root", config.results_root)
-        source = FMRIRRRArtifact(**source_kwargs)
+        source = Artifact(**source_kwargs)
     else:
         raise ValueError("cross_dataset requires an explicit RRR source Artifact")
     if source.variant is None:
@@ -2695,6 +2694,7 @@ def run_ieeg(config: RRRConfig):
         upstream = source_cls(**kwargs)
         if upstream.variant is None:
             upstream._resolve_variant()
+        upstream.manifest()
         upstreams.append(upstream.identity_record())
     for view in config.views:
         source_kwargs = view.ieeg_rrr_source or view.fmri_rrr_source
@@ -2706,6 +2706,7 @@ def run_ieeg(config: RRRConfig):
         upstream = source_cls(**kwargs)
         if upstream.variant is None:
             upstream._resolve_variant()
+        upstream.manifest()
         upstreams.append(upstream.identity_record())
     artifact = Artifact.from_ieeg_config(config, dataset_context)
     artifact.begin(

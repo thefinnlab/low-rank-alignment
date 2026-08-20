@@ -25,6 +25,13 @@ would collide at the same readable location is rejected and must supply an
 explicit `variant_name`. Loading without a variant is permitted only when exactly
 one variant exists.
 
+RRR consumers may pass `significance_selection` directly to the `Artifact`
+constructor in place of `variant`. The Artifact computes the same stable digest,
+selects that variant, and verifies the selection recorded in its manifest. Explicit
+`variant` and `significance_selection` arguments are mutually exclusive. Cross-dataset
+RRR source blocks use this form so the source factors are constrained to the intended
+significant-target set rather than relying on single-variant discovery.
+
 ## Contract
 
 Producer classes declare required and optional fields. Fields may be scalar or

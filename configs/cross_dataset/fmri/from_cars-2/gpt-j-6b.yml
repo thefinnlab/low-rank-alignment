@@ -32,6 +32,14 @@ rrr_source:
   offset: 0
   model: gpt-j-6b
   layer: '{layer}'
+  significance_selection:
+    mode: within-layer
+    reference_artifact:
+      mode: sig_lags
+      dataset: brain-treebank-cars-2
+      offset: 0
+      model: gpt-j-6b
+      layer: '{layer}'
 ieeg: null
 fmri:
   ridge:

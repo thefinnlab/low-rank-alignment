@@ -53,6 +53,8 @@ is configured uniformly across modalities as `within-layer` or as an explicit
 `cross-model-layer` union; union artifact entries may compactly list several layers
 for one model. Cross-model-layer batch RRR uses per-model configs so model-specific
 rank and ridge-memory settings can be retained for both iEEG and fMRI.
+Cross-dataset RRR source identities include their own significance selection, which
+deterministically resolves and validates the saved source variant.
 
 ## Tests
 

@@ -102,22 +102,7 @@ def readable_variant(config: Any, upstreams: list[dict] | None = None,
 
     selection = normalized.get("significance_selection")
     if isinstance(selection, dict) and selection.get("reference_artifact"):
-        canonical = {
-            "mode": selection.get("mode", "within-layer"),
-            "reference_artifact": selection["reference_artifact"],
-            "artifacts": [],
-        }
-        expanded = []
-        for artifact in selection.get("artifacts", []):
-            layers = artifact.get("layer")
-            for layer in layers if isinstance(layers, list) else [layers]:
-                concrete = dict(artifact)
-                concrete["layer"] = layer
-                expanded.append(concrete)
-        canonical["artifacts"] = sorted(
-            expanded,
-            key=lambda item: json.dumps(_primitive(item), sort_keys=True),
-        )
+        canonical = canonical_significance_selection(selection)
         encoded = json.dumps(_primitive(canonical), sort_keys=True, separators=(",", ":"))
         digest = hashlib.sha256(encoded.encode("utf-8")).hexdigest()[:10]
         parts.append(f"significance-{canonical['mode']}-{digest}")
@@ -125,6 +110,34 @@ def readable_variant(config: Any, upstreams: list[dict] | None = None,
     return "/".join(
         _component(part, "variant component") for part in (parts or ["default"])
     )
+
+
+def canonical_significance_selection(selection: Any) -> dict:
+    """Canonicalize a significance selection for RRR identity and validation."""
+    normalized = normalized_config({"significance_selection": selection})[
+        "significance_selection"
+    ]
+    if not isinstance(normalized, dict) or not normalized.get("reference_artifact"):
+        raise ValueError(
+            "significance_selection must define a reference_artifact"
+        )
+    canonical = {
+        "mode": normalized.get("mode", "within-layer"),
+        "reference_artifact": normalized["reference_artifact"],
+        "artifacts": [],
+    }
+    expanded = []
+    for artifact in normalized.get("artifacts", []):
+        layers = artifact.get("layer")
+        for layer in layers if isinstance(layers, list) else [layers]:
+            concrete = dict(artifact)
+            concrete["layer"] = layer
+            expanded.append(concrete)
+    canonical["artifacts"] = sorted(
+        expanded,
+        key=lambda item: json.dumps(_primitive(item), sort_keys=True),
+    )
+    return canonical
 
 
 def normalize_dataset(dataset: str, stimulus: str | None = None) -> str:
