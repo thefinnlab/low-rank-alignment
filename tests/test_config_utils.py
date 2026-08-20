@@ -209,6 +209,35 @@ class TestDictToDataclass:
         with pytest.raises(ValueError, match="at least one window"):
             RRRConfig(mode=ScriptMode.TEMPORAL_WINDOWS)
 
+    def test_rrr_cross_temporal_windows_roundtrip(self):
+        config = dict_to_dataclass(
+            {
+                "mode": "cross_temporal_windows",
+                "ieeg_rrr_source": {"mode": "temporal_windows"},
+                "temporal_windows": [
+                    {"name": "pre", "start_sec": -2.0, "end_sec": 0.0},
+                    {"name": "post", "start_sec": 0.0, "end_sec": 2.0},
+                ],
+                "temporal_window_pairs": [
+                    {"source": "pre", "target": "post"}
+                ],
+            },
+            RRRConfig,
+        )
+        assert config.mode == ScriptMode.CROSS_TEMPORAL_WINDOWS
+        assert config.temporal_window_pairs[0].source == "pre"
+        assert config.temporal_window_pairs[0].target == "post"
+
+    def test_rrr_cross_temporal_windows_requires_ieeg_source(self):
+        with pytest.raises(ValueError, match="requires an ieeg_rrr_source"):
+            RRRConfig(
+                mode=ScriptMode.CROSS_TEMPORAL_WINDOWS,
+                temporal_windows=[
+                    RRRTemporalWindowConfig("pre", -2, 0),
+                    RRRTemporalWindowConfig("post", 0, 2),
+                ],
+            )
+
     @pytest.mark.parametrize(
         "windows, message",
         [

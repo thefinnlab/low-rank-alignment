@@ -34,7 +34,8 @@ temporarily deferred from that storage refactor.
 - `src/utils/significance/` contains the modality-specific significance runners and
   their reusable statistical helpers.
 - `src/utils/rrr/` contains the modality-specific RRR runners, dense fitting, input
-  preparation, evaluation, multiview handling, and result helpers.
+  preparation, evaluation, multiview handling, cross-temporal-window transfer, and
+  result helpers.
 - `src/utils/subspace_comparison/` contains saved-space metrics and directed comparison
   orchestration.
 - `src/utils/language_interpret/` contains decoding, reconstruction, and task registry

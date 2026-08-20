@@ -26,6 +26,7 @@ class ScriptMode(str, Enum):
     LEAVE_ONE_SUBJECT_OUT = "leave_one_subject_out"
     MULTI_VIEW = "multi_view"
     TEMPORAL_WINDOWS = "temporal_windows"
+    CROSS_TEMPORAL_WINDOWS = "cross_temporal_windows"
     INTERNAL = "internal"
 
 
@@ -194,6 +195,14 @@ class RRRTemporalWindowConfig:
 
 
 @dataclass
+class RRRCrossTemporalWindowPairConfig:
+    """One directed transfer from a source window's A to target-window responses."""
+
+    source: str
+    target: str
+
+
+@dataclass
 class SignificanceSelectionConfig:
     """Select neural targets from one significance run or an explicit union."""
 
@@ -235,6 +244,7 @@ class RRRConfig:
     Mode → output directory mapping (default, overridable via rrr_output_dir):
         cross_subject : {output_dir}/rrr/
         temporal_windows: {output_dir}/temporal_window_rrr/<window>/{rrr,pca}/
+        cross_temporal_windows: directed, fold-matched transfer between saved windows
         per_subject   : {output_dir}/per_subject_rrr/
         per_region    : {output_dir}/per_region_rrr/
     """
@@ -251,6 +261,9 @@ class RRRConfig:
     cross_source_format: str = "fold_factors"
     views: list[RRRViewConfig] = field(default_factory=list)
     temporal_windows: list[RRRTemporalWindowConfig] = field(default_factory=list)
+    temporal_window_pairs: list[RRRCrossTemporalWindowPairConfig] = field(
+        default_factory=list
+    )
     subspace_aggregation: str = "extrinsic"
 
     # Full-model banded ridge used by mode=multi_view.
@@ -331,7 +344,9 @@ class RRRConfig:
         duplicates = sorted({name for name in names if names.count(name) > 1})
         if duplicates:
             raise ValueError(f"Duplicate RRR view name(s): {duplicates}")
-        if self.mode == ScriptMode.TEMPORAL_WINDOWS and not self.temporal_windows:
+        if self.mode in {
+            ScriptMode.TEMPORAL_WINDOWS, ScriptMode.CROSS_TEMPORAL_WINDOWS
+        } and not self.temporal_windows:
             raise ValueError(
                 "RRRConfig.temporal_windows must contain at least one window"
             )
@@ -355,6 +370,29 @@ class RRRConfig:
                 raise ValueError(
                     f"Temporal window {window.name!r} must have start_sec < end_sec"
                 )
+        if self.mode == ScriptMode.CROSS_TEMPORAL_WINDOWS:
+            if not self.ieeg_rrr_source or self.fmri_rrr_source:
+                raise ValueError(
+                    "mode=cross_temporal_windows requires an ieeg_rrr_source"
+                )
+            if len(window_names) < 2:
+                raise ValueError(
+                    "mode=cross_temporal_windows requires at least two windows"
+                )
+            known_windows = set(window_names)
+            pairs = [(pair.source, pair.target) for pair in self.temporal_window_pairs]
+            if len(pairs) != len(set(pairs)):
+                raise ValueError("Duplicate temporal window transfer pair")
+            for source, target in pairs:
+                if source == target:
+                    raise ValueError(
+                        "Temporal window transfer source and target must differ"
+                    )
+                unknown = sorted({source, target} - known_windows)
+                if unknown:
+                    raise ValueError(
+                        f"Temporal window transfer references unknown window(s): {unknown}"
+                    )
         if any(not view.name for view in self.views):
             raise ValueError("Every RRR view name must be non-empty")
         if any(int(view.rank) < 1 for view in self.views):

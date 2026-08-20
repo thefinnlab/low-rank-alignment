@@ -51,6 +51,27 @@ def test_rrr_internal_mode_and_generic_source_translation():
     assert fmri.ieeg_rrr_source["dataset"] == "podcast"
 
 
+def test_rrr_cross_temporal_mode_translates_generic_source():
+    selected = RRRClientConfig(
+        mode="cross_temporal_windows",
+        rrr_source={"dataset": "podcast", "mode": "temporal_windows"},
+        significance_selection={
+            "mode": "within-layer",
+            "reference_artifact": {"dataset": "podcast"},
+        },
+        ieeg={
+            "encoding": {},
+            "temporal_windows": [
+                {"name": "pre", "start_sec": -2.0, "end_sec": 0.0},
+                {"name": "post", "start_sec": 0.0, "end_sec": 2.0},
+            ],
+        },
+    ).selected_config()
+
+    assert selected.mode.value == "cross_temporal_windows"
+    assert selected.ieeg_rrr_source["mode"] == "temporal_windows"
+
+
 def test_significance_targets_and_rrr_factor_sets_are_modality_neutral(tmp_path):
     significance = SignificanceArtifact(results_root=tmp_path).begin(config={"x": 1})
     frame = pd.DataFrame({
