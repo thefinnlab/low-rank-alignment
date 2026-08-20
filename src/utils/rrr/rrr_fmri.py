@@ -32,7 +32,10 @@ from src.utils.shared.fmri import (
     TEMPORARILY_HELD_OUT_FMRI_STORIES,
 )
 from src.utils.rrr.core import fit_dense_rrr
-from src.utils.rrr.significance import load_significance_selection
+from src.utils.rrr.significance import (
+    load_significance_selection,
+    validate_cross_dataset_significance_alignment,
+)
 from src.utils.subspace_comparison.metrics import aggregate_subspace_basis
 from src.utils.shared.tensors import to_numpy
 
@@ -339,6 +342,13 @@ def run_fmri(config: FMRICrossDatasetRRRConfig) -> Artifact:
         source.manifest()
         upstreams.append(source.identity_record())
     artifact = Artifact.from_fmri_config(config)
+    if source is not None:
+        validate_cross_dataset_significance_alignment(
+            config.significance_selection,
+            artifact.identity,
+            source.requested_significance_selection,
+            source.identity,
+        )
     artifact.begin(config=config, upstreams=upstreams, refresh=config.refresh)
     artifact.save_field("effective_config", asdict(config), overwrite=config.refresh)
     artifact.save_field("upstream_identities", upstreams, overwrite=config.refresh)

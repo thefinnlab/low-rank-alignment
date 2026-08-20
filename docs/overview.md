@@ -56,6 +56,8 @@ for one model. Cross-model-layer batch RRR uses per-model configs so model-speci
 rank and ridge-memory settings can be retained for both iEEG and fMRI.
 Cross-dataset RRR source identities include their own significance selection, which
 deterministically resolves and validates the saved source variant.
+Source and target selections are required to be corresponding within-layer selections
+for the same model and layer over their respective datasets.
 
 ## Tests
 

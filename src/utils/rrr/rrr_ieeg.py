@@ -1,6 +1,5 @@
 """iEEG reduced-rank regression implementation for the unified client."""
 
-import json
 import time
 from dataclasses import asdict
 
@@ -42,7 +41,11 @@ from src.utils.rrr.multiview import (
     fit_banded_ridge_baseline,
     project_view_bands,
 )
-from src.utils.rrr.significance import PreparedSignificance, load_significance_selection
+from src.utils.rrr.significance import (
+    PreparedSignificance,
+    load_significance_selection,
+    validate_cross_dataset_significance_alignment,
+)
 from himalaya.scoring import correlation_score, r2_score
 from scripts.run_rrr import Artifact, UnitSelector
 
@@ -2563,8 +2566,13 @@ def _run_cross_dataset_rrr(
         raise ValueError("cross_dataset requires an explicit RRR source Artifact")
     if source.variant is None:
         source._resolve_variant()
-    source_identity = json.dumps(source.identity_record(), sort_keys=True)
-    unit = UnitSelector(method="rrr", cross_dataset_source=source_identity)
+    validate_cross_dataset_significance_alignment(
+        config.significance_selection,
+        artifact.identity,
+        source.requested_significance_selection,
+        source.identity,
+    )
+    unit = UnitSelector(method="rrr")
     print(f"Loading source RRR subspaces from {source.identity_record()}")
     A_rrr_by_rank = _load_cross_dataset_A_by_rank(
         source,
@@ -2589,7 +2597,7 @@ def _run_cross_dataset_rrr(
             aggregation=config.subspace_aggregation,
             source_format=config.cross_source_format,
         )
-        pca_unit = UnitSelector(method="pca", cross_dataset_source=source_identity)
+        pca_unit = UnitSelector(method="pca")
 
     reference = _reference_encoding_results(significance, subject_ids)
     n_folds = len(reference["test_idxs"])
