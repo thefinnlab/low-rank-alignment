@@ -280,13 +280,16 @@ def expand_fmri_layer_configs(config):
 
 
 def _format_nested_templates(value, **parts):
-    """Format string leaves in constructor-argument blocks."""
+    """Format constructor blocks, preserving exact-placeholder value types."""
     if isinstance(value, dict):
         return {key: _format_nested_templates(item, **parts)
                 for key, item in value.items()}
     if isinstance(value, list):
         return [_format_nested_templates(item, **parts) for item in value]
     if isinstance(value, str) and "{" in value:
+        for key, part in parts.items():
+            if value == "{" + key + "}":
+                return deepcopy(part)
         return value.format(**parts)
     return value
 

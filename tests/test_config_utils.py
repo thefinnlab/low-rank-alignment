@@ -651,12 +651,20 @@ class TestExpandPerModelLayerConfigs:
         config = RRRConfig(
             encoding=EncodingConfig(per_model_config={"layer": [0, 12]}),
             fmri_rrr_source={"mode": "within_fmri", "dataset": "deep-fmri",
-                              "offset": 0, "model": "model", "layer": "{layer}"},
+                             "offset": 0, "model": "model", "layer": "{layer}",
+                             "significance_selection": {
+                                 "mode": "within-layer",
+                                 "reference_artifact": {"layer": "{layer}"},
+                             }},
         )
 
         expanded = expand_per_model_layer_configs(config)
 
-        assert [item.fmri_rrr_source["layer"] for item in expanded] == ["0", "12"]
+        assert [item.fmri_rrr_source["layer"] for item in expanded] == [0, 12]
+        assert [
+            item.fmri_rrr_source["significance_selection"]["reference_artifact"]["layer"]
+            for item in expanded
+        ] == [0, 12]
 
 
 class TestExpandFMRILayerConfigs:
@@ -674,9 +682,9 @@ class TestExpandFMRILayerConfigs:
         expanded = expand_fmri_layer_configs(config)
 
         assert [item.layer for item in expanded] == [0, 12]
-        assert expanded[1].significance_selection.reference_artifact["layer"] == "12"
+        assert expanded[1].significance_selection.reference_artifact["layer"] == 12
         assert expanded[1].significance_selection.artifacts[0]["layer"] == [0, 6, 12]
-        assert expanded[1].ieeg_rrr_source["layer"] == "12"
+        assert expanded[1].ieeg_rrr_source["layer"] == 12
 
     def test_significance_config_uses_same_fanout(self):
         config = FMRISignificanceConfig(layer=[0, 12])
