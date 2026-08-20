@@ -23,6 +23,10 @@ workflow owns one client-facing `Artifact` class. Their canonical
 identity, variants, selector fields, resume behavior, and legacy migration are
 described in [artifacts.md](artifacts.md). Language decoding and reconstruction are
 temporarily deferred from that storage refactor.
+The `cross-temporal-pipeline` Make target submits per-model temporal-window RRR to
+cross-temporal-window transfer chains for podcast and Cars 2, using Slurm `afterok`
+dependencies between those artifact-producing stages. It consumes existing
+significance artifacts rather than submitting significance jobs.
 
 ## Source layout
 

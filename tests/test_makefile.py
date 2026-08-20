@@ -33,13 +33,13 @@ printf '%s\n' "$((1000 + count))"
 
 
 def _run_make(
-    tmp_path: Path, *args: str
+    tmp_path: Path, *args: str, target: str = "sig-rrr-batch"
 ) -> tuple[subprocess.CompletedProcess[str], list[str]]:
     sbatch, log_path = _fake_sbatch(tmp_path)
     env = os.environ.copy()
     env["SBATCH_LOG"] = str(log_path)
     result = subprocess.run(
-        ["make", "sig-rrr-batch", f"SBATCH={sbatch}", *args],
+        ["make", target, f"SBATCH={sbatch}", *args],
         cwd=REPO_ROOT,
         env=env,
         capture_output=True,
@@ -117,3 +117,48 @@ def test_sig_rrr_batch_stops_when_significance_submission_fails(
     assert result.returncode != 0
     assert len(submissions) == 1
     assert "scripts/run_significance.py" in submissions[0]
+
+
+def test_cross_temporal_pipeline_submits_complete_dependency_chain(tmp_path: Path):
+    result, submissions = _run_make(
+        tmp_path,
+        "CROSS_TEMPORAL_MODELS=gpt2 gpt2-xl",
+        "RRR_OVERRIDES=--refresh=false",
+        target="cross-temporal-pipeline",
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert len(submissions) == 8
+
+    assert "configs/rrr/gpt2/temporal_windows.yml" in submissions[0]
+    assert "--dependency" not in submissions[0]
+    assert "--dependency=afterok:1001" in submissions[1]
+    assert "configs/rrr/gpt2/cross_temporal_windows.yml" in submissions[1]
+    assert "--refresh=false" in submissions[1]
+    assert "configs/rrr/gpt2-xl/temporal_windows.yml" in submissions[2]
+    assert "--dependency" not in submissions[2]
+    assert "configs/rrr/gpt2-xl/cross_temporal_windows.yml" in submissions[3]
+    assert "--dependency=afterok:1003" in submissions[3]
+
+    cars_root = "configs/brain_treebank/cars_2/rrr"
+    assert f"{cars_root}/gpt2/temporal_windows.yml" in submissions[4]
+    assert "--dependency" not in submissions[4]
+    assert f"{cars_root}/gpt2/cross_temporal_windows.yml" in submissions[5]
+    assert "--dependency=afterok:1005" in submissions[5]
+    assert f"{cars_root}/gpt2-xl/temporal_windows.yml" in submissions[6]
+    assert f"{cars_root}/gpt2-xl/cross_temporal_windows.yml" in submissions[7]
+    assert "--dependency=afterok:1007" in submissions[7]
+
+
+def test_cross_temporal_pipeline_validates_every_config_before_submission(
+    tmp_path: Path,
+):
+    result, submissions = _run_make(
+        tmp_path,
+        "CROSS_TEMPORAL_MODELS=gpt2 missing-model",
+        target="cross-temporal-pipeline",
+    )
+
+    assert result.returncode != 0
+    assert "Missing cross-temporal pipeline config" in result.stderr
+    assert submissions == []

@@ -43,7 +43,7 @@ ieeg:
       - 12
       - 24
       - 36
-      # - 48
+      - 48
   temporal_windows:
   - name: pre_word
     start_sec: -2.0

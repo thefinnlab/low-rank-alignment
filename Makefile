@@ -48,6 +48,9 @@ OVERRIDES       ?=   # e.g. OVERRIDES="--encoding.layer=48 --n_permutations=100"
 SUBSPACE_COMPARISON_SBATCH_ARGS ?=
 TEMPORAL_WINDOW_DATASETS ?= podcast cars-2
 TEMPORAL_WINDOW_SBATCH_ARGS ?=
+CROSS_TEMPORAL_MODELS ?= $(PIPELINE_MODELS)
+CROSS_TEMPORAL_DATASETS ?= podcast cars-2
+CROSS_TEMPORAL_SBATCH_ARGS ?=
 
 # Batch config lists. Override these with whitespace-separated
 # config paths, e.g. SIG_CONFIGS="configs/a.yml configs/b.yml".
@@ -420,6 +423,57 @@ temporal-windows-batch:
 		done; \
 	done
 
+## Submit temporal-window -> cross-temporal-window RRR for every model and
+## dataset. Existing significance artifacts are prerequisites but are not submitted.
+## Usage:
+##   make cross-temporal-pipeline
+##   make cross-temporal-pipeline CROSS_TEMPORAL_MODELS="gpt2 gpt2-xl"
+##   make cross-temporal-pipeline CROSS_TEMPORAL_DATASETS="cars-2"
+##   make cross-temporal-pipeline CROSS_TEMPORAL_SBATCH_ARGS="--time=24:00:00"
+cross-temporal-pipeline:
+	@set -eu; \
+	mkdir -p logs; \
+	if [ -z "$(strip $(CROSS_TEMPORAL_MODELS))" ]; then \
+		echo "CROSS_TEMPORAL_MODELS must contain at least one model" >&2; \
+		exit 2; \
+	fi; \
+	if [ -z "$(strip $(CROSS_TEMPORAL_DATASETS))" ]; then \
+		echo "CROSS_TEMPORAL_DATASETS must contain at least one dataset" >&2; \
+		exit 2; \
+	fi; \
+	for dataset in $(CROSS_TEMPORAL_DATASETS); do \
+		case "$$dataset" in \
+			podcast) config_root="configs/rrr" ;; \
+			cars-2) config_root="configs/brain_treebank/cars_2/rrr" ;; \
+			*) echo "Unsupported cross-temporal dataset '$$dataset'; expected podcast or cars-2" >&2; exit 2 ;; \
+		esac; \
+		for model in $(CROSS_TEMPORAL_MODELS); do \
+			temporal_config="$$config_root/$$model/temporal_windows.yml"; \
+			cross_config="$$config_root/$$model/cross_temporal_windows.yml"; \
+			for config in "$$temporal_config" "$$cross_config"; do \
+			if [ ! -f "$$config" ]; then \
+				echo "Missing cross-temporal pipeline config: $$config" >&2; \
+				exit 2; \
+			fi; \
+			done; \
+		done; \
+	done; \
+	for dataset in $(CROSS_TEMPORAL_DATASETS); do \
+		case "$$dataset" in podcast) config_root="configs/rrr" ;; cars-2) config_root="configs/brain_treebank/cars_2/rrr" ;; esac; \
+		for model in $(CROSS_TEMPORAL_MODELS); do \
+			temporal_config="$$config_root/$$model/temporal_windows.yml"; \
+			cross_config="$$config_root/$$model/cross_temporal_windows.yml"; \
+			temporal_submission="$$( $(SBATCH) --parsable $(CROSS_TEMPORAL_SBATCH_ARGS) --job-name="rrr-windows-$$dataset-$$model-$(USR)-$(DT)" submit.sh scripts/run_rrr.py --config "$$temporal_config" $(RRR_OVERRIDES) )"; \
+			temporal_job_id="$${temporal_submission%%;*}"; \
+			case "$$temporal_job_id" in ''|*[!0-9]*) echo "Could not parse temporal-window job ID from: $$temporal_submission" >&2; exit 2 ;; esac; \
+			echo "Submitted temporal-window RRR for $$dataset / $$model: $$temporal_job_id"; \
+			cross_submission="$$( $(SBATCH) --parsable --dependency="afterok:$$temporal_job_id" $(CROSS_TEMPORAL_SBATCH_ARGS) --job-name="rrr-cross-windows-$$dataset-$$model-$(USR)-$(DT)" submit.sh scripts/run_rrr.py --config "$$cross_config" $(RRR_OVERRIDES) )"; \
+			cross_job_id="$${cross_submission%%;*}"; \
+			case "$$cross_job_id" in ''|*[!0-9]*) echo "Could not parse cross-temporal job ID from: $$cross_submission" >&2; exit 2 ;; esac; \
+			echo "Submitted cross-temporal RRR for $$dataset / $$model: $$cross_job_id (afterok:$$temporal_job_id)"; \
+		done; \
+	done
+
 ## Submit paired significance and internal RRR jobs for each model.
 ## Each RRR job starts only after its model's significance job succeeds.
 ## Usage:
@@ -497,4 +551,4 @@ sig-test:
 test:
 	python -m pytest tests/ -v
 
-.PHONY: sig sig-batch train plots rrr rrr-batch rrr-cross-model-layer-batch temporal-windows-batch sig-rrr-batch submit-rrr-matrix sig-test test generate-embeddings generate-embeddings-batch generate-random-embeddings download-models precompute-epochs print-atlas-regions compare-subspaces compare-subspaces-batch
+.PHONY: sig sig-batch train plots rrr rrr-batch rrr-cross-model-layer-batch temporal-windows-batch cross-temporal-pipeline sig-rrr-batch submit-rrr-matrix sig-test test generate-embeddings generate-embeddings-batch generate-random-embeddings download-models precompute-epochs print-atlas-regions compare-subspaces compare-subspaces-batch
