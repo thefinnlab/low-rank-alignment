@@ -31,6 +31,14 @@ rrr_source:
   offset: 0
   model: gpt2-xl
   layer: 24
+  significance_selection:
+    mode: within-layer
+    reference_artifact:
+      mode: sig_lags
+      dataset: podcast
+      offset: 0
+      model: gpt2-xl
+      layer: 24
 ieeg: null
 fmri:
   ridge:

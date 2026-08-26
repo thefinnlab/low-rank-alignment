@@ -23,6 +23,10 @@ workflow owns one client-facing `Artifact` class. Their canonical
 identity, variants, selector fields, resume behavior, and legacy migration are
 described in [artifacts.md](artifacts.md). Language decoding and reconstruction are
 temporarily deferred from that storage refactor.
+The `cross-temporal-pipeline` Make target submits per-model temporal-window RRR to
+cross-temporal-window transfer chains for podcast and Cars 2, using Slurm `afterok`
+dependencies between those artifact-producing stages. It consumes existing
+significance artifacts rather than submitting significance jobs.
 
 ## Source layout
 
@@ -34,9 +38,10 @@ temporarily deferred from that storage refactor.
 - `src/utils/significance/` contains the modality-specific significance runners and
   their reusable statistical helpers.
 - `src/utils/rrr/` contains the modality-specific RRR runners, dense fitting, input
-  preparation, evaluation, multiview handling, and result helpers. iEEG RRR mode
-  implementations are organized under `src/utils/rrr/ieeg_rrr_mode/`, with
-  `rrr_ieeg.py` retained as the compatibility facade.
+  preparation, evaluation, multiview handling, cross-temporal-window transfer, and
+  result helpers. iEEG RRR mode implementations are organized under
+  `src/utils/rrr/ieeg_rrr_mode/`, with `rrr_ieeg.py` retained as the compatibility
+  facade.
 - `src/utils/subspace_comparison/` contains saved-space metrics and directed comparison
   orchestration.
 - `src/utils/language_interpret/` contains decoding, reconstruction, and task registry
@@ -55,6 +60,10 @@ is configured uniformly across modalities as `within-layer` or as an explicit
 `cross-model-layer` union; union artifact entries may compactly list several layers
 for one model. Cross-model-layer batch RRR uses per-model configs so model-specific
 rank and ridge-memory settings can be retained for both iEEG and fMRI.
+Cross-dataset RRR source identities include their own significance selection, which
+deterministically resolves and validates the saved source variant.
+Source and target selections are required to be corresponding within-layer selections
+for the same model and layer over their respective datasets.
 
 ## Tests
 

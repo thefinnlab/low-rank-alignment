@@ -32,6 +32,14 @@ rrr_source:
   offset: 0
   model: llama3-8b
   layer: '{layer}'
+  significance_selection:
+    mode: within-layer
+    reference_artifact:
+      mode: held_out_session
+      dataset: deep-fmri
+      offset: 0
+      model: llama3-8b
+      layer: '{layer}'
 ieeg:
   encoding:
     data_root: data/brain-treebank

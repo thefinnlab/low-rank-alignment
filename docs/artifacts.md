@@ -25,6 +25,13 @@ would collide at the same readable location is rejected and must supply an
 explicit `variant_name`. Loading without a variant is permitted only when exactly
 one variant exists.
 
+RRR consumers may pass `significance_selection` directly to the `Artifact`
+constructor in place of `variant`. The Artifact computes the same stable digest,
+selects that variant, and verifies the selection recorded in its manifest. Explicit
+`variant` and `significance_selection` arguments are mutually exclusive. Cross-dataset
+RRR source blocks use this form so the source factors are constrained to the intended
+significant-target set rather than relying on single-variant discovery.
+
 ## Contract
 
 Producer classes declare required and optional fields. Fields may be scalar or
@@ -66,6 +73,11 @@ recorded as upstreams.
 Cross-dataset and multiview inputs use generic `rrr_source`/`source` identities;
 there are no modality-named dependency fields. `internal` identifies the ordinary
 within-dataset RRR producer for both modalities.
+Cross-dataset RRR currently requires corresponding `within-layer` source and target
+significance selections: their model and layer must match, while each reference must
+match its own dataset-specific RRR identity. The concrete source Artifact is recorded
+as an upstream dependency; rank and fold field selectors therefore need only the RRR
+or PCA method rather than a serialized source identity.
 
 Significance exposes complete subject-keyed `target_significance` tables with
 `target_id`, `target_kind`, and `significant` columns. RRR exposes common factor,

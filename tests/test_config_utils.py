@@ -209,6 +209,35 @@ class TestDictToDataclass:
         with pytest.raises(ValueError, match="at least one window"):
             RRRConfig(mode=ScriptMode.TEMPORAL_WINDOWS)
 
+    def test_rrr_cross_temporal_windows_roundtrip(self):
+        config = dict_to_dataclass(
+            {
+                "mode": "cross_temporal_windows",
+                "ieeg_rrr_source": {"mode": "temporal_windows"},
+                "temporal_windows": [
+                    {"name": "pre", "start_sec": -2.0, "end_sec": 0.0},
+                    {"name": "post", "start_sec": 0.0, "end_sec": 2.0},
+                ],
+                "temporal_window_pairs": [
+                    {"source": "pre", "target": "post"}
+                ],
+            },
+            RRRConfig,
+        )
+        assert config.mode == ScriptMode.CROSS_TEMPORAL_WINDOWS
+        assert config.temporal_window_pairs[0].source == "pre"
+        assert config.temporal_window_pairs[0].target == "post"
+
+    def test_rrr_cross_temporal_windows_requires_ieeg_source(self):
+        with pytest.raises(ValueError, match="requires an ieeg_rrr_source"):
+            RRRConfig(
+                mode=ScriptMode.CROSS_TEMPORAL_WINDOWS,
+                temporal_windows=[
+                    RRRTemporalWindowConfig("pre", -2, 0),
+                    RRRTemporalWindowConfig("post", 0, 2),
+                ],
+            )
+
     @pytest.mark.parametrize(
         "windows, message",
         [
@@ -622,12 +651,20 @@ class TestExpandPerModelLayerConfigs:
         config = RRRConfig(
             encoding=EncodingConfig(per_model_config={"layer": [0, 12]}),
             fmri_rrr_source={"mode": "within_fmri", "dataset": "deep-fmri",
-                              "offset": 0, "model": "model", "layer": "{layer}"},
+                             "offset": 0, "model": "model", "layer": "{layer}",
+                             "significance_selection": {
+                                 "mode": "within-layer",
+                                 "reference_artifact": {"layer": "{layer}"},
+                             }},
         )
 
         expanded = expand_per_model_layer_configs(config)
 
-        assert [item.fmri_rrr_source["layer"] for item in expanded] == ["0", "12"]
+        assert [item.fmri_rrr_source["layer"] for item in expanded] == [0, 12]
+        assert [
+            item.fmri_rrr_source["significance_selection"]["reference_artifact"]["layer"]
+            for item in expanded
+        ] == [0, 12]
 
 
 class TestExpandFMRILayerConfigs:
@@ -645,9 +682,9 @@ class TestExpandFMRILayerConfigs:
         expanded = expand_fmri_layer_configs(config)
 
         assert [item.layer for item in expanded] == [0, 12]
-        assert expanded[1].significance_selection.reference_artifact["layer"] == "12"
+        assert expanded[1].significance_selection.reference_artifact["layer"] == 12
         assert expanded[1].significance_selection.artifacts[0]["layer"] == [0, 6, 12]
-        assert expanded[1].ieeg_rrr_source["layer"] == "12"
+        assert expanded[1].ieeg_rrr_source["layer"] == 12
 
     def test_significance_config_uses_same_fanout(self):
         config = FMRISignificanceConfig(layer=[0, 12])

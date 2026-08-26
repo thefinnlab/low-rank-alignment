@@ -7,6 +7,7 @@ from dataclasses import dataclass
 import numpy as np
 import pandas as pd
 
+from src.core.artifacts import canonical_significance_selection
 from src.core.config import SignificanceSelectionConfig
 from scripts.run_significance import Artifact as SignificanceArtifact
 
@@ -27,6 +28,57 @@ class PreparedSignificance:
 
     def identity_record(self) -> dict:
         return self.reference.identity_record()
+
+
+def validate_cross_dataset_significance_alignment(
+    target_selection,
+    target_identity: dict,
+    source_selection,
+    source_identity: dict,
+) -> None:
+    """Require source and target RRR runs to use corresponding within-layer targets."""
+    if source_selection is None:
+        raise ValueError(
+            "Cross-dataset RRR sources must define significance_selection"
+        )
+    target = canonical_significance_selection(target_selection)
+    source = canonical_significance_selection(source_selection)
+    if target["mode"] != "within-layer" or source["mode"] != "within-layer":
+        raise ValueError(
+            "Cross-dataset RRR currently requires within-layer significance "
+            "selections for both source and target"
+        )
+
+    def validate_reference(label: str, selection: dict, identity: dict) -> dict:
+        reference = selection["reference_artifact"]
+        mismatches = {
+            key: (reference.get(key), identity.get(key))
+            for key in ("dataset", "offset", "model", "layer")
+            if reference.get(key) != identity.get(key)
+        }
+        if mismatches:
+            raise ValueError(
+                f"Cross-dataset {label} significance reference does not match "
+                f"its RRR Artifact identity: {mismatches}"
+            )
+        return reference
+
+    target_reference = validate_reference("target", target, target_identity)
+    source_reference = validate_reference("source", source, source_identity)
+    if target_reference["dataset"] == source_reference["dataset"]:
+        raise ValueError(
+            "Cross-dataset source and target significance datasets must differ"
+        )
+    mismatches = {
+        key: (target_reference.get(key), source_reference.get(key))
+        for key in ("model", "layer")
+        if target_reference.get(key) != source_reference.get(key)
+    }
+    if mismatches:
+        raise ValueError(
+            "Cross-dataset source and target significance selections must use "
+            f"the same model and layer: {mismatches}"
+        )
 
 
 def expand_significance_artifact_specs(specs: list[dict]) -> list[dict]:

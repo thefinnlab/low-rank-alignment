@@ -13,6 +13,7 @@ from src.core.artifacts import (
 )
 from scripts.run_significance import Artifact as SignificanceArtifact
 from scripts.run_rrr import Artifact as RRRArtifact, UnitSelector
+from src.utils.rrr.significance import validate_cross_dataset_significance_alignment
 
 
 def test_canonical_identity_and_defaults(tmp_path):
@@ -107,6 +108,73 @@ def test_rrr_variant_distinguishes_significance_selection_and_source_sets():
     assert cross_variant.startswith("significance-cross-model-layer-")
     assert within_variant != cross_variant
     assert cross_variant == readable_variant(reordered_equivalent)
+
+
+def test_rrr_artifact_loads_variant_from_significance_selection(tmp_path):
+    reference = {
+        "mode": "sig_lags", "dataset": "podcast", "offset": 0,
+        "model": "gpt2", "layer": 12,
+    }
+    selection = {
+        "mode": "within-layer", "reference_artifact": reference,
+    }
+    other_selection = {
+        "mode": "cross-model-layer", "reference_artifact": reference,
+        "artifacts": [{"dataset": "podcast", "model": "gpt2", "layer": [6, 12]}],
+    }
+    for value, configured_selection in ((1, selection), (2, other_selection)):
+        artifact = RRRArtifact(results_root=tmp_path).begin(config={
+            "significance_selection": configured_selection,
+            "scientific_parameter": value,
+        })
+        artifact.save_field("effective_config", {"value": value})
+
+    loaded = RRRArtifact(
+        results_root=tmp_path, significance_selection=selection
+    ).load_artifacts(["effective_config"])
+    assert loaded.effective_config == {"value": 1}
+    assert loaded.variant == readable_variant({"significance_selection": selection})
+
+
+def test_rrr_artifact_rejects_variant_and_significance_selection(tmp_path):
+    with pytest.raises(ValueError, match="mutually exclusive"):
+        RRRArtifact(
+            results_root=tmp_path,
+            variant="manual",
+            significance_selection={"reference_artifact": {"dataset": "podcast"}},
+        )
+
+
+def test_cross_dataset_significance_alignment_allows_only_dataset_to_differ():
+    target_identity = {
+        "dataset": "brain-treebank-cars-2", "offset": 0,
+        "model": "gpt-j-6b", "layer": 0,
+    }
+    source_identity = {
+        "dataset": "deep-fmri", "offset": 0,
+        "model": "gpt-j-6b", "layer": 0,
+    }
+    target = {
+        "mode": "within-layer",
+        "reference_artifact": {
+            **target_identity, "mode": "sig_lags",
+        },
+    }
+    source = {
+        "mode": "within-layer",
+        "reference_artifact": {
+            **source_identity, "mode": "held_out_session",
+        },
+    }
+    validate_cross_dataset_significance_alignment(
+        target, target_identity, source, source_identity
+    )
+
+    source["reference_artifact"]["layer"] = 12
+    with pytest.raises(ValueError, match="does not match its RRR Artifact identity"):
+        validate_cross_dataset_significance_alignment(
+            target, target_identity, source, source_identity
+        )
 
 
 def test_rrr_manifest_resume_is_selector_complete(tmp_path):

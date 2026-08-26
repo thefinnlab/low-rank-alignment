@@ -30,6 +30,14 @@ rrr_source:
   offset: 0
   model: roberta-large
   layer: '{layer}'
+  significance_selection:
+    mode: within-layer
+    reference_artifact:
+      mode: sig_lags
+      dataset: podcast
+      offset: 0
+      model: roberta-large
+      layer: '{layer}'
 ieeg:
   encoding:
     data_root: data/brain-treebank

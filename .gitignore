@@ -199,6 +199,10 @@ pca/
 !configs/rrr/compare_subspaces.yml
 !configs/brain_treebank/cars_2/rrr/
 !configs/brain_treebank/cars_2/rrr/**
+# Re-apply Python cache exclusions after the RRR subtree exceptions above.
+__pycache__/
+*.py[cod]
+*$py.class
 *.pdf
 *.csv
 processed_data/regions.txt
