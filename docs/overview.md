@@ -34,7 +34,9 @@ temporarily deferred from that storage refactor.
 - `src/utils/significance/` contains the modality-specific significance runners and
   their reusable statistical helpers.
 - `src/utils/rrr/` contains the modality-specific RRR runners, dense fitting, input
-  preparation, evaluation, multiview handling, and result helpers.
+  preparation, evaluation, multiview handling, and result helpers. iEEG RRR mode
+  implementations are organized under `src/utils/rrr/ieeg_rrr_mode/`, with
+  `rrr_ieeg.py` retained as the compatibility facade.
 - `src/utils/subspace_comparison/` contains saved-space metrics and directed comparison
   orchestration.
 - `src/utils/language_interpret/` contains decoding, reconstruction, and task registry
