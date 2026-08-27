@@ -307,6 +307,20 @@ class TestDictToDataclass:
         with pytest.raises(ValueError, match="requires save_b_matrices=True"):
             RRRConfig(save_rrr_corr_per_target=True)
 
+    def test_subspace_comparison_config_accepts_ordered_model_entries(self):
+        dataset = {
+            "loader": "ieeg_words", "dataset": "podcast",
+            "data_root": "data/", "results_root": "results", "subjects": [1],
+        }
+        config = SubspaceComparisonConfig(
+            datasets={"podcast": dataset},
+            models=[{
+                "model": "gpt2", "layers": [0, 6], "datasets": ["podcast"],
+            }],
+        )
+
+        assert config.models[0]["model"] == "gpt2"
+
     def test_subspace_comparison_config_preserves_model_and_dataset_mappings(self):
         config = dict_to_dataclass(
             {

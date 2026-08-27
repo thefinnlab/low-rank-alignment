@@ -11,7 +11,8 @@ embeddings predict iEEG and fMRI responses. The supported executable surface is
 - `scripts/run_rrr.py` dispatches reduced-rank regression by dataset while exposing
   one Config and Artifact contract.
 - `scripts/rrr/compare_subspaces.py` performs configured leakage-safe comparisons
-  between saved RRR/PCA spaces.
+  between saved RRR/PCA spaces and publishes one source-organized Artifact per
+  generating dataset/model/layer/subspace.
 - `scripts/fmri/` contains fMRI embedding generation and held-out
   language-decoding workflows.
 - `scripts/language-interpret/` contains language decoding and reconstruction.
@@ -19,10 +20,11 @@ embeddings predict iEEG and fMRI responses. The supported executable surface is
   generation, plotting, and atlas-reporting entrypoints.
 
 The Makefile exposes significance and RRR through the unified entry points. Each
-workflow owns one client-facing `Artifact` class. Their canonical
+retained analysis workflow owns one client-facing `Artifact` class. Their canonical
 identity, variants, selector fields, resume behavior, and legacy migration are
-described in [artifacts.md](artifacts.md). Language decoding and reconstruction are
-temporarily deferred from that storage refactor.
+described in [artifacts.md](artifacts.md). Language decoding and reconstruction load
+RRR/PCA factors through RRR Artifact identities and publish task-level results through
+their own Artifacts.
 The `cross-temporal-pipeline` Make target submits per-model temporal-window RRR to
 cross-temporal-window transfer chains for podcast and Cars 2, using Slurm `afterok`
 dependencies between those artifact-producing stages. It consumes existing

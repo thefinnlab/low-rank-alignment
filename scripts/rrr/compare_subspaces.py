@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
+import io
 import json
 import sys
 from dataclasses import dataclass
-from datetime import datetime, timezone
 from pathlib import Path
 
 _ROOT = Path(__file__).resolve()
@@ -22,13 +22,15 @@ import pandas as pd
 from tqdm import tqdm
 
 from src.core.config import SubspaceComparisonConfig
-from src.utils.shared.config import load_config, parse_args, save_effective_config
+from src.core.artifacts import ArtifactStore, normalized_config
+from src.utils.shared.config import load_config, parse_args
 from src.utils.subspace_comparison.directed import (
     ALL_METRICS,
     METRIC_IMPLEMENTATION,
     SYMMETRIC_METRICS,
     align_views,
     configure_metric_backend,
+    configured_models,
     expand_spaces,
     factor_for,
     fold_indices,
@@ -39,6 +41,169 @@ from src.utils.subspace_comparison.directed import (
     summarize_fold_metrics,
 )
 from src.utils.rrr.subspace_io import sanitize_name
+
+
+def _selection_keys(models):
+    if not models:
+        raise ValueError("models must contain at least one selection")
+    keys = set()
+    for item in models:
+        missing = {"model", "layers", "datasets"} - set(item)
+        if missing:
+            raise ValueError(
+                "Each model selection requires model, layers, and datasets; "
+                f"missing {sorted(missing)}"
+            )
+        for dataset in item["datasets"]:
+            for layer in item["layers"]:
+                keys.add((str(dataset), str(item["model"]), int(layer)))
+    return keys
+
+
+class Artifact(ArtifactStore):
+    """One source-owned comparison result or a filtered downstream collection."""
+
+    SCRIPT = "compare_subspaces"
+    SELECTOR_ORDER = (
+        "target_dataset", "target_offset", "target_model", "target_layer",
+        "target_kind", "comparison_mode", "geometry", "source_rank",
+        "target_rank", "equal_capacity_rank", "fold", "metric", "name",
+    )
+    FIELD_CONTRACT = {
+        "effective_config": True, "upstream_identities": True,
+        "source_metadata": True, "validation": True, "cell_metrics": True,
+        "fold_metrics": True, "summary": True, "matrices": False,
+        "plots": False,
+    }
+
+    def __init__(self, *, analysis_name, evaluation_dataset,
+                 source_dataset=None, source_offset=0, source_model=None,
+                 source_layer=None, source_kind=None, models=None, variant=None,
+                 results_root="results"):
+        self.analysis_name = str(analysis_name)
+        self.evaluation_dataset = str(evaluation_dataset)
+        self.models = models
+        self.source_kind = source_kind
+        self._collection = models is not None and source_model is None
+        if self._collection:
+            _selection_keys(models)
+            self.results_root = Path(results_root)
+            self.complete = False
+            for field in self.FIELD_CONTRACT:
+                setattr(self, field, None)
+            return
+        if (source_model is None or source_layer is None or source_dataset is None
+                or source_kind is None):
+            raise ValueError(
+                "A stored comparison Artifact requires source_dataset, "
+                "source_model, source_layer, and source_kind"
+            )
+        self._init_store(
+            mode=self.analysis_name, dataset=source_dataset,
+            offset=source_offset, model=source_model, layer=source_layer,
+            variant=variant, results_root=results_root,
+        )
+
+    @classmethod
+    def from_space(cls, config, space):
+        return cls(
+            analysis_name=config.analysis_name,
+            evaluation_dataset=config.evaluation_dataset,
+            source_dataset=space.dataset, source_offset=space.offset,
+            source_model=space.model, source_layer=space.layer,
+            source_kind=space.kind,
+            variant=(f"{config.variant_name}/source-{space.kind}"
+                     if config.variant_name else f"source-{space.kind}"),
+            results_root=config.output_root,
+        )
+
+    @staticmethod
+    def _matches(frame, keys, prefix):
+        return frame.apply(
+            lambda row: (
+                str(row[f"{prefix}_dataset"]), str(row[f"{prefix}_model"]),
+                int(row[f"{prefix}_layer"]),
+            ) in keys,
+            axis=1,
+        )
+
+    def _discover(self):
+        keys = _selection_keys(self.models)
+        artifacts = []
+        root = self.results_root / self.SCRIPT / self.analysis_name
+        for dataset, model, layer in sorted(keys):
+            model_root = root / dataset
+            if not model_root.exists():
+                continue
+            for offset_dir in sorted(model_root.glob("offset-*")):
+                leaf = offset_dir / model / f"layer-{layer}"
+                index = self._read_json(leaf / "manifest.json", default={})
+                for variant, status in sorted(index.get("variants", {}).items()):
+                    if not status.get("complete"):
+                        continue
+                    artifacts.append(Artifact(
+                        analysis_name=self.analysis_name,
+                        evaluation_dataset=self.evaluation_dataset,
+                        source_dataset=dataset,
+                        source_offset=int(offset_dir.name.removeprefix("offset-")),
+                        source_model=model, source_layer=layer,
+                        source_kind=variant.rsplit("/", 1)[-1].removeprefix("source-"),
+                        variant=variant,
+                        results_root=self.results_root,
+                    ))
+        return artifacts, keys
+
+    def load_artifacts(self, fields, selectors=None):
+        if not self._collection:
+            scalar = {"effective_config", "upstream_identities", "source_metadata", "validation"}
+            for field in fields:
+                setattr(self, field, self.load_field(field) if field in scalar
+                        else self.load_collection(field, selectors))
+            self.complete = bool(self.manifest().get("complete"))
+            return self
+        artifacts, keys = self._discover()
+        table_fields = {"fold_metrics", "summary"}
+        for field in fields:
+            if field not in table_fields:
+                raise ValueError(
+                    "Collection Artifacts load fold_metrics or summary; load a "
+                    "source Artifact for lower-level fields"
+                )
+            frames = []
+            for artifact in artifacts:
+                frame = artifact.load_field(field)
+                selected = frame[
+                    self._matches(frame, keys, "source")
+                    & self._matches(frame, keys, "target")
+                ]
+                if len(selected):
+                    frames.append(selected)
+            setattr(self, field, pd.concat(frames, ignore_index=True) if frames
+                    else pd.DataFrame())
+        basis = getattr(self, "fold_metrics", None)
+        if basis is None:
+            basis = getattr(self, "summary", pd.DataFrame())
+        columns = [
+            "source_dataset", "source_offset", "source_model", "source_layer",
+            "source_kind", "target_dataset", "target_offset", "target_model",
+            "target_layer", "target_kind",
+        ]
+        self.available_comparisons = (
+            basis[columns].drop_duplicates().reset_index(drop=True)
+            if len(basis) else pd.DataFrame(columns=columns)
+        )
+        self.complete = bool(artifacts) and all(item.manifest().get("complete") for item in artifacts)
+        return self
+
+    def save_artifacts(self, *, config, upstreams, source_metadata, validation):
+        self.save_field(
+            "effective_config", normalized_config(config, drop_paths=False),
+            overwrite=config.refresh,
+        )
+        self.save_field("upstream_identities", upstreams, overwrite=config.refresh)
+        self.save_field("source_metadata", source_metadata, overwrite=config.refresh)
+        self.save_field("validation", validation, overwrite=config.refresh)
+        return self
 
 
 @dataclass(frozen=True)
@@ -54,7 +219,8 @@ class ComparisonJob:
 
 
 def _saturation_rank(config, space) -> int:
-    by_layer = config.models[space.model]["saturation_ranks"][space.kind][space.dataset]
+    models = dict(configured_models(config))
+    by_layer = models[space.model]["saturation_ranks"][space.kind][space.dataset]
     return int(by_layer.get(space.layer, by_layer.get(str(space.layer))))
 
 
@@ -96,24 +262,6 @@ def generate_comparison_jobs(config, spaces, equal_ranks) -> list[ComparisonJob]
     return jobs
 
 
-def _json_default(value):
-    if isinstance(value, Path):
-        return str(value)
-    if isinstance(value, np.ndarray):
-        return value.tolist()
-    if isinstance(value, (np.integer, np.floating)):
-        return value.item()
-    raise TypeError(f"Cannot JSON serialize {type(value).__name__}")
-
-
-def _save_json(path: Path, payload) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(
-        json.dumps(payload, indent=2, sort_keys=True, default=_json_default),
-        encoding="utf-8",
-    )
-
-
 def _space_metadata(space) -> dict:
     return {
         "label": space.label,
@@ -128,36 +276,50 @@ def _space_metadata(space) -> dict:
     }
 
 
-def _cell_cache_path(
-    output_dir, geometry, source_rank, target_rank, source_index, target_index, fold
-):
-    return (
-        output_dir
-        / "cache"
-        / geometry
-        / f"source_k{source_rank}_target_k{target_rank}"
-        / f"source_{source_index:04d}"
-        / f"target_{target_index:04d}_fold_{fold}.json"
-    )
+def _cell_selector(target, geometry, job, fold):
+    selector = {
+        "target_dataset": target.dataset, "target_offset": target.offset,
+        "target_model": target.model, "target_layer": target.layer,
+        "target_kind": target.kind, "comparison_mode": job.mode,
+        "geometry": geometry, "source_rank": job.source_rank,
+        "target_rank": job.target_rank, "fold": fold,
+    }
+    if job.equal_capacity_rank is not None:
+        selector["equal_capacity_rank"] = job.equal_capacity_rank
+    return selector
 
 
-def _cached_metrics(path: Path, refresh: bool, calculate) -> dict:
-    if path.exists() and not refresh:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-        if (
-            payload.get("implementation") == METRIC_IMPLEMENTATION
-            and set(payload.get("metrics", {})) == set(ALL_METRICS)
-        ):
-            return payload["metrics"]
+def _cached_metrics(artifact, selector=None, refresh=None, calculate=None) -> dict:
+    # Compatibility for callers of the former path cache helper.
+    if isinstance(artifact, Path):
+        path, old_refresh, old_calculate = artifact, selector, refresh
+        if path.exists() and not old_refresh:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            if (payload.get("implementation") == METRIC_IMPLEMENTATION
+                    and set(payload.get("metrics", {})) == set(ALL_METRICS)):
+                return payload["metrics"]
+        metrics = old_calculate()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({
+            "implementation": METRIC_IMPLEMENTATION, "metrics": metrics,
+        }), encoding="utf-8")
+        return metrics
+    if not refresh and artifact.has_field("cell_metrics", selector=selector):
+        payload = artifact.load_field("cell_metrics", selector=selector)
+        if payload.get("implementation") == METRIC_IMPLEMENTATION:
+            metrics = payload.get("metrics", {})
+            if set(metrics) == set(ALL_METRICS):
+                return metrics
     metrics = calculate()
     if set(metrics) != set(ALL_METRICS):
         raise ValueError(
             f"Metric implementation returned {sorted(metrics)}, expected "
             f"{sorted(ALL_METRICS)}"
         )
-    _save_json(
-        path,
+    artifact.save_field(
+        "cell_metrics",
         {"implementation": METRIC_IMPLEMENTATION, "metrics": metrics},
+        selector=selector, overwrite=refresh,
     )
     return metrics
 
@@ -226,7 +388,7 @@ def _weighted_job_supported(config, source, target) -> bool:
     )
 
 
-def _run_comparisons(config, spaces, jobs, evaluation, output_dir) -> pd.DataFrame:
+def _run_comparisons(config, spaces, jobs, evaluation, artifacts) -> pd.DataFrame:
     rows = []
     factor_cache = {}
 
@@ -259,20 +421,11 @@ def _run_comparisons(config, spaces, jobs, evaluation, output_dir) -> pd.DataFra
         common_ids, source_values, target_values = align_views(
             views[source.key], views[target.key]
         )
-        mode_output_dir = output_dir / job.mode
         for fold in range(len(evaluation.fold_test_ids)):
             train_idx, test_idx = fold_indices(
                 common_ids, source, target, evaluation, fold
             )
-            cache_path = _cell_cache_path(
-                mode_output_dir,
-                geometry,
-                job.source_rank,
-                job.target_rank,
-                source_index,
-                target_index,
-                fold,
-            )
+            selector = _cell_selector(target, geometry, job, fold)
             def calculate_metrics():
                 source_factor = cached_factor(
                     source_index, source, job.source_rank, fold, geometry
@@ -308,7 +461,7 @@ def _run_comparisons(config, spaces, jobs, evaluation, output_dir) -> pd.DataFra
                 )
 
             metrics = _cached_metrics(
-                cache_path,
+                artifacts[source_index], selector,
                 config.refresh,
                 calculate_metrics,
             )
@@ -399,24 +552,6 @@ def _validate_preflight(config, spaces, jobs, evaluation) -> dict:
     return {"minimum_train_rows": minimum_train, "minimum_test_rows": minimum_test}
 
 
-def _write_dataset_pair_tables(frame, summary, output_dir):
-    for (source_dataset, target_dataset), group in frame.groupby(
-        ["source_dataset", "target_dataset"], sort=False
-    ):
-        detail = (
-            output_dir
-            / "by_generating_data"
-            / sanitize_name(source_dataset)
-            / sanitize_name(target_dataset)
-        )
-        detail.mkdir(parents=True, exist_ok=True)
-        group.to_csv(detail / "fold_metrics.csv", index=False)
-        summary[
-            (summary.source_dataset == source_dataset)
-            & (summary.target_dataset == target_dataset)
-        ].to_csv(detail / "summary.csv", index=False)
-
-
 def _matrix(summary, labels, geometry, metric, equal_capacity_rank=None):
     selected = summary[summary.geometry == geometry]
     if equal_capacity_rank is not None:
@@ -459,7 +594,7 @@ def _group_boundaries(spaces):
     return boundaries
 
 
-def _plot_matrix(matrix, spaces, metric, geometry, mode, rank, path):
+def _plot_matrix(matrix, spaces, metric, geometry, mode, rank):
     labels = [space.label for space in spaces]
     size = max(9.0, min(28.0, 0.34 * len(labels) + 4.0))
     fig, ax = plt.subplots(figsize=(size, size))
@@ -487,22 +622,11 @@ def _plot_matrix(matrix, spaces, metric, geometry, mode, rank, path):
     ax.set_title(f"{metric} — {mode}, {geometry}{capacity}")
     fig.colorbar(image, ax=ax, shrink=0.72)
     fig.tight_layout()
-    fig.savefig(path.with_suffix(".png"), dpi=180)
-    fig.savefig(path.with_suffix(".svg"))
-    plt.close(fig)
+    return fig
 
 
-def _write_matrices_and_plots(summary, spaces, mode, config, output_dir):
+def _save_matrices_and_plots(artifacts, summary, spaces, mode, config):
     labels = [space.label for space in spaces]
-    matrix_dir = output_dir / "matrices"
-    figure_dir = output_dir / "figures"
-    matrix_dir.mkdir(parents=True, exist_ok=True)
-    figure_dir.mkdir(parents=True, exist_ok=True)
-    for directory in (matrix_dir, figure_dir):
-        for path in directory.glob("cca_*"):
-            if path.is_file() and path.suffix in {".csv", ".npz", ".png", ".svg"}:
-                path.unlink()
-    links = []
     ranks = (
         sorted(summary.equal_capacity_rank.dropna().astype(int).unique())
         if mode == "equal_capacity"
@@ -522,38 +646,56 @@ def _write_matrices_and_plots(summary, spaces, mode, config, output_dir):
                 )
                 rank_suffix = f"__k{rank}" if rank is not None else ""
                 stem = f"{sanitize_name(metric)}__{geometry}{rank_suffix}"
-                np.savez_compressed(
-                    matrix_dir / f"{stem}.npz",
-                    labels=np.asarray(labels),
-                    mean=mean,
-                    sem=sem_values,
-                    n_folds=counts,
-                    source_ranks=source_ranks,
-                    target_ranks=target_ranks,
-                    symmetric=metric in SYMMETRIC_METRICS,
-                )
-                pd.DataFrame(mean, index=labels, columns=labels).to_csv(
-                    matrix_dir / f"{stem}.csv"
-                )
-                _plot_matrix(
-                    mean, spaces, metric, geometry, mode, rank, figure_dir / stem
-                )
-                links.append((metric, geometry, rank, f"{stem}.png"))
-    html = ["<!doctype html><meta charset='utf-8'><title>Subspace heatmaps</title>"]
-    html.append(f"<h1>Global ordered subspace heatmaps — {mode}</h1>")
-    for metric, geometry, rank, filename in links:
-        capacity = f", rank {rank}" if rank is not None else ""
-        html.append(
-            f"<h2>{metric} — {geometry}{capacity}</h2>"
-            f"<a href='{filename}'><img src='{filename}' style='max-width:95vw'></a>"
-        )
-    (figure_dir / "index.html").write_text("\n".join(html), encoding="utf-8")
+                for source_index, artifact in artifacts.items():
+                    selector = {
+                        "comparison_mode": mode, "geometry": geometry,
+                        "metric": metric,
+                    }
+                    if rank is not None:
+                        selector["equal_capacity_rank"] = int(rank)
+                    payload = {
+                        "target_labels": np.asarray(labels),
+                        "mean": mean[source_index], "sem": sem_values[source_index],
+                        "n_folds": counts[source_index],
+                        "source_ranks": source_ranks[source_index],
+                        "target_ranks": target_ranks[source_index],
+                        "symmetric": metric in SYMMETRIC_METRICS,
+                    }
+                    artifact.save_field(
+                        "matrices", payload, selector=selector,
+                        overwrite=config.refresh,
+                    )
+                    width = max(9.0, min(28.0, 0.34 * len(labels) + 4.0))
+                    figure, axis = plt.subplots(figsize=(width, 2.8))
+                    image = axis.imshow(mean[[source_index]], aspect="auto", cmap="viridis")
+                    axis.set_xticks(range(len(labels)), labels, rotation=90, fontsize=6)
+                    axis.set_yticks([0], [spaces[source_index].label], fontsize=7)
+                    axis.set_title(f"{metric} — {mode}, {geometry}")
+                    figure.colorbar(image, ax=axis, shrink=0.72)
+                    figure.tight_layout()
+                    buffer = io.BytesIO()
+                    figure.savefig(buffer, format="png", dpi=180, bbox_inches="tight")
+                    plt.close(figure)
+                    plot_selector = {**selector, "name": stem}
+                    artifact.save_field(
+                        "plots", buffer.getvalue(), selector=plot_selector,
+                        overwrite=config.refresh,
+                    )
 
 
-def run_config(config: SubspaceComparisonConfig) -> Path:
+def _write_matrices_and_plots(summary, spaces, mode, config, output_dir):
+    """Compatibility cleanup for legacy CCA outputs; new runs use Artifact fields."""
+    for directory_name in ("matrices", "figures"):
+        directory = Path(output_dir) / directory_name
+        if not directory.exists():
+            continue
+        for path in directory.glob("cca_*"):
+            if path.is_file() and path.suffix in {".csv", ".npz", ".png", ".svg"}:
+                path.unlink()
+
+
+def run_config(config: SubspaceComparisonConfig) -> dict[int, Artifact]:
     configure_metric_backend("cuda")
-    output_dir = Path(config.output_root) / sanitize_name(config.analysis_name)
-    save_effective_config(config, output_dir)
     spaces = expand_spaces(config)
     equal_ranks = (
         shared_ranks(spaces, config.max_rank)
@@ -573,48 +715,63 @@ def run_config(config: SubspaceComparisonConfig) -> Path:
             f"{sorted(fold_counts)} versus reference {len(evaluation.fold_test_ids)}"
         )
     validation = _validate_preflight(config, spaces, jobs, evaluation)
-    _save_json(
-        output_dir / "manifest.json",
-        {
-            "created_at": datetime.now(timezone.utc).isoformat(),
-            "evaluation_dataset": config.evaluation_dataset,
-            "evaluation": evaluation.metadata,
-            "comparison_modes": config.comparison_modes,
-            "equal_capacity_ranks": equal_ranks,
-            "n_comparison_jobs": len(jobs),
-            "n_spaces": len(spaces),
-            "n_ordered_span_pairs": len(spaces) * (len(spaces) - 1),
-            "validation": validation,
-            "spaces": [_space_metadata(space) for space in spaces],
-            "metrics": {
-                metric: {"symmetric": metric in SYMMETRIC_METRICS}
-                for metric in ALL_METRICS
-            },
-            "metric_implementation": METRIC_IMPLEMENTATION,
-            "metric_device": "cuda",
-            "ridge_cv": {"folds": 5, "shared_alpha": True},
-        },
-    )
-    frame = _run_comparisons(config, spaces, jobs, evaluation, output_dir)
-    for mode in config.comparison_modes:
-        mode_output_dir = output_dir / mode
-        mode_output_dir.mkdir(parents=True, exist_ok=True)
-        mode_frame = frame[frame.comparison_mode == mode].copy()
-        mode_frame.to_csv(mode_output_dir / "fold_metrics.csv", index=False)
-        summary = summarize_fold_metrics(mode_frame)
-        summary.to_csv(mode_output_dir / "summary.csv", index=False)
-        _write_dataset_pair_tables(mode_frame, summary, mode_output_dir)
-        _write_matrices_and_plots(
-            summary, spaces, mode, config, mode_output_dir
+    upstreams = []
+    for space in spaces:
+        identity = space.artifact.identity_record()
+        if identity not in upstreams:
+            upstreams.append(identity)
+    artifacts = {}
+    for index, space in enumerate(spaces):
+        artifact = Artifact.from_space(config, space).begin(
+            config=config, upstreams=upstreams, refresh=config.refresh
         )
-    return output_dir
+        artifact.save_artifacts(
+            config=config, upstreams=upstreams,
+            source_metadata=_space_metadata(space),
+            validation={
+                **validation, "evaluation": evaluation.metadata,
+                "equal_capacity_ranks": equal_ranks,
+                "n_comparison_jobs": len(jobs), "n_spaces": len(spaces),
+                "metric_implementation": METRIC_IMPLEMENTATION,
+                "metric_device": "cuda",
+            },
+        )
+        artifacts[index] = artifact
+    frame = _run_comparisons(config, spaces, jobs, evaluation, artifacts)
+    for mode in config.comparison_modes:
+        mode_frame = frame[frame.comparison_mode == mode].copy()
+        summary = summarize_fold_metrics(mode_frame)
+        _save_matrices_and_plots(artifacts, summary, spaces, mode, config)
+    summary = summarize_fold_metrics(frame)
+    for index, artifact in artifacts.items():
+        source = spaces[index]
+        source_rows = frame[
+            (frame.source_dataset == source.dataset)
+            & (frame.source_offset == source.offset)
+            & (frame.source_model == source.model)
+            & (frame.source_layer == source.layer)
+            & (frame.source_kind == source.kind)
+        ].reset_index(drop=True)
+        source_summary = summary[
+            (summary.source_dataset == source.dataset)
+            & (summary.source_offset == source.offset)
+            & (summary.source_model == source.model)
+            & (summary.source_layer == source.layer)
+            & (summary.source_kind == source.kind)
+        ].reset_index(drop=True)
+        artifact.save_field("fold_metrics", source_rows, overwrite=config.refresh)
+        artifact.save_field("summary", source_summary, overwrite=config.refresh)
+        selectors = [entry["selector"] for entry in
+                     artifact.manifest()["entries"]["cell_metrics"].values()]
+        artifact.mark_complete({"cell_metrics": selectors})
+    return artifacts
 
 
 def main() -> None:
     args, overrides = parse_args(__doc__)
     config = load_config(args.config, overrides, SubspaceComparisonConfig)
-    output_dir = run_config(config)
-    print(f"Saved ordered subspace comparisons to {output_dir}")
+    artifacts = run_config(config)
+    print(f"Saved {len(artifacts)} source-organized subspace Artifacts")
 
 
 if __name__ == "__main__":

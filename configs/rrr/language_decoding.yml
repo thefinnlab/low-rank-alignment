@@ -10,18 +10,27 @@ encoding:
     model_dir: gpt2-xl-batch
     layer: 24
 
-# May point directly to a unit containing fold_*/A.npy or to its parent run root.
-# A saved mode=multi_view config.yml in that unit automatically reconstructs the
-# configured fixed-rank view embeddings before applying the final multiview A.
-rrr_run_path: results/gpt2-xl-batch_layer24_offset0/rrr
-# Optional PCA comparison source with the same saved fold_*/A.npy layout.
-pca_run_path: results/gpt2-xl-batch_layer24_offset0/pca
+results_root: results
+rrr_source:
+  mode: internal
+  dataset: podcast
+  offset: 0
+  model: gpt2-xl-batch
+  layer: 24
+  significance_selection:
+    mode: within-layer
+    reference_artifact:
+      mode: sig_lags
+      dataset: podcast
+      offset: 0
+      model: gpt2-xl-batch
+      layer: 24
+# Add unit selectors here for per-subject, per-region, or temporal-window RRR.
+rrr_selectors: {}
 mode: within_dataset
 # Used only in cross_dataset mode when averaging saved source folds.
 subspace_aggregation: extrinsic
 source_name: podcast_gpt2-xl-batch_layer24
-fold_results_dir: null
-output_dir: null
 # auto uses CUDA for continuous RidgeCV tasks when available; categorical
 # LogisticRegressionCV tasks remain on CPU. Use cuda to require a GPU.
 device: auto

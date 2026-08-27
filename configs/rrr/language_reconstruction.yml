@@ -10,13 +10,24 @@ encoding:
     model_dir: gpt2-xl-batch
     layer: 24
 
-# May point directly to an RRR unit or to a run root containing rrr/. The
-# corresponding PCA sibling is resolved automatically and is required.
-rrr_run_path: results/gpt2-xl-batch_layer24_offset0/rrr
+results_root: results
+rrr_source:
+  mode: internal
+  dataset: podcast
+  offset: 0
+  model: gpt2-xl-batch
+  layer: 24
+  significance_selection:
+    mode: within-layer
+    reference_artifact:
+      mode: sig_lags
+      dataset: podcast
+      offset: 0
+      model: gpt2-xl-batch
+      layer: 24
+rrr_selectors: {}
 mode: within_dataset
 source_name: podcast_gpt2-xl-batch_layer24
-fold_results_dir: null
-output_dir: null
 subspace_aggregation: extrinsic
 
 rank_grid: [1, 2, 4, 8, 16, 32]

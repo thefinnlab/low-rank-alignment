@@ -34,7 +34,7 @@ datasets:
     num_folds: 5
 
 models:
-  gpt2:
+  - model: gpt2
     offsets: [0]
     layers: [0, 3, 6, 9, 12]
     datasets: [podcast, cars-2, fmri]
@@ -47,7 +47,7 @@ models:
         podcast: {0: 128, 3: 512, 6: 256, 9: 128, 12: 256}
         cars-2: {0: 128, 3: 256, 6: 512, 9: 512, 12: 256}
         fmri: {0: 32, 3: 64, 6: 16, 9: 16, 12: 16}
-  gpt2-xl-batch:
+  - model: gpt2-xl-batch
     offsets: [0]
     layers: [0, 12, 24, 36, 48]
     datasets: [podcast, cars-2, fmri]
@@ -60,7 +60,7 @@ models:
         podcast: {0: 64, 12: 512, 24: 128, 36: 128, 48: 128}
         cars-2: {0: 64, 12: 512, 24: 256, 36: 256, 48: 64}
         fmri: {0: 64, 12: 32, 24: 32, 36: 16, 48: 16}
-  gpt-j-6b:
+  - model: gpt-j-6b
     offsets: [0]
     layers: [0, 7, 14, 21, 28]
     datasets: [podcast, cars-2, fmri]
@@ -73,7 +73,7 @@ models:
         podcast: {0: 128, 7: 256, 14: 256, 21: 256, 28: 128}
         cars-2: {0: 256, 7: 512, 14: 128, 21: 128, 28: 64}
         fmri: {0: 16, 7: 16, 14: 32, 21: 32, 28: 32}
-  llama3-8b:
+  - model: llama3-8b
     offsets: [0]
     layers: [0, 8, 16, 24, 32]
     datasets: [podcast, cars-2, fmri]
@@ -86,7 +86,7 @@ models:
         podcast: {0: 128, 8: 64, 16: 128, 24: 128, 32: 128}
         cars-2: {0: 512, 8: 128, 16: 256, 24: 256, 32: 128}
         fmri: {0: 16, 8: 32, 16: 32, 24: 16, 32: 32}
-  roberta-large:
+  - model: roberta-large
     offsets: [0]
     layers: [0, 6, 12, 18, 24]
     datasets: [podcast, cars-2, fmri]
@@ -99,7 +99,7 @@ models:
         podcast: {0: 256, 6: 512, 12: 256, 18: 256, 24: 256}
         cars-2: {0: 128, 6: 512, 12: 256, 18: 256, 24: 256}
         fmri: {0: 64, 6: 64, 12: 64, 18: 32, 24: 64}
-  random-gpt2-xl:
+  - model: random-gpt2-xl
     offsets: [0]
     layers: [0, 12, 24, 36, 48]
     datasets: [podcast, cars-2, fmri]

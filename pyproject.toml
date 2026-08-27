@@ -29,6 +29,8 @@ dependencies = [
     "peft",
     "pyannote.audio>=4,<5",
     "wtpsplit>=2.2.1",
+    "altair>=6.2.2",
+    "ipython>=9.16.1",
 ]
 
 [[tool.uv.index]]

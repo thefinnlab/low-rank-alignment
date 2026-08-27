@@ -1,8 +1,9 @@
 # Analysis Artifacts
 
-Core analysis results are owned by the unified `Artifact` classes in
-`scripts/run_significance.py` and `scripts/run_rrr.py`. Consumers use generic
-artifact identity blocks; the dataset selects the underlying implementation.
+Core analysis results are owned by the `Artifact` classes in the producing scripts.
+Significance and RRR use unified modality-neutral contracts; language decoding,
+language reconstruction, and subspace comparison define result-specific contracts.
+Consumers use generic artifact identity blocks rather than result paths.
 
 The canonical identity is:
 
@@ -10,7 +11,9 @@ The canonical identity is:
 results/<script>/<mode>/<dataset>/offset-<offset>/<model>/layer-<layer>/
 ```
 
-The script components are `run_significance` and `run_rrr`. Dataset components are `podcast`,
+Script components include `run_significance`, `run_rrr`,
+`run_language_decoding`, `run_language_reconstruction`, and `compare_subspaces`.
+Dataset components are `podcast`,
 `brain-treebank-<stimulus>`, and `deep-fmri`. fMRI always uses `offset-0`.
 GloVe dimensions are part of the model (`glove-300`) and its layer is
 `layer-none`. Configured model directory names are otherwise preserved.
@@ -45,7 +48,7 @@ instance.
 Writes publish payloads atomically and then update the manifest, with the physical
 codec and file size recorded for every selector entry. Tables are CSV, arrays are
 NPY, array mappings are NPZ, plots are PNG, JSON-compatible values are JSON, and
-fitted encoding objects are joblib files. Partial runs are valid.
+fitted encoding/reconstruction objects are joblib files. Partial runs are valid.
 Required fields and selector combinations are checked only by `mark_complete()`.
 Plot fields are optional, and `plot: false` never prevents completion.
 
@@ -85,8 +88,52 @@ metric, target-manifest, and mean-result fields. `load_input_factors()` always
 returns a list: one matrix per iEEG fold or a one-element fMRI rank-basis set.
 `load_mean_results()` preserves additional modality-specific metric columns.
 
-Language decoding and reconstruction remain on their legacy interfaces and are
-explicitly deferred from this refactor.
+## Language interpretation
+
+Language decoding and reconstruction accept one `rrr_source` identity. The selected
+RRR Artifact supplies both `method: rrr` and `method: pca` factors; optional
+`rrr_selectors` narrow unit-scoped factors such as a subject, region, or temporal
+window. The RRR source is recorded as an upstream dependency. Result identities use
+the decoded/reconstructed dataset, offset, embedding model, and layer, with the
+language mode as the Artifact mode.
+
+Decoding exposes word selection, run metadata, per-task/fold fit metrics, decoder
+weights, held-out predictions, the complete grid and summary, optional prediction
+agreement tables, and plots. Reconstruction exposes corresponding provenance,
+per-fit metrics, optional fitted models, fold and summary tables, RRR/PCA contrasts,
+predictor contrasts, and plots.
+
+The importable downstream facades are `scripts.run_language_decoding.Artifact` and
+`scripts.run_language_reconstruction.Artifact`; the existing executable files under
+`scripts/language-interpret/` retain their command-line roles.
+
+## Subspace comparisons
+
+Subspace comparison configuration uses an ordered list whose entries contain
+`model`, `layers`, and `datasets`; `offsets` defaults to `[0]`. Each configured source
+dataset/model/layer/subspace owns a `compare_subspaces` Artifact. Its fields contain
+the source-to-target cell cache, fold metrics, summary, row matrices, row heatmaps,
+source metadata, validation metadata, and all RRR upstream identities.
+
+A downstream collection loader requires the same explicit selection shape and keeps
+only comparisons whose source and target both belong to it:
+
+```python
+Artifact(
+    analysis_name="all_spaces_over_podcast_saturation_rrr",
+    evaluation_dataset="podcast",
+    models=[
+        {"model": "gpt2", "layers": [0, 6, 12],
+         "datasets": ["podcast", "cars-2"]},
+        {"model": "gpt2-xl-batch", "layers": [0, 24, 48],
+         "datasets": ["podcast"]},
+    ],
+    results_root="results/subspace_comparisons",
+).load_artifacts(["fold_metrics", "summary"])
+```
+
+The loaded object also exposes `available_comparisons`, containing the distinct
+source/target endpoints actually found. Missing, never-computed pairs are omitted.
 
 ## Legacy migration
 

@@ -48,6 +48,13 @@ SYMMETRIC_METRICS = (
 ALL_METRICS = DIRECTED_METRICS + SYMMETRIC_METRICS
 METRIC_IMPLEMENTATION = "torch_cuda_himalaya_shared_alpha_5fold_v2"
 
+
+def configured_models(config):
+    """Return ordered ``(model, specification)`` pairs for either config syntax."""
+    if isinstance(config.models, dict):
+        return list(config.models.items())
+    return [(item["model"], {"offsets": [0], **item}) for item in config.models]
+
 @dataclass(frozen=True)
 class EvaluationView:
     """One model/layer/offset representation on the evaluation stimulus."""
@@ -208,10 +215,11 @@ def expand_spaces(config: SubspaceComparisonConfig) -> list[ComparisonSpace]:
     missing = []
     kinds = ["rrr", "pca"] if config.include_pca else ["rrr"]
     dataset_order = {name: i for i, name in enumerate(config.datasets)}
-    model_order = {name: i for i, name in enumerate(config.models)}
+    model_specs = configured_models(config)
+    model_order = {name: i for i, (name, _) in enumerate(model_specs)}
     for dataset_alias in config.datasets:
         dataset_spec = config.datasets[dataset_alias]
-        for model, model_spec in config.models.items():
+        for model, model_spec in model_specs:
             if dataset_alias not in model_spec["datasets"]:
                 continue
             for offset in sorted(map(int, model_spec["offsets"])):
@@ -450,7 +458,7 @@ def _load_fmri_words(config: SubspaceComparisonConfig) -> EvaluationData:
     reference_item = next(
         (
             (model, model_spec)
-            for model, model_spec in config.models.items()
+            for model, model_spec in configured_models(config)
             if alias in model_spec["datasets"]
         ),
         None,

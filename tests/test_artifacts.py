@@ -13,6 +13,8 @@ from src.core.artifacts import (
 )
 from scripts.run_significance import Artifact as SignificanceArtifact
 from scripts.run_rrr import Artifact as RRRArtifact, UnitSelector
+from scripts.run_language_decoding import Artifact as DecodingArtifact
+from scripts.run_language_reconstruction import Artifact as ReconstructionArtifact
 from src.utils.rrr.significance import validate_cross_dataset_significance_alignment
 
 
@@ -28,6 +30,16 @@ def test_canonical_identity_and_defaults(tmp_path):
     assert normalize_dataset("fmri") == "deep-fmri"
     assert normalize_model("gpt2-xl-batch") == "gpt2-xl-batch"
     assert normalize_model("glove", glove_dim=300) == "glove-300"
+
+
+def test_language_artifact_facades_expose_script_owned_contracts(tmp_path):
+    decoding = DecodingArtifact(results_root=tmp_path).begin(config={"tasks": ["pos"]})
+    reconstruction = ReconstructionArtifact(results_root=tmp_path).begin(
+        config={"predictor_sets": ["tasks"]}
+    )
+
+    assert decoding.identity["script"] == "run_language_decoding"
+    assert reconstruction.identity["script"] == "run_language_reconstruction"
 
 
 def test_selective_fields_partial_completion_and_decode_errors(tmp_path):

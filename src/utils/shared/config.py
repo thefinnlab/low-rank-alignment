@@ -233,7 +233,7 @@ def expand_per_model_layer_configs(config):
         expanded_encoding = getattr(expanded, "encoding", expanded)
         expanded_encoding.per_model_config["layer"] = scalar_layer
         for field_name in ("significance_selection", "ieeg_rrr_source",
-                           "fmri_rrr_source"):
+                           "fmri_rrr_source", "rrr_source"):
             value = getattr(expanded, field_name, None)
             if is_dataclass(value):
                 for nested in ("reference_artifact", "artifacts"):

@@ -23,6 +23,7 @@ from src.utils.subspace_comparison.directed import (
     shared_ranks,
 )
 from scripts.rrr.compare_subspaces import (
+    Artifact as ComparisonArtifact,
     ComparisonJob,
     _cached_metrics,
     _canonicalize_symmetric_metrics,
@@ -30,6 +31,51 @@ from scripts.rrr.compare_subspaces import (
     _write_matrices_and_plots,
     generate_comparison_jobs,
 )
+
+
+def test_comparison_artifact_collection_requires_datasets_and_filters_endpoints(tmp_path):
+    producer = ComparisonArtifact(
+        analysis_name="demo", evaluation_dataset="podcast",
+        source_dataset="podcast", source_model="gpt2", source_layer=6,
+        source_kind="rrr", variant="source-rrr", results_root=tmp_path,
+    ).begin(config={"analysis_name": "demo"})
+    rows = pd.DataFrame({
+        "source_dataset": ["podcast", "podcast"],
+        "source_offset": [0, 0], "source_model": ["gpt2", "gpt2"],
+        "source_layer": [6, 6], "source_kind": ["rrr", "rrr"],
+        "target_dataset": ["cars-2", "fmri"], "target_offset": [0, 0],
+        "target_model": ["gpt2-xl", "gpt2-xl"], "target_layer": [24, 24],
+        "target_kind": ["rrr", "rrr"], "ridge_r2": [.2, .3],
+    })
+    producer.save_field("fold_metrics", rows)
+    producer.save_field("summary", rows)
+    producer.save_field("effective_config", {"analysis_name": "demo"})
+    producer.save_field("upstream_identities", [])
+    producer.save_field("source_metadata", {"kind": "rrr"})
+    producer.save_field("validation", {"ok": True})
+    cell = {"target_dataset": "cars-2", "target_offset": 0,
+            "target_model": "gpt2-xl", "target_layer": 24,
+            "target_kind": "rrr", "comparison_mode": "equal_capacity",
+            "geometry": "span", "source_rank": 1, "target_rank": 1, "fold": 0}
+    producer.save_field("cell_metrics", {"metrics": {}}, selector=cell)
+    producer.mark_complete({"cell_metrics": [cell]})
+
+    selection = [
+        {"model": "gpt2", "layers": [6], "datasets": ["podcast"]},
+        {"model": "gpt2-xl", "layers": [24], "datasets": ["cars-2"]},
+    ]
+    loaded = ComparisonArtifact(
+        analysis_name="demo", evaluation_dataset="podcast",
+        models=selection, results_root=tmp_path,
+    ).load_artifacts(["fold_metrics"])
+
+    assert loaded.fold_metrics["target_dataset"].tolist() == ["cars-2"]
+    assert len(loaded.available_comparisons) == 1
+    with pytest.raises(ValueError, match="datasets"):
+        ComparisonArtifact(
+            analysis_name="demo", evaluation_dataset="podcast",
+            models=[{"model": "gpt2", "layers": [6]}], results_root=tmp_path,
+        )
 
 
 @pytest.fixture(autouse=True)

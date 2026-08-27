@@ -478,7 +478,7 @@ class ArtifactStore:
                 return "json", ".json", payload, {}
             except (TypeError, ValueError):
                 pass
-        if field == "encoding_results":
+        if field in {"encoding_results", "fitted_models"}:
             import joblib
             buffer = io.BytesIO()
             joblib.dump(value, buffer)

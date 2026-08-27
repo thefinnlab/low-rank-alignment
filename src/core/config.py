@@ -416,6 +416,11 @@ class LanguageDecodingConfig:
     """Decode word-aligned linguistic targets from saved RRR/PCA subspaces."""
 
     encoding: EncodingConfig = field(default_factory=EncodingConfig)
+    rrr_source: dict | None = None
+    rrr_selectors: dict = field(default_factory=dict)
+    results_root: str = "results"
+    variant_name: str | None = None
+    # Deprecated compatibility inputs; executable clients require rrr_source.
     rrr_run_path: str | None = None
     pca_run_path: str | None = None
     mode: LanguageDecodingMode = LanguageDecodingMode.WITHIN_DATASET
@@ -460,8 +465,8 @@ class LanguageDecodingConfig:
         _validate_subspace_aggregation(self.subspace_aggregation)
         if self.device not in {"auto", "cuda", "cpu"}:
             raise ValueError("device must be one of ['auto', 'cpu', 'cuda']")
-        if not self.rrr_run_path:
-            raise ValueError("LanguageDecodingConfig.rrr_run_path is required")
+        if not self.rrr_source and not self.rrr_run_path:
+            raise ValueError("LanguageDecodingConfig.rrr_source is required")
         if not self.rank_grid or any(int(rank) < 1 for rank in self.rank_grid):
             raise ValueError("rank_grid must contain positive integers")
         if len(set(int(rank) for rank in self.rank_grid)) != len(self.rank_grid):
@@ -479,6 +484,11 @@ class LanguageReconstructionConfig:
     """Linearly reconstruct saved language-model subspaces from fixed predictors."""
 
     encoding: EncodingConfig = field(default_factory=EncodingConfig)
+    rrr_source: dict | None = None
+    rrr_selectors: dict = field(default_factory=dict)
+    results_root: str = "results"
+    variant_name: str | None = None
+    # Deprecated compatibility input; executable clients require rrr_source.
     rrr_run_path: str | None = None
     mode: LanguageDecodingMode = LanguageDecodingMode.WITHIN_DATASET
     source_name: str | None = None
@@ -507,8 +517,8 @@ class LanguageReconstructionConfig:
 
     def validate(self):
         _validate_subspace_aggregation(self.subspace_aggregation)
-        if not self.rrr_run_path:
-            raise ValueError("LanguageReconstructionConfig.rrr_run_path is required")
+        if not self.rrr_source and not self.rrr_run_path:
+            raise ValueError("LanguageReconstructionConfig.rrr_source is required")
         if not self.rank_grid or any(int(rank) < 1 for rank in self.rank_grid):
             raise ValueError("rank_grid must contain positive integers")
         if len(set(map(int, self.rank_grid))) != len(self.rank_grid):
@@ -595,10 +605,11 @@ class SubspaceComparisonConfig:
     """Parameters for ordered comparisons of saved RRR/PCA spaces."""
 
     analysis_name: str = "subspace_comparison"
+    variant_name: str | None = None
     output_root: str = "results/subspace_comparisons"
     evaluation_dataset: str = "podcast"
     datasets: dict[str, dict] = field(default_factory=dict)
-    models: dict[str, dict] = field(default_factory=dict)
+    models: list[dict] | dict[str, dict] = field(default_factory=list)
     comparison_modes: list[str] = field(default_factory=lambda: ["equal_capacity"])
     max_rank: int = 128
     include_pca: bool = False
@@ -623,6 +634,19 @@ class SubspaceComparisonConfig:
             )
         if not self.models:
             raise ValueError("models must contain at least one model")
+        model_items = (
+            list(self.models.items())
+            if isinstance(self.models, dict)
+            else [
+                (item.get("model"), {"offsets": [0], **item})
+                for item in self.models
+            ]
+        )
+        names = [name for name, _ in model_items]
+        if any(not name for name in names):
+            raise ValueError("Each models list entry must define model")
+        if len(set(names)) != len(names):
+            raise ValueError("models must not contain duplicate model names")
         if isinstance(self.max_rank, bool) or int(self.max_rank) < 1:
             raise ValueError("max_rank must be a positive integer")
         allowed_loaders = {"ieeg_words", "fmri_words"}
@@ -668,11 +692,11 @@ class SubspaceComparisonConfig:
             {"capacity_controlled", "full_neural_space"}
             & set(self.comparison_modes)
         )
-        for name, spec in self.models.items():
+        for name, spec in model_items:
             if not str(name).strip() or not isinstance(spec, dict):
                 raise ValueError("model names must be non-empty and map to objects")
             required = {"offsets", "layers", "datasets"}
-            allowed = required | {"saturation_ranks"}
+            allowed = required | {"model", "saturation_ranks"}
             if not required.issubset(spec) or set(spec) - allowed:
                 raise ValueError(
                     f"Model {name!r} must contain exactly required fields "
