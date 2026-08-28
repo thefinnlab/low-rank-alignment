@@ -2,6 +2,7 @@ data_root: data/brain-treebank
 dataset: brain_treebank
 per_dataset_config:
   movie: cars-2
+  rereference: common_average
 model: transformer
 per_model_config:
   layer:

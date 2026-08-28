@@ -57,6 +57,12 @@ significance artifacts rather than submitting significance jobs.
   providers.
 - `src/utils/atlas/` and `src/utils/plotting/` contain atlas and retained plotting code.
 
+Brain Treebank high-gamma preprocessing supports common-average and shaft-Laplacian
+rereferencing. Common average remains the default. Laplacian caches and downstream
+analyses are selected with `per_dataset_config.rereference: laplacian`; see
+[brain_treebank.md](brain_treebank.md) for the cache naming, contact-retention, and
+configuration contract.
+
 Imports use these explicit package paths. The former flat `src.utils.<module>` paths
 are intentionally unsupported.
 

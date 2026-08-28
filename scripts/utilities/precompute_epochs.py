@@ -111,7 +111,15 @@ def main():
             per_dataset_config=config.per_dataset_config,
             dataset_context=dataset_context,
         )
-        save_effective_config(config, os.path.dirname(cache_path))
+        rereference = getattr(dataset_context, "rereference", None)
+        config_filename = (
+            "config.yml"
+            if rereference in (None, "common_average")
+            else f"config_ref-{rereference}.yml"
+        )
+        save_effective_config(
+            config, os.path.dirname(cache_path), filename=config_filename
+        )
         print(f"\n{'='*60}")
         print(f"Subject {sub_id}")
         print(f"{'='*60}")

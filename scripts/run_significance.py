@@ -117,12 +117,18 @@ class Artifact(ArtifactStore):
     def from_ieeg_config(cls, config, dataset_context):
         enc = config.encoding
         model = enc.per_model_config.get("model_dir", enc.model)
+        rereference = getattr(dataset_context, "rereference", None)
         return cls(
             mode="sig_lags",
             dataset=normalize_dataset(enc.dataset, dataset_context.stimulus_id),
             offset=enc.offset,
             model=normalize_model(model, glove_dim=enc.per_model_config.get("dim")),
             layer=None if enc.model == "glove" else enc.per_model_config.get("layer"),
+            variant=(
+                f"rereference-{rereference}"
+                if rereference not in (None, "common_average")
+                else None
+            ),
             results_root=config.results_root,
         )
 

@@ -61,6 +61,7 @@ def load_raws(
         "per_subject_electrodes": per_subject_electrodes,
         "channel_reg_ex": channel_reg_ex,
         "no_preload": no_preload,
+        "rereference": getattr(context, "rereference", None),
     }
 
     raws = []
@@ -457,6 +458,9 @@ def save_precomputed_epochs(
         h5f.attrs["stimulus_label"] = getattr(
             context, "stimulus_label", "podcast" if dataset == "podcast" else ""
         )
+        rereference = getattr(context, "rereference", None)
+        if rereference is not None:
+            h5f.attrs["rereference"] = rereference
     print(f"  Saved precomputed epochs: {path}")
 
 
@@ -586,6 +590,22 @@ def load_precomputed_epochs(
                 "with scripts/utilities/precompute_epochs.py before running analyses."
             )
         attrs = cache.attrs
+        expected_rereference = getattr(context, "rereference", None)
+        cached_rereference = attrs.get("rereference")
+        if isinstance(cached_rereference, bytes):
+            cached_rereference = cached_rereference.decode("utf-8")
+        elif cached_rereference is not None:
+            cached_rereference = str(cached_rereference)
+        elif getattr(context, "dataset", dataset) == "brain_treebank":
+            cached_rereference = "common_average"
+        if (
+            expected_rereference is not None
+            and cached_rereference != expected_rereference
+        ):
+            raise ValueError(
+                "Precomputed epoch cache rereference does not match the requested "
+                f"mode: {cached_rereference!r} != {expected_rereference!r} ({path})."
+            )
         ch_names = [
             name.decode("utf-8") if isinstance(name, bytes) else str(name)
             for name in cache["ch_names"][:]
@@ -607,6 +627,7 @@ def load_precomputed_epochs(
                     "stimulus_label", getattr(context, "stimulus_label", "podcast")
                 )
             ),
+            "rereference": cached_rereference,
             "path": path,
         }
 

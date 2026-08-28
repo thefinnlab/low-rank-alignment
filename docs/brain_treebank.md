@@ -1,0 +1,44 @@
+# Brain Treebank preprocessing
+
+Brain Treebank word-aligned epoch preprocessing computes a 70–200 Hz Hilbert envelope
+from the source HDF5 voltage traces. It drops contacts listed in `corrupted_elec.json`,
+resamples the continuous recording to 512 Hz, despikes each contact, rereferences the
+voltage, applies the notch and band-pass filters, computes the envelope, and finally
+extracts word-aligned epochs at 32 Hz.
+
+## Rereferencing
+
+Set the rereference mode alongside the movie in `per_dataset_config`:
+
+```yaml
+per_dataset_config:
+  movie: cars-2
+  rereference: laplacian
+```
+
+Supported values are:
+
+- `common_average` (default): subtract the mean of all remaining sEEG contacts.
+- `laplacian`: for contact `n` on a shaft, compute
+  `V[n] - (V[n-1] + V[n+1]) / 2` before filtering and envelope extraction.
+
+Laplacian preprocessing retains a contact only when both consecutively numbered
+neighbors on the same shaft remain after corrupted-contact removal. Shaft endpoints,
+contacts beside a missing or corrupted contact, and channels without a numbered-contact
+label are excluded. `#` and `*` markers in Brain Treebank labels are ignored when
+identifying the shaft and contact number, while the original channel name is retained
+in the cache.
+
+Common-average caches retain the legacy filename. Laplacian caches add
+`_ref-laplacian` before `_ieeg.h5`, so both sets can coexist. Each new cache also
+records its rereference mode, and the loader rejects a cache whose mode differs from
+the requested configuration. Legacy Brain Treebank caches without this metadata are
+treated as `common_average`. Laplacian precomputation provenance is written to
+`config_ref-laplacian.yml`, alongside the legacy `config.yml` used by common-average
+precomputation.
+
+Use the same `per_dataset_config.rereference` value in precomputation and every
+downstream significance, RRR, comparison, or language-analysis encoding configuration.
+Laplacian significance Artifacts use the `rereference-laplacian` variant. RRR Artifacts
+also include `rereference-laplacian` in their readable variant path; an RRR significance
+selection must therefore reference the corresponding Laplacian significance variant.

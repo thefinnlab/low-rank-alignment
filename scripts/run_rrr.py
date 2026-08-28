@@ -224,10 +224,14 @@ class Artifact(ArtifactStore):
             layer=None if enc.model == "glove" else enc.per_model_config.get("layer"),
             results_root=config.results_root,
         )
-        artifact.variant_extras = (
-            {"atlas": config.atlas_path.rsplit("/", 1)[-1].rsplit(".", 1)[0]}
-            if config.atlas_path else {}
-        )
+        artifact.variant_extras = {}
+        rereference = getattr(dataset_context, "rereference", None)
+        if rereference not in (None, "common_average"):
+            artifact.variant_extras["rereference"] = rereference
+        if config.atlas_path:
+            artifact.variant_extras["atlas"] = (
+                config.atlas_path.rsplit("/", 1)[-1].rsplit(".", 1)[0]
+            )
         return artifact
 
     @classmethod

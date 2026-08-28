@@ -28,6 +28,11 @@ would collide at the same readable location is rejected and must supply an
 explicit `variant_name`. Loading without a variant is permitted only when exactly
 one variant exists.
 
+Brain Treebank Laplacian analyses are separated from legacy common-average results.
+Significance uses the `rereference-laplacian` variant, and RRR includes the same
+rereference label alongside its other readable variant components. Dependency blocks
+must select the matching Laplacian variant.
+
 RRR consumers may pass `significance_selection` directly to the `Artifact`
 constructor in place of `variant`. The Artifact computes the same stable digest,
 selects that variant, and verifies the selection recorded in its manifest. Explicit

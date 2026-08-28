@@ -8,7 +8,8 @@ from scripts.run_rrr import UnitSelector
 from scripts.run_significance import Artifact as SignificanceArtifact
 from scripts.run_significance import Config as SignificanceClientConfig
 from src.core.config import FMRICrossDatasetRRRConfig, FMRISignificanceConfig
-from src.core.config import RRRConfig, SignificanceConfig
+from src.core.config import EncodingConfig, RRRConfig, SignificanceConfig
+from src.core.registry import DatasetContext
 from src.utils.shared.config import dict_to_dataclass
 
 
@@ -26,6 +27,29 @@ def test_significance_config_dispatches_dataset_and_rejects_legacy_shape():
     assert isinstance(fmri.selected_config(), FMRISignificanceConfig)
     with pytest.raises(ValueError, match="Unknown Config fields"):
         dict_to_dataclass({"encoding": {}}, SignificanceClientConfig)
+
+
+def test_brain_treebank_laplacian_separates_downstream_artifact_variants(tmp_path):
+    context = DatasetContext(
+        dataset="brain_treebank",
+        stimulus_id="cars-2",
+        stimulus_label="cars-2",
+        rereference="laplacian",
+    )
+    encoding = EncodingConfig(
+        dataset="brain_treebank",
+        per_dataset_config={"movie": "cars-2", "rereference": "laplacian"},
+    )
+
+    significance = SignificanceArtifact.from_ieeg_config(
+        SignificanceConfig(encoding=encoding, results_root=str(tmp_path)), context
+    )
+    rrr = RRRArtifact.from_ieeg_config(
+        RRRConfig(encoding=encoding, results_root=str(tmp_path)), context
+    )
+
+    assert significance.variant == "rereference-laplacian"
+    assert rrr.variant_extras["rereference"] == "laplacian"
 
 
 def test_rrr_internal_mode_and_generic_source_translation():
