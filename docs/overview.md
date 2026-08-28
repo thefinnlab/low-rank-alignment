@@ -18,7 +18,9 @@ embeddings predict iEEG and fMRI responses. The supported executable surface is
   Language decoding includes word-aligned and TR-aligned pre-FIR modes for fMRI,
   all published through the same Artifact client.
 - `scripts/utilities/` contains data preparation, embedding generation, language-feature
-  generation, plotting, and atlas-reporting entrypoints.
+  generation, plotting, atlas-reporting entrypoints, and a read-only iEEG utility for
+  comparing max-lag correlation, max-lag correlation/SEM, and lag-cluster
+  significance on matched encoding fits and circular-shift null samples.
 
 The Makefile exposes significance and RRR through the unified entry points. Each
 retained analysis workflow owns one client-facing `Artifact` class. Their canonical

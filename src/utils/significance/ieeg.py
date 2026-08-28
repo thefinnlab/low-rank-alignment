@@ -245,6 +245,86 @@ def compute_fold_correlations(fold_predictions, fold_targets, device=None):
     return to_numpy(batch_corrcoef(pred_t, target_t))
 
 
+def compute_per_fold_correlations(fold_predictions, fold_targets, device=None):
+    """Compute one electrode-lag correlation matrix per held-out fold."""
+    _validate_fold_arrays(fold_predictions, fold_targets)
+    torch_device = _resolve_torch_device(device)
+    correlations = []
+    for pred, target in zip(fold_predictions, fold_targets):
+        pred_t = torch.tensor(
+            np.asarray(pred).transpose(1, 2, 0),
+            dtype=torch.float32,
+            device=torch_device,
+        )
+        target_t = torch.tensor(
+            np.asarray(target).transpose(1, 2, 0),
+            dtype=torch.float32,
+            device=torch_device,
+        )
+        correlations.append(to_numpy(batch_corrcoef(pred_t, target_t)))
+    return np.stack(correlations)
+
+
+def fisher_mean_correlations(correlations, axis=0):
+    """Fisher-average correlations and return the result in correlation space."""
+    with warnings.catch_warnings(), np.errstate(invalid="ignore"):
+        warnings.simplefilter("ignore", category=RuntimeWarning)
+        return np.tanh(np.nanmean(fisher_z(correlations), axis=axis))
+
+
+def _compute_shifted_fold_correlations_batch(
+    fold_predictions, fold_targets, batch_shift_matrix, device=None
+):
+    """Compute per-fold correlations for a batch of fold-local circular shifts.
+
+    Returns an array shaped ``(batch_size, n_folds, n_electrodes, n_lags)``.
+    """
+    _validate_fold_arrays(fold_predictions, fold_targets)
+    batch_shift_matrix = np.asarray(batch_shift_matrix, dtype=int)
+    if batch_shift_matrix.ndim != 2:
+        raise ValueError(
+            "batch_shift_matrix must have shape (batch_size, n_folds), got "
+            f"{batch_shift_matrix.shape}"
+        )
+    if batch_shift_matrix.shape[1] != len(fold_predictions):
+        raise ValueError(
+            "batch_shift_matrix fold count does not match fold data: "
+            f"{batch_shift_matrix.shape[1]} and {len(fold_predictions)}"
+        )
+    if batch_shift_matrix.shape[0] == 0:
+        raise ValueError("batch_shift_matrix must contain at least one shift row.")
+
+    torch_device = _resolve_torch_device(device)
+    fold_correlations = []
+    for fold_idx, (pred, target) in enumerate(zip(fold_predictions, fold_targets)):
+        pred = torch.tensor(
+            np.asarray(pred).transpose(1, 2, 0),
+            dtype=torch.float32,
+            device=torch_device,
+        )
+        pred_centered = pred - pred.mean(dim=-1, keepdim=True)
+        pred_norm = (pred_centered**2).sum(dim=-1).sqrt()
+
+        target = torch.tensor(
+            np.asarray(target), dtype=torch.float32, device=torch_device
+        )
+        fold_len = len(target)
+        shifts = batch_shift_matrix[:, fold_idx]
+        source_idx = (
+            np.arange(fold_len, dtype=int)[None, :] - shifts[:, None]
+        ) % fold_len
+        source_idx_t = torch.tensor(source_idx, dtype=torch.long, device=torch_device)
+        shifted_target = target[source_idx_t].permute(0, 2, 3, 1)
+        target_centered = shifted_target - shifted_target.mean(dim=-1, keepdim=True)
+        target_norm = (target_centered**2).sum(dim=-1).sqrt()
+        numerator = (pred_centered.unsqueeze(0) * target_centered).sum(dim=-1)
+        denominator = pred_norm.unsqueeze(0) * target_norm
+        corr = numerator / denominator
+        corr = torch.where(denominator == 0, torch.full_like(corr, float("nan")), corr)
+        fold_correlations.append(to_numpy(corr))
+    return np.stack(fold_correlations, axis=1)
+
+
 def build_cluster_filter(block_corrs, positive_fraction=0.8, mean_corr_threshold=0.0):
     """Return reliable electrode-lag mask from blockwise correlations.
 
@@ -438,6 +518,152 @@ def derive_subject_null_seed(null_seed, subject_id):
     )
 
 
+def sample_fold_shift_matrix(
+    fold_targets,
+    *,
+    minimal_shift=500,
+    shift_step=1,
+    num_null_shifts=10000,
+    seed=42,
+):
+    """Sample one allowed circular shift per held-out fold and null draw."""
+    if isinstance(num_null_shifts, bool) or not isinstance(num_null_shifts, int):
+        raise ValueError("num_null_shifts must be a positive integer")
+    if num_null_shifts <= 0:
+        raise ValueError("num_null_shifts must be a positive integer")
+    if isinstance(seed, bool) or not isinstance(seed, int):
+        raise ValueError("seed must be an integer")
+    shift_lists = [
+        valid_fold_shifts(len(target), minimal_shift, shift_step)
+        for target in fold_targets
+    ]
+    rng = np.random.default_rng(seed % (2**64))
+    return np.column_stack(
+        [
+            rng.choice(shifts, size=num_null_shifts, replace=True)
+            for shifts in shift_lists
+        ]
+    )
+
+
+def _finite_lag_max(scores):
+    """Return lag maxima, using negative infinity when every lag is invalid."""
+    scores = np.asarray(scores, dtype=np.float64)
+    finite_scores = np.where(np.isfinite(scores), scores, -np.inf)
+    return np.max(finite_scores, axis=-1)
+
+
+def fold_local_comparison_null_scores(
+    fold_predictions,
+    fold_targets,
+    *,
+    blocks_per_fold=5,
+    max_matching_distance=1,
+    positive_fraction=0.8,
+    mean_corr_threshold=0.0,
+    minimal_shift=500,
+    shift_step=1,
+    num_null_shifts=10000,
+    seed=42,
+    device=None,
+    null_batch_size=16,
+    shift_matrix=None,
+):
+    """Build matched max-lag and max-cluster nulls for method comparison.
+
+    All three returned distributions use the exact same fold-local shifts.
+    ``lag_corr`` is the Fisher mean of per-fold correlations, ``lag_sem`` is
+    the blockwise Fisher-z mean divided by its SEM, and ``cluster`` retains the
+    current filtered cluster-mass statistic.
+    """
+    _validate_fold_arrays(fold_predictions, fold_targets)
+    if isinstance(null_batch_size, bool) or not isinstance(
+        null_batch_size, (int, np.integer)
+    ):
+        raise ValueError("null_batch_size must be a positive integer")
+    null_batch_size = int(null_batch_size)
+    if null_batch_size <= 0:
+        raise ValueError("null_batch_size must be a positive integer")
+
+    if shift_matrix is None:
+        shift_matrix = sample_fold_shift_matrix(
+            fold_targets,
+            minimal_shift=minimal_shift,
+            shift_step=shift_step,
+            num_null_shifts=num_null_shifts,
+            seed=seed,
+        )
+    else:
+        shift_matrix = np.asarray(shift_matrix, dtype=int)
+        if shift_matrix.ndim != 2 or shift_matrix.shape[1] != len(fold_targets):
+            raise ValueError(
+                "shift_matrix must have shape (n_null, n_folds), got "
+                f"{shift_matrix.shape}"
+            )
+        if len(shift_matrix) == 0:
+            raise ValueError("shift_matrix must contain at least one null sample")
+        num_null_shifts = int(len(shift_matrix))
+
+    n_electrodes = np.asarray(fold_predictions[0]).shape[1]
+    maxima = {
+        "lag_corr": np.full((num_null_shifts, n_electrodes), -np.inf, dtype=np.float32),
+        "lag_sem": np.full((num_null_shifts, n_electrodes), -np.inf, dtype=np.float32),
+        "cluster": np.zeros((num_null_shifts, n_electrodes), dtype=np.float32),
+    }
+
+    for batch_start in tqdm(
+        range(0, num_null_shifts, null_batch_size),
+        desc="Matched fold-local circular shifts",
+    ):
+        batch_stop = min(batch_start + null_batch_size, num_null_shifts)
+        batch_shifts = shift_matrix[batch_start:batch_stop]
+        batch_fold_corrs = _compute_shifted_fold_correlations_batch(
+            fold_predictions, fold_targets, batch_shifts, device=device
+        )
+        lag_corr_scores = fisher_mean_correlations(batch_fold_corrs, axis=1)
+        maxima["lag_corr"][batch_start:batch_stop] = _finite_lag_max(
+            lag_corr_scores
+        )
+
+        batch_block_corrs = _compute_shifted_block_correlations_batch(
+            fold_predictions,
+            fold_targets,
+            blocks_per_fold=blocks_per_fold,
+            batch_shift_matrix=batch_shifts,
+            device=device,
+        )
+        for batch_offset, block_corrs in enumerate(batch_block_corrs):
+            sample_idx = batch_start + batch_offset
+            target_scores, _, _ = compute_sem_normalized_target_scores(block_corrs)
+            maxima["lag_sem"][sample_idx] = _finite_lag_max(target_scores)
+
+            cluster_mask, _, _ = build_cluster_filter(
+                block_corrs,
+                positive_fraction=positive_fraction,
+                mean_corr_threshold=mean_corr_threshold,
+            )
+            _, clusters = label_lag_clusters(
+                cluster_mask, max_matching_distance=max_matching_distance
+            )
+            for cluster in score_lag_clusters(target_scores, clusters):
+                elec_idx = int(cluster["electrode_idx"])
+                maxima["cluster"][sample_idx, elec_idx] = max(
+                    maxima["cluster"][sample_idx, elec_idx],
+                    float(cluster["cluster_score"]),
+                )
+
+    metadata = {
+        "shift_matrix": shift_matrix,
+        "n_null": int(num_null_shifts),
+        "minimal_shift": int(minimal_shift),
+        "shift_step": int(shift_step),
+        "fold_lengths": np.array([len(target) for target in fold_targets], dtype=int),
+        "seed": int(seed),
+        "sampling_mode": "iid_with_replacement_per_fold",
+    }
+    return maxima, metadata
+
+
 def fold_local_circular_shift_null_scores(
     fold_predictions,
     fold_targets,
@@ -472,16 +698,15 @@ def fold_local_circular_shift_null_scores(
     null_batch_size = int(null_batch_size)
     if null_batch_size <= 0:
         raise ValueError("null_batch_size must be a positive integer")
-    shift_lists = [
-        valid_fold_shifts(len(target), minimal_shift, shift_step)
-        for target in fold_targets
-    ]
-    rng = np.random.default_rng(seed % (2**64))
     n_null = num_null_shifts
     n_electrodes = np.asarray(fold_predictions[0]).shape[1]
     max_per_electrode = np.zeros((n_null, n_electrodes), dtype=np.float32)
-    shift_matrix = np.column_stack(
-        [rng.choice(shifts, size=n_null, replace=True) for shifts in shift_lists]
+    shift_matrix = sample_fold_shift_matrix(
+        fold_targets,
+        minimal_shift=minimal_shift,
+        shift_step=shift_step,
+        num_null_shifts=n_null,
+        seed=seed,
     )
 
     for batch_start in tqdm(
