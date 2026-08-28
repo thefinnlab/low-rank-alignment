@@ -152,16 +152,31 @@ def _observed_method_scores(cluster_result: dict, fold_corrs: np.ndarray) -> dic
         "lag_corr": _finite_max_per_electrode(lag_corr),
         "lag_sem": _finite_max_per_electrode(lag_sem),
         "cluster": cluster,
+        "mean_all_lags_corr": fisher_mean_correlations(lag_corr, axis=1),
     }
 
 
-def _fit_subject(config, subject, context, aligned_embeddings, word_in_glove, shared):
+def _fit_subject(
+    config,
+    subject,
+    context,
+    aligned_embeddings,
+    word_in_glove,
+    shared,
+    selected_electrodes=None,
+    return_predictions=True,
+):
     enc = config.encoding
     X_arr, Y, _, elec_names = load_data_from_cache(
         [subject],
         enc.data_root,
         enc.offset,
         aligned_embeddings,
+        sig_electrodes=(
+            {subject: list(selected_electrodes)}
+            if selected_electrodes is not None
+            else None
+        ),
         valid_rows=word_in_glove,
         dataset=enc.dataset,
         per_dataset_config=enc.per_dataset_config,
@@ -200,23 +215,29 @@ def _fit_subject(config, subject, context, aligned_embeddings, word_in_glove, sh
         y_in_cpu=enc.ridge_y_in_cpu,
         force_cpu=enc.ridge_force_cpu,
     )
-    _, models, _, test_idxs, scalers, predictions = train_encoding(
+    trained = train_encoding(
         [X_arr] * enc.num_folds,
         Y,
         constructor,
         epochs_shape=(n_electrodes, n_lags),
         num_folds=enc.num_folds,
-        return_preds=True,
+        return_preds=return_predictions,
     )
-    fold_predictions, fold_targets = reshape_fold_predictions_and_targets(
-        predictions, test_idxs, Y, n_electrodes, n_lags
-    )
+    corrs, models, _, test_idxs, scalers = trained[:5]
+    predictions = trained[5] if return_predictions else None
+    if return_predictions:
+        fold_predictions, fold_targets = reshape_fold_predictions_and_targets(
+            predictions, test_idxs, Y, n_electrodes, n_lags
+        )
+    else:
+        fold_predictions = fold_targets = None
     return {
         "X": X_arr,
         "Y": Y,
         "models": models,
         "scalers": scalers,
         "predictions": predictions,
+        "correlations": corrs,
         "fold_predictions": fold_predictions,
         "fold_targets": fold_targets,
         "electrodes": list(map(str, elec_names[0])),
@@ -312,7 +333,13 @@ def run_comparison(config) -> pd.DataFrame:
             for method in METHODS
         }
         for electrode_idx, electrode in enumerate(fitted["electrodes"]):
-            row = {"subject": int(subject), "electrode": electrode}
+            row = {
+                "subject": int(subject),
+                "electrode": electrode,
+                "mean_all_lags_corr": float(
+                    observed["mean_all_lags_corr"][electrode_idx]
+                ),
+            }
             for method in METHODS:
                 row[f"{method}_score"] = float(observed[method][electrode_idx])
                 row[f"{method}_p"] = float(pvalues[method][electrode_idx])
@@ -363,11 +390,11 @@ def membership_groups(sets: dict[str, set[str]]) -> dict[str, set[str]]:
 
 
 def mean_significant_correlations(frame: pd.DataFrame) -> dict[str, float]:
-    """Fisher-average best-lag correlations over each method's selected electrodes."""
+    """Fisher-average all-lag electrode correlations over each selected set."""
     means = {}
     for method in METHODS:
         values = frame.loc[
-            frame[f"{method}_significant"], "lag_corr_score"
+            frame[f"{method}_significant"], "mean_all_lags_corr"
         ].to_numpy(dtype=float)
         finite = values[np.isfinite(values)]
         means[method] = (
@@ -403,7 +430,7 @@ def print_report(frame: pd.DataFrame, config, config_path: Path, dataset, model,
         row = {
             "method": METHOD_LABELS[method],
             "all": len(sets[method]),
-            "mean best-lag r (Fisher z→r)": mean_correlations[method],
+            "mean all-lag r (Fisher z→r)": mean_correlations[method],
         }
         for subject in sorted(frame.subject.unique()):
             mask = frame.subject.eq(subject) & frame[f"{method}_significant"]

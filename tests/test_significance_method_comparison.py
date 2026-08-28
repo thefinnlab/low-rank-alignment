@@ -8,6 +8,7 @@ import yaml
 
 from scripts.utilities.compare_significance_methods import (
     METHODS,
+    _observed_method_scores,
     apply_global_fdr,
     canonical_config_path,
     empirical_max_pvalues,
@@ -27,6 +28,24 @@ def test_fisher_mean_averages_foldwise_correlations():
     result = ieeg.fisher_mean_correlations(correlations, axis=0)
 
     np.testing.assert_allclose(result, expected)
+
+
+def test_observed_summary_fisher_averages_all_folds_and_lags_per_electrode():
+    fold_corrs = np.array(
+        [
+            [[0.1, 0.2], [0.3, 0.4]],
+            [[0.2, 0.3], [0.4, 0.5]],
+        ]
+    )
+    cluster_result = {
+        "target_scores": np.ones((2, 2)),
+        "scored_clusters": [],
+    }
+
+    observed = _observed_method_scores(cluster_result, fold_corrs)
+    expected = np.tanh(np.mean(np.arctanh(fold_corrs), axis=(0, 2)))
+
+    np.testing.assert_allclose(observed["mean_all_lags_corr"], expected)
 
 
 def test_empirical_pvalues_use_electrode_specific_max_nulls_and_plus_one():
@@ -136,10 +155,10 @@ def test_empty_significant_sets_are_supported():
     assert all(not members for members in membership_groups(sets).values())
 
 
-def test_mean_correlation_uses_common_best_lag_score_for_each_selected_set():
+def test_mean_correlation_uses_common_all_lag_score_for_each_selected_set():
     frame = pd.DataFrame(
         {
-            "lag_corr_score": [0.1, 0.3, 0.5],
+            "mean_all_lags_corr": [0.1, 0.3, 0.5],
             "lag_corr_significant": [True, True, False],
             "lag_sem_significant": [False, True, True],
             "cluster_significant": [False, False, False],
@@ -162,7 +181,7 @@ def test_console_report_prints_counts_overlap_and_discordant_ids(capsys):
         {
             "subject": [1, 1],
             "electrode": ["A", "B"],
-            "lag_corr_score": [0.2, 0.4],
+            "mean_all_lags_corr": [0.2, 0.4],
             "lag_corr_significant": [True, True],
             "lag_sem_significant": [True, False],
             "cluster_significant": [True, False],
@@ -182,7 +201,7 @@ def test_console_report_prints_counts_overlap_and_discordant_ids(capsys):
     output = capsys.readouterr().out
 
     assert "Significant electrode counts" in output
-    assert "mean best-lag r (Fisher z→r)" in output
+    assert "mean all-lag r (Fisher z→r)" in output
     assert "0.3033" in output
     assert "Pairwise overlap" in output
     assert "all three (1)" in output
