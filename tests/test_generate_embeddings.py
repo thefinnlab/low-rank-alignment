@@ -1,7 +1,7 @@
 """Tests for scripts/utilities/generate_embeddings.py.
 
 Covers the four logic blocks called out in PR review:
-  - _tokenize_transcript: pre-split word tokenization + word_id alignment checks
+  - _tokenize_transcript_per_word: per-word tokenization + word_id alignment checks
   - _build_transcript_df: per-token transcript.tsv schema assembly
   - _causal_window_plan: sliding-window step logic for causal models
   - _build_bidir_batch: left-padded batch construction for bidirectional_strict
@@ -10,41 +10,37 @@ Covers the four logic blocks called out in PR review:
 import numpy as np
 import pandas as pd
 import pytest
+import h5py
 
 torch = pytest.importorskip("torch")
 
+import scripts.utilities.generate_embeddings as generate_embeddings
 from scripts.utilities.generate_embeddings import (
     _build_bidir_batch,
+    _build_podcast_context_batch,
     _build_transcript_df,
     _causal_window_plan,
-    _tokenize_transcript,
+    _load_model_for_generation,
+    _run_podcast_per_token,
+    _select_generation_model_class,
+    _tokenize_for_attention_mode,
+    _load_generation_words,
+    _tokenize_transcript_per_word,
+    _write_features_hdf5,
 )
+from src.core.config import GenerateEmbeddingsConfig
+from src.core.registry import get_dataset_adapter
 
 
 # ---------------------------------------------------------------------------
 # Fake tokenizer that mimics the slice of the HF tokenizer API we rely on.
 # ---------------------------------------------------------------------------
 
-class _FakeEncoding:
-    def __init__(self, input_ids, word_ids):
-        self._input_ids = input_ids
-        self._word_ids = word_ids
-
-    def __getitem__(self, key):
-        if key == "input_ids":
-            return self._input_ids
-        raise KeyError(key)
-
-    def word_ids(self):
-        return self._word_ids
-
-
 class FakeTokenizer:
     """Minimal HF-tokenizer-compatible stub.
 
     ``word_to_tokens`` maps each word → list of ``(token_str, token_id)``. An
-    empty list simulates a word that fails to tokenize (to exercise the assertion
-    in ``_tokenize_transcript``).
+    empty list simulates a word that fails to tokenize.
     """
 
     def __init__(self, word_to_tokens: dict):
@@ -52,59 +48,272 @@ class FakeTokenizer:
         self._id_to_tok = {
             tid: tok for toks in word_to_tokens.values() for tok, tid in toks
         }
+        self._tok_to_id = {
+            tok: tid for toks in word_to_tokens.values() for tok, tid in toks
+        }
+        self.pad_token_id = None
 
-    def __call__(
-        self,
-        words,
-        is_split_into_words=False,
-        add_special_tokens=True,
-        return_tensors=None,
-    ):
-        assert is_split_into_words, "only is_split_into_words=True is used"
-        assert not add_special_tokens, "only add_special_tokens=False is used"
-        assert return_tensors is None
-        input_ids: list[int] = []
-        word_ids: list[int] = []
-        for w_idx, word in enumerate(words):
-            for _, tid in self.word_to_tokens[word]:
-                input_ids.append(tid)
-                word_ids.append(w_idx)
-        return _FakeEncoding(input_ids, word_ids)
+    def tokenize(self, text):
+        assert text.startswith(" ")
+        return [tok for tok, _ in self.word_to_tokens[text[1:]]]
+
+    def convert_tokens_to_ids(self, tokens):
+        if isinstance(tokens, str):
+            return self._tok_to_id[tokens]
+        return [self._tok_to_id[t] for t in tokens]
 
     def convert_ids_to_tokens(self, ids):
-        return [self._id_to_tok[i] for i in ids]
+        return [self._id_to_tok[int(i)] for i in ids]
+
+
+class TestLoadGenerationWords:
+    def test_brain_treebank_uses_dataset_adapter_word_table(self, tmp_path, monkeypatch):
+        adapter = get_dataset_adapter("brain_treebank")
+        called = {"value": False}
+
+        def fake_load_word_table(data_root, context, drop_untimed_words=False):
+            called["value"] = True
+            assert data_root == str(tmp_path)
+            assert context.stimulus_id == "coraline"
+            assert drop_untimed_words is False
+            return pd.DataFrame(
+                {
+                    "word": ["Hello", "world"],
+                    "start": [0.0, 0.5],
+                    "end": [0.4, 0.9],
+                }
+            )
+
+        monkeypatch.setattr(adapter, "load_word_table", fake_load_word_table)
+        cfg = GenerateEmbeddingsConfig(
+            data_root=str(tmp_path),
+            dataset="brain_treebank",
+            per_dataset_config={"movie": "coraline"},
+        )
+
+        words_df, context, out_dir = _load_generation_words(cfg, "roberta-base")
+
+        assert called["value"] is True
+        assert words_df["word"].tolist() == ["Hello", "world"]
+        assert context.dataset == "brain_treebank"
+        assert out_dir == str(tmp_path / "stimuli" / "roberta-base" / "movie-coraline")
+
+
+class TestLoadModelForGeneration:
+    class _FakeModel:
+        def __init__(self, config):
+            self.config = config
+            self.to_device = None
+            self.eval_called = False
+
+        def to(self, device):
+            self.to_device = device
+            return self
+
+        def eval(self):
+            self.eval_called = True
+            return self
+
+    class _FakeModelClass:
+        from_pretrained_calls = []
+        from_config_calls = []
+
+        @classmethod
+        def reset(cls):
+            cls.from_pretrained_calls = []
+            cls.from_config_calls = []
+
+        @classmethod
+        def from_pretrained(cls, *args, **kwargs):
+            cls.from_pretrained_calls.append((args, kwargs))
+            return TestLoadModelForGeneration._FakeModel(type("Config", (), {"model_type": "gpt2"})())
+
+        @classmethod
+        def from_config(cls, *args, **kwargs):
+            cls.from_config_calls.append((args, kwargs))
+            return TestLoadModelForGeneration._FakeModel(args[0])
+
+    class _FakeAutoConfig:
+        calls = []
+
+        @classmethod
+        def reset(cls):
+            cls.calls = []
+
+        @classmethod
+        def from_pretrained(cls, *args, **kwargs):
+            cls.calls.append((args, kwargs))
+            return type("Config", (), {"model_type": "gpt2"})()
+
+    def setup_method(self):
+        self._FakeModelClass.reset()
+        self._FakeAutoConfig.reset()
+
+    def test_pretrained_mode_calls_from_pretrained(self, monkeypatch):
+        monkeypatch.setattr(generate_embeddings, "AutoConfig", self._FakeAutoConfig)
+        cfg = GenerateEmbeddingsConfig(
+            hf_model_id="example/model",
+            device="cpu",
+            dtype="float32",
+            local_files_only=False,
+            hf_cache_dir="/tmp/hf",
+            hf_token="token",
+        )
+
+        model = _load_model_for_generation(cfg, self._FakeModelClass)
+
+        assert len(self._FakeModelClass.from_pretrained_calls) == 1
+        assert self._FakeModelClass.from_config_calls == []
+        assert self._FakeAutoConfig.calls == []
+        args, kwargs = self._FakeModelClass.from_pretrained_calls[0]
+        assert args == ("example/model",)
+        assert kwargs["torch_dtype"] is torch.float32
+        assert kwargs["cache_dir"] == "/tmp/hf"
+        assert kwargs["local_files_only"] is False
+        assert kwargs["token"] == "token"
+        assert model.to_device == "cpu"
+        assert model.eval_called is True
+
+    def test_random_mode_loads_config_and_uses_from_config(self, monkeypatch):
+        monkeypatch.setattr(generate_embeddings, "AutoConfig", self._FakeAutoConfig)
+        cfg = GenerateEmbeddingsConfig(
+            hf_model_id="example/model",
+            device="cpu",
+            dtype="bfloat16",
+            random_init_model=True,
+        )
+
+        model = _load_model_for_generation(cfg, self._FakeModelClass)
+
+        assert self._FakeModelClass.from_pretrained_calls == []
+        assert len(self._FakeAutoConfig.calls) == 1
+        assert len(self._FakeModelClass.from_config_calls) == 1
+        config_args, config_kwargs = self._FakeAutoConfig.calls[0]
+        assert config_args == ("example/model",)
+        assert config_kwargs["local_files_only"] is True
+        from_config_args, from_config_kwargs = self._FakeModelClass.from_config_calls[0]
+        assert from_config_args[0] is model.config
+        assert from_config_kwargs == {"torch_dtype": torch.bfloat16}
+        assert model.to_device == "cpu"
+        assert model.eval_called is True
+
+    def test_causal_and_non_causal_modes_select_expected_auto_class(self):
+        assert _select_generation_model_class("podcast_per_token") is generate_embeddings.AutoModelForCausalLM
+        assert _select_generation_model_class("auto") is generate_embeddings.AutoModel
+        assert _select_generation_model_class("causal_native") is generate_embeddings.AutoModel
+
+    def test_seed_is_applied_before_random_construction(self, monkeypatch):
+        events = []
+
+        class ModelClass(self._FakeModelClass):
+            @classmethod
+            def from_config(cls, *args, **kwargs):
+                events.append("from_config")
+                return super().from_config(*args, **kwargs)
+
+        def fake_manual_seed(seed):
+            events.append(("manual_seed", seed))
+
+        def fake_cuda_available():
+            return True
+
+        def fake_cuda_manual_seed_all(seed):
+            events.append(("cuda_manual_seed_all", seed))
+
+        monkeypatch.setattr(generate_embeddings, "AutoConfig", self._FakeAutoConfig)
+        monkeypatch.setattr(torch, "manual_seed", fake_manual_seed)
+        monkeypatch.setattr(torch.cuda, "is_available", fake_cuda_available)
+        monkeypatch.setattr(torch.cuda, "manual_seed_all", fake_cuda_manual_seed_all)
+
+        cfg = GenerateEmbeddingsConfig(
+            hf_model_id="example/model",
+            device="cpu",
+            random_init_model=True,
+            random_init_seed=123,
+        )
+
+        _load_model_for_generation(cfg, ModelClass)
+
+        assert events == [("manual_seed", 123), ("cuda_manual_seed_all", 123), "from_config"]
 
 
 # ---------------------------------------------------------------------------
-# _tokenize_transcript
+# _tokenize_transcript_per_word
 # ---------------------------------------------------------------------------
 
 class TestTokenizeTranscript:
     def test_single_token_words(self):
-        tok = FakeTokenizer({"hello": [("hello", 1)], "world": [("world", 2)]})
-        input_ids, word_ids = _tokenize_transcript(["hello", "world"], tok)
+        tok = FakeTokenizer({"hello": [("Ġhello", 1)], "world": [("Ġworld", 2)]})
+        input_ids, word_ids, hftokens = _tokenize_transcript_per_word(["hello", "world"], tok)
         assert input_ids.dtype == np.int64
         assert input_ids.tolist() == [1, 2]
         assert word_ids == [0, 1]
+        assert hftokens == ["Ġhello", "Ġworld"]
 
     def test_multi_token_words(self):
         tok = FakeTokenizer(
-            {"pre": [("pre", 10)], "fix": [("fix", 11)], "ation": [("ation", 12)], "banana": [("ban", 20), ("ana", 21)]}
+            {"pre": [("Ġpre", 10)], "fix": [("Ġfix", 11)], "ation": [("Ġation", 12)], "banana": [("Ġban", 20), ("ana", 21)]}
         )
-        input_ids, word_ids = _tokenize_transcript(["pre", "banana", "fix"], tok)
+        input_ids, word_ids, hftokens = _tokenize_transcript_per_word(["pre", "banana", "fix"], tok)
         assert input_ids.tolist() == [10, 20, 21, 11]
         assert word_ids == [0, 1, 1, 2]
+        assert hftokens == ["Ġpre", "Ġban", "ana", "Ġfix"]
 
     def test_all_words_mapped_assertion(self):
         """Every word must produce at least one token — empty mapping raises."""
         tok = FakeTokenizer({"good": [("good", 1)], "bad": []})
         with pytest.raises(AssertionError, match="failed to tokenize"):
-            _tokenize_transcript(["good", "bad"], tok)
+            _tokenize_transcript_per_word(["good", "bad"], tok)
 
     def test_input_ids_word_ids_length_match(self):
         tok = FakeTokenizer({"a": [("a", 1)], "b": [("b1", 2), ("b2", 3)]})
-        input_ids, word_ids = _tokenize_transcript(["a", "b"], tok)
+        input_ids, word_ids, hftokens = _tokenize_transcript_per_word(["a", "b"], tok)
         assert len(input_ids) == len(word_ids) == 3
+        assert len(hftokens) == 3
+
+
+class TestPerWordTokenizeTranscript:
+    def test_uses_space_prefixed_word_tokenization(self):
+        tok = FakeTokenizer(
+            {
+                "hello": [("Ġhello", 10)],
+                "banana": [("Ġban", 20), ("ana", 21)],
+            }
+        )
+        input_ids, word_ids, hftokens = _tokenize_transcript_per_word(["hello", "banana"], tok)
+
+        assert input_ids.dtype == np.int64
+        assert input_ids.tolist() == [10, 20, 21]
+        assert word_ids == [0, 1, 1]
+        assert hftokens == ["Ġhello", "Ġban", "ana"]
+
+
+class TestTokenizeForAttentionMode:
+    def test_causal_native_uses_per_word_tokenization(self):
+        tok = FakeTokenizer({"won't": [("Ġwon", 10), ("'t", 11)]})
+
+        input_ids, word_ids, hftokens = _tokenize_for_attention_mode(
+            ["won't"],
+            tok,
+            "causal_native",
+        )
+
+        assert input_ids.tolist() == [10, 11]
+        assert word_ids == [0, 0]
+        assert hftokens == ["Ġwon", "'t"]
+
+    def test_bidirectional_strict_uses_same_per_word_tokenization(self):
+        tok = FakeTokenizer({"hello": [("Ġhello", 10)]})
+
+        input_ids, word_ids, hftokens = _tokenize_for_attention_mode(
+            ["hello"],
+            tok,
+            "bidirectional_strict",
+        )
+
+        assert input_ids.tolist() == [10]
+        assert word_ids == [0]
+        assert hftokens == ["Ġhello"]
 
 
 # ---------------------------------------------------------------------------
@@ -317,3 +526,112 @@ class TestBuildBidirBatch:
         batch_ids, batch_mask = _build_bidir_batch(input_ids, targets=[], N=4, pad_id=0)
         assert batch_ids.shape == (0, 4)
         assert batch_mask.shape == (0, 4)
+
+
+# ---------------------------------------------------------------------------
+# _build_podcast_context_batch
+# ---------------------------------------------------------------------------
+
+class TestBuildPodcastContextBatch:
+    def test_rows_have_context_len_plus_one_width(self):
+        input_ids = torch.tensor([10, 20, 30], dtype=torch.long)
+        batch_ids = _build_podcast_context_batch(input_ids, targets=[0, 1], context_len=4, pad_id=0)
+        assert batch_ids.shape == (2, 5)
+
+    def test_early_tokens_are_left_padded(self):
+        input_ids = torch.tensor([10, 20, 30], dtype=torch.long)
+        batch_ids = _build_podcast_context_batch(input_ids, targets=[0, 1, 2], context_len=3, pad_id=0)
+        assert batch_ids[0].tolist() == [0, 0, 0, 10]
+        assert batch_ids[1].tolist() == [0, 0, 10, 20]
+        assert batch_ids[2].tolist() == [0, 10, 20, 30]
+
+    def test_target_sees_exact_previous_context_len_plus_self(self):
+        input_ids = torch.tensor([10, 20, 30, 40, 50, 60], dtype=torch.long)
+        batch_ids = _build_podcast_context_batch(input_ids, targets=[4, 5], context_len=3, pad_id=0)
+        assert batch_ids[0].tolist() == [20, 30, 40, 50]
+        assert batch_ids[1].tolist() == [30, 40, 50, 60]
+
+    def test_pad_id_falls_through_from_caller(self):
+        input_ids = torch.tensor([5], dtype=torch.long)
+        batch_ids = _build_podcast_context_batch(input_ids, targets=[0], context_len=2, pad_id=999)
+        assert batch_ids[0].tolist() == [999, 999, 5]
+
+
+class _FakeCausalOutput:
+    def __init__(self, hidden_states, logits):
+        self.hidden_states = hidden_states
+        self.logits = logits
+
+
+class _FakeCausalLM:
+    def __init__(self, vocab_size=8, hidden_dim=2, n_layers=25):
+        self.vocab_size = vocab_size
+        self.hidden_dim = hidden_dim
+        self.n_layers = n_layers
+        self.calls = []
+
+    def __call__(self, input_ids, output_hidden_states=False):
+        assert output_hidden_states is True
+        self.calls.append(input_ids.detach().cpu().clone())
+        B, W = input_ids.shape
+        base = input_ids.float().unsqueeze(-1)
+        hidden_states = tuple(
+            torch.cat([base + L, base + L + 0.25], dim=-1)
+            for L in range(self.n_layers)
+        )
+        logits = torch.zeros(B, W, self.vocab_size, dtype=torch.float32, device=input_ids.device)
+        for row in range(B):
+            target_id = int(input_ids[row, -1].item())
+            logits[row, -2, target_id] = 4.0
+            logits[row, -2, (target_id + 1) % self.vocab_size] = 2.0
+            logits[row, -1, (target_id + 2) % self.vocab_size] = 10.0
+        return _FakeCausalOutput(hidden_states, logits)
+
+
+class TestRunPodcastPerToken:
+    class _Cfg:
+        device = "cpu"
+        context_window = 2
+        batch_size = 2
+
+    class _Tok:
+        pad_token_id = 0
+
+    def test_reads_hidden_from_last_position_and_logits_from_second_to_last(self):
+        model = _FakeCausalLM(vocab_size=10, hidden_dim=2, n_layers=3)
+        input_ids = np.array([1, 2, 3], dtype=np.int64)
+        out = {0: np.zeros((3, 2), dtype=np.float32), 2: np.zeros((3, 2), dtype=np.float32)}
+
+        perf_df = _run_podcast_per_token(model, input_ids, [0, 2], self._Cfg, self._Tok, out)
+
+        assert model.calls[0].tolist() == [[0, 0, 1], [0, 1, 2]]
+        assert model.calls[1].tolist() == [[1, 2, 3]]
+        np.testing.assert_allclose(out[0], [[1.0, 1.25], [2.0, 2.25], [3.0, 3.25]])
+        np.testing.assert_allclose(out[2], [[3.0, 3.25], [4.0, 4.25], [5.0, 5.25]])
+        assert perf_df["top_pred"].tolist() == [1, 2, 3]
+        assert perf_df["rank"].tolist() == [0, 0, 0]
+        assert (perf_df["true_prob"] > 0).all()
+        assert (perf_df["entropy"] > 0).all()
+
+    def test_selected_layers_only_are_required_in_output(self):
+        model = _FakeCausalLM(vocab_size=10, hidden_dim=2, n_layers=25)
+        input_ids = np.array([1, 2], dtype=np.int64)
+        out = {0: np.zeros((2, 2), dtype=np.float32), 24: np.zeros((2, 2), dtype=np.float32)}
+
+        _run_podcast_per_token(model, input_ids, [0, 24], self._Cfg, self._Tok, out)
+
+        assert set(out) == {0, 24}
+        np.testing.assert_allclose(out[0], [[1.0, 1.25], [2.0, 2.25]])
+        np.testing.assert_allclose(out[24], [[25.0, 25.25], [26.0, 26.25]])
+
+    def test_selected_layers_only_are_written_to_hdf5(self, tmp_path):
+        out = {
+            0: np.ones((2, 2), dtype=np.float32),
+            24: np.full((2, 2), 24, dtype=np.float32),
+        }
+        path = tmp_path / "features.hdf5"
+
+        _write_features_hdf5(str(path), [0, 24], out)
+
+        with h5py.File(path, "r") as f:
+            assert sorted(f.keys()) == ["layer-0", "layer-24"]

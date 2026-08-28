@@ -1,0 +1,46 @@
+dataset: podcast
+mode: internal
+results_root: results
+plot: true
+refresh: true
+rank_grid:
+- 1
+- 2
+- 4
+- 8
+- 16
+- 32
+- 64
+- 128
+- 256
+- 512
+- 1024
+- 1280
+significance_selection:
+  mode: within-layer
+  reference_artifact:
+    mode: sig_lags
+    dataset: podcast
+    offset: 0
+    model: gpt2-large
+    layer: '{layer}'
+ieeg:
+  encoding:
+    data_root: data/
+    model: transformer
+    offset: 0
+    subjects: null
+    batch: false
+    per_model_config:
+      model_dir: gpt2-large
+      layer:
+      - 0
+      - 18
+      - 36
+  run_pca_baseline: true
+  run_null_augmented: false
+  null_augmented_repeats: 50
+  null_augmented_reference_rank: 1280
+  null_augmented_min_shift: 50
+  null_augmented_seed: 42
+fmri: null

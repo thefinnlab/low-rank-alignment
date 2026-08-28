@@ -23,8 +23,8 @@ import pandas as pd
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from src.utils.encoding import load_encoding_results, load_all_subject_correlations
-from src.utils.plotting import (
+from src.utils.shared.encoding import load_encoding_results, load_all_subject_correlations
+from src.utils.plotting.encoding import (
     add_corrs,
     plot_corrs_vs_arbitrary,
     plot_corrs_by_significance,

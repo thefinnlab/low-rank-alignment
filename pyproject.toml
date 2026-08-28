@@ -1,0 +1,49 @@
+[project]
+name = "alignment-attribution"
+version = "0.0.1"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "numpy>=2,<3",
+    "transformers",
+    "accelerate",
+    "safetensors",
+    "tokenizers",
+    "sentencepiece",
+    "torch",
+    "torchvision",
+    "torchaudio",
+    "marimo>=0.23.10",
+    "plotly>=6.3.0",
+    "matplotlib>=3.11.0",
+    "nilearn>=0.13.1",
+    "mne>=1.12.1",
+    "mne-bids>=0.19.0",
+    "gensim>=4.4.0",
+    "h5py>=3.16.0",
+    "statsmodels>=0.14.6",
+    "himalaya>=0.4.11",
+    "scikit-learn==1.8.0",
+    "wordfreq>=3.1.1",
+    "nltk>=3.9.2",
+    "stanza>=1.10.1",
+    "peft",
+    "pyannote.audio>=4,<5",
+    "wtpsplit>=2.2.1",
+    "altair>=6.2.2",
+    "ipython>=9.16.1",
+]
+
+[[tool.uv.index]]
+name = "pytorch-cu130"
+url = "https://download.pytorch.org/whl/cu130"
+explicit = true
+
+[tool.uv.sources]
+torch = { index = "pytorch-cu130" }
+torchvision = { index = "pytorch-cu130" }
+torchaudio = { index = "pytorch-cu130" }
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+]

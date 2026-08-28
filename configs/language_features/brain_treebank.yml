@@ -1,0 +1,28 @@
+dataset: brain_treebank
+data_root: data/brain-treebank
+per_dataset_config:
+  movie: cars-2
+output_dir: processed_data/language_features
+resource_dir: data/language_resources
+provider_resource_config: configs/language_features/podcast.yml
+
+providers:
+  - native
+  - gpt2_surprisal
+  - ud
+  - lexical_norms
+  - swow
+  - wordnet
+  - disfluency
+  - entity_coreference
+
+provider_options:
+  ud:
+    language: en
+    package: ewt
+    model_resource: stanza_ewt
+    use_gpu: false
+  entity_coreference:
+    use_gpu: true
+
+refresh: true

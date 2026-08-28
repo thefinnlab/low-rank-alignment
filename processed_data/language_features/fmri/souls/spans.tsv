@@ -1,0 +1,748 @@
+provider	resource	span_id	start_token_id	end_token_id	label	span_type
+lexical_norms	concreteness	concreteness_phrase_171_173	171	172	dotted line	lexical_multiword
+lexical_norms	concreteness	concreteness_phrase_188_190	188	189	business plan	lexical_multiword
+lexical_norms	concreteness	concreteness_phrase_393_395	393	394	shopping cart	lexical_multiword
+lexical_norms	concreteness	concreteness_phrase_465_467	465	466	slow down	lexical_multiword
+lexical_norms	concreteness	concreteness_phrase_593_595	593	594	phone number	lexical_multiword
+lexical_norms	concreteness	concreteness_phrase_682_684	682	683	rock band	lexical_multiword
+lexical_norms	concreteness	concreteness_phrase_685_687	685	686	rock band	lexical_multiword
+lexical_norms	concreteness	concreteness_phrase_789_791	789	790	show up	lexical_multiword
+lexical_norms	concreteness	concreteness_phrase_1271_1273	1271	1272	look around	lexical_multiword
+lexical_norms	lancaster	lancaster_phrase_171_173	171	172	DOTTED LINE	lexical_multiword
+lexical_norms	lancaster	lancaster_phrase_188_190	188	189	BUSINESS PLAN	lexical_multiword
+lexical_norms	lancaster	lancaster_phrase_393_395	393	394	SHOPPING CART	lexical_multiword
+lexical_norms	lancaster	lancaster_phrase_465_467	465	466	SLOW DOWN	lexical_multiword
+lexical_norms	lancaster	lancaster_phrase_593_595	593	594	PHONE NUMBER	lexical_multiword
+lexical_norms	lancaster	lancaster_phrase_682_684	682	683	ROCK BAND	lexical_multiword
+lexical_norms	lancaster	lancaster_phrase_685_687	685	686	ROCK BAND	lexical_multiword
+lexical_norms	lancaster	lancaster_phrase_789_791	789	790	SHOW UP	lexical_multiword
+lexical_norms	lancaster	lancaster_phrase_1271_1273	1271	1272	LOOK AROUND	lexical_multiword
+lexical_norms	nrc_vad	nrc_vad_phrase_1_3	1	2	a lot	lexical_multiword
+lexical_norms	nrc_vad	nrc_vad_phrase_38_40	38	39	but then	lexical_multiword
+lexical_norms	nrc_vad	nrc_vad_phrase_123_125	123	124	make up	lexical_multiword
+lexical_norms	nrc_vad	nrc_vad_phrase_131_133	131	132	to go	lexical_multiword
+lexical_norms	nrc_vad	nrc_vad_phrase_133_135	133	134	out of	lexical_multiword
+lexical_norms	nrc_vad	nrc_vad_phrase_156_158	156	157	too many	lexical_multiword
+lexical_norms	nrc_vad	nrc_vad_phrase_165_167	165	166	to me	lexical_multiword
+lexical_norms	nrc_vad	nrc_vad_phrase_171_173	171	172	dotted line	lexical_multiword
+lexical_norms	nrc_vad	nrc_vad_phrase_185_187	185	186	on paper	lexical_multiword
+lexical_norms	nrc_vad	nrc_vad_phrase_188_190	188	189	business plan	lexical_multiword
+lexical_norms	nrc_vad	nrc_vad_phrase_194_196	194	195	supposed to	lexical_multiword
+lexical_norms	nrc_vad	nrc_vad_phrase_197_199	197	198	is to	lexical_multiword
+lexical_norms	nrc_vad	nrc_vad_phrase_211_213	211	212	skin care	lexical_multiword
+lexical_norms	nrc_vad	nrc_vad_phrase_214_216	214	215	make up	lexical_multiword
+lexical_norms	nrc_vad	nrc_vad_phrase_221_223	221	222	supposed to	lexical_multiword
+lexical_norms	nrc_vad	nrc_vad_phrase_226_228	226	227	every time	lexical_multiword
+lexical_norms	nrc_vad	nrc_vad_phrase_255_257	255	256	don't know	lexical_multiword
+lexical_norms	nrc_vad	nrc_vad_phrase_257_259	257	258	what the	lexical_multiword
+lexical_norms	nrc_vad	nrc_vad_phrase_283_285	283	284	was to	lexical_multiword
+lexical_norms	nrc_vad	nrc_vad_phrase_285_287	285	286	strike up	lexical_multiword
+lexical_norms	nrc_vad	nrc_vad_phrase_300_302	300	301	name for	lexical_multiword
+lexical_norms	nrc_vad	nrc_vad_phrase_326_328	326	327	so what	lexical_multiword
+lexical_norms	nrc_vad	nrc_vad_phrase_329_331	329	330	about to	lexical_multiword
+lexical_norms	nrc_vad	nrc_vad_phrase_339_341	339	340	long time	lexical_multiword
+lexical_norms	nrc_vad	nrc_vad_phrase_356_358	356	357	get dressed	lexical_multiword
+lexical_norms	nrc_vad	nrc_vad_phrase_365_367	365	366	put on	lexical_multiword
+lexical_norms	nrc_vad	nrc_vad_phrase_369_371	369	370	make up	lexical_multiword
+lexical_norms	nrc_vad	nrc_vad_phrase_393_395	393	394	shopping cart	lexical_multiword
+lexical_norms	nrc_vad	nrc_vad_phrase_445_447	445	446	be together	lexical_multiword
+lexical_norms	nrc_vad	nrc_vad_phrase_454_456	454	455	would appear	lexical_multiword
+lexical_norms	nrc_vad	nrc_vad_phrase_465_467	465	466	slow down	lexical_multiword
+lexical_norms	nrc_vad	nrc_vad_phrase_469_471	469	470	the most	lexical_multiword
+lexical_norms	nrc_vad	nrc_vad_phrase_475_477	475	476	would say	lexical_multiword
+lexical_norms	nrc_vad	nrc_vad_phrase_487_489	487	488	would say	lexical_multiword
+lexical_norms	nrc_vad	nrc_vad_phrase_489_491	489	490	excuse me	lexical_multiword
+lexical_norms	nrc_vad	nrc_vad_phrase_496_498	496	497	quick question	lexical_multiword
+lexical_norms	nrc_vad	nrc_vad_phrase_523_525	523	524	you know	lexical_multiword
+lexical_norms	nrc_vad	nrc_vad_phrase_540_542	540	541	want to	lexical_multiword
+lexical_norms	nrc_vad	nrc_vad_phrase_568_570	568	569	to do	lexical_multiword
+lexical_norms	nrc_vad	nrc_vad_phrase_586_588	586	587	give her	lexical_multiword
+lexical_norms	nrc_vad	nrc_vad_phrase_593_595	593	594	phone number	lexical_multiword
+lexical_norms	nrc_vad	nrc_vad_phrase_611_613	611	612	with me	lexical_multiword
+lexical_norms	nrc_vad	nrc_vad_phrase_631_633	631	632	the same	lexical_multiword
+lexical_norms	nrc_vad	nrc_vad_phrase_660_662	660	661	kind of	lexical_multiword
+lexical_norms	nrc_vad	nrc_vad_phrase_676_678	676	677	strip mall	lexical_multiword
+lexical_norms	nrc_vad	nrc_vad_phrase_682_684	682	683	rock band	lexical_multiword
+lexical_norms	nrc_vad	nrc_vad_phrase_685_687	685	686	rock band	lexical_multiword
+lexical_norms	nrc_vad	nrc_vad_phrase_689_691	689	690	up front	lexical_multiword
+lexical_norms	nrc_vad	nrc_vad_phrase_754_756	754	755	first night	lexical_multiword
+lexical_norms	nrc_vad	nrc_vad_phrase_756_758	756	757	at one	lexical_multiword
+lexical_norms	nrc_vad	nrc_vad_phrase_763_765	763	764	don't know	lexical_multiword
+lexical_norms	nrc_vad	nrc_vad_phrase_779_781	779	780	kind of	lexical_multiword
+lexical_norms	nrc_vad	nrc_vad_phrase_789_791	789	790	show up	lexical_multiword
+lexical_norms	nrc_vad	nrc_vad_phrase_804_806	804	805	what the	lexical_multiword
+lexical_norms	nrc_vad	nrc_vad_phrase_811_813	811	812	going to	lexical_multiword
+lexical_norms	nrc_vad	nrc_vad_phrase_819_821	819	820	long before	lexical_multiword
+lexical_norms	nrc_vad	nrc_vad_phrase_896_898	896	897	you think	lexical_multiword
+lexical_norms	nrc_vad	nrc_vad_phrase_923_925	923	924	even though	lexical_multiword
+lexical_norms	nrc_vad	nrc_vad_phrase_942_944	942	943	listen to	lexical_multiword
+lexical_norms	nrc_vad	nrc_vad_phrase_1020_1022	1020	1021	feel like	lexical_multiword
+lexical_norms	nrc_vad	nrc_vad_phrase_1043_1045	1043	1044	one day	lexical_multiword
+lexical_norms	nrc_vad	nrc_vad_phrase_1076_1078	1076	1077	excuse me	lexical_multiword
+lexical_norms	nrc_vad	nrc_vad_phrase_1083_1085	1083	1084	quick question	lexical_multiword
+lexical_norms	nrc_vad	nrc_vad_phrase_1092_1094	1092	1093	kind of	lexical_multiword
+lexical_norms	nrc_vad	nrc_vad_phrase_1102_1104	1102	1103	kind of	lexical_multiword
+lexical_norms	nrc_vad	nrc_vad_phrase_1106_1108	1106	1107	the end	lexical_multiword
+lexical_norms	nrc_vad	nrc_vad_phrase_1137_1139	1137	1138	don't know	lexical_multiword
+lexical_norms	nrc_vad	nrc_vad_phrase_1164_1166	1164	1165	problem with	lexical_multiword
+lexical_norms	nrc_vad	nrc_vad_phrase_1176_1178	1176	1177	or anything	lexical_multiword
+lexical_norms	nrc_vad	nrc_vad_phrase_1180_1182	1180	1181	you think	lexical_multiword
+lexical_norms	nrc_vad	nrc_vad_phrase_1185_1187	1185	1186	answer for	lexical_multiword
+lexical_norms	nrc_vad	nrc_vad_phrase_1192_1194	1192	1193	can't help	lexical_multiword
+lexical_norms	nrc_vad	nrc_vad_phrase_1195_1197	1195	1196	look at	lexical_multiword
+lexical_norms	nrc_vad	nrc_vad_phrase_1201_1203	1201	1202	as if	lexical_multiword
+lexical_norms	nrc_vad	nrc_vad_phrase_1206_1208	1206	1207	need to	lexical_multiword
+lexical_norms	nrc_vad	nrc_vad_phrase_1213_1215	1213	1214	want to	lexical_multiword
+lexical_norms	nrc_vad	nrc_vad_phrase_1246_1248	1246	1247	up front	lexical_multiword
+lexical_norms	nrc_vad	nrc_vad_phrase_1271_1273	1271	1272	look around	lexical_multiword
+lexical_norms	nrc_vad	nrc_vad_phrase_1402_1404	1402	1403	think so	lexical_multiword
+lexical_norms	nrc_vad	nrc_vad_phrase_1406_1408	1406	1407	a couple	lexical_multiword
+lexical_norms	nrc_vad	nrc_vad_phrase_1425_1427	1425	1426	mission statement	lexical_multiword
+lexical_norms	nrc_vad	nrc_vad_phrase_1457_1459	1457	1458	think about	lexical_multiword
+lexical_norms	nrc_vad	nrc_vad_phrase_1470_1472	1470	1471	falling off	lexical_multiword
+lexical_norms	nrc_vad	nrc_vad_phrase_1486_1488	1486	1487	going to	lexical_multiword
+lexical_norms	nrc_vad	nrc_vad_phrase_1493_1495	1493	1494	going to	lexical_multiword
+lexical_norms	nrc_vad	nrc_vad_phrase_1534_1536	1534	1535	start with	lexical_multiword
+lexical_norms	nrc_vad	nrc_vad_phrase_1536_1538	1536	1537	the same	lexical_multiword
+lexical_norms	nrc_vad	nrc_vad_phrase_1545_1547	1545	1546	think so	lexical_multiword
+lexical_norms	nrc_vad	nrc_vad_phrase_1548_1550	1548	1549	and so	lexical_multiword
+lexical_norms	nrc_vad	nrc_vad_phrase_1600_1602	1600	1601	ever again	lexical_multiword
+lexical_norms	nrc_vad	nrc_vad_phrase_1623_1625	1623	1624	at once	lexical_multiword
+lexical_norms	nrc_vad	nrc_vad_phrase_1626_1628	1626	1627	even though	lexical_multiword
+lexical_norms	nrc_vad	nrc_vad_phrase_1667_1669	1667	1668	felt like	lexical_multiword
+lexical_norms	nrc_vad	nrc_vad_phrase_1673_1675	1673	1674	be able	lexical_multiword
+lexical_norms	nrc_vad	nrc_vad_phrase_1684_1686	1684	1685	exit strategy	lexical_multiword
+lexical_norms	nrc_vad	nrc_vad_phrase_1694_1696	1694	1695	going to	lexical_multiword
+lexical_norms	nrc_vad	nrc_vad_phrase_1740_1742	1740	1741	you know	lexical_multiword
+lexical_norms	nrc_vad	nrc_vad_phrase_1749_1751	1749	1750	environmentally friendly	lexical_multiword
+lexical_norms	nrc_vad	nrc_vad_phrase_1755_1757	1755	1756	part of	lexical_multiword
+lexical_norms	nrc_vad	nrc_vad_phrase_1774_1776	1774	1775	a good	lexical_multiword
+lexical_norms	nrc_vad	nrc_vad_phrase_1785_1787	1785	1786	something about	lexical_multiword
+lexical_norms	nrc_vad	nrc_vad_phrase_1796_1798	1796	1797	just so	lexical_multiword
+lexical_norms	nrc_vad	nrc_vad_phrase_1802_1804	1802	1803	right thing	lexical_multiword
+lexical_norms	nrc_vad	nrc_vad_phrase_1827_1829	1827	1828	one day	lexical_multiword
+lexical_norms	nrc_vad	nrc_vad_phrase_1866_1868	1866	1867	thank you	lexical_multiword
+disfluency		discourse_marker_0	0	0	so	discourse_marker
+disfluency		discourse_marker_1	228	228	so	discourse_marker
+disfluency		discourse_marker_2	523	524	you_know	discourse_marker
+disfluency		discourse_marker_3	629	629	so	discourse_marker
+disfluency		repeated_phrase_4	684	686	repeated_phrase	disfluency
+disfluency		discourse_marker_5	707	707	so	discourse_marker
+disfluency		discourse_marker_6	733	733	so	discourse_marker
+disfluency		discourse_marker_7	814	814	so	discourse_marker
+disfluency		discourse_marker_8	882	882	so	discourse_marker
+disfluency		repeated_phrase_9	912	913	repeated_phrase	disfluency
+disfluency		discourse_marker_10	966	966	so	discourse_marker
+disfluency		discourse_marker_11	1218	1218	so	discourse_marker
+disfluency		discourse_marker_12	1439	1439	so	discourse_marker
+disfluency		discourse_marker_13	1740	1741	you_know	discourse_marker
+disfluency		discourse_marker_14	1819	1819	so	discourse_marker
+entity_coreference		entity_1_0	12	12	CARDINAL	named_entity
+entity_coreference		entity_1_1	20	20	CARDINAL	named_entity
+entity_coreference		entity_8_0	153	153	CARDINAL	named_entity
+entity_coreference		entity_12_0	200	200	CARDINAL	named_entity
+entity_coreference		entity_12_1	224	224	CARDINAL	named_entity
+entity_coreference		entity_14_0	240	240	CARDINAL	named_entity
+entity_coreference		entity_17_0	269	269	CARDINAL	named_entity
+entity_coreference		entity_19_0	279	279	CARDINAL	named_entity
+entity_coreference		entity_21_0	342	344	DATE	named_entity
+entity_coreference		entity_21_1	348	351	TIME	named_entity
+entity_coreference		entity_23_0	482	484	CARDINAL	named_entity
+entity_coreference		entity_26_0	543	543	CARDINAL	named_entity
+entity_coreference		entity_34_0	705	705	CARDINAL	named_entity
+entity_coreference		entity_40_0	754	754	ORDINAL	named_entity
+entity_coreference		entity_45_0	822	822	CARDINAL	named_entity
+entity_coreference		entity_63_0	1023	1025	TIME	named_entity
+entity_coreference		entity_83_0	1406	1409	DATE	named_entity
+entity_coreference		entity_84_0	1430	1430	CARDINAL	named_entity
+entity_coreference		entity_91_0	1530	1530	CARDINAL	named_entity
+entity_coreference		entity_99_0	1622	1622	CARDINAL	named_entity
+entity_coreference		entity_108_0	1821	1821	CARDINAL	named_entity
+entity_coreference		coreference_0_1	1	4	first	coreference_mention
+entity_coreference		coreference_0_2	14	20	subsequent	coreference_mention
+entity_coreference		coreference_1_1	8	9	first	coreference_mention
+entity_coreference		coreference_1_2	23	25	subsequent	coreference_mention
+entity_coreference		coreference_1_3	1172	1173	subsequent	coreference_mention
+entity_coreference		coreference_2_1	11	11	first	coreference_mention
+entity_coreference		coreference_2_2	12	20	subsequent	coreference_mention
+entity_coreference		coreference_2_3	26	26	subsequent	coreference_mention
+entity_coreference		coreference_2_4	30	30	subsequent	coreference_mention
+entity_coreference		coreference_2_5	59	59	subsequent	coreference_mention
+entity_coreference		coreference_2_6	68	68	subsequent	coreference_mention
+entity_coreference		coreference_2_7	70	71	subsequent	coreference_mention
+entity_coreference		coreference_2_8	73	73	subsequent	coreference_mention
+entity_coreference		coreference_2_9	79	79	subsequent	coreference_mention
+entity_coreference		coreference_2_10	88	88	subsequent	coreference_mention
+entity_coreference		coreference_2_11	96	96	subsequent	coreference_mention
+entity_coreference		coreference_2_12	98	104	subsequent	coreference_mention
+entity_coreference		coreference_2_13	105	105	subsequent	coreference_mention
+entity_coreference		coreference_2_14	115	115	subsequent	coreference_mention
+entity_coreference		coreference_2_15	127	127	subsequent	coreference_mention
+entity_coreference		coreference_2_16	138	138	subsequent	coreference_mention
+entity_coreference		coreference_2_17	140	140	subsequent	coreference_mention
+entity_coreference		coreference_2_18	142	142	subsequent	coreference_mention
+entity_coreference		coreference_2_19	146	146	subsequent	coreference_mention
+entity_coreference		coreference_2_20	150	150	subsequent	coreference_mention
+entity_coreference		coreference_2_21	166	166	subsequent	coreference_mention
+entity_coreference		coreference_2_22	168	168	subsequent	coreference_mention
+entity_coreference		coreference_2_23	174	174	subsequent	coreference_mention
+entity_coreference		coreference_2_24	176	176	subsequent	coreference_mention
+entity_coreference		coreference_2_25	179	183	subsequent	coreference_mention
+entity_coreference		coreference_2_26	236	236	subsequent	coreference_mention
+entity_coreference		coreference_2_27	242	242	subsequent	coreference_mention
+entity_coreference		coreference_2_28	246	246	subsequent	coreference_mention
+entity_coreference		coreference_2_29	248	248	subsequent	coreference_mention
+entity_coreference		coreference_2_30	254	254	subsequent	coreference_mention
+entity_coreference		coreference_2_31	264	264	subsequent	coreference_mention
+entity_coreference		coreference_2_32	309	309	subsequent	coreference_mention
+entity_coreference		coreference_2_33	312	312	subsequent	coreference_mention
+entity_coreference		coreference_2_34	317	317	subsequent	coreference_mention
+entity_coreference		coreference_2_35	321	325	subsequent	coreference_mention
+entity_coreference		coreference_2_36	328	328	subsequent	coreference_mention
+entity_coreference		coreference_2_37	333	333	subsequent	coreference_mention
+entity_coreference		coreference_2_38	354	354	subsequent	coreference_mention
+entity_coreference		coreference_2_39	360	360	subsequent	coreference_mention
+entity_coreference		coreference_2_40	364	364	subsequent	coreference_mention
+entity_coreference		coreference_2_41	368	368	subsequent	coreference_mention
+entity_coreference		coreference_2_42	372	372	subsequent	coreference_mention
+entity_coreference		coreference_2_43	374	374	subsequent	coreference_mention
+entity_coreference		coreference_2_44	380	380	subsequent	coreference_mention
+entity_coreference		coreference_2_45	388	388	subsequent	coreference_mention
+entity_coreference		coreference_2_46	391	391	subsequent	coreference_mention
+entity_coreference		coreference_2_47	396	396	subsequent	coreference_mention
+entity_coreference		coreference_2_48	398	398	subsequent	coreference_mention
+entity_coreference		coreference_2_49	405	405	subsequent	coreference_mention
+entity_coreference		coreference_2_50	411	411	subsequent	coreference_mention
+entity_coreference		coreference_2_51	414	414	subsequent	coreference_mention
+entity_coreference		coreference_2_52	427	427	subsequent	coreference_mention
+entity_coreference		coreference_2_53	433	433	subsequent	coreference_mention
+entity_coreference		coreference_2_54	453	453	subsequent	coreference_mention
+entity_coreference		coreference_2_55	463	463	subsequent	coreference_mention
+entity_coreference		coreference_2_56	474	474	subsequent	coreference_mention
+entity_coreference		coreference_2_57	480	480	subsequent	coreference_mention
+entity_coreference		coreference_2_58	486	486	subsequent	coreference_mention
+entity_coreference		coreference_2_59	490	490	subsequent	coreference_mention
+entity_coreference		coreference_2_60	492	492	subsequent	coreference_mention
+entity_coreference		coreference_2_61	498	498	subsequent	coreference_mention
+entity_coreference		coreference_2_62	499	502	subsequent	coreference_mention
+entity_coreference		coreference_2_63	516	516	subsequent	coreference_mention
+entity_coreference		coreference_2_64	525	525	subsequent	coreference_mention
+entity_coreference		coreference_2_65	531	531	subsequent	coreference_mention
+entity_coreference		coreference_2_66	585	585	subsequent	coreference_mention
+entity_coreference		coreference_2_67	590	590	subsequent	coreference_mention
+entity_coreference		coreference_2_68	596	596	subsequent	coreference_mention
+entity_coreference		coreference_2_69	604	604	subsequent	coreference_mention
+entity_coreference		coreference_2_70	612	612	subsequent	coreference_mention
+entity_coreference		coreference_2_71	614	614	subsequent	coreference_mention
+entity_coreference		coreference_2_72	619	619	subsequent	coreference_mention
+entity_coreference		coreference_2_73	634	634	subsequent	coreference_mention
+entity_coreference		coreference_2_74	639	639	subsequent	coreference_mention
+entity_coreference		coreference_2_75	641	641	subsequent	coreference_mention
+entity_coreference		coreference_2_76	644	644	subsequent	coreference_mention
+entity_coreference		coreference_2_77	750	750	subsequent	coreference_mention
+entity_coreference		coreference_2_78	753	753	subsequent	coreference_mention
+entity_coreference		coreference_2_79	762	762	subsequent	coreference_mention
+entity_coreference		coreference_2_80	767	767	subsequent	coreference_mention
+entity_coreference		coreference_2_81	771	771	subsequent	coreference_mention
+entity_coreference		coreference_2_82	773	773	subsequent	coreference_mention
+entity_coreference		coreference_2_83	784	784	subsequent	coreference_mention
+entity_coreference		coreference_2_84	934	934	subsequent	coreference_mention
+entity_coreference		coreference_2_85	946	946	subsequent	coreference_mention
+entity_coreference		coreference_2_86	1003	1003	subsequent	coreference_mention
+entity_coreference		coreference_2_87	1016	1016	subsequent	coreference_mention
+entity_coreference		coreference_2_88	1036	1036	subsequent	coreference_mention
+entity_coreference		coreference_2_89	1045	1045	subsequent	coreference_mention
+entity_coreference		coreference_2_90	1050	1050	subsequent	coreference_mention
+entity_coreference		coreference_2_91	1055	1055	subsequent	coreference_mention
+entity_coreference		coreference_2_92	1066	1066	subsequent	coreference_mention
+entity_coreference		coreference_2_93	1071	1071	subsequent	coreference_mention
+entity_coreference		coreference_2_94	1074	1074	subsequent	coreference_mention
+entity_coreference		coreference_2_95	1077	1077	subsequent	coreference_mention
+entity_coreference		coreference_2_96	1079	1079	subsequent	coreference_mention
+entity_coreference		coreference_2_97	1111	1111	subsequent	coreference_mention
+entity_coreference		coreference_2_98	1136	1136	subsequent	coreference_mention
+entity_coreference		coreference_2_99	1141	1141	subsequent	coreference_mention
+entity_coreference		coreference_2_100	1149	1149	subsequent	coreference_mention
+entity_coreference		coreference_2_101	1161	1161	subsequent	coreference_mention
+entity_coreference		coreference_2_102	1211	1211	subsequent	coreference_mention
+entity_coreference		coreference_2_103	1219	1219	subsequent	coreference_mention
+entity_coreference		coreference_2_104	1221	1221	subsequent	coreference_mention
+entity_coreference		coreference_2_105	1231	1231	subsequent	coreference_mention
+entity_coreference		coreference_2_106	1238	1238	subsequent	coreference_mention
+entity_coreference		coreference_2_107	1268	1268	subsequent	coreference_mention
+entity_coreference		coreference_2_108	1282	1282	subsequent	coreference_mention
+entity_coreference		coreference_2_109	1291	1291	subsequent	coreference_mention
+entity_coreference		coreference_2_110	1296	1296	subsequent	coreference_mention
+entity_coreference		coreference_2_111	1300	1300	subsequent	coreference_mention
+entity_coreference		coreference_2_112	1310	1310	subsequent	coreference_mention
+entity_coreference		coreference_2_113	1313	1313	subsequent	coreference_mention
+entity_coreference		coreference_2_114	1322	1322	subsequent	coreference_mention
+entity_coreference		coreference_2_115	1326	1326	subsequent	coreference_mention
+entity_coreference		coreference_2_116	1328	1328	subsequent	coreference_mention
+entity_coreference		coreference_2_117	1333	1333	subsequent	coreference_mention
+entity_coreference		coreference_2_118	1340	1340	subsequent	coreference_mention
+entity_coreference		coreference_2_119	1346	1346	subsequent	coreference_mention
+entity_coreference		coreference_2_120	1351	1351	subsequent	coreference_mention
+entity_coreference		coreference_2_121	1365	1365	subsequent	coreference_mention
+entity_coreference		coreference_2_122	1376	1376	subsequent	coreference_mention
+entity_coreference		coreference_2_123	1397	1397	subsequent	coreference_mention
+entity_coreference		coreference_2_124	1400	1400	subsequent	coreference_mention
+entity_coreference		coreference_2_125	1445	1445	subsequent	coreference_mention
+entity_coreference		coreference_2_126	1459	1459	subsequent	coreference_mention
+entity_coreference		coreference_2_127	1461	1461	subsequent	coreference_mention
+entity_coreference		coreference_2_128	1466	1466	subsequent	coreference_mention
+entity_coreference		coreference_2_129	1484	1484	subsequent	coreference_mention
+entity_coreference		coreference_2_130	1490	1490	subsequent	coreference_mention
+entity_coreference		coreference_2_131	1498	1498	subsequent	coreference_mention
+entity_coreference		coreference_2_132	1507	1507	subsequent	coreference_mention
+entity_coreference		coreference_2_133	1540	1540	subsequent	coreference_mention
+entity_coreference		coreference_2_134	1543	1543	subsequent	coreference_mention
+entity_coreference		coreference_2_135	1553	1553	subsequent	coreference_mention
+entity_coreference		coreference_2_136	1561	1561	subsequent	coreference_mention
+entity_coreference		coreference_2_137	1565	1565	subsequent	coreference_mention
+entity_coreference		coreference_2_138	1570	1570	subsequent	coreference_mention
+entity_coreference		coreference_2_139	1579	1579	subsequent	coreference_mention
+entity_coreference		coreference_2_140	1580	1580	subsequent	coreference_mention
+entity_coreference		coreference_2_141	1582	1582	subsequent	coreference_mention
+entity_coreference		coreference_2_142	1584	1584	subsequent	coreference_mention
+entity_coreference		coreference_2_143	1587	1587	subsequent	coreference_mention
+entity_coreference		coreference_2_144	1641	1641	subsequent	coreference_mention
+entity_coreference		coreference_2_145	1648	1648	subsequent	coreference_mention
+entity_coreference		coreference_2_146	1666	1666	subsequent	coreference_mention
+entity_coreference		coreference_2_147	1669	1669	subsequent	coreference_mention
+entity_coreference		coreference_2_148	1677	1677	subsequent	coreference_mention
+entity_coreference		coreference_2_149	1757	1757	subsequent	coreference_mention
+entity_coreference		coreference_2_150	1762	1762	subsequent	coreference_mention
+entity_coreference		coreference_2_151	1764	1764	subsequent	coreference_mention
+entity_coreference		coreference_2_152	1767	1767	subsequent	coreference_mention
+entity_coreference		coreference_2_153	1773	1776	subsequent	coreference_mention
+entity_coreference		coreference_2_154	1774	1776	subsequent	coreference_mention
+entity_coreference		coreference_2_155	1778	1778	subsequent	coreference_mention
+entity_coreference		coreference_2_156	1811	1811	subsequent	coreference_mention
+entity_coreference		coreference_2_157	1813	1813	subsequent	coreference_mention
+entity_coreference		coreference_2_158	1826	1826	subsequent	coreference_mention
+entity_coreference		coreference_2_159	1832	1832	subsequent	coreference_mention
+entity_coreference		coreference_2_160	1838	1838	subsequent	coreference_mention
+entity_coreference		coreference_2_161	1842	1842	subsequent	coreference_mention
+entity_coreference		coreference_2_162	1844	1844	subsequent	coreference_mention
+entity_coreference		coreference_2_163	1851	1851	subsequent	coreference_mention
+entity_coreference		coreference_2_164	1858	1858	subsequent	coreference_mention
+entity_coreference		coreference_2_165	1861	1861	subsequent	coreference_mention
+entity_coreference		coreference_3_1	20	20	first	coreference_mention
+entity_coreference		coreference_4_1	23	23	first	coreference_mention
+entity_coreference		coreference_4_2	26	27	subsequent	coreference_mention
+entity_coreference		coreference_4_3	35	37	subsequent	coreference_mention
+entity_coreference		coreference_4_4	42	42	subsequent	coreference_mention
+entity_coreference		coreference_4_5	47	47	subsequent	coreference_mention
+entity_coreference		coreference_4_6	59	60	subsequent	coreference_mention
+entity_coreference		coreference_4_7	653	653	subsequent	coreference_mention
+entity_coreference		coreference_4_8	679	679	subsequent	coreference_mention
+entity_coreference		coreference_4_9	708	708	subsequent	coreference_mention
+entity_coreference		coreference_4_10	710	712	subsequent	coreference_mention
+entity_coreference		coreference_4_11	713	713	subsequent	coreference_mention
+entity_coreference		coreference_4_12	720	720	subsequent	coreference_mention
+entity_coreference		coreference_4_13	734	734	subsequent	coreference_mention
+entity_coreference		coreference_4_14	855	855	subsequent	coreference_mention
+entity_coreference		coreference_4_15	871	871	subsequent	coreference_mention
+entity_coreference		coreference_4_16	875	875	subsequent	coreference_mention
+entity_coreference		coreference_4_17	910	910	subsequent	coreference_mention
+entity_coreference		coreference_4_18	912	912	subsequent	coreference_mention
+entity_coreference		coreference_4_19	916	916	subsequent	coreference_mention
+entity_coreference		coreference_4_20	919	919	subsequent	coreference_mention
+entity_coreference		coreference_4_21	961	961	subsequent	coreference_mention
+entity_coreference		coreference_4_22	1683	1683	subsequent	coreference_mention
+entity_coreference		coreference_4_23	1687	1687	subsequent	coreference_mention
+entity_coreference		coreference_4_24	1692	1692	subsequent	coreference_mention
+entity_coreference		coreference_4_25	1703	1703	subsequent	coreference_mention
+entity_coreference		coreference_4_26	1715	1715	subsequent	coreference_mention
+entity_coreference		coreference_4_27	1723	1723	subsequent	coreference_mention
+entity_coreference		coreference_4_28	1727	1727	subsequent	coreference_mention
+entity_coreference		coreference_4_29	1792	1792	subsequent	coreference_mention
+entity_coreference		coreference_5_1	33	34	first	coreference_mention
+entity_coreference		coreference_6_1	42	44	first	coreference_mention
+entity_coreference		coreference_7_1	50	51	first	coreference_mention
+entity_coreference		coreference_7_2	63	64	subsequent	coreference_mention
+entity_coreference		coreference_7_3	84	85	subsequent	coreference_mention
+entity_coreference		coreference_7_4	180	181	subsequent	coreference_mention
+entity_coreference		coreference_8_1	50	52	first	coreference_mention
+entity_coreference		coreference_9_1	54	60	first	coreference_mention
+entity_coreference		coreference_10_1	56	60	first	coreference_mention
+entity_coreference		coreference_11_1	63	66	first	coreference_mention
+entity_coreference		coreference_12_1	75	75	first	coreference_mention
+entity_coreference		coreference_12_2	1010	1010	subsequent	coreference_mention
+entity_coreference		coreference_12_3	1124	1124	subsequent	coreference_mention
+entity_coreference		coreference_12_4	1134	1134	subsequent	coreference_mention
+entity_coreference		coreference_13_1	83	86	first	coreference_mention
+entity_coreference		coreference_14_1	93	94	first	coreference_mention
+entity_coreference		coreference_15_1	103	104	first	coreference_mention
+entity_coreference		coreference_16_1	107	107	first	coreference_mention
+entity_coreference		coreference_17_1	107	108	first	coreference_mention
+entity_coreference		coreference_18_1	110	113	first	coreference_mention
+entity_coreference		coreference_19_1	114	114	first	coreference_mention
+entity_coreference		coreference_20_1	117	124	first	coreference_mention
+entity_coreference		coreference_21_1	123	124	first	coreference_mention
+entity_coreference		coreference_22_1	129	137	first	coreference_mention
+entity_coreference		coreference_23_1	135	135	first	coreference_mention
+entity_coreference		coreference_24_1	137	137	first	coreference_mention
+entity_coreference		coreference_25_1	142	144	first	coreference_mention
+entity_coreference		coreference_26_1	146	149	first	coreference_mention
+entity_coreference		coreference_27_1	149	149	first	coreference_mention
+entity_coreference		coreference_27_2	1233	1233	subsequent	coreference_mention
+entity_coreference		coreference_28_1	153	157	first	coreference_mention
+entity_coreference		coreference_29_1	159	162	first	coreference_mention
+entity_coreference		coreference_30_1	162	162	first	coreference_mention
+entity_coreference		coreference_31_1	170	172	first	coreference_mention
+entity_coreference		coreference_32_1	176	183	first	coreference_mention
+entity_coreference		coreference_33_1	188	188	first	coreference_mention
+entity_coreference		coreference_34_1	187	189	first	coreference_mention
+entity_coreference		coreference_35_1	192	196	first	coreference_mention
+entity_coreference		coreference_36_1	193	193	first	coreference_mention
+entity_coreference		coreference_36_2	207	207	subsequent	coreference_mention
+entity_coreference		coreference_36_3	209	209	subsequent	coreference_mention
+entity_coreference		coreference_36_4	229	229	subsequent	coreference_mention
+entity_coreference		coreference_37_1	200	201	first	coreference_mention
+entity_coreference		coreference_37_2	217	217	subsequent	coreference_mention
+entity_coreference		coreference_38_1	204	205	first	coreference_mention
+entity_coreference		coreference_39_1	211	212	first	coreference_mention
+entity_coreference		coreference_40_1	217	218	first	coreference_mention
+entity_coreference		coreference_41_1	224	225	first	coreference_mention
+entity_coreference		coreference_41_2	240	241	subsequent	coreference_mention
+entity_coreference		coreference_42_1	226	227	first	coreference_mention
+entity_coreference		coreference_43_1	230	230	first	coreference_mention
+entity_coreference		coreference_44_1	229	231	first	coreference_mention
+entity_coreference		coreference_45_1	244	253	first	coreference_mention
+entity_coreference		coreference_45_2	1074	1075	subsequent	coreference_mention
+entity_coreference		coreference_45_3	1088	1088	subsequent	coreference_mention
+entity_coreference		coreference_46_1	258	259	first	coreference_mention
+entity_coreference		coreference_47_1	268	271	first	coreference_mention
+entity_coreference		coreference_47_2	281	282	subsequent	coreference_mention
+entity_coreference		coreference_48_1	272	272	first	coreference_mention
+entity_coreference		coreference_49_1	274	274	first	coreference_mention
+entity_coreference		coreference_49_2	294	294	subsequent	coreference_mention
+entity_coreference		coreference_49_3	297	297	subsequent	coreference_mention
+entity_coreference		coreference_49_4	303	303	subsequent	coreference_mention
+entity_coreference		coreference_49_5	443	443	subsequent	coreference_mention
+entity_coreference		coreference_49_6	504	504	subsequent	coreference_mention
+entity_coreference		coreference_49_7	554	554	subsequent	coreference_mention
+entity_coreference		coreference_49_8	562	562	subsequent	coreference_mention
+entity_coreference		coreference_49_9	1391	1391	subsequent	coreference_mention
+entity_coreference		coreference_49_10	1395	1395	subsequent	coreference_mention
+entity_coreference		coreference_49_11	1651	1651	subsequent	coreference_mention
+entity_coreference		coreference_50_1	277	277	first	coreference_mention
+entity_coreference		coreference_51_1	279	282	first	coreference_mention
+entity_coreference		coreference_51_2	284	292	subsequent	coreference_mention
+entity_coreference		coreference_51_3	302	302	subsequent	coreference_mention
+entity_coreference		coreference_51_4	305	305	subsequent	coreference_mention
+entity_coreference		coreference_51_5	306	307	subsequent	coreference_mention
+entity_coreference		coreference_51_6	324	325	subsequent	coreference_mention
+entity_coreference		coreference_52_1	287	289	first	coreference_mention
+entity_coreference		coreference_53_1	291	292	first	coreference_mention
+entity_coreference		coreference_54_1	299	302	first	coreference_mention
+entity_coreference		coreference_55_1	316	316	first	coreference_mention
+entity_coreference		coreference_55_2	335	335	subsequent	coreference_mention
+entity_coreference		coreference_55_3	1289	1289	subsequent	coreference_mention
+entity_coreference		coreference_55_4	1298	1298	subsequent	coreference_mention
+entity_coreference		coreference_55_5	1332	1332	subsequent	coreference_mention
+entity_coreference		coreference_55_6	1369	1369	subsequent	coreference_mention
+entity_coreference		coreference_55_7	1378	1378	subsequent	coreference_mention
+entity_coreference		coreference_55_8	1394	1394	subsequent	coreference_mention
+entity_coreference		coreference_56_1	332	332	first	coreference_mention
+entity_coreference		coreference_57_1	338	340	first	coreference_mention
+entity_coreference		coreference_58_1	341	346	first	coreference_mention
+entity_coreference		coreference_59_1	345	346	first	coreference_mention
+entity_coreference		coreference_60_1	348	353	first	coreference_mention
+entity_coreference		coreference_61_1	352	353	first	coreference_mention
+entity_coreference		coreference_62_1	360	362	first	coreference_mention
+entity_coreference		coreference_63_1	374	375	first	coreference_mention
+entity_coreference		coreference_64_1	378	378	first	coreference_mention
+entity_coreference		coreference_65_1	384	384	first	coreference_mention
+entity_coreference		coreference_65_2	387	387	subsequent	coreference_mention
+entity_coreference		coreference_65_3	440	441	subsequent	coreference_mention
+entity_coreference		coreference_65_4	1048	1048	subsequent	coreference_mention
+entity_coreference		coreference_65_5	1228	1229	subsequent	coreference_mention
+entity_coreference		coreference_66_1	391	394	first	coreference_mention
+entity_coreference		coreference_67_1	402	402	first	coreference_mention
+entity_coreference		coreference_68_1	410	410	first	coreference_mention
+entity_coreference		coreference_69_1	418	425	first	coreference_mention
+entity_coreference		coreference_70_1	429	431	first	coreference_mention
+entity_coreference		coreference_70_2	438	438	subsequent	coreference_mention
+entity_coreference		coreference_70_3	494	494	subsequent	coreference_mention
+entity_coreference		coreference_70_4	501	502	subsequent	coreference_mention
+entity_coreference		coreference_70_5	523	523	subsequent	coreference_mention
+entity_coreference		coreference_70_6	538	538	subsequent	coreference_mention
+entity_coreference		coreference_70_7	582	582	subsequent	coreference_mention
+entity_coreference		coreference_70_8	587	587	subsequent	coreference_mention
+entity_coreference		coreference_70_9	592	592	subsequent	coreference_mention
+entity_coreference		coreference_70_10	598	598	subsequent	coreference_mention
+entity_coreference		coreference_70_11	603	603	subsequent	coreference_mention
+entity_coreference		coreference_70_12	607	607	subsequent	coreference_mention
+entity_coreference		coreference_70_13	827	828	subsequent	coreference_mention
+entity_coreference		coreference_70_14	843	844	subsequent	coreference_mention
+entity_coreference		coreference_70_15	883	884	subsequent	coreference_mention
+entity_coreference		coreference_70_16	975	976	subsequent	coreference_mention
+entity_coreference		coreference_70_17	1118	1119	subsequent	coreference_mention
+entity_coreference		coreference_70_18	1128	1129	subsequent	coreference_mention
+entity_coreference		coreference_70_19	1628	1629	subsequent	coreference_mention
+entity_coreference		coreference_70_20	1633	1633	subsequent	coreference_mention
+entity_coreference		coreference_70_21	1637	1637	subsequent	coreference_mention
+entity_coreference		coreference_71_1	448	450	first	coreference_mention
+entity_coreference		coreference_72_1	469	473	first	coreference_mention
+entity_coreference		coreference_73_1	477	485	first	coreference_mention
+entity_coreference		coreference_74_1	482	485	first	coreference_mention
+entity_coreference		coreference_75_1	495	497	first	coreference_mention
+entity_coreference		coreference_75_2	564	565	subsequent	coreference_mention
+entity_coreference		coreference_76_1	509	514	first	coreference_mention
+entity_coreference		coreference_76_2	522	522	subsequent	coreference_mention
+entity_coreference		coreference_77_1	513	514	first	coreference_mention
+entity_coreference		coreference_78_1	518	519	first	coreference_mention
+entity_coreference		coreference_79_1	518	522	first	coreference_mention
+entity_coreference		coreference_80_1	527	528	first	coreference_mention
+entity_coreference		coreference_81_1	531	532	first	coreference_mention
+entity_coreference		coreference_82_1	535	547	first	coreference_mention
+entity_coreference		coreference_83_1	543	543	first	coreference_mention
+entity_coreference		coreference_83_2	547	547	subsequent	coreference_mention
+entity_coreference		coreference_83_3	588	589	subsequent	coreference_mention
+entity_coreference		coreference_84_1	544	544	first	coreference_mention
+entity_coreference		coreference_85_1	549	550	first	coreference_mention
+entity_coreference		coreference_85_2	566	566	subsequent	coreference_mention
+entity_coreference		coreference_85_3	575	575	subsequent	coreference_mention
+entity_coreference		coreference_86_1	571	572	first	coreference_mention
+entity_coreference		coreference_87_1	574	574	first	coreference_mention
+entity_coreference		coreference_88_1	592	594	first	coreference_mention
+entity_coreference		coreference_89_1	608	612	first	coreference_mention
+entity_coreference		coreference_90_1	614	622	first	coreference_mention
+entity_coreference		coreference_90_2	624	624	subsequent	coreference_mention
+entity_coreference		coreference_91_1	618	620	first	coreference_mention
+entity_coreference		coreference_92_1	639	640	first	coreference_mention
+entity_coreference		coreference_93_1	641	642	first	coreference_mention
+entity_coreference		coreference_94_1	651	651	first	coreference_mention
+entity_coreference		coreference_95_1	653	655	first	coreference_mention
+entity_coreference		coreference_95_2	657	657	subsequent	coreference_mention
+entity_coreference		coreference_95_3	659	671	subsequent	coreference_mention
+entity_coreference		coreference_95_4	662	671	subsequent	coreference_mention
+entity_coreference		coreference_95_5	672	672	subsequent	coreference_mention
+entity_coreference		coreference_95_6	824	825	subsequent	coreference_mention
+entity_coreference		coreference_95_7	853	854	subsequent	coreference_mention
+entity_coreference		coreference_95_8	1412	1412	subsequent	coreference_mention
+entity_coreference		coreference_95_9	1422	1423	subsequent	coreference_mention
+entity_coreference		coreference_96_1	675	677	first	coreference_mention
+entity_coreference		coreference_97_1	681	683	first	coreference_mention
+entity_coreference		coreference_97_2	684	686	subsequent	coreference_mention
+entity_coreference		coreference_98_1	688	688	first	coreference_mention
+entity_coreference		coreference_99_1	691	692	first	coreference_mention
+entity_coreference		coreference_99_2	694	698	subsequent	coreference_mention
+entity_coreference		coreference_99_3	700	700	subsequent	coreference_mention
+entity_coreference		coreference_99_4	1416	1417	subsequent	coreference_mention
+entity_coreference		coreference_99_5	1523	1524	subsequent	coreference_mention
+entity_coreference		coreference_100_1	705	706	first	coreference_mention
+entity_coreference		coreference_101_1	727	732	first	coreference_mention
+entity_coreference		coreference_102_1	732	732	first	coreference_mention
+entity_coreference		coreference_103_1	739	740	first	coreference_mention
+entity_coreference		coreference_104_1	738	741	first	coreference_mention
+entity_coreference		coreference_105_1	745	747	first	coreference_mention
+entity_coreference		coreference_106_1	744	748	first	coreference_mention
+entity_coreference		coreference_107_1	753	760	first	coreference_mention
+entity_coreference		coreference_108_1	757	760	first	coreference_mention
+entity_coreference		coreference_108_2	793	793	subsequent	coreference_mention
+entity_coreference		coreference_108_3	795	802	subsequent	coreference_mention
+entity_coreference		coreference_109_1	759	760	first	coreference_mention
+entity_coreference		coreference_109_2	776	776	subsequent	coreference_mention
+entity_coreference		coreference_110_1	779	782	first	coreference_mention
+entity_coreference		coreference_111_1	800	800	first	coreference_mention
+entity_coreference		coreference_112_1	802	802	first	coreference_mention
+entity_coreference		coreference_113_1	805	809	first	coreference_mention
+entity_coreference		coreference_114_1	815	815	first	coreference_mention
+entity_coreference		coreference_115_1	821	823	first	coreference_mention
+entity_coreference		coreference_115_2	837	838	subsequent	coreference_mention
+entity_coreference		coreference_115_3	869	870	subsequent	coreference_mention
+entity_coreference		coreference_115_4	932	933	subsequent	coreference_mention
+entity_coreference		coreference_116_1	840	841	first	coreference_mention
+entity_coreference		coreference_116_2	845	845	subsequent	coreference_mention
+entity_coreference		coreference_117_1	858	859	first	coreference_mention
+entity_coreference		coreference_118_1	864	864	first	coreference_mention
+entity_coreference		coreference_119_1	866	870	first	coreference_mention
+entity_coreference		coreference_120_1	874	876	first	coreference_mention
+entity_coreference		coreference_121_1	881	881	first	coreference_mention
+entity_coreference		coreference_122_1	883	889	first	coreference_mention
+entity_coreference		coreference_122_2	891	891	subsequent	coreference_mention
+entity_coreference		coreference_122_3	899	899	subsequent	coreference_mention
+entity_coreference		coreference_122_4	915	915	subsequent	coreference_mention
+entity_coreference		coreference_122_5	922	922	subsequent	coreference_mention
+entity_coreference		coreference_123_1	892	892	first	coreference_mention
+entity_coreference		coreference_124_1	892	893	first	coreference_mention
+entity_coreference		coreference_125_1	896	896	first	coreference_mention
+entity_coreference		coreference_125_2	1167	1167	subsequent	coreference_mention
+entity_coreference		coreference_125_3	1180	1180	subsequent	coreference_mention
+entity_coreference		coreference_125_4	1191	1191	subsequent	coreference_mention
+entity_coreference		coreference_125_5	1604	1604	subsequent	coreference_mention
+entity_coreference		coreference_125_6	1740	1740	subsequent	coreference_mention
+entity_coreference		coreference_126_1	905	905	first	coreference_mention
+entity_coreference		coreference_127_1	905	906	first	coreference_mention
+entity_coreference		coreference_128_1	925	925	first	coreference_mention
+entity_coreference		coreference_129_1	925	926	first	coreference_mention
+entity_coreference		coreference_130_1	944	944	first	coreference_mention
+entity_coreference		coreference_130_2	956	956	subsequent	coreference_mention
+entity_coreference		coreference_130_3	968	968	subsequent	coreference_mention
+entity_coreference		coreference_130_4	981	981	subsequent	coreference_mention
+entity_coreference		coreference_130_5	984	984	subsequent	coreference_mention
+entity_coreference		coreference_130_6	987	987	subsequent	coreference_mention
+entity_coreference		coreference_130_7	990	990	subsequent	coreference_mention
+entity_coreference		coreference_130_8	996	996	subsequent	coreference_mention
+entity_coreference		coreference_130_9	1007	1007	subsequent	coreference_mention
+entity_coreference		coreference_131_1	949	957	first	coreference_mention
+entity_coreference		coreference_132_1	956	957	first	coreference_mention
+entity_coreference		coreference_133_1	960	962	first	coreference_mention
+entity_coreference		coreference_134_1	964	965	first	coreference_mention
+entity_coreference		coreference_135_1	970	970	first	coreference_mention
+entity_coreference		coreference_136_1	972	972	first	coreference_mention
+entity_coreference		coreference_137_1	974	974	first	coreference_mention
+entity_coreference		coreference_138_1	987	988	first	coreference_mention
+entity_coreference		coreference_139_1	992	994	first	coreference_mention
+entity_coreference		coreference_140_1	998	1001	first	coreference_mention
+entity_coreference		coreference_141_1	1001	1001	first	coreference_mention
+entity_coreference		coreference_142_1	1012	1013	first	coreference_mention
+entity_coreference		coreference_143_1	1022	1026	first	coreference_mention
+entity_coreference		coreference_144_1	1028	1028	first	coreference_mention
+entity_coreference		coreference_145_1	1034	1041	first	coreference_mention
+entity_coreference		coreference_146_1	1040	1041	first	coreference_mention
+entity_coreference		coreference_147_1	1043	1044	first	coreference_mention
+entity_coreference		coreference_148_1	1050	1053	first	coreference_mention
+entity_coreference		coreference_148_2	1221	1222	subsequent	coreference_mention
+entity_coreference		coreference_149_1	1057	1069	first	coreference_mention
+entity_coreference		coreference_149_2	1069	1069	subsequent	coreference_mention
+entity_coreference		coreference_149_3	1081	1081	subsequent	coreference_mention
+entity_coreference		coreference_149_4	1116	1116	subsequent	coreference_mention
+entity_coreference		coreference_149_5	1122	1122	subsequent	coreference_mention
+entity_coreference		coreference_149_6	1126	1126	subsequent	coreference_mention
+entity_coreference		coreference_149_7	1132	1132	subsequent	coreference_mention
+entity_coreference		coreference_149_8	1143	1143	subsequent	coreference_mention
+entity_coreference		coreference_149_9	1145	1145	subsequent	coreference_mention
+entity_coreference		coreference_149_10	1155	1155	subsequent	coreference_mention
+entity_coreference		coreference_150_1	1082	1084	first	coreference_mention
+entity_coreference		coreference_151_1	1086	1087	first	coreference_mention
+entity_coreference		coreference_152_1	1096	1107	first	coreference_mention
+entity_coreference		coreference_153_1	1106	1107	first	coreference_mention
+entity_coreference		coreference_154_1	1139	1140	first	coreference_mention
+entity_coreference		coreference_155_1	1163	1209	first	coreference_mention
+entity_coreference		coreference_156_1	1169	1169	first	coreference_mention
+entity_coreference		coreference_156_2	1189	1190	subsequent	coreference_mention
+entity_coreference		coreference_157_1	1175	1175	first	coreference_mention
+entity_coreference		coreference_158_1	1177	1178	first	coreference_mention
+entity_coreference		coreference_159_1	1183	1187	first	coreference_mention
+entity_coreference		coreference_160_1	1187	1187	first	coreference_mention
+entity_coreference		coreference_160_2	1656	1656	subsequent	coreference_mention
+entity_coreference		coreference_160_3	1660	1660	subsequent	coreference_mention
+entity_coreference		coreference_160_4	1805	1805	subsequent	coreference_mention
+entity_coreference		coreference_161_1	1195	1209	first	coreference_mention
+entity_coreference		coreference_161_2	1216	1216	subsequent	coreference_mention
+entity_coreference		coreference_162_1	1197	1200	first	coreference_mention
+entity_coreference		coreference_163_1	1199	1200	first	coreference_mention
+entity_coreference		coreference_163_2	1558	1559	subsequent	coreference_mention
+entity_coreference		coreference_163_3	1643	1644	subsequent	coreference_mention
+entity_coreference		coreference_164_1	1225	1229	first	coreference_mention
+entity_coreference		coreference_165_1	1234	1236	first	coreference_mention
+entity_coreference		coreference_165_2	1238	1241	subsequent	coreference_mention
+entity_coreference		coreference_166_1	1240	1240	first	coreference_mention
+entity_coreference		coreference_167_1	1243	1244	first	coreference_mention
+entity_coreference		coreference_167_2	1381	1382	subsequent	coreference_mention
+entity_coreference		coreference_168_1	1249	1249	first	coreference_mention
+entity_coreference		coreference_168_2	1251	1251	subsequent	coreference_mention
+entity_coreference		coreference_169_1	1252	1259	first	coreference_mention
+entity_coreference		coreference_170_1	1258	1258	first	coreference_mention
+entity_coreference		coreference_171_1	1256	1259	first	coreference_mention
+entity_coreference		coreference_172_1	1261	1266	first	coreference_mention
+entity_coreference		coreference_173_1	1273	1274	first	coreference_mention
+entity_coreference		coreference_173_2	1449	1450	subsequent	coreference_mention
+entity_coreference		coreference_174_1	1276	1277	first	coreference_mention
+entity_coreference		coreference_174_2	1279	1279	subsequent	coreference_mention
+entity_coreference		coreference_174_3	1282	1289	subsequent	coreference_mention
+entity_coreference		coreference_174_4	1318	1318	subsequent	coreference_mention
+entity_coreference		coreference_174_5	1326	1327	subsequent	coreference_mention
+entity_coreference		coreference_174_6	1330	1330	subsequent	coreference_mention
+entity_coreference		coreference_174_7	1337	1337	subsequent	coreference_mention
+entity_coreference		coreference_175_1	1291	1298	first	coreference_mention
+entity_coreference		coreference_175_2	1340	1341	subsequent	coreference_mention
+entity_coreference		coreference_175_3	1342	1348	subsequent	coreference_mention
+entity_coreference		coreference_175_4	1347	1347	subsequent	coreference_mention
+entity_coreference		coreference_175_5	1352	1352	subsequent	coreference_mention
+entity_coreference		coreference_175_6	1354	1354	subsequent	coreference_mention
+entity_coreference		coreference_176_1	1306	1306	first	coreference_mention
+entity_coreference		coreference_176_2	1309	1311	subsequent	coreference_mention
+entity_coreference		coreference_177_1	1317	1320	first	coreference_mention
+entity_coreference		coreference_178_1	1347	1348	first	coreference_mention
+entity_coreference		coreference_178_2	1352	1353	subsequent	coreference_mention
+entity_coreference		coreference_179_1	1354	1355	first	coreference_mention
+entity_coreference		coreference_180_1	1356	1359	first	coreference_mention
+entity_coreference		coreference_181_1	1372	1373	first	coreference_mention
+entity_coreference		coreference_182_1	1374	1379	first	coreference_mention
+entity_coreference		coreference_183_1	1386	1386	first	coreference_mention
+entity_coreference		coreference_184_1	1388	1388	first	coreference_mention
+entity_coreference		coreference_185_1	1388	1389	first	coreference_mention
+entity_coreference		coreference_186_1	1406	1409	first	coreference_mention
+entity_coreference		coreference_187_1	1413	1413	first	coreference_mention
+entity_coreference		coreference_187_2	1420	1420	subsequent	coreference_mention
+entity_coreference		coreference_188_1	1411	1414	first	coreference_mention
+entity_coreference		coreference_189_1	1422	1426	first	coreference_mention
+entity_coreference		coreference_189_2	1443	1443	subsequent	coreference_mention
+entity_coreference		coreference_190_1	1430	1431	first	coreference_mention
+entity_coreference		coreference_190_2	1529	1531	subsequent	coreference_mention
+entity_coreference		coreference_191_1	1434	1438	first	coreference_mention
+entity_coreference		coreference_192_1	1437	1438	first	coreference_mention
+entity_coreference		coreference_193_1	1440	1440	first	coreference_mention
+entity_coreference		coreference_193_2	1455	1455	subsequent	coreference_mention
+entity_coreference		coreference_193_3	1463	1463	subsequent	coreference_mention
+entity_coreference		coreference_193_4	1481	1481	subsequent	coreference_mention
+entity_coreference		coreference_193_5	1502	1502	subsequent	coreference_mention
+entity_coreference		coreference_194_1	1475	1475	first	coreference_mention
+entity_coreference		coreference_195_1	1488	1488	first	coreference_mention
+entity_coreference		coreference_195_2	1495	1495	subsequent	coreference_mention
+entity_coreference		coreference_196_1	1490	1491	first	coreference_mention
+entity_coreference		coreference_197_1	1511	1511	first	coreference_mention
+entity_coreference		coreference_197_2	1516	1521	subsequent	coreference_mention
+entity_coreference		coreference_198_1	1514	1514	first	coreference_mention
+entity_coreference		coreference_199_1	1514	1515	first	coreference_mention
+entity_coreference		coreference_200_1	1536	1538	first	coreference_mention
+entity_coreference		coreference_201_1	1553	1559	first	coreference_mention
+entity_coreference		coreference_202_1	1561	1569	first	coreference_mention
+entity_coreference		coreference_202_2	1575	1575	subsequent	coreference_mention
+entity_coreference		coreference_202_3	1576	1576	subsequent	coreference_mention
+entity_coreference		coreference_202_4	1683	1685	subsequent	coreference_mention
+entity_coreference		coreference_203_1	1568	1569	first	coreference_mention
+entity_coreference		coreference_204_1	1582	1583	first	coreference_mention
+entity_coreference		coreference_204_2	1767	1768	subsequent	coreference_mention
+entity_coreference		coreference_205_1	1589	1599	first	coreference_mention
+entity_coreference		coreference_206_1	1599	1599	first	coreference_mention
+entity_coreference		coreference_207_1	1608	1608	first	coreference_mention
+entity_coreference		coreference_207_2	1610	1613	subsequent	coreference_mention
+entity_coreference		coreference_208_1	1612	1613	first	coreference_mention
+entity_coreference		coreference_209_1	1618	1618	first	coreference_mention
+entity_coreference		coreference_209_2	1620	1624	subsequent	coreference_mention
+entity_coreference		coreference_210_1	1622	1622	first	coreference_mention
+entity_coreference		coreference_211_1	1631	1632	first	coreference_mention
+entity_coreference		coreference_212_1	1639	1640	first	coreference_mention
+entity_coreference		coreference_213_1	1646	1654	first	coreference_mention
+entity_coreference		coreference_214_1	1679	1685	first	coreference_mention
+entity_coreference		coreference_214_2	1687	1702	subsequent	coreference_mention
+entity_coreference		coreference_215_1	1690	1691	first	coreference_mention
+entity_coreference		coreference_216_1	1697	1698	first	coreference_mention
+entity_coreference		coreference_217_1	1701	1702	first	coreference_mention
+entity_coreference		coreference_218_1	1706	1706	first	coreference_mention
+entity_coreference		coreference_219_1	1708	1712	first	coreference_mention
+entity_coreference		coreference_220_1	1717	1717	first	coreference_mention
+entity_coreference		coreference_221_1	1730	1734	first	coreference_mention
+entity_coreference		coreference_221_2	1736	1736	subsequent	coreference_mention
+entity_coreference		coreference_221_3	1799	1799	subsequent	coreference_mention
+entity_coreference		coreference_222_1	1747	1753	first	coreference_mention
+entity_coreference		coreference_223_1	1770	1770	first	coreference_mention
+entity_coreference		coreference_224_1	1785	1818	first	coreference_mention
+entity_coreference		coreference_225_1	1787	1809	first	coreference_mention
+entity_coreference		coreference_226_1	1790	1794	first	coreference_mention
+entity_coreference		coreference_227_1	1801	1805	first	coreference_mention
+entity_coreference		coreference_228_1	1816	1817	first	coreference_mention
+entity_coreference		coreference_229_1	1821	1824	first	coreference_mention
+entity_coreference		coreference_229_2	1853	1853	subsequent	coreference_mention
+entity_coreference		coreference_229_3	1867	1867	subsequent	coreference_mention
+entity_coreference		coreference_230_1	1827	1828	first	coreference_mention
+entity_coreference		coreference_231_1	1847	1849	first	coreference_mention
+entity_coreference		coreference_232_1	1855	1856	first	coreference_mention
+entity_coreference		coreference_233_1	1864	1864	first	coreference_mention

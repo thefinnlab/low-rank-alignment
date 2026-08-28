@@ -1,0 +1,21 @@
+hf_model_id: openai-community/gpt2-xl
+output_name: gpt2-xl
+data_root: data/brain-treebank
+dataset: brain_treebank
+per_dataset_config:
+  movie: coraline
+context_window: 1024
+stride: null
+layers:
+- 0
+- 24
+- 48
+pooling: mean
+attention_mode: podcast_per_token
+dtype: float32
+output_dtype: float32
+device: cuda
+batch_size: 1
+local_files_only: true
+add_prefix_space: true
+refresh: true

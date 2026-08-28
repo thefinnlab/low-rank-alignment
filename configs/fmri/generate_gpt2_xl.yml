@@ -1,0 +1,22 @@
+generation:
+  hf_model_id: openai-community/gpt2-xl
+  output_name: gpt2-xl
+  context_window: 1024
+  stride: 512
+  layers: [24]
+  pooling: mean
+  attention_mode: auto
+  dtype: float16
+  output_dtype: float16
+  device: cuda
+  batch_size: 1
+  local_files_only: true
+  add_prefix_space: true
+fmri:
+  fmri_repo_root: data/deep-fMRI-dataset
+  embedding_root: data/fmri/stimuli
+  sessions: [1, 2, 3, 4, 5]
+  subjects: [UTS01, UTS02, UTS03, UTS04, UTS05, UTS06, UTS07, UTS08, UTS09]
+  trim: 5
+  ndelays: 4
+refresh: true

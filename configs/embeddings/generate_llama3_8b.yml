@@ -1,13 +1,15 @@
-# Llama-3-8B is gated on HuggingFace. On offline GPU hosts, pre-populate the
-# HF cache from an internet-connected machine:
-#   HF_TOKEN=<your_token> huggingface-cli download meta-llama/Meta-Llama-3-8B
-# Then rsync ~/.cache/huggingface/ to the GPU host (or set hf_cache_dir).
-hf_model_id: meta-llama/Meta-Llama-3-8B
+hf_model_id: model_cache/models/Llama-3.1-8B
+tokenizer_name_or_path: model_cache/models/Llama-3.1-8B
 output_name: llama3-8b
 data_root: data/
-context_window: 1024
+context_window: 1023
 stride: 512
-layers: all
+layers:
+- 0
+- 8
+- 16
+- 24
+- 32
 pooling: mean
 attention_mode: auto
 dtype: bfloat16
@@ -16,4 +18,4 @@ device: cuda
 batch_size: 1
 local_files_only: true
 add_prefix_space: false
-# hf_token: null   # override via env var HF_TOKEN or set explicitly here
+refresh: true

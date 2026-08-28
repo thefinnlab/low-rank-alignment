@@ -1,0 +1,35 @@
+dataset: podcast
+mode: sig_lags
+results_root: results
+plot: true
+refresh: true
+num_null_shifts: 10000
+null_seed: 42
+null_batch_size: 16
+minimal_shift: 50
+fdr_q: 0.01
+ieeg:
+  encoding:
+    data_root: data/
+    model: transformer
+    offset: 0
+    subjects: null
+    batch: true
+    num_folds: 5
+    per_model_config:
+      model_dir: gpt-j-6b
+      layer:
+      - 0
+      - 7
+      - 14
+      - 21
+      - 28
+  blocks_per_fold: 3
+  max_matching_distance: 3
+  positive_fraction: 0.8
+  mean_corr_threshold: 0.0
+  shift_step: 1
+  device: null
+  fdr_mode: electrode
+  save_weights: true
+fmri: null

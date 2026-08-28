@@ -1,153 +1,79 @@
 # Repository Overview
 
-This is a neuroscience encoding analysis pipeline that studies how GPT-2-XL language model embeddings correlate with intracranial EEG (iEEG) neural activity from human subjects listening to a podcast. The pipeline trains ridge regression encoding models, performs permutation-based significance testing, and conducts SVD analysis to identify which directions in embedding space best predict neural responses.
+This repository contains script-driven neuroscience analyses of how language-model
+embeddings predict iEEG and fMRI responses. The supported executable surface is
+`scripts/`; utilities exist to serve those workflows rather than as a standalone API.
 
-## Pipeline Stages
+## Retained workflows
 
-1. **Significance testing** (`make sig`) — identifies electrode-lag pairs with statistically significant encoding (legacy approach: word-order shuffling permutation test)
-1b. **Phase-randomization significance** — more robust electrode-level significance via phase randomization of continuous neural signal: `generate_null_distribution.py` (batchable, run in parallel) followed by `compute_significance.py` (reads null distribution shards, FDR correction). See details below.
-2. **Encoding model training** (`make train`) — trains ridge regression models on significant electrodes
-3. **SVD analysis** (`make svd`) — decomposes model weights to find dominant directions in embedding space
-4. **Partial SVD analysis** (`make partial-svd`) — removes contiguous windows of SVD directions from word embeddings and retrains ridge regression to measure how much each group contributes to encoding performance
-5. **SRRR analysis** (`make srrr`) — finds the minimal subset of SVD directions that explains all significant encoding variance, via stability selection and a statistical sufficiency test
-6. **RRR analysis** (`make rrr`) — raw-input RRR baseline: sweeps over ranks to find the minimal rank that captures full-ridge variance, directly in embedding space (no SVD projection)
-6b. **PCA analysis** (`make pca`) — PCA-based subspace baseline: computes PCA on word embeddings to find a low-dimensional input subspace, trains ridge regression from projected embeddings to neural targets, and sweeps over a rank grid; plots optionally overlay corresponding RRR results for comparison
-7. **Partial RRR analysis** (`make partial-rrr`) — partials out RRR-learned subspaces from word embeddings and retrains ridge regression to measure how much each rank-k subspace contributes to encoding performance
-8. **SAE analysis** (`make sae`) — projects embeddings into an RRR-learned k-dimensional subspace and trains a sparse autoencoder (overcomplete hidden layer with ReLU + L1 penalty) followed by regression to predict neural targets; tests whether superposition in the RRR subspace can be decoded with more linear dimensions
-9. **Ablation analysis** (`run_ablation.py`) — loads pre-computed RRR A/B matrices, projects embeddings into the latent space, applies quantile-based masks (tail-only, center-only, random) to the projected activations, trains fresh ridge regressions from masked projections to neural targets, and evaluates reconstruction performance; determines whether encoding information is concentrated in distributional tails or centers; supports cross_subject, per_subject, and per_region modes
-10. **Visualization** (`make plots`) — generates correlation plots with optional significance overlays
+- `scripts/run_significance.py` dispatches significance by dataset to the iEEG
+  lag-cluster or fMRI held-out-session implementation.
+- `scripts/run_rrr.py` dispatches reduced-rank regression by dataset while exposing
+  one Config and Artifact contract.
+- `scripts/rrr/compare_subspaces.py` performs configured leakage-safe comparisons
+  between saved RRR/PCA spaces and publishes one source-organized Artifact per
+  generating dataset/model/layer/subspace.
+- `scripts/fmri/` contains fMRI embedding generation workflows.
+- `scripts/language-interpret/` contains language decoding and reconstruction.
+  Language decoding includes word-aligned and TR-aligned pre-FIR modes for fMRI,
+  all published through the same Artifact client.
+- `scripts/utilities/` contains data preparation, embedding generation, language-feature
+  generation, plotting, and atlas-reporting entrypoints.
 
-### Generating embeddings for new models
+The Makefile exposes significance and RRR through the unified entry points. Each
+retained analysis workflow owns one client-facing `Artifact` class. Their canonical
+identity, variants, selector fields, resume behavior, and legacy migration are
+described in [artifacts.md](artifacts.md). Language decoding and reconstruction load
+RRR/PCA factors through RRR Artifact identities and publish task-level results through
+their own Artifacts.
+The `cross-temporal-pipeline` Make target submits per-model temporal-window RRR to
+cross-temporal-window transfer chains for podcast and Cars 2, using Slurm `afterok`
+dependencies between those artifact-producing stages. It consumes existing
+significance artifacts rather than submitting significance jobs.
 
-`make generate-embeddings EMBED_CONFIG=configs/embeddings/generate_<model>.yml` runs
-`scripts/utilities/generate_embeddings.py`, which loads any HuggingFace model via
-`transformers`, tokenizes `data/stimuli/podcast_transcript.csv` with
-`is_split_into_words=True`, and produces per-token contextual embeddings via a
-sliding window of configurable `context_window` and `stride`. Causal models
-(GPT-2, Pythia, GPT-J, Llama) use native causal attention; bidirectional models
-(RoBERTa) use `attention_mode=bidirectional_strict` (stride=1) so each target
-sees only preceding tokens. Outputs go to `data/stimuli/{output_name}/` with
-three files matching the existing GPT-2-XL layout:
-`features.hdf5` (per-layer hidden states), `transcript.tsv` (per-token
-word/token metadata), and `metadata.json` (generation parameters). The
-`transformer` embedding getter in `src/utils/embeddings.py` loads any of these
-directories by `model_dir` + `layer`. Offline GPU hosts should pre-populate
-the HF cache (e.g. `huggingface-cli download meta-llama/Meta-Llama-3-8B`) and
-run with the default `local_files_only: true`.
+## Source layout
 
----
+- `src/core/config.py` defines the modality implementation dataclasses; the two
+  public facade scripts define the strict client Configs.
+- `src/core/registry.py` defines embedding and dataset adapter registries.
+- `src/utils/shared/` contains configuration, embedding, iEEG/fMRI loading, ridge,
+  correlation, alpha-grid, and tensor helpers used by multiple workflows.
+- `src/utils/significance/` contains the modality-specific significance runners and
+  their reusable statistical helpers.
+- `src/utils/rrr/` contains the modality-specific RRR runners, dense fitting, input
+  preparation, evaluation, multiview handling, cross-temporal-window transfer, and
+  result helpers. iEEG RRR mode implementations are organized under
+  `src/utils/rrr/ieeg_rrr_mode/`, with `rrr_ieeg.py` retained as the compatibility
+  facade.
+- `src/utils/subspace_comparison/` contains saved-space metrics and directed comparison
+  orchestration.
+- `src/utils/language_interpret/` contains decoding, reconstruction, and task registry
+  utilities shared by iEEG and fMRI scripts.
+- `src/utils/language_features/` contains the reusable annotation pipeline and built-in
+  providers.
+- `src/utils/atlas/` and `src/utils/plotting/` contain atlas and retained plotting code.
 
-## File Reference
+Imports use these explicit package paths. The former flat `src.utils.<module>` paths
+are intentionally unsupported.
 
-### Root
+Significance and RRR YAMLs use a top-level dataset discriminator, shared settings,
+and exactly one `ieeg` or `fmri` block. RRR uses modality-neutral `internal` and
+`cross_dataset` modes; specialized modes remain iEEG-only. RRR significance selection
+is configured uniformly across modalities as `within-layer` or as an explicit
+`cross-model-layer` union; union artifact entries may compactly list several layers
+for one model. Cross-model-layer batch RRR uses per-model configs so model-specific
+rank and ridge-memory settings can be retained for both iEEG and fMRI.
+Cross-dataset RRR source identities include their own significance selection, which
+deterministically resolves and validates the saved source variant.
+Source and target selections are required to be corresponding within-layer selections
+for the same model and layer over their respective datasets.
 
-| File | Purpose |
-|------|---------|
-| `Makefile` | Build targets for all pipeline stages; supports SLURM or local execution |
-| `submit.sh` | SLURM job submission script (1 CPU, 1 GPU, 32GB RAM, 2hr); activates `align_env` virtualenv |
-| `pytest.ini` | Pytest config with custom markers and test path |
+## Tests
 
-### `configs/`
+Tests cover behavior reachable from retained scripts: configuration and layer fanout,
+data/epoch loading, embeddings, significance, RRR and multiview analysis, fMRI,
+subspace comparison, language interpretation/features, atlas lookup, and Makefile batch
+submission behavior.
 
-YAML config files passed to scripts via `--config`:
-
-| File | Purpose |
-|------|---------|
-| `encoding_mid.yml` | Encoding config for GPT-2-XL layer 24 (mid-layer) |
-| `encoding_final.yml` | Encoding config for GPT-2-XL layer 48 (final layer) |
-| `significance_default.yml` | Default significance testing (5000 permutations, FDR q=0.01) |
-| `significance_fast.yml` | Reduced permutations for quick iteration |
-| `svd_default.yml` | SVD on mid-layer (layer 24) with k values [1,2,5,…,1600] and 0.95 retention threshold |
-| `partial_svd_default.yml` | Partial SVD analysis: single-direction sweep up to direction 50 |
-| `partial_svd_per_region.yml` | Partial SVD variant with Destrieux atlas region plots |
-| `partial_rrr_default.yml` | Partial RRR analysis: cross-subject subspace importance (rank_grid [1,2,5,10,20,50]) |
-| `rrr_default.yml` | RRR cross-subject baseline (rank_grid [1,2,5,10,20,50]) |
-| `pca_default.yml` | PCA cross-subject baseline (rank_grid [1,2,5,...,1600]) |
-| `pca_per_subject.yml` | Per-subject PCA variant |
-| `pca_per_region.yml` | Per-region PCA variant with Destrieux atlas regions |
-| `rrr_per_subject.yml` | Per-subject RRR variant |
-| `rrr_per_region.yml` | Per-region RRR variant with Destrieux atlas regions |
-| `sae_default.yml` | SAE cross-subject default (k=10, hidden_dim=50, end-to-end, OLS, L1=0.001) |
-| `ablation_default.yml` | Ablation cross-subject default (rank_grid [1,2,5,...,1600], center_pcts [10,30,50,70,90], masks [tail,center,random], 5 random seeds) |
-
-### `scripts/`
-
-Main entry points for the pipeline:
-
-| File | Purpose |
-|------|---------|
-| `run_significance.py` | Legacy permutation-test significance per electrode-lag pair; outputs `significance_detailed.csv` and `all_subject_sig.csv` |
-| `generate_null_distribution.py` | Batchable phase-randomization null distribution generator; each invocation runs N iterations per subject and writes a uniquely-named `.npy` shard to `{null_dir}/sub_{id}/`; multiple jobs can run in parallel |
-| `compute_significance.py` | Reads null distribution shards, re-runs encoding on real data, computes per-electrode p-values via max-statistic procedure, applies FDR correction, outputs `all_subject_sig.csv` and `significance_detailed.csv` |
-| `train_encoding_models.py` | Trains ridge regression models on significant electrodes; outputs coefficients, correlations, and plots. When `log_alphas=True`, saves alpha diagnostic plots and `.npz` files. When `refine_alphas=True`, uses a two-pass coarse→refined alpha sweep |
-| `generate_plots.py` | Generates or regenerates correlation plots from existing run results; supports backfilling SVD plots for cross_subject, per_subject, and per_region modes (auto-detected or via `--svd-modes`) |
-| `run_svd_analysis.py` | SVD decomposition of encoding weights; evaluates truncation at various k values and selects optimal k |
-| `run_srrr.py` | SRRR analysis; reads SVD decompositions and finds minimal direction subset via stability selection and sufficiency testing; supports cross_subject, per_subject, and per_region modes |
-| `run_partial_svd.py` | Partial SVD analysis; removes windows of SVD directions from embeddings, retrains ridge regression, and measures correlation drop; generates cross-subject, per-subject, and per-region sweep plots |
-| `run_rrr.py` | RRR baseline; fits RRR directly from raw embeddings to neural targets (no SVD projection); sweeps over ranks with residual R², CCA, and Procrustes metrics; supports cross_subject, per_subject, and per_region modes |
-| `run_pca.py` | PCA baseline; computes PCA on word embeddings to find low-dimensional input subspace, trains ridge regression from projected embeddings to neural targets; sweeps over ranks with same metrics as RRR; plots overlay corresponding RRR results when available; supports cross_subject, per_subject, and per_region modes |
-| `run_partial_rrr.py` | Partial RRR analysis; loads RRR-learned A matrices, partials out their subspaces from embeddings, retrains ridge, and measures correlation drop; supports cross_subject, per_subject, and per_region modes |
-| `run_sae.py` | SAE analysis; projects embeddings into RRR k-dim subspace, trains sparse autoencoder + regression (end-to-end or alternating), evaluates with correlation/R²/recovery metrics; supports cross_subject, per_subject, and per_region modes. **Hyperparameter sweeps**: set any scalar config param as a list (e.g. `hidden_dim: [5, 10, 30]`, `l1_penalty: [0.005, 0.01]`) to run all combinations. Results are organized hierarchically under k directories (e.g. `sae/k5/hidden_dim=5/l1_penalty=0.005/`). Summary plots at each k directory show how metrics vary per swept parameter. |
-| `run_ablation.py` | RRR latent space ablation; loads pre-computed RRR A/B matrices, applies quantile-based masks (tail/center/random) to projected activations, trains fresh ridge regressions from masked projections to neural targets, sweeps over rank and center-zone percentile grids; outputs per-k pct_zeroed plots and a vs-rank summary figure; supports cross_subject, per_subject, and per_region modes |
-
-### `utils/`
-
-Core library modules:
-
-| File | Purpose |
-|------|---------|
-
-| `constants.py` | Project-wide constants; `RIDGE_ALPHAS` — default alpha grid for RidgeCV; `refine_alpha_grid()` — builds a refined grid from observed best alphas; `check_alpha_grid_boundaries()` — detects when selected alphas cluster at grid edges |
-| `config.py` | Dataclass definitions for `EncodingConfig`, `SignificanceConfig`, `NullDistConfig`, `NewSignificanceConfig`, `SVDConfig`, `PartialSVDConfig`, `PartialRRRConfig`, `SRRRConfig`, `RRRConfig`, `PCAConfig`, `SAEConfig`, `AblationConfig`; `get_results_dir()` for canonical output paths. Most downstream configs support `sig_dir` to override where significance CSVs are read from (defaults to `output_dir`). |
-| `config_utils.py` | Argument parsing and YAML loading with CLI override support (dot-notation, e.g. `--encoding.layer=48`) |
-| `data_loaders.py` | Loads iEEG BIDS data via MNE, GPT-2 embeddings from HDF5, builds word-aligned epochs, handles time offsets; `build_XY_from_subjects()` for stacking multi-subject neural data; `load_sig_electrodes()` and `load_fold_indices()` for shared data-loading across scripts |
-| `embeddings.py` | Loads contextual token embeddings from HDF5 and pools tokens per word. Registered getters: `gpt2xl` (legacy GPT-2-XL path), `transformer` (generic — reads `data/stimuli/{model_dir}/features.hdf5` produced by `generate_embeddings.py`), `glove`, `arbitrary` |
-| `encoding.py` | K-fold cross-validation ridge regression (Himalaya backend), coefficient serialization, cross-subject aggregation; `extract_best_alphas()` — extracts per-target selected alphas from fitted RidgeCV; `train_encoding_two_pass()` — coarse-then-refined alpha sweep |
-| `significance.py` | GPU-accelerated permutation testing, vectorized Pearson correlation, Benjamini-Hochberg FDR correction; `phase_randomize_raw()` for signal phase randomization preserving autocorrelation; `compute_observed_max_per_electrode()` for max-across-lags statistics |
-| `analysis.py` | SVD decomposition of weights, truncated correlation evaluation, best-k selection, residualization utilities |
-| `srrr.py` | Core SRRR/RRR functions: ProxGD optimizer, stability selection, `fit_dense_rrr`, sufficiency test, alignment metrics (CCA, Procrustes), I/O helpers for both SRRR and RRR outputs |
-| `sae.py` | SAE model (`SAEEncoder`, `SAERegressorEndToEnd`), training functions (`train_sae_end_to_end`, `train_sae_alternating`), dead feature resampling (`_resample_dead_neurons`), and SAE-specific metrics (L0 sparsity, dead neurons, activation frequency). Encoder bias is initialized to zero to prevent dead-on-init features. |
-| `plotting.py` | Matplotlib helpers for correlation vs lag plots, significance overlays, SVD truncation analysis figures, ablation pct-zeroed and vs-rank plots; `plot_alpha_diagnostics()` — 3-panel alpha selection summary; `plot_alpha_vs_rank()` — how optimal alpha shifts with RRR rank |
-| `rrr_utils.py` | Shared helpers for RRR-based scripts: `add_sig_nonsig_corrs`, `apply_sig_nonsig_splits_and_strip`, `make_sig_split_df`, `resolve_rrr_source_dir` |
-| `subspace_utils.py` | Shared utilities for subspace evaluation: `evaluate_input_space` (train ridge on X, return correlation/R2/Y_hat), `evaluate_complement` (predict from complement of k-dim subspace), `evaluate_arbitrary` (predict from arbitrary embeddings), `compute_stacked_joint_metrics` (2-model stacking via inner CV); used by both `_run_rrr_for_unit` and `_run_pca_for_unit` in `run_rrr.py` |
-| `examples.py` | Generates context windows and markdown tables of example words for qualitative analysis |
-| `__init__.py` | Public API — re-exports all key functions for convenient imports |
-
-### `tests/`
-
-Unit tests with full pipeline coverage:
-
-| File | Purpose |
-|------|---------|
-| `conftest.py` | Shared fixtures: synthetic (X, Y) data, CSV inputs |
-| `test_config_utils.py` | Config loading, CLI override parsing, nested attribute access |
-| `test_data_loaders.py` | Subject mapping, electrode file parsing |
-| `test_embeddings.py` | Embedding loading and per-word averaging |
-| `test_encoding.py` | Ridge regression, k-fold CV, result serialization |
-| `test_analysis.py` | SVD decomposition, truncation evaluation, best-k selection |
-| `test_srrr.py` | SRRR core functions: ProxGD, stability selection, sufficiency test, alignment metrics, I/O |
-| `test_partial_svd.py` | Partial SVD: `partial_out_svd_directions` orthogonality/idempotency, config round-trip, sweep window generation |
-| `test_rrr.py` | RRR utilities: `save_rrr_result`/`load_rrr_result` roundtrip, `_run_rrr_for_unit` integration, `build_XY_from_subjects` |
-| `test_pca.py` | PCA utilities: `evaluate_input_space`, `evaluate_complement`, `evaluate_arbitrary` unit tests; `_run_pca_for_unit` integration (CSV output, pca_corr/complement columns, monotonicity, rank clamping, plot generation) |
-| `test_partial_rrr.py` | Partial RRR: `partial_out_subspace` orthogonality/idempotency/non-orthonormal handling, sweep integration, save results, config round-trip |
-| `test_sae.py` | SAE: encoder shape/ReLU, zero-bias init, dead feature resampling, end-to-end and alternating training (loss decrease, OLS/ridge, resampling integration), metrics computation, config round-trip, sweep detection helpers, sweep summary plot |
-| `test_ablation.py` | Ablation: quantile mask construction (center/tail/random fractions, complementarity, median centering), `_run_ablation_for_unit` integration (grid_results.csv, summary.csv, baseline inclusion, per-k plots, performance monotonicity) |
-| `test_alpha_diagnostics.py` | Alpha grid utilities: `refine_alpha_grid`, `check_alpha_grid_boundaries`, `extract_best_alphas`, `solve_regression` `return_alphas` parameter |
-| `test_significance.py` | Permutation testing, FDR correction |
-| `test_examples.py` | Context building and table generation |
-
-### `notebooks/`
-
-Exploratory Jupyter notebooks (not part of the main pipeline):
-
-| File | Purpose |
-|------|---------|
-| `cluster-extraction.py` | Cluster analysis on neural/embedding data |
-| `dictionary.py` | Word dictionary and vocabulary analysis |
-| `word-analysis.py` | Word-level qualitative analysis |
-| `rrr-srrr-review.py` | Interactive marimo notebook for RRR interpretability: direction word activations, B-matrix temporal/spatial visualization (nilearn brain maps), cross-fold consistency, cross-source comparison, cross-region electrode similarity, and activation statistics |
-| `svd-interpretability.py` | Interactive marimo notebook for SVD direction interpretability, fold consistency, cross-source comparison, and subspace analyses |
-
-### `processed_data/`
-
-Pre-computed embeddings and intermediate results cached to disk.
+See [language_feature_generation.md](language_feature_generation.md) for the reusable
+language-feature artifact contract and provider details.

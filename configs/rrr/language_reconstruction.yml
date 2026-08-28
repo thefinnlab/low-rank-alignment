@@ -1,0 +1,56 @@
+encoding:
+  data_root: data/
+  dataset: podcast
+  model: transformer
+  offset: 0
+  subjects: null
+  num_folds: 5
+  ridge_cv_folds: 5
+  per_model_config:
+    model_dir: gpt2-xl-batch
+    layer: 24
+
+results_root: results
+rrr_source:
+  mode: internal
+  dataset: podcast
+  offset: 0
+  model: gpt2-xl-batch
+  layer: 24
+  significance_selection:
+    mode: within-layer
+    reference_artifact:
+      mode: sig_lags
+      dataset: podcast
+      offset: 0
+      model: gpt2-xl-batch
+      layer: 24
+rrr_selectors: {}
+mode: within_dataset
+source_name: podcast_gpt2-xl-batch_layer24
+subspace_aggregation: extrinsic
+
+rank_grid: [1, 2, 4, 8, 16, 32]
+tasks:
+  - part_of_speech
+  - content_word
+  - surprisal
+  - entropy
+  - sentence_position
+  - iu_position
+  - word_zipf_frequency
+  - is_named_entity
+  - is_coreference_mention
+
+# Leave empty to use processed_data/language_features/{dataset}/{stimulus}/tokens.tsv.
+task_data: {}
+
+# Compare registered language tasks, same-word GloVe vectors, and their joint design.
+# When any GloVe condition is enabled, all conditions use the same GloVe-covered words.
+predictor_sets: [tasks, glove, tasks_glove]
+glove_dim: 300
+target_views: [weighted, span]
+ridge_alphas: null
+
+save_models: false
+refresh: false

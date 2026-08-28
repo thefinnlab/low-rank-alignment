@@ -8,10 +8,14 @@ Output (under ``{data_root}/stimuli/{output_name}/``):
   transcript.tsv   — per-token rows: word_idx, word, start, end, hftoken, token_id
   metadata.json    — generation parameters (for reproducibility)
 
-Each forward pass processes ``context_window`` tokens and retains the hidden
-states for the last ``stride`` positions (or all positions, on the first
-window). For bidirectional models (RoBERTa), use ``attention_mode='bidirectional_strict'``
-with ``stride=1`` so each target sees only preceding tokens.
+Generation tokenizes each transcript word independently with the space-prefixed
+convention from ``data/code/llm.py`` for all model types, processes
+``context_window`` tokens, and retains the hidden states for the last ``stride``
+positions (or all positions, on the first window). For bidirectional models (RoBERTa), use
+``attention_mode='bidirectional_strict'`` with ``stride=1`` so each target sees only
+preceding tokens. Podcast-compatible causal LM generation uses
+``attention_mode='podcast_per_token'`` and builds one left-padded context row per
+target token.
 """
 
 import argparse
@@ -24,10 +28,11 @@ import numpy as np
 import pandas as pd
 import torch
 from tqdm import tqdm
-from transformers import AutoModel, AutoTokenizer
+from transformers import AutoConfig, AutoModel, AutoModelForCausalLM, AutoTokenizer
 
 from src.core.config import GenerateEmbeddingsConfig
-from src.utils.config_utils import load_config, parse_override_args
+from src.core.registry import get_dataset_adapter, resolve_dataset_context
+from src.utils.shared.config import load_config, parse_override_args, save_effective_config
 
 
 _CAUSAL_MODEL_TYPES = {
@@ -46,6 +51,10 @@ _BIDIRECTIONAL_MODEL_TYPES = {"bert", "roberta", "deberta", "deberta-v2", "elect
 
 def _auto_output_name(hf_model_id: str) -> str:
     return hf_model_id.split("/")[-1]
+
+
+def _tokenizer_name_or_path(cfg: GenerateEmbeddingsConfig) -> str:
+    return cfg.tokenizer_name_or_path or cfg.hf_model_id
 
 
 def _is_causal(model_type: str) -> bool:
@@ -71,6 +80,9 @@ def _resolve_defaults(cfg: GenerateEmbeddingsConfig, model_type: str):
         )
     elif mode == "causal_native":
         stride = cfg.stride if cfg.stride is not None else cfg.context_window // 2
+    elif mode == "podcast_per_token":
+        assert cfg.context_window >= 1, "podcast_per_token requires context_window >= 1"
+        stride = None
     elif mode == "bidirectional_masked":
         stride = cfg.stride if cfg.stride is not None else cfg.context_window // 2
     else:
@@ -91,32 +103,74 @@ def _resolve_np_dtype(dtype: str):
     return {"float32": np.float32, "float16": np.float16, "bfloat16": np.float32}[dtype]
 
 
-def _tokenize_transcript(words: list[str], tokenizer):
-    """Tokenize the pre-split word list and return (input_ids, word_ids).
-
-    Uses ``is_split_into_words=True`` so every tokenizer family produces a canonical
-    subtoken→word alignment via ``encoding.word_ids()``.
-    """
-    enc = tokenizer(
-        words,
-        is_split_into_words=True,
-        add_special_tokens=False,
-        return_tensors=None,
+def _load_model_for_generation(cfg: GenerateEmbeddingsConfig, model_cls):
+    """Load a pretrained or randomly initialized model for embedding generation."""
+    model_kwargs = dict(
+        torch_dtype=_resolve_dtype(cfg.dtype),
+        cache_dir=cfg.hf_cache_dir,
+        local_files_only=cfg.local_files_only,
+        token=cfg.hf_token,
     )
-    input_ids = np.asarray(enc["input_ids"], dtype=np.int64)
-    word_ids = enc.word_ids()
-    assert len(input_ids) == len(word_ids), "input_ids and word_ids length mismatch"
-    mapped_words = {w for w in word_ids if w is not None}
-    missing = set(range(len(words))) - mapped_words
-    assert not missing, f"{len(missing)} words failed to tokenize: {sorted(missing)[:5]}..."
-    return input_ids, word_ids
+    if not cfg.random_init_model:
+        model = model_cls.from_pretrained(cfg.hf_model_id, **model_kwargs)
+    else:
+        if cfg.random_init_seed is not None:
+            torch.manual_seed(cfg.random_init_seed)
+            if torch.cuda.is_available():
+                torch.cuda.manual_seed_all(cfg.random_init_seed)
+        config = AutoConfig.from_pretrained(
+            cfg.hf_model_id,
+            cache_dir=cfg.hf_cache_dir,
+            local_files_only=cfg.local_files_only,
+            token=cfg.hf_token,
+        )
+        model = model_cls.from_config(config, torch_dtype=_resolve_dtype(cfg.dtype))
+    return model.to(cfg.device).eval()
+
+
+def _select_generation_model_class(attention_mode: str):
+    return AutoModelForCausalLM if attention_mode == "podcast_per_token" else AutoModel
+
+
+def _tokenize_transcript_per_word(words: list[str], tokenizer):
+    """Tokenize each transcript word independently with a leading space.
+
+    ``data/code/llm.py`` tokenized each transcript word independently as
+    ``tokenizer.tokenize(" " + word)``. All generation modes use this path so
+    tokenization is consistent across model types.
+    """
+    input_ids: list[int] = []
+    word_ids: list[int] = []
+    hftokens: list[str] = []
+    for w_idx, word in enumerate(words):
+        tokens = tokenizer.tokenize(" " + str(word))
+        if not tokens:
+            raise AssertionError(f"1 word failed to tokenize: {word!r}")
+        token_ids = tokenizer.convert_tokens_to_ids(tokens)
+        if isinstance(token_ids, int):
+            token_ids = [token_ids]
+        input_ids.extend(int(tid) for tid in token_ids)
+        word_ids.extend([w_idx] * len(tokens))
+        hftokens.extend(tokens)
+
+    return np.asarray(input_ids, dtype=np.int64), word_ids, hftokens
+
+
+def _tokenize_for_attention_mode(words: list[str], tokenizer, attention_mode: str):
+    _ = attention_mode
+    return _tokenize_transcript_per_word(words, tokenizer)
 
 
 def _build_transcript_df(
-    words_df: pd.DataFrame, word_ids: list, input_ids: np.ndarray, tokenizer
+    words_df: pd.DataFrame,
+    word_ids: list,
+    input_ids: np.ndarray,
+    tokenizer,
+    hftokens: list[str] | None = None,
 ) -> pd.DataFrame:
     """Assemble the per-token transcript.tsv schema used by the embedding loaders."""
-    hftokens = tokenizer.convert_ids_to_tokens(input_ids.tolist())
+    if hftokens is None:
+        hftokens = tokenizer.convert_ids_to_tokens(input_ids.tolist())
     rows = []
     for tok_idx, w_idx in enumerate(word_ids):
         src = words_df.iloc[w_idx]
@@ -137,6 +191,31 @@ def _resolve_layers(cfg_layers, num_hidden_states: int) -> list[int]:
     if cfg_layers == "all" or cfg_layers is None:
         return list(range(num_hidden_states))
     return [int(L) for L in cfg_layers]
+
+
+def _load_generation_words(cfg: GenerateEmbeddingsConfig, output_name: str):
+    context = resolve_dataset_context(
+        dataset=cfg.dataset,
+        subject_ids=[],
+        per_dataset_config=cfg.per_dataset_config,
+        data_root=cfg.data_root,
+    )
+    adapter = get_dataset_adapter(context.dataset)
+    if context.dataset == "podcast":
+        print(f"Loading transcript: {cfg.transcript_path}")
+        words_df = pd.read_csv(cfg.transcript_path)
+    else:
+        print(f"Loading {context.dataset} transcript: {context.stimulus_id}")
+        words_df = adapter.load_word_table(
+            cfg.data_root,
+            context,
+            drop_untimed_words=False,
+        )
+
+    if "word" not in words_df.columns:
+        raise ValueError("Transcript table must contain a 'word' column.")
+    out_dir = adapter.get_embedding_dir(cfg.data_root, context, output_name)
+    return words_df, context, out_dir
 
 
 def _causal_window_plan(N: int, stride: int, T: int) -> list[tuple[int, int, int, int]]:
@@ -213,6 +292,41 @@ def _build_bidir_batch(
     return batch_ids, batch_mask
 
 
+def _build_podcast_context_batch(
+    input_ids: "torch.Tensor", targets: list[int], context_len: int, pad_id: int
+) -> "torch.Tensor":
+    """Build podcast-style left-padded causal LM rows.
+
+    For target token ``i``, the real sequence is
+    ``input_ids[max(0, i - context_len): i + 1]`` and the row width is
+    ``context_len + 1``. The target is always at ``-1`` and the logit position
+    that predicts it is therefore ``-2``.
+    """
+    B = len(targets)
+    width = context_len + 1
+    batch_ids = torch.full((B, width), pad_id, dtype=torch.long)
+    for row, tgt in enumerate(targets):
+        lo = max(0, tgt - context_len)
+        seq = input_ids[lo : tgt + 1]
+        batch_ids[row, width - seq.shape[0] :] = seq
+    return batch_ids
+
+
+def _performance_from_logits(logits: "torch.Tensor", target_ids: "torch.Tensor"):
+    """Return GPT-style prediction metrics for the target token."""
+    probs = torch.softmax(logits.float(), dim=-1)
+    true_probs = probs.gather(1, target_ids[:, None]).squeeze(1)
+    top_pred = torch.argmax(probs, dim=-1)
+    ranks = (probs > true_probs[:, None]).sum(dim=-1)
+    entropy = -(probs * torch.log(probs.clamp_min(torch.finfo(probs.dtype).tiny))).sum(dim=-1)
+    return {
+        "rank": ranks.cpu().numpy().astype(np.int64),
+        "true_prob": true_probs.cpu().numpy().astype(np.float64),
+        "top_pred": top_pred.cpu().numpy().astype(np.int64),
+        "entropy": entropy.cpu().numpy().astype(np.float64),
+    }
+
+
 def _run_bidirectional_strict(
     model, input_ids: np.ndarray, layers: list[int], cfg, tokenizer, out: dict
 ):
@@ -249,10 +363,60 @@ def _run_bidirectional_strict(
                 out[L][tgt] = layer_hs[row]
 
 
+def _run_podcast_per_token(
+    model, input_ids: np.ndarray, layers: list[int], cfg, tokenizer, out: dict
+) -> pd.DataFrame:
+    """Podcast-compatible per-token causal LM inference.
+
+    Hidden states are retained from the target position (``-1``); next-token
+    metrics are computed from logits at ``-2`` because those logits predict the
+    target token at ``-1``.
+    """
+    device = cfg.device
+    context_len = cfg.context_window
+    T = input_ids.shape[0]
+    ids_t = torch.from_numpy(input_ids)
+    pad_id = tokenizer.pad_token_id if tokenizer.pad_token_id is not None else 0
+
+    perf = {
+        "rank": np.zeros(T, dtype=np.int64),
+        "true_prob": np.zeros(T, dtype=np.float64),
+        "top_pred": np.zeros(T, dtype=np.int64),
+        "entropy": np.zeros(T, dtype=np.float64),
+    }
+
+    B = cfg.batch_size
+    for batch_start in tqdm(range(0, T, B), desc="targets (podcast-causal)"):
+        targets = list(range(batch_start, min(batch_start + B, T)))
+        batch_ids = _build_podcast_context_batch(ids_t, targets, context_len, pad_id).to(device)
+        target_ids = ids_t[targets].to(device)
+
+        with torch.inference_mode():
+            outputs = model(batch_ids, output_hidden_states=True)
+
+        for L in layers:
+            layer_hs = outputs.hidden_states[L][:, -1, :].float().cpu().numpy()
+            for row, tgt in enumerate(targets):
+                out[L][tgt] = layer_hs[row]
+
+        batch_perf = _performance_from_logits(outputs.logits[:, -2, :], target_ids)
+        for name, values in batch_perf.items():
+            perf[name][batch_start : batch_start + len(targets)] = values
+
+    return pd.DataFrame(perf)
+
+
+def _write_features_hdf5(features_path: str, layers: list[int], out: dict):
+    with h5py.File(features_path, "w") as f:
+        for L in layers:
+            f.create_dataset(f"layer-{L}", data=out[L], compression="gzip")
+
+
 def generate(cfg: GenerateEmbeddingsConfig):
     output_name = cfg.output_name or _auto_output_name(cfg.hf_model_id)
 
-    print(f"Loading tokenizer: {cfg.hf_model_id}")
+    tokenizer_name_or_path = _tokenizer_name_or_path(cfg)
+    print(f"Loading tokenizer: {tokenizer_name_or_path}")
     tok_kwargs = dict(
         cache_dir=cfg.hf_cache_dir,
         local_files_only=cfg.local_files_only,
@@ -260,29 +424,28 @@ def generate(cfg: GenerateEmbeddingsConfig):
     )
     try:
         tokenizer = AutoTokenizer.from_pretrained(
-            cfg.hf_model_id, add_prefix_space=cfg.add_prefix_space, **tok_kwargs
+            tokenizer_name_or_path, add_prefix_space=cfg.add_prefix_space, **tok_kwargs
         )
     except TypeError:
         # Some tokenizers (e.g. SentencePiece/Llama) don't accept add_prefix_space.
-        tokenizer = AutoTokenizer.from_pretrained(cfg.hf_model_id, **tok_kwargs)
+        tokenizer = AutoTokenizer.from_pretrained(tokenizer_name_or_path, **tok_kwargs)
 
-    print(f"Loading model: {cfg.hf_model_id} (dtype={cfg.dtype}, device={cfg.device})")
-    model = AutoModel.from_pretrained(
-        cfg.hf_model_id,
-        torch_dtype=_resolve_dtype(cfg.dtype),
-        cache_dir=cfg.hf_cache_dir,
-        local_files_only=cfg.local_files_only,
-        token=cfg.hf_token,
-    ).to(cfg.device).eval()
+    model_cls = _select_generation_model_class(cfg.attention_mode)
+    init_mode = "random init" if cfg.random_init_model else "pretrained"
+    print(f"Loading model: {cfg.hf_model_id} ({init_mode}, dtype={cfg.dtype}, device={cfg.device})")
+    model = _load_model_for_generation(cfg, model_cls)
 
     model_type = model.config.model_type
     attention_mode, stride = _resolve_defaults(cfg, model_type)
     print(f"model_type={model_type} attention_mode={attention_mode} stride={stride}")
 
-    print(f"Loading transcript: {cfg.transcript_path}")
-    words_df = pd.read_csv(cfg.transcript_path)
+    words_df, dataset_context, out_dir = _load_generation_words(cfg, output_name)
     words = words_df["word"].tolist()
-    input_ids, word_ids = _tokenize_transcript(words, tokenizer)
+    input_ids, word_ids, hftokens = _tokenize_for_attention_mode(
+        words,
+        tokenizer,
+        attention_mode,
+    )
     T = input_ids.shape[0]
     hidden_dim = model.config.hidden_size
     num_hidden_states = model.config.num_hidden_layers + 1  # +1 for embedding layer
@@ -292,8 +455,11 @@ def generate(cfg: GenerateEmbeddingsConfig):
     np_dtype = _resolve_np_dtype(cfg.output_dtype)
     out = {L: np.zeros((T, hidden_dim), dtype=np_dtype) for L in layers}
 
+    performance_df = None
     if attention_mode == "causal_native":
         _run_causal_sliding(model, input_ids, layers, cfg, stride, out)
+    elif attention_mode == "podcast_per_token":
+        performance_df = _run_podcast_per_token(model, input_ids, layers, cfg, tokenizer, out)
     elif attention_mode == "bidirectional_strict":
         _run_bidirectional_strict(model, input_ids, layers, cfg, tokenizer, out)
     elif attention_mode == "bidirectional_masked":
@@ -305,19 +471,25 @@ def generate(cfg: GenerateEmbeddingsConfig):
     else:
         raise ValueError(f"Unknown attention_mode: {attention_mode}")
 
-    transcript_df = _build_transcript_df(words_df, word_ids, input_ids, tokenizer)
+    transcript_df = _build_transcript_df(words_df, word_ids, input_ids, tokenizer, hftokens=hftokens)
+    if performance_df is not None:
+        transcript_df = pd.concat([transcript_df, performance_df], axis=1)
 
-    out_dir = os.path.join(cfg.data_root, "stimuli", output_name)
     os.makedirs(out_dir, exist_ok=True)
+    save_effective_config(cfg, out_dir)
     features_path = os.path.join(out_dir, "features.hdf5")
     print(f"Writing {features_path}")
-    with h5py.File(features_path, "w") as f:
-        for L in layers:
-            f.create_dataset(f"layer-{L}", data=out[L], compression="gzip")
+    _write_features_hdf5(features_path, layers, out)
 
     transcript_path = os.path.join(out_dir, "transcript.tsv")
     print(f"Writing {transcript_path}")
     transcript_df.to_csv(transcript_path, sep="\t")
+
+    if performance_df is not None:
+        performance_path = os.path.join(out_dir, "performance.json")
+        print(f"Writing {performance_path}")
+        with open(performance_path, "w") as f:
+            json.dump(performance_df.to_dict(orient="list"), f, indent=2)
 
     metadata = dict(
         hf_model_id=cfg.hf_model_id,
@@ -333,9 +505,16 @@ def generate(cfg: GenerateEmbeddingsConfig):
         dtype=cfg.dtype,
         output_dtype=cfg.output_dtype,
         add_prefix_space=cfg.add_prefix_space,
+        random_init_model=cfg.random_init_model,
+        random_init_seed=cfg.random_init_seed,
+        architecture_source=cfg.hf_model_id,
         n_tokens=T,
         n_words=len(words),
         transcript_path=cfg.transcript_path,
+        dataset=dataset_context.dataset,
+        data_root=cfg.data_root,
+        stimulus_id=dataset_context.stimulus_id,
+        per_dataset_config=cfg.per_dataset_config,
     )
     metadata_path = os.path.join(out_dir, "metadata.json")
     with open(metadata_path, "w") as f:

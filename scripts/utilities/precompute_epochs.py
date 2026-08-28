@@ -1,95 +1,74 @@
 """
-precompute_epochs.py — One-time preprocessing: resample each subject's high-gamma
-signal to 32 Hz and save the result to disk.
+precompute_epochs.py — One-time preprocessing: build word-aligned 32 Hz epochs.
 
 After running this script, all other scripts can replace the slow
   load_raws(...) + build_word_epochs(...)
 sequence with the fast
   load_precomputed_epochs(...) + epochs_from_cache(...)
-which avoids re-running MNE's FFT resample on every script invocation.
+which avoids re-running high-gamma preprocessing/resampling on every invocation.
 
-Saves per subject to:
-  {data_root}/derivatives/ecogprep/sub-{id:02d}/ieeg/
-      sub-{id:02d}_task-podcast_desc-epochs32hz_ieeg.npz
+Saves per subject to the active dataset adapter's precomputed-epochs path.
 
-The .npz contains:
-  raw_data     — (n_elecs, n_total_samples) float32 at 32 Hz
-  selection    — (n_words_kept,) int, word indices kept by MNE epoching
-  epoch_starts — (n_words_kept,) int, start sample in raw_data for each epoch
+The .h5 contains:
+  epoch_data   — (n_words_kept, n_elecs, 128) float32 at 32 Hz
+  selection    — (n_words_kept,) int, word indices kept after duplicate/bounds filtering
   n_lags       — scalar int, samples per epoch window
   ch_names     — (n_elecs,) electrode names
 """
 
 import argparse
 import gc
+import os
 
-import numpy as np
 from tqdm import tqdm
 
-from src.utils import (
+from src.utils.shared.ieeg import (
     load_raws,
-    load_embeddings,
-    build_word_epochs,
+    build_aligned_epoch_data,
     save_precomputed_epochs,
+    get_precomputed_epochs_path,
 )
+from src.utils.shared.embeddings import load_embeddings
 from src.core.config import EncodingConfig
-from src.utils.config_utils import parse_args, load_config
+from src.core.registry import get_dataset_adapter, resolve_dataset_context
+from src.utils.shared.config import parse_args, load_config, save_effective_config
 
 _TARGET_SFREQ = 32.0
 _TMIN = -2.0
 _TMAX = 2.0
 
 
-def precompute_subject(sub_id, raw, df_word):
+def precompute_subject(raw, df_word):
     """Precompute and return cache components for one subject.
 
-    Runs build_word_epochs once on the original raw to get the canonical
-    selection and n_lags, then resamples the full continuous signal to
-    32 Hz and computes per-epoch start indices by direct time-to-sample
-    conversion on the resampled object.
+    Extracts word epochs on the source-rate grid, then resamples aligned
+    batches to 32 Hz.
 
     Returns:
-        raw_data     — (n_elecs, n_samples) float32
+        epoch_data   — (n_words_kept, n_elecs, n_lags) float32
         selection    — int array
-        epoch_starts — int array
         ch_names     — list of str
         n_lags       — int
     """
-    import mne
-
-    print(f"  Building reference epochs (run once to get selection / n_lags)...")
-    epochs_ref, data_ref = build_word_epochs(raw, df_word, _TMIN, _TMAX, _TARGET_SFREQ)
-    selection = epochs_ref.selection
-    n_lags = data_ref.shape[2]
+    print(
+        f"  Extracting epochs at {raw.info['sfreq']} Hz and resampling aligned "
+        f"batches to {_TARGET_SFREQ} Hz..."
+    )
+    epoch_data, selection = build_aligned_epoch_data(
+        raw,
+        df_word,
+        tmin=_TMIN,
+        tmax=_TMAX,
+        target_sfreq=_TARGET_SFREQ,
+        batch_size=64,
+    )
+    n_lags = epoch_data.shape[-1]
+    print(f"  epoch_data shape: {epoch_data.shape}")
     print(f"  n_words_kept={len(selection)}, n_lags={n_lags}")
 
-    print(f"  Resampling full continuous signal to {_TARGET_SFREQ} Hz...")
-    raw_resampled = raw.copy().resample(
-        _TARGET_SFREQ, npad="auto", method="fft", window="hamming"
-    )
-    raw_data = raw_resampled.get_data().astype(np.float32)
-    print(f"  raw_data shape: {raw_data.shape}")
-
-    tmin_samp = int(round(_TMIN * _TARGET_SFREQ))
-    onset_times = df_word.iloc[selection]["start"].values
-    onset_samples = raw_resampled.time_as_index(onset_times)
-    epoch_starts = onset_samples + tmin_samp
-
-    # Sanity check: all windows must be within bounds
-    out_of_bounds = np.where(
-        (epoch_starts < 0) | (epoch_starts + n_lags > raw_data.shape[1])
-    )[0]
-    if len(out_of_bounds) > 0:
-        raise RuntimeError(
-            f"Subject {sub_id}: {len(out_of_bounds)} epochs would fall outside "
-            "the resampled raw array bounds.  This should not happen if selection "
-            "matches the original build_word_epochs output."
-        )
-
-    del raw_resampled, epochs_ref, data_ref
     gc.collect()
 
-    return raw_data, selection, epoch_starts, raw.ch_names, n_lags
+    return epoch_data, selection, raw.ch_names, n_lags
 
 
 def main():
@@ -97,39 +76,86 @@ def main():
     config: EncodingConfig = load_config(args.config, overrides, EncodingConfig)
 
     subject_ids = config.subjects or list(range(1, 10))
+    dataset_context = resolve_dataset_context(
+        dataset=config.dataset,
+        subject_ids=subject_ids,
+        per_dataset_config=config.per_dataset_config,
+        data_root=config.data_root,
+    )
+    get_dataset_adapter(config.dataset).validate_subjects_share_stimulus(
+        subject_ids, config.per_dataset_config, config.data_root
+    )
 
     print(f"Precomputing epochs for subjects: {subject_ids}")
     print(f"  data_root: {config.data_root}")
 
+    per_model_config = dict(config.per_model_config)
+    if isinstance(per_model_config.get("layer"), list):
+        per_model_config["layer"] = per_model_config["layer"][0]
+
     _, df_word = load_embeddings(
-        config.data_root, config.model, **config.per_model_config
+        config.data_root,
+        config.model,
+        dataset=config.dataset,
+        per_dataset_config=config.per_dataset_config,
+        dataset_context=dataset_context,
+        **per_model_config,
     )
+    dataset_adapter = get_dataset_adapter(config.dataset)
 
     for sub_id in tqdm(subject_ids, desc="Subjects"):
+        cache_path = get_precomputed_epochs_path(
+            sub_id,
+            config.data_root,
+            dataset=config.dataset,
+            per_dataset_config=config.per_dataset_config,
+            dataset_context=dataset_context,
+        )
+        save_effective_config(config, os.path.dirname(cache_path))
         print(f"\n{'='*60}")
         print(f"Subject {sub_id}")
         print(f"{'='*60}")
 
         raws = load_raws(
-            [sub_id], config.data_root, use_high_gamma=True, do_drop_bads=True
+            [sub_id],
+            config.data_root,
+            use_high_gamma=True,
+            do_drop_bads=True,
+            dataset=config.dataset,
+            per_dataset_config=config.per_dataset_config,
+            dataset_context=dataset_context,
         )
         raw = raws[0]
         print(f"  Loaded raw: {len(raw.ch_names)} electrodes, {raw.info['sfreq']} Hz")
 
-        raw_data, selection, epoch_starts, ch_names, n_lags = precompute_subject(
-            sub_id, raw, df_word
+        subject_df_word = df_word
+        if hasattr(dataset_adapter, "load_subject_word_table"):
+            subject_df_word = dataset_adapter.load_subject_word_table(
+                config.data_root,
+                dataset_context,
+                sub_id,
+                df_word,
+                drop_untimed_words=True,
+            )
+            print(f"  Subject-aligned words: {len(subject_df_word)}")
+
+        epoch_data, selection, ch_names, n_lags = precompute_subject(
+            raw, subject_df_word
         )
         save_precomputed_epochs(
             sub_id,
             config.data_root,
-            raw_data,
+            epoch_data,
             selection,
-            epoch_starts,
             ch_names,
-            n_lags,
+            sfreq=_TARGET_SFREQ,
+            tmin=_TMIN,
+            tmax=_TMAX,
+            dataset=config.dataset,
+            per_dataset_config=config.per_dataset_config,
+            dataset_context=dataset_context,
         )
-
-        del raws, raw, raw_data
+        del raws, raw, epoch_data
         gc.collect()
 
     print("\nDone.")

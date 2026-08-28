@@ -6,7 +6,7 @@ import pytest
 
 h5py = pytest.importorskip("h5py")
 
-from src.utils.embeddings import load_embeddings
+from src.utils.shared.embeddings import load_embeddings
 
 
 @pytest.fixture
@@ -73,3 +73,104 @@ class TestLoadEmbeddings:
         data_root, _ = tmp_hdf5_and_transcript
         with pytest.raises(KeyError):
             load_embeddings(data_root, layer=99)
+
+    def test_brain_treebank_dispatch_uses_movie_scoped_generated_transcript(self, tmp_path):
+        rng = np.random.default_rng(2)
+        embeddings = rng.standard_normal((3, 4)).astype(np.float32)
+
+        stim_path = tmp_path / "stimuli" / "roberta-base" / "movie-coraline"
+        stim_path.mkdir(parents=True)
+        with h5py.File(stim_path / "features.hdf5", "w") as f:
+            f.create_dataset("layer-1", data=embeddings)
+        pd.DataFrame(
+            [
+                {"word_idx": 0, "word": "Hello", "start": 1.0, "end": 1.2},
+                {"word_idx": 1, "word": "world", "start": 2.0, "end": 2.1},
+                {"word_idx": 1, "word": "world", "start": 2.0, "end": 2.2},
+            ]
+        ).to_csv(stim_path / "transcript.tsv", sep="\t")
+
+        movie_path = tmp_path / "transcripts" / "coraline" / "features.csv"
+        movie_path.parent.mkdir(parents=True)
+        pd.DataFrame(
+            [
+                {"text": "Hello", "start": 1.0, "end": 1.2},
+                {"text": "world", "start": 2.0, "end": 2.2},
+            ]
+        ).to_csv(movie_path, index=False)
+
+        aligned, df_word = load_embeddings(
+            str(tmp_path),
+            embedding_getter_name="transformer",
+            model_dir="roberta-base",
+            layer=1,
+            dataset="brain_treebank",
+            per_dataset_config={"movie": "coraline"},
+        )
+
+        np.testing.assert_allclose(aligned[0], embeddings[0], rtol=1e-5)
+        np.testing.assert_allclose(aligned[1], embeddings[1:].mean(0), rtol=1e-5)
+        assert df_word["word"].tolist() == ["Hello", "world"]
+
+    def test_generated_transcript_drops_untimed_words_and_preserves_token_rows(
+        self, tmp_path
+    ):
+        embeddings = np.arange(20, dtype=np.float32).reshape(5, 4)
+
+        stim_path = tmp_path / "stimuli" / "roberta-base" / "movie-coraline"
+        stim_path.mkdir(parents=True)
+        with h5py.File(stim_path / "features.hdf5", "w") as f:
+            f.create_dataset("layer-1", data=embeddings)
+        pd.DataFrame(
+            [
+                {"word_idx": 0, "word": "timed", "start": 1.0, "end": 1.1},
+                {"word_idx": 1, "word": "untimed", "start": np.nan, "end": np.nan},
+                {"word_idx": 1, "word": "untimed", "start": np.nan, "end": np.nan},
+                {"word_idx": 2, "word": "again", "start": 2.0, "end": 2.1},
+                {"word_idx": 2, "word": "again", "start": 2.0, "end": 2.2},
+            ]
+        ).to_csv(stim_path / "transcript.tsv", sep="\t")
+
+        aligned, df_word = load_embeddings(
+            str(tmp_path),
+            embedding_getter_name="transformer",
+            model_dir="roberta-base",
+            layer=1,
+            dataset="brain_treebank",
+            per_dataset_config={"movie": "coraline"},
+        )
+
+        np.testing.assert_allclose(aligned[0], embeddings[0])
+        np.testing.assert_allclose(aligned[1], embeddings[[3, 4]].mean(0))
+        assert df_word["word"].tolist() == ["timed", "again"]
+        assert df_word.index.tolist() == [0, 1]
+
+    def test_brain_treebank_fallback_word_table_accepts_explicit_model_dir(
+        self, tmp_path
+    ):
+        embeddings = np.arange(8, dtype=np.float32).reshape(2, 4)
+        stim_path = tmp_path / "stimuli" / "roberta-base" / "movie-coraline"
+        stim_path.mkdir(parents=True)
+        with h5py.File(stim_path / "features.hdf5", "w") as f:
+            f.create_dataset("layer-1", data=embeddings)
+
+        movie_path = tmp_path / "transcripts" / "coraline" / "features.csv"
+        movie_path.parent.mkdir(parents=True)
+        pd.DataFrame(
+            [
+                {"text": "Hello", "start": 1.0, "end": 1.2},
+                {"text": "world", "start": 2.0, "end": 2.2},
+            ]
+        ).to_csv(movie_path, index=False)
+
+        aligned, df_word = load_embeddings(
+            str(tmp_path),
+            embedding_getter_name="transformer",
+            model_dir="roberta-base",
+            layer=1,
+            dataset="brain_treebank",
+            per_dataset_config={"movie": "coraline"},
+        )
+
+        np.testing.assert_array_equal(aligned, embeddings)
+        assert df_word["word"].tolist() == ["Hello", "world"]

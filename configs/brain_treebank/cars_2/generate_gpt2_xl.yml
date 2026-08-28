@@ -1,0 +1,24 @@
+output_name: gpt2-xl-batch
+data_root: data/brain-treebank
+dataset: brain_treebank
+per_dataset_config:
+  movie: cars-2
+context_window: 1023
+stride: 512
+layers:
+- 0
+- 12
+- 24
+- 36
+- 48
+pooling: mean
+attention_mode: auto
+dtype: float32
+output_dtype: float32
+device: cuda
+batch_size: 1
+local_files_only: true
+add_prefix_space: true
+hf_model_id: model_cache/models/gpt2-xl
+tokenizer_name_or_path: model_cache/models/gpt2-xl
+refresh: true

@@ -1,0 +1,60 @@
+dataset: podcast
+mode: cross_dataset
+results_root: results
+plot: true
+refresh: true
+rank_grid:
+- 1
+- 2
+- 4
+- 8
+- 16
+- 32
+- 64
+- 128
+- 256
+- 512
+- 1024
+- 2048
+- 4096
+significance_selection:
+  mode: within-layer
+  reference_artifact:
+    mode: sig_lags
+    dataset: podcast
+    offset: 0
+    model: llama3-8b
+    layer: '{layer}'
+subspace_aggregation: extrinsic
+rrr_source:
+  mode: internal
+  dataset: brain-treebank-cars-2
+  offset: 0
+  model: llama3-8b
+  layer: '{layer}'
+  significance_selection:
+    mode: within-layer
+    reference_artifact:
+      mode: sig_lags
+      dataset: brain-treebank-cars-2
+      offset: 0
+      model: llama3-8b
+      layer: '{layer}'
+ieeg:
+  encoding:
+    data_root: data/
+    model: transformer
+    offset: 0
+    subjects: null
+    batch: false
+    per_model_config:
+      model_dir: llama3-8b
+      layer:
+      - 0
+      - 8
+      - 16
+      - 24
+      - 32
+  run_pca_baseline: true
+  run_null_augmented: false
+fmri: null

@@ -1,0 +1,141 @@
+encoding:
+  data_root: data/
+  dataset: podcast
+  model: transformer
+  offset: 0
+  subjects: null
+  num_folds: 5
+  ridge_cv_folds: 5
+  per_model_config:
+    model_dir: gpt2-xl-batch
+    layer: 24
+
+results_root: results
+rrr_source:
+  mode: internal
+  dataset: podcast
+  offset: 0
+  model: gpt2-xl-batch
+  layer: 24
+  significance_selection:
+    mode: within-layer
+    reference_artifact:
+      mode: sig_lags
+      dataset: podcast
+      offset: 0
+      model: gpt2-xl-batch
+      layer: 24
+# Add unit selectors here for per-subject, per-region, or temporal-window RRR.
+rrr_selectors: {}
+mode: within_dataset
+# Used only in cross_dataset mode when averaging saved source folds.
+subspace_aggregation: extrinsic
+source_name: podcast_gpt2-xl-batch_layer24
+# auto uses CUDA for continuous RidgeCV tasks when available; categorical
+# LogisticRegressionCV tasks remain on CPU. Use cuda to require a GPU.
+device: auto
+
+rank_grid: [1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 1600]
+tasks:
+  - speaker_identity
+  - native_part_of_speech
+  - native_surprisal
+  - native_entropy
+  - part_of_speech
+  - fine_part_of_speech
+  - content_word
+  - surprisal
+  - standardized_entropy
+  - self_surprisal
+  - self_entropy
+  - entropy
+  - surprisal_class
+  - story_position
+  - story_time_position
+  - sentence_onset
+  - sentence_end
+  - iu_onset
+  - iu_end
+  - sentence_position
+  - sentence_length
+  - iu_position
+  - iu_length
+  - pre_word_pause
+  - post_word_pause
+  - word_duration
+  - word_length
+  - word_zipf_frequency
+  - concreteness
+  - age_of_acquisition
+  - word_prevalence
+  - semantic_diversity
+  - socialness
+  - valence
+  - arousal
+  - dominance
+  - emotional_intensity
+  - visual_strength
+  - auditory_strength
+  - haptic_strength
+  - olfactory_strength
+  - gustatory_strength
+  - interoceptive_strength
+  - hand_arm_action_strength
+  - mouth_throat_action_strength
+  - foot_leg_action_strength
+  - head_action_strength
+  - torso_action_strength
+  - sensorimotor_strength
+  - sensorimotor_exclusivity
+  - association_degree
+  - association_entropy
+  - sense_count
+  - wordnet_lexname_mfs
+  - person_relatedness_mfs
+  - animacy_mfs
+  - motion_concept_mfs
+  - cognition_concept_mfs
+  - communication_concept_mfs
+  - perception_concept_mfs
+  - number_of_hypernyms_mfs
+  - ontology_depth_mfs
+  - dependency_relation
+  - tense
+  - mood
+    # - voice
+  - grammatical_person
+  - number
+  - definiteness
+  - dependency_depth
+  - dependency_length
+  - head_direction
+  - number_of_dependents
+  - subtree_size
+  - left_dependents
+  - right_dependents
+  - open_dependencies
+  - dependency_locality_cost
+  - filled_pause
+  - immediate_word_repetition
+  - repeated_phrase
+  - discourse_marker
+  - discourse_marker_type
+  - word_seen_before
+  - prior_word_count
+  - distance_from_previous_occurrence
+  - word_in_previous_5
+  - is_named_entity
+  - named_entity_type
+  - is_coreference_mention
+  - coreference_newness
+  - coreference_mention_form
+  - coreference_mention_order
+  - coreference_chain_size
+  - coreference_antecedent_distance_words
+
+task_data:
+  language_features: processed_data/language_features/podcast/podcast/tokens.tsv
+  word_annotations: processed_data/df_word_onset_with_pos_class.csv
+
+logistic_cs: [0.0001, 0.001, 0.01, 0.1, 1.0, 10.0, 100.0]
+refresh: true

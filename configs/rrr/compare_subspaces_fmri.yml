@@ -1,0 +1,114 @@
+analysis_name: all_spaces_over_fmri_saturation_rrr
+output_root: results/subspace_comparisons
+evaluation_dataset: fmri
+comparison_modes: [capacity_controlled, full_neural_space]
+max_rank: 32
+include_pca: false
+geometries: [span]
+rsm_metric: cosine
+refresh: false
+
+datasets:
+  podcast:
+    loader: ieeg_words
+    dataset: podcast
+    data_root: data/
+    results_root: results
+    subjects: [1, 2, 3, 4, 5, 6, 7, 8, 9]
+  cars-2:
+    loader: ieeg_words
+    dataset: brain_treebank
+    data_root: data/brain-treebank
+    results_root: results
+    per_dataset_config:
+      movie: cars-2
+    subjects: [3, 7, 10]
+    shared_word_selection: true
+  fmri:
+    loader: fmri_words
+    results_root: results
+    fmri_repo_root: data/deep-fMRI-dataset
+    embedding_root: data/fmri/stimuli
+    sessions: [1, 2, 3, 4, 5]
+    pooling: mean
+    num_folds: 5
+
+models:
+  - model: gpt2
+    offsets: [0]
+    layers: [0, 3, 6, 9, 12]
+    datasets: [podcast, cars-2, fmri]
+    saturation_ranks:
+      rrr:
+        podcast: {0: 32, 3: 64, 6: 32, 9: 32, 12: 64}
+        cars-2: {0: 32, 3: 32, 6: 32, 9: 64, 12: 32}
+        fmri: {0: 16, 3: 16, 6: 16, 9: 16, 12: 8}
+      pca:
+        podcast: {0: 128, 3: 512, 6: 256, 9: 128, 12: 256}
+        cars-2: {0: 128, 3: 256, 6: 512, 9: 512, 12: 256}
+        fmri: {0: 32, 3: 64, 6: 16, 9: 16, 12: 16}
+  - model: gpt2-xl-batch
+    offsets: [0]
+    layers: [0, 12, 24, 36, 48]
+    datasets: [podcast, cars-2, fmri]
+    saturation_ranks:
+      rrr:
+        podcast: {0: 32, 12: 64, 24: 32, 36: 32, 48: 32}
+        cars-2: {0: 16, 12: 64, 24: 16, 36: 64, 48: 32}
+        fmri: {0: 8, 12: 8, 24: 16, 36: 16, 48: 16}
+      pca:
+        podcast: {0: 64, 12: 512, 24: 128, 36: 128, 48: 128}
+        cars-2: {0: 64, 12: 512, 24: 256, 36: 256, 48: 64}
+        fmri: {0: 64, 12: 32, 24: 32, 36: 16, 48: 16}
+  - model: gpt-j-6b
+    offsets: [0]
+    layers: [0, 7, 14, 21, 28]
+    datasets: [podcast, cars-2, fmri]
+    saturation_ranks:
+      rrr:
+        podcast: {0: 32, 7: 32, 14: 32, 21: 32, 28: 32}
+        cars-2: {0: 32, 7: 64, 14: 16, 21: 16, 28: 32}
+        fmri: {0: 8, 7: 16, 14: 16, 21: 16, 28: 16}
+      pca:
+        podcast: {0: 128, 7: 256, 14: 256, 21: 256, 28: 128}
+        cars-2: {0: 256, 7: 512, 14: 128, 21: 128, 28: 64}
+        fmri: {0: 16, 7: 16, 14: 32, 21: 32, 28: 32}
+  - model: llama3-8b
+    offsets: [0]
+    layers: [0, 8, 16, 24, 32]
+    datasets: [podcast, cars-2, fmri]
+    saturation_ranks:
+      rrr:
+        podcast: {0: 16, 8: 32, 16: 32, 24: 64, 32: 64}
+        cars-2: {0: 64, 8: 16, 16: 32, 24: 32, 32: 8}
+        fmri: {0: 8, 8: 16, 16: 8, 24: 16, 32: 8}
+      pca:
+        podcast: {0: 128, 8: 64, 16: 128, 24: 128, 32: 128}
+        cars-2: {0: 512, 8: 128, 16: 256, 24: 256, 32: 128}
+        fmri: {0: 16, 8: 32, 16: 32, 24: 16, 32: 32}
+  - model: roberta-large
+    offsets: [0]
+    layers: [0, 6, 12, 18, 24]
+    datasets: [podcast, cars-2, fmri]
+    saturation_ranks:
+      rrr:
+        podcast: {0: 32, 6: 64, 12: 64, 18: 64, 24: 128}
+        cars-2: {0: 32, 6: 128, 12: 64, 18: 32, 24: 32}
+        fmri: {0: 8, 6: 8, 12: 8, 18: 8, 24: 8}
+      pca:
+        podcast: {0: 256, 6: 512, 12: 256, 18: 256, 24: 256}
+        cars-2: {0: 128, 6: 512, 12: 256, 18: 256, 24: 256}
+        fmri: {0: 64, 6: 64, 12: 64, 18: 32, 24: 64}
+  - model: random-gpt2-xl
+    offsets: [0]
+    layers: [0, 12, 24, 36, 48]
+    datasets: [podcast, cars-2, fmri]
+    saturation_ranks:
+      rrr:
+        podcast: {0: 128, 12: 32, 24: 64, 36: 64, 48: 32}
+        cars-2: {0: 16, 12: 32, 24: 32, 36: 32, 48: 32}
+        fmri: {0: 8, 12: 2, 24: 2, 36: 2, 48: 2}
+      pca:
+        podcast: {0: 1024, 12: 256, 24: 256, 36: 256, 48: 256}
+        cars-2: {0: 64, 12: 512, 24: 256, 36: 256, 48: 256}
+        fmri: {0: 256, 12: 32, 24: 16, 36: 16, 48: 16}

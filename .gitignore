@@ -1,3 +1,18 @@
+# Custom
+data
+results/
+**.DS_STORE*
+__marimo__/
+correlation_diagnostics/
+cluster_sig_playground.py
+subjects/
+scratch/
+processed_data/gpt2-xl-local
+foundation_model_weights/
+gpt2-xl-local/
+model_cache/
+old_result_formatted/
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
@@ -174,3 +189,23 @@ cython_debug/
 # PyPI configuration file
 .pypirc
 
+rrr/
+!src/utils/rrr/
+!src/utils/rrr/**
+pca/
+!scripts/rrr/
+!scripts/rrr/compare_subspaces.py
+!configs/rrr/
+!configs/rrr/compare_subspaces.yml
+!configs/brain_treebank/cars_2/rrr/
+!configs/brain_treebank/cars_2/rrr/**
+# Re-apply Python cache exclusions after the RRR subtree exceptions above.
+__pycache__/
+*.py[cod]
+*$py.class
+*.pdf
+*.csv
+processed_data/regions.txt
+.gitignore
+cluster_null_distribution.npz
+.gitignore
