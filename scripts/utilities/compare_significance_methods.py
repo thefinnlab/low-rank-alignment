@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""Compare three iEEG lag-significance methods on matched encoding results."""
+"""Compare iEEG lag-significance methods on matched encoding results."""
 
 from __future__ import annotations
 
@@ -39,11 +39,13 @@ from src.utils.significance.ieeg import (
 )
 
 
-METHODS = ("lag_corr", "lag_sem", "cluster")
+THREE_WAY_METHODS = ("lag_corr", "lag_sem", "cluster")
+METHODS = (*THREE_WAY_METHODS, "lag_corr_shared_max")
 METHOD_LABELS = {
     "lag_corr": "Lag correlation",
     "lag_sem": "Lag correlation / SEM",
     "cluster": "Cluster",
+    "lag_corr_shared_max": "Lag correlation (subject shared-max null)",
 }
 
 
@@ -131,6 +133,32 @@ def empirical_max_pvalues(observed: np.ndarray, null_maxima: np.ndarray) -> np.n
     return pvalues
 
 
+def empirical_shared_max_pvalues(
+    observed: np.ndarray, electrode_null_maxima: np.ndarray
+) -> np.ndarray:
+    """Test electrode scores against per-draw maxima across all electrodes."""
+    observed = np.asarray(observed, dtype=np.float64)
+    electrode_null_maxima = np.asarray(electrode_null_maxima, dtype=np.float64)
+    if electrode_null_maxima.ndim != 2 or electrode_null_maxima.shape[1] != len(
+        observed
+    ):
+        raise ValueError(
+            "electrode_null_maxima must have shape (n_null, n_electrodes), got "
+            f"{electrode_null_maxima.shape} for {len(observed)} observed scores"
+        )
+    finite = np.where(
+        np.isfinite(electrode_null_maxima), electrode_null_maxima, -np.inf
+    )
+    shared_null = np.max(finite, axis=1)
+    shared_null[~np.isfinite(shared_null)] = np.nan
+    pvalues = np.ones(len(observed), dtype=float)
+    valid = np.isfinite(observed)
+    pvalues[valid] = (
+        np.sum(shared_null[:, None] >= observed[None, valid], axis=0) + 1.0
+    ) / (len(shared_null) + 1.0)
+    return pvalues
+
+
 def _finite_max_per_electrode(scores: np.ndarray) -> np.ndarray:
     finite = np.where(np.isfinite(scores), scores, -np.inf)
     maxima = np.max(finite, axis=1)
@@ -150,6 +178,7 @@ def _observed_method_scores(cluster_result: dict, fold_corrs: np.ndarray) -> dic
             cluster[electrode] = score
     return {
         "lag_corr": _finite_max_per_electrode(lag_corr),
+        "lag_corr_shared_max": _finite_max_per_electrode(lag_corr),
         "lag_sem": _finite_max_per_electrode(lag_sem),
         "cluster": cluster,
         "mean_all_lags_corr": fisher_mean_correlations(lag_corr, axis=1),
@@ -330,8 +359,11 @@ def run_comparison(config) -> pd.DataFrame:
         )
         pvalues = {
             method: empirical_max_pvalues(observed[method], nulls[method])
-            for method in METHODS
+            for method in THREE_WAY_METHODS
         }
+        pvalues["lag_corr_shared_max"] = empirical_shared_max_pvalues(
+            observed["lag_corr_shared_max"], nulls["lag_corr"]
+        )
         for electrode_idx, electrode in enumerate(fitted["electrodes"]):
             row = {
                 "subject": int(subject),
@@ -377,7 +409,7 @@ def significant_sets(frame: pd.DataFrame) -> dict[str, set[str]]:
 
 def membership_groups(sets: dict[str, set[str]]) -> dict[str, set[str]]:
     """Return the seven non-empty three-method membership regions."""
-    corr, sem, cluster = (sets[method] for method in METHODS)
+    corr, sem, cluster = (sets[method] for method in THREE_WAY_METHODS)
     return {
         "all three": corr & sem & cluster,
         "lag correlation + lag SEM only": (corr & sem) - cluster,
@@ -465,6 +497,14 @@ def print_report(frame: pd.DataFrame, config, config_path: Path, dataset, model,
     for label, members in membership_groups(sets).items():
         print(f"\n{label} ({len(members)}):")
         print("  " + (", ".join(sorted(members)) if members else "—"))
+
+    shared_max_members = sets["lag_corr_shared_max"]
+    print("\nAdditional method selections")
+    print(
+        f"\n{METHOD_LABELS['lag_corr_shared_max']} "
+        f"({len(shared_max_members)}):"
+    )
+    print("  " + (", ".join(sorted(shared_max_members)) if shared_max_members else "—"))
 
 
 def _parse_args() -> argparse.Namespace:

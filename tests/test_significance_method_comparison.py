@@ -12,6 +12,7 @@ from scripts.utilities.compare_significance_methods import (
     apply_global_fdr,
     canonical_config_path,
     empirical_max_pvalues,
+    empirical_shared_max_pvalues,
     load_comparison_config,
     mean_significant_correlations,
     membership_groups,
@@ -46,6 +47,9 @@ def test_observed_summary_fisher_averages_all_folds_and_lags_per_electrode():
     expected = np.tanh(np.mean(np.arctanh(fold_corrs), axis=(0, 2)))
 
     np.testing.assert_allclose(observed["mean_all_lags_corr"], expected)
+    np.testing.assert_array_equal(
+        observed["lag_corr_shared_max"], observed["lag_corr"]
+    )
 
 
 def test_empirical_pvalues_use_electrode_specific_max_nulls_and_plus_one():
@@ -55,6 +59,22 @@ def test_empirical_pvalues_use_electrode_specific_max_nulls_and_plus_one():
     pvalues = empirical_max_pvalues(observed, null)
 
     np.testing.assert_allclose(pvalues, [0.75, 0.75, 1.0])
+
+
+def test_shared_max_pvalues_use_each_draws_maximum_across_electrodes():
+    observed = np.array([2.0, 5.0, np.nan])
+    electrode_null = np.array(
+        [[1.0, 6.0, 0.0], [2.0, 4.0, 1.0], [3.0, 5.0, 2.0]]
+    )
+
+    pvalues = empirical_shared_max_pvalues(observed, electrode_null)
+
+    np.testing.assert_allclose(pvalues, [1.0, 0.75, 1.0])
+
+
+def test_shared_max_pvalues_reject_mismatched_electrode_count():
+    with pytest.raises(ValueError, match="n_null, n_electrodes"):
+        empirical_shared_max_pvalues(np.array([1.0, 2.0]), np.ones((3, 1)))
 
 
 def test_matched_null_methods_receive_identical_shift_batches(monkeypatch):
@@ -122,6 +142,7 @@ def test_global_bh_and_overlap_summaries_cover_discordant_groups():
             "lag_corr_p": [0.001, 0.01, 0.9, 0.9],
             "lag_sem_p": [0.001, 0.9, 0.01, 0.9],
             "cluster_p": [0.001, 0.9, 0.9, 0.01],
+            "lag_corr_shared_max_p": [0.001, 0.9, 0.9, 0.9],
         }
     )
 
@@ -134,6 +155,7 @@ def test_global_bh_and_overlap_summaries_cover_discordant_groups():
         "lag_corr": {"1:A", "1:B"},
         "lag_sem": {"1:A", "2:C"},
         "cluster": {"1:A", "2:D"},
+        "lag_corr_shared_max": {"1:A"},
     }
     assert groups["all three"] == {"1:A"}
     assert groups["lag correlation only"] == {"1:B"}
@@ -162,6 +184,7 @@ def test_mean_correlation_uses_common_all_lag_score_for_each_selected_set():
             "lag_corr_significant": [True, True, False],
             "lag_sem_significant": [False, True, True],
             "cluster_significant": [False, False, False],
+            "lag_corr_shared_max_significant": [False, False, True],
         }
     )
 
@@ -174,6 +197,7 @@ def test_mean_correlation_uses_common_all_lag_score_for_each_selected_set():
         np.tanh(np.mean(np.arctanh([0.3, 0.5])))
     )
     assert np.isnan(means["cluster"])
+    assert means["lag_corr_shared_max"] == pytest.approx(0.5)
 
 
 def test_console_report_prints_counts_overlap_and_discordant_ids(capsys):
@@ -185,6 +209,7 @@ def test_console_report_prints_counts_overlap_and_discordant_ids(capsys):
             "lag_corr_significant": [True, True],
             "lag_sem_significant": [True, False],
             "cluster_significant": [True, False],
+            "lag_corr_shared_max_significant": [True, False],
         }
     )
     config = SimpleNamespace(
@@ -206,4 +231,5 @@ def test_console_report_prints_counts_overlap_and_discordant_ids(capsys):
     assert "Pairwise overlap" in output
     assert "all three (1)" in output
     assert "lag correlation only (1)" in output
+    assert "Lag correlation (subject shared-max null) (1)" in output
     assert "1:B" in output

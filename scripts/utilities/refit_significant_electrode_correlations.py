@@ -22,6 +22,7 @@ if str(PROJECT_ROOT) not in sys.path:
 from scripts.utilities.compare_significance_methods import (
     METHODS,
     METHOD_LABELS,
+    THREE_WAY_METHODS,
     _fit_subject,
     load_comparison_config,
 )
@@ -32,7 +33,7 @@ from src.utils.shared.ieeg import compute_shared_word_selection
 
 
 MEMBERSHIP_METHODS = {
-    "all three": METHODS,
+    "all three": THREE_WAY_METHODS,
     "lag correlation + lag SEM only": ("lag_corr", "lag_sem"),
     "lag correlation + cluster only": ("lag_corr", "cluster"),
     "lag SEM + cluster only": ("lag_sem", "cluster"),
@@ -45,6 +46,9 @@ _MEMBERSHIP_HEADER = re.compile(
     r"\((?P<count>\d+)\):\s*$"
 )
 _ELECTRODE_ID = re.compile(r"(?<!\S)(\d+):([^,\s]+)")
+_ADDITIONAL_METHOD_HEADER = re.compile(
+    rf"^{re.escape(METHOD_LABELS['lag_corr_shared_max'])} \((?P<count>\d+)\):\s*$"
+)
 
 
 def parse_comparison_report(text: str) -> dict[str, set[tuple[int, str]]]:
@@ -52,7 +56,15 @@ def parse_comparison_report(text: str) -> dict[str, set[tuple[int, str]]]:
     marker = "Three-way membership"
     if marker not in text:
         raise ValueError("Comparison report has no 'Three-way membership' section")
-    lines = text.split(marker, 1)[1].splitlines()
+    membership_text = text.split(marker, 1)[1]
+    additional_marker = "Additional method selections"
+    if additional_marker in membership_text:
+        membership_text, additional_text = membership_text.split(
+            additional_marker, 1
+        )
+    else:
+        additional_text = ""
+    lines = membership_text.splitlines()
     groups: dict[str, set[tuple[int, str]]] = {}
     current_label = None
     declared_count = None
@@ -90,6 +102,26 @@ def parse_comparison_report(text: str) -> dict[str, set[tuple[int, str]]]:
     for label, members in groups.items():
         for method in MEMBERSHIP_METHODS[label]:
             selections[method].update(members)
+
+    additional_lines = additional_text.splitlines()
+    for index, raw_line in enumerate(additional_lines):
+        header = _ADDITIONAL_METHOD_HEADER.match(raw_line.strip())
+        if not header:
+            continue
+        declared = int(header.group("count"))
+        members = set()
+        for member_line in additional_lines[index + 1 :]:
+            members.update(
+                (int(subject), electrode)
+                for subject, electrode in _ELECTRODE_ID.findall(member_line.strip())
+            )
+        if len(members) != declared:
+            raise ValueError(
+                "Report shared-max method declares "
+                f"{declared} electrodes but {len(members)} identifiers were parsed"
+            )
+        selections["lag_corr_shared_max"] = members
+        break
     return selections
 
 

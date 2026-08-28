@@ -32,6 +32,11 @@ lag SEM only (1):
 
 cluster only (0):
   —
+
+Additional method selections
+
+Lag correlation (subject shared-max null) (1):
+  4:H
 """
 
 
@@ -47,6 +52,7 @@ def test_parses_report_memberships_into_each_method_set():
     assert selections["cluster"] == {
         (1, "A"), (2, "B"), (1, "D"), (2, "E")
     }
+    assert selections["lag_corr_shared_max"] == {(4, "H")}
 
 
 def test_report_parser_rejects_truncated_membership_lists():

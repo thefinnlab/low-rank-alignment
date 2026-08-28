@@ -19,8 +19,9 @@ embeddings predict iEEG and fMRI responses. The supported executable surface is
   all published through the same Artifact client.
 - `scripts/utilities/` contains data preparation, embedding generation, language-feature
   generation, plotting, atlas-reporting entrypoints, and a read-only iEEG utility for
-  comparing max-lag correlation, max-lag correlation/SEM, and lag-cluster
-  significance on matched encoding fits and circular-shift null samples. A companion
+  comparing max-lag correlation with electrode-specific or subject-wide shared-max
+  nulls, max-lag correlation/SEM, and lag-cluster significance on matched encoding
+  fits and circular-shift null samples. A companion
   refit utility parses that comparison's console report and recomputes all-lag
   correlations for only the union of selected electrodes, without permutation tests.
 
