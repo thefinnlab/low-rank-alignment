@@ -139,10 +139,14 @@ def load_story_embeddings(
         transcript = pd.read_csv(story_dir / "transcript.tsv", sep="\t")
         transcript = transcript.loc[:, ~transcript.columns.astype(str).str.startswith("Unnamed:")]
         with h5py.File(story_dir / "features.hdf5", "r") as handle:
-            token_values = handle[f"layer-{int(layer)}"][...]
-        pooled = []
-        for _, group in transcript.groupby("word_idx", sort=True):
-            pooled.append(reducers[pooling](token_values[group.index.to_numpy()]))
+            token_values = handle[f"layer-{int(layer)}"]
+            pooled = []
+            for _, group in transcript.groupby("word_idx", sort=True):
+                indices = group.index.to_numpy()
+                # Pool one word at a time so long stories do not require a
+                # second in-memory copy of the complete token-level layer.
+                values = token_values[indices]
+                pooled.append(reducers[pooling](values))
         result[story] = np.asarray(pooled, dtype=np.float32)
     return result
 

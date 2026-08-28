@@ -13,9 +13,10 @@ embeddings predict iEEG and fMRI responses. The supported executable surface is
 - `scripts/rrr/compare_subspaces.py` performs configured leakage-safe comparisons
   between saved RRR/PCA spaces and publishes one source-organized Artifact per
   generating dataset/model/layer/subspace.
-- `scripts/fmri/` contains fMRI embedding generation and held-out
-  language-decoding workflows.
+- `scripts/fmri/` contains fMRI embedding generation workflows.
 - `scripts/language-interpret/` contains language decoding and reconstruction.
+  Language decoding includes word-aligned and TR-aligned pre-FIR modes for fMRI,
+  all published through the same Artifact client.
 - `scripts/utilities/` contains data preparation, embedding generation, language-feature
   generation, plotting, and atlas-reporting entrypoints.
 

@@ -35,6 +35,8 @@ class LanguageDecodingMode(str, Enum):
 
     WITHIN_DATASET = "within_dataset"
     CROSS_DATASET = "cross_dataset"
+    FMRI_WORD = "fmri_word"
+    FMRI_TR_PRE_FIR = "fmri_tr_pre_fir"
 
 
 SUBSPACE_AGGREGATION_METHODS = {"extrinsic", "unnormalized"}
@@ -462,6 +464,8 @@ class LanguageDecodingConfig:
         self.validate()
 
     def validate(self):
+        if isinstance(self.mode, str):
+            self.mode = LanguageDecodingMode(self.mode)
         _validate_subspace_aggregation(self.subspace_aggregation)
         if self.device not in {"auto", "cuda", "cpu"}:
             raise ValueError("device must be one of ['auto', 'cpu', 'cuda']")
@@ -477,6 +481,15 @@ class LanguageDecodingConfig:
             raise ValueError("tasks must not contain duplicate names")
         if not self.logistic_cs or any(float(value) <= 0 for value in self.logistic_cs):
             raise ValueError("logistic_cs must contain positive values")
+        if self.mode in {
+            LanguageDecodingMode.FMRI_WORD,
+            LanguageDecodingMode.FMRI_TR_PRE_FIR,
+        }:
+            source_dataset = str((self.rrr_source or {}).get("dataset", ""))
+            if source_dataset not in {"fmri", "deep_fmri", "deep-fmri"}:
+                raise ValueError(
+                    f"mode={self.mode.value} requires a deep-fmri rrr_source"
+                )
 
 
 @dataclass
@@ -516,7 +529,16 @@ class LanguageReconstructionConfig:
         self.validate()
 
     def validate(self):
+        if isinstance(self.mode, str):
+            self.mode = LanguageDecodingMode(self.mode)
         _validate_subspace_aggregation(self.subspace_aggregation)
+        if self.mode not in {
+            LanguageDecodingMode.WITHIN_DATASET,
+            LanguageDecodingMode.CROSS_DATASET,
+        }:
+            raise ValueError(
+                f"Language reconstruction does not support mode={self.mode.value}"
+            )
         if not self.rrr_source and not self.rrr_run_path:
             raise ValueError("LanguageReconstructionConfig.rrr_source is required")
         if not self.rank_grid or any(int(rank) < 1 for rank in self.rank_grid):

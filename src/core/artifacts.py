@@ -462,8 +462,14 @@ class ArtifactStore:
                     "string_columns": [
                         str(column) for column in value.columns
                         if str(value[column].dtype) == "object"
-                        and all(isinstance(item, str) or pd.isna(item)
-                                for item in value[column])
+                        and all(
+                            isinstance(item, str)
+                            or (
+                                pd.api.types.is_scalar(item)
+                                and bool(pd.isna(item))
+                            )
+                            for item in value[column]
+                        )
                     ],
                 }
         except ImportError:

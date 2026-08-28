@@ -46,6 +46,23 @@ def test_make_delayed_matches_positive_zero_padded_delays():
     )
 
 
+def test_load_story_embeddings_pools_words_from_hdf5(tmp_path):
+    story_dir = tmp_path / "model" / "story"
+    story_dir.mkdir(parents=True)
+    pd.DataFrame({"word_idx": [0, 0, 1]}).to_csv(
+        story_dir / "transcript.tsv", sep="\t", index=False
+    )
+    token_values = np.array([[1.0, 2.0], [3.0, 6.0], [8.0, 10.0]])
+    with h5py.File(story_dir / "features.hdf5", "w") as handle:
+        handle.create_dataset("layer-2", data=token_values)
+
+    result = fmri.load_story_embeddings(
+        str(tmp_path), "model", ["story"], layer=2, pooling="mean"
+    )
+
+    np.testing.assert_allclose(result["story"], [[2.0, 4.0], [8.0, 10.0]])
+
+
 def test_finite_response_voxel_masks_require_complete_stories(tmp_path):
     base = (
         tmp_path

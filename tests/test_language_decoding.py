@@ -1,9 +1,13 @@
+import json
+
 import numpy as np
 import pandas as pd
 import pytest
 import yaml
 
 from src.core.config import LanguageDecodingConfig, LanguageDecodingMode
+from scripts.run_language_decoding import Artifact as DecodingArtifact, run_config
+from scripts.run_rrr import Artifact as RRRArtifact
 from src.utils.shared.config import dict_to_dataclass
 from src.utils.language_interpret.decoding import (
     _configure_decoder_backend,
@@ -23,6 +27,15 @@ from src.utils.language_interpret.decoding import (
     summarize_prediction_agreement,
 )
 from src.utils.language_interpret.tasks import TASK_REGISTRY, PodcastTaskContext, get_language_task
+from src.utils.language_interpret.fmri_decoding import (
+    _categorical_metrics,
+    _prepare_rank_design,
+    _stable_classifier_rows,
+    _word_session_cv,
+    build_word_targets,
+    build_tr_targets,
+)
+from src.utils.shared.fmri import AlignedFMRIStimuli
 
 
 def _task_context(tmp_path):
@@ -284,6 +297,254 @@ def test_nested_language_decoding_config_roundtrip():
     assert config.pca_run_path == "results/example/pca"
     assert config.encoding.num_folds == 7
     assert config.tasks == ["surprisal"]
+
+
+@pytest.mark.parametrize("mode", ["fmri_word", "fmri_tr_pre_fir"])
+def test_fmri_modes_require_fmri_rrr_source(mode):
+    config = dict_to_dataclass(
+        {
+            "mode": mode,
+            "rrr_source": {"dataset": "deep-fmri"},
+            "rank_grid": [2],
+            "tasks": ["concreteness"],
+        },
+        LanguageDecodingConfig,
+    )
+    assert config.mode.value == mode
+
+    with pytest.raises(ValueError, match="requires a deep-fmri rrr_source"):
+        dict_to_dataclass(
+            {
+                "mode": mode,
+                "rrr_source": {"dataset": "podcast"},
+                "rank_grid": [2],
+                "tasks": ["concreteness"],
+            },
+            LanguageDecodingConfig,
+        )
+
+
+def test_fmri_word_targets_preserve_raw_values_and_missing_rows(tmp_path):
+    frames = {}
+    for story, words in {"one": ["a", "b", "c"], "two": ["d", "e"]}.items():
+        frames[story] = pd.DataFrame({"word": words})
+        root = tmp_path / "features" / story
+        root.mkdir(parents=True)
+        pd.DataFrame({
+            "word": words,
+            "concreteness": ([1.0, "", 3.0] if story == "one" else [8.0, 9.0]),
+            "part_of_speech": (["N", "", "V"] if story == "one" else ["V", "N"]),
+        }).to_csv(root / "tokens.tsv", sep="\t", index=False)
+
+    targets = build_word_targets(
+        stories=["one", "two"], frames=frames,
+        tasks=["concreteness", "part_of_speech"],
+        task_data={"language_features": str(tmp_path / "features")},
+        model_dir="model",
+    )
+
+    np.testing.assert_allclose(
+        targets["concreteness"].values["one"], [1.0, np.nan, 3.0],
+        equal_nan=True,
+    )
+    np.testing.assert_array_equal(
+        targets["concreteness"].availability["one"], [True, False, True]
+    )
+    np.testing.assert_array_equal(targets["part_of_speech"].classes, ["N", "V"])
+    np.testing.assert_allclose(
+        targets["part_of_speech"].values["one"], [0.0, np.nan, 1.0],
+        equal_nan=True,
+    )
+
+
+def test_fmri_word_session_cv_remaps_after_task_missing_rows():
+    frames = {story: pd.DataFrame(index=range(2)) for story in ["a", "b", "c"]}
+    valid = np.array([True, False, True, True, False, True])
+    cv = _word_session_cv(
+        ["a", "b", "c"], frames, {1: ["a", "b"], 2: ["c"]}, valid
+    )
+
+    np.testing.assert_array_equal(cv[0][0], [3])
+    np.testing.assert_array_equal(cv[0][1], [0, 1, 2])
+    np.testing.assert_array_equal(cv[1][0], [0, 1, 2])
+    np.testing.assert_array_equal(cv[1][1], [3])
+
+
+def test_fmri_targets_lanczos_filter_mean_filled_and_one_hot_channels(
+    tmp_path, monkeypatch
+):
+    stories = ["story"]
+    frame = pd.DataFrame({
+        "word_idx": np.arange(12),
+        "word": [f"w{i}" for i in range(12)],
+        "start": np.arange(12, dtype=float),
+        "end": np.arange(12, dtype=float) + 0.5,
+    })
+    sequence = type("Sequence", (), {
+        "data_times": np.arange(12, dtype=float),
+        "tr_times": np.arange(12, dtype=float),
+    })()
+    story_root = tmp_path / "features" / "story"
+    story_root.mkdir(parents=True)
+    table = pd.DataFrame({
+        "word": frame["word"],
+        "concreteness": [1, 2, 3, 4, 5, "", 7, 8, 9, 10, 11, 12],
+        "part_of_speech": ["N", "V", "N", "V", "N", "", "N", "V", "N", "V", "N", "V"],
+    })
+    table.to_csv(story_root / "tokens.tsv", sep="\t", index=False)
+    monkeypatch.setattr(
+        "src.utils.language_interpret.fmri_decoding._toolbox_modules",
+        lambda _: (lambda values, old, new, window: np.asarray(values), None, None),
+    )
+
+    targets = build_tr_targets(
+        stories=stories,
+        frames={"story": frame},
+        sequences={"story": sequence},
+        tasks=["concreteness", "part_of_speech"],
+        task_data={"language_features": str(tmp_path / "features")},
+        model_dir="model",
+        fmri_repo_root="unused",
+        trim=0,
+    )
+
+    continuous = targets["concreteness"]
+    assert continuous.filtered["story"].shape == (7, 1)
+    assert continuous.filtered["story"][0, 0] == pytest.approx(72 / 11)
+    assert continuous.availability["story"][0] == 0
+    assert continuous.standardized["story"].mean() == pytest.approx(0, abs=1e-6)
+
+    categorical = targets["part_of_speech"]
+    assert categorical.classes.tolist() == ["N", "V"]
+    np.testing.assert_allclose(categorical.filtered["story"][0], [6 / 11, 5 / 11])
+    assert categorical.availability["story"][0] == 0
+    np.testing.assert_allclose(
+        categorical.standardized["story"].mean(axis=0), 0, atol=1e-6
+    )
+
+
+def test_fmri_categorical_metrics_and_stable_classifier_classes():
+    y_train = np.array([
+        [1.0, 0.0, 0.0],
+        [0.0, 1.0, 0.0],
+        [1.0, 0.0, 0.0],
+        [0.0, 1.0, 0.0],
+    ])
+    y_test = y_train.copy()
+    summary, channels, eligible = _categorical_metrics(
+        y_train, y_test, y_test.copy(), np.array(["a", "b", "heldout"])
+    )
+    assert summary["primary_score"] == pytest.approx(1.0)
+    assert summary["multivariate_r2"] == pytest.approx(1.0)
+    assert summary["mean_cosine_similarity"] == pytest.approx(1.0)
+    np.testing.assert_array_equal(eligible, [True, True, False])
+    assert channels["eligible"].tolist() == [True, True, False]
+
+    labels = np.array([0, 1, 2, 0, 1, 0])
+    cv = [
+        (np.array([0, 1, 3, 4]), np.array([2, 5])),
+        (np.array([0, 1, 2, 5]), np.array([3, 4])),
+    ]
+    rows, remapped, stable = _stable_classifier_rows(labels, cv)
+    np.testing.assert_array_equal(stable, [0, 1])
+    np.testing.assert_array_equal(rows, [0, 1, 3, 4, 5])
+    assert all(train.max() < len(rows) for train, _ in remapped)
+
+
+def test_fmri_pre_fir_rank_design_projects_and_story_zscores():
+    aligned = AlignedFMRIStimuli(stories={
+        "train": np.arange(24, dtype=np.float32).reshape(8, 3),
+        "test": np.arange(30, 54, dtype=np.float32).reshape(8, 3),
+    })
+    factor = np.array([[1.0, 0.0], [0.0, 1.0], [0.5, -0.5]], dtype=np.float32)
+
+    prepared = _prepare_rank_design(
+        aligned=aligned, train_stories=["train"], test_stories=["test"],
+        factor=factor, rank=2, ndelays=2,
+    )
+
+    np.testing.assert_allclose(prepared[2], prepared[0].pre_fir_stimulus)
+    np.testing.assert_allclose(prepared[3], prepared[1].pre_fir_stimulus)
+    assert prepared[2].shape == (8, 2)
+    np.testing.assert_allclose(prepared[2].mean(axis=0), 0, atol=1e-6)
+    np.testing.assert_array_equal(prepared[4], factor)
+
+
+@pytest.mark.parametrize("mode", ["fmri_word", "fmri_tr_pre_fir"])
+def test_primary_client_publishes_fmri_results(tmp_path, monkeypatch, mode):
+    source = RRRArtifact(
+        mode="internal", dataset="deep-fmri", offset=0,
+        model="gpt2-xl-batch", layer=24, variant="source",
+        results_root=tmp_path,
+    ).begin(config={"rank_grid": [1]})
+    source.save_field("effective_config", {
+        "model_dir": "gpt2-xl-batch", "layer": 24, "pooling": "mean",
+        "fmri": {
+            "fmri_repo_root": "unused", "embedding_root": "unused",
+            "sessions": [1, 2], "trim": 5, "ndelays": 2,
+        },
+    })
+    source.save_field("input_factors", np.eye(2, 1),
+                      selector={"method": "rrr", "rank": 1})
+
+    def fake_run(config, source_config, factors, output):
+        assert config.mode.value == mode
+        assert source_config["fmri"]["ndelays"] == 2
+        np.testing.assert_array_equal(factors[("rrr", 1)], np.eye(2, 1))
+        output.mkdir(parents=True)
+        pd.DataFrame({
+            "analysis_row": [0], "split": ["test"], "story": ["heldout"],
+            "story_tr_index": [0], "tr_time": [1.0],
+        }).to_csv(output / "sample_selection.csv", index=False)
+        (output / "run_metadata.json").write_text(json.dumps({"mode": mode}))
+        metrics = pd.DataFrame([{
+            "task": "concreteness", "kind": "continuous", "fold": 0,
+            "space": "rank", "subspace": "rrr", "k": 1,
+            "primary_score": 0.5, "correlation": 0.5, "r2": 0.1,
+        }])
+        metrics.to_csv(output / "grid_results.csv", index=False)
+        metrics.to_csv(output / "summary.csv", index=False)
+        fit = output / "tasks/concreteness/rrr/k1/fold_0"
+        fit.mkdir(parents=True)
+        (fit / "metrics.json").write_text(metrics.iloc[0].to_json())
+        np.savez(fit / "weights.npz", reduced_weights=np.ones((1, 1)))
+        np.savez(fit / "heldout_predictions.npz", y_true=[0.0], y_pred=[0.0])
+        diagnostics = output / "target_diagnostics/concreteness"
+        diagnostics.mkdir(parents=True)
+        (diagnostics / "metadata.json").write_text(
+            '{"task":"concreteness","normalization":"per_story_zscore"}'
+        )
+        np.savez(diagnostics / "availability.npz", heldout=np.ones(1))
+        np.savez(
+            diagnostics / "targets.npz",
+            filtered__heldout=np.ones((1, 1)),
+            standardized__heldout=np.zeros((1, 1)),
+        )
+        return output
+
+    monkeypatch.setattr(
+        "src.utils.language_interpret.fmri_decoding.run_fmri_decoding", fake_run
+    )
+    config = LanguageDecodingConfig(
+        mode=LanguageDecodingMode(mode),
+        rrr_source={
+            "mode": "internal", "dataset": "deep-fmri", "offset": 0,
+            "model": "gpt2-xl-batch", "layer": 24, "variant": "source",
+        },
+        results_root=str(tmp_path), rank_grid=[1], tasks=["concreteness"],
+    )
+
+    artifact = run_config(config)
+
+    assert isinstance(artifact, DecodingArtifact)
+    assert artifact.identity["mode"] == mode
+    assert artifact.complete
+    loaded = artifact.load_field("sample_selection")
+    assert loaded.loc[0, "story"] == "heldout"
+    diagnostics = artifact.load_collection(
+        "target_diagnostics", {"task": "concreteness"}
+    )
+    assert len(diagnostics) == 3
 
 
 def test_language_decoding_device_validation_and_cpu_backend(monkeypatch):

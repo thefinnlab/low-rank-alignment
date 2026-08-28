@@ -97,9 +97,17 @@ window. The RRR source is recorded as an upstream dependency. Result identities 
 the decoded/reconstructed dataset, offset, embedding model, and layer, with the
 language mode as the Artifact mode.
 
-Decoding exposes word selection, run metadata, per-task/fold fit metrics, decoder
-weights, held-out predictions, the complete grid and summary, optional prediction
-agreement tables, and plots. Reconstruction exposes corresponding provenance,
+Decoding exposes modality-neutral sample selection, backward-compatible word
+selection, run metadata, per-task/fold fit metrics, decoder weights, held-out
+predictions, the complete grid and summary, optional prediction agreement tables,
+and plots. Its `fmri_word` and `fmri_tr_pre_fir` modes take their story split,
+embeddings, and rank factors from a deep-fMRI RRR Artifact. The former decodes raw
+word-aligned features from projected pooled-word embeddings; the latter uses the
+source timing and trimming to decode Lanczos-aligned current-TR targets from
+projected pre-FIR inputs.
+Categorical TR targets also expose per-channel metrics, availability diagnostics,
+smoothed-channel ridge weights, and dominant-label classifier weights.
+Reconstruction exposes corresponding provenance,
 per-fit metrics, optional fitted models, fold and summary tables, RRR/PCA contrasts,
 predictor contrasts, and plots.
 

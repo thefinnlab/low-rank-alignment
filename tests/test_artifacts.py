@@ -1,6 +1,7 @@
 import json
 
 import numpy as np
+import pandas as pd
 import pytest
 
 from src.core.artifacts import (
@@ -40,6 +41,25 @@ def test_language_artifact_facades_expose_script_owned_contracts(tmp_path):
 
     assert decoding.identity["script"] == "run_language_decoding"
     assert reconstruction.identity["script"] == "run_language_reconstruction"
+
+
+def test_dataframe_codec_accepts_object_columns_containing_lists(tmp_path):
+    artifact = DecodingArtifact(results_root=tmp_path).begin(config={"tasks": ["pos"]})
+    metrics = pd.DataFrame({
+        "task": ["pos"],
+        "classifier_classes": [["NOUN", "VERB"]],
+    })
+
+    artifact.save_field(
+        "fit_metrics", metrics,
+        selector={"task": "pos", "subspace": "rrr", "rank": 1, "fold": 0},
+    )
+
+    loaded = artifact.load_field(
+        "fit_metrics",
+        selector={"task": "pos", "subspace": "rrr", "rank": 1, "fold": 0},
+    )
+    assert loaded.loc[0, "classifier_classes"] == "['NOUN', 'VERB']"
 
 
 def test_selective_fields_partial_completion_and_decode_errors(tmp_path):

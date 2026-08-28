@@ -544,7 +544,12 @@ def summarize_language_decoding(results: pd.DataFrame) -> pd.DataFrame:
     ):
         values = group["primary_score"].to_numpy(dtype=float)
         kind = str(group["kind"].iloc[0])
-        if kind == "continuous":
+        correlation_primary = (
+            kind == "continuous"
+            or str(group.get("primary_metric", pd.Series([""])).iloc[0])
+            == "correlation"
+        )
+        if correlation_primary:
             mean, lower, upper = fisher_z_mean_sem(values)
             mean, sem_lower, sem_upper = float(mean), float(lower), float(upper)
         else:
@@ -562,7 +567,10 @@ def summarize_language_decoding(results: pd.DataFrame) -> pd.DataFrame:
             "sem_upper": sem_upper,
             "n_folds": int(len(group)),
         }
-        for metric in ("correlation", "r2", "balanced_accuracy", "macro_f1", "accuracy"):
+        for metric in (
+            "correlation", "r2", "multivariate_r2", "mean_cosine_similarity",
+            "balanced_accuracy", "macro_f1", "accuracy",
+        ):
             if metric in group and group[metric].notna().any():
                 metric_values = group[metric].to_numpy(dtype=float)
                 row[metric] = (

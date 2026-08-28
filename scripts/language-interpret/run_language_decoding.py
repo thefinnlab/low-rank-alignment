@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import os
+import sys
 import tempfile
 from copy import deepcopy
 from dataclasses import asdict
@@ -12,10 +14,12 @@ import joblib
 import numpy as np
 import pandas as pd
 
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+
 from scripts.run_rrr import Artifact as RRRArtifact
 from scripts.run_significance import Artifact as SignificanceArtifact
 from src.core.artifacts import ArtifactStore, normalize_dataset, normalize_model
-from src.core.config import LanguageDecodingConfig
+from src.core.config import LanguageDecodingConfig, LanguageDecodingMode
 from src.core.registry import resolve_dataset_context
 from src.utils.shared.config import expand_per_model_layer_configs, load_config, parse_args
 
@@ -27,10 +31,12 @@ class Artifact(ArtifactStore):
     SELECTOR_ORDER = ("task", "subspace", "rank", "fold", "name")
     FIELD_CONTRACT = {
         "effective_config": True, "upstream_identities": True,
-        "word_selection": True, "run_metadata": True, "fit_metrics": True,
+        "sample_selection": True, "word_selection": False,
+        "run_metadata": True, "fit_metrics": True,
         "decoder_weights": True, "heldout_predictions": True,
         "grid_results": True, "summary": True, "iu_alignment": False,
         "prediction_agreement": False, "prediction_agreement_summary": False,
+        "target_diagnostics": False, "channel_metrics": False,
         "plots": False,
     }
 
@@ -40,7 +46,23 @@ class Artifact(ArtifactStore):
                          layer=layer, variant=variant, results_root=results_root)
 
     @classmethod
-    def from_config(cls, config):
+    def from_config(cls, config, source=None):
+        if config.mode in {
+            LanguageDecodingMode.FMRI_WORD,
+            LanguageDecodingMode.FMRI_TR_PRE_FIR,
+        }:
+            if source is None:
+                raise ValueError("fMRI decoding Artifact identity requires its RRR source")
+            identity = source.identity
+            return cls(
+                mode=config.mode.value,
+                dataset=identity["dataset"],
+                offset=identity["offset"],
+                model=identity["model"],
+                layer=identity["layer"],
+                variant=config.variant_name,
+                results_root=config.results_root,
+            )
         enc = config.encoding
         context = resolve_dataset_context(
             enc.dataset, enc.subjects or list(range(1, 10)),
@@ -59,7 +81,8 @@ class Artifact(ArtifactStore):
 
     def load_artifacts(self, fields, selectors=None):
         scalar = {
-            "effective_config", "upstream_identities", "word_selection",
+            "effective_config", "upstream_identities", "sample_selection",
+            "word_selection",
             "run_metadata", "grid_results", "summary", "iu_alignment",
             "prediction_agreement", "prediction_agreement_summary",
         }
@@ -155,12 +178,19 @@ def _publish(artifact, output, config, upstream):
     artifact.save_field("effective_config", asdict(config), overwrite=overwrite)
     artifact.save_field("upstream_identities", [upstream], overwrite=overwrite)
     scalar_files = {
+        "sample_selection": "sample_selection.csv",
         "word_selection": "word_selection.csv", "run_metadata": "run_metadata.json",
         "grid_results": "grid_results.csv", "summary": "summary.csv",
         "iu_alignment": "iu_alignment.csv",
         "prediction_agreement": "prediction_agreement.csv",
         "prediction_agreement_summary": "prediction_agreement_summary.csv",
     }
+    if not (output / "sample_selection.csv").exists():
+        word_selection = output / "word_selection.csv"
+        if word_selection.exists():
+            pd.read_csv(word_selection).to_csv(
+                output / "sample_selection.csv", index=False
+            )
     for field, filename in scalar_files.items():
         path = output / filename
         if path.exists():
@@ -187,6 +217,39 @@ def _publish(artifact, output, config, upstream):
             with np.load(metrics_path.parent / filename, allow_pickle=True) as values:
                 artifact.save_field(field, dict(values), selector=selector,
                                     overwrite=overwrite)
+        classifier_path = metrics_path.parent / "classifier_weights.npz"
+        if classifier_path.exists():
+            with np.load(classifier_path, allow_pickle=True) as values:
+                artifact.save_field(
+                    "decoder_weights", dict(values),
+                    selector={**selector, "name": "dominant_label_classifier"},
+                    overwrite=overwrite,
+                )
+        channel_path = metrics_path.parent / "channel_metrics.csv"
+        if channel_path.exists():
+            artifact.save_field(
+                "channel_metrics", pd.read_csv(channel_path),
+                selector=selector, overwrite=overwrite,
+            )
+    for metadata_path in (output / "target_diagnostics").glob("*/metadata.json"):
+        task = metadata_path.parent.name
+        artifact.save_field(
+            "target_diagnostics", json.loads(metadata_path.read_text()),
+            selector={"task": task, "name": "metadata"}, overwrite=overwrite,
+        )
+        availability_path = metadata_path.parent / "availability.npz"
+        with np.load(availability_path, allow_pickle=True) as values:
+            artifact.save_field(
+                "target_diagnostics", dict(values),
+                selector={"task": task, "name": "availability"},
+                overwrite=overwrite,
+            )
+        with np.load(metadata_path.parent / "targets.npz", allow_pickle=True) as values:
+            artifact.save_field(
+                "target_diagnostics", dict(values),
+                selector={"task": task, "name": "targets"},
+                overwrite=overwrite,
+            )
     plot = output / "rank_analysis.png"
     if plot.exists():
         artifact.save_field("plots", plot.read_bytes(),
@@ -201,13 +264,52 @@ def _publish(artifact, output, config, upstream):
 
 def run_config(config: LanguageDecodingConfig) -> Artifact:
     source = _source_artifact(config)
-    artifact = Artifact.from_config(config).begin(
+    artifact = Artifact.from_config(config, source=source).begin(
         config=config, upstreams=[source.identity_record()], refresh=config.refresh
     )
     if artifact.complete and not config.refresh:
         return artifact
     with tempfile.TemporaryDirectory(prefix="language-decoding-") as temporary:
         root = Path(temporary)
+        if config.mode in {
+            LanguageDecodingMode.FMRI_WORD,
+            LanguageDecodingMode.FMRI_TR_PRE_FIR,
+        }:
+            source_config = source.load_field("effective_config")
+            factors = {}
+            selectors = dict(config.rrr_selectors or {})
+            for method in ("rrr", "pca"):
+                entries = source.load_collection(
+                    "input_factors", {**selectors, "method": method}
+                )
+                for selector, value in entries.items():
+                    mapping = dict(selector)
+                    if "rank" in mapping and int(mapping["rank"]) in set(
+                        map(int, config.rank_grid)
+                    ):
+                        key = (method, int(mapping["rank"]))
+                        if key in factors:
+                            raise ValueError(
+                                f"rrr_selectors match multiple fMRI factors for "
+                                f"method={method}, rank={mapping['rank']}"
+                            )
+                        factors[key] = np.asarray(value)
+            missing_rrr = sorted(
+                set(map(int, config.rank_grid))
+                - {rank for method, rank in factors if method == "rrr"}
+            )
+            if missing_rrr:
+                raise FileNotFoundError(
+                    f"RRR source Artifact is missing requested fMRI ranks {missing_rrr}"
+                )
+            from src.utils.language_interpret.fmri_decoding import run_fmri_decoding
+            output = run_fmri_decoding(
+                config, source_config, factors, root / "output"
+            )
+            artifact.save_artifacts(
+                output=output, config=config, upstream=source.identity_record()
+            )
+            return artifact
         rrr = _materialize_method(source, "rrr", root, config.rrr_selectors)
         if rrr is None:
             raise FileNotFoundError("RRR source Artifact has no matching rrr factors")
