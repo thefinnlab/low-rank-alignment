@@ -153,6 +153,8 @@ class UnitSelector:
     target_temporal_window: str | None = None
     held_out_subject: int | str | None = None
     loso_phase: str | None = None
+    held_out_region: str | None = None
+    loro_phase: str | None = None
     cross_dataset_source: str | None = None
 
     def mapping(self):
@@ -165,8 +167,9 @@ class Artifact(ArtifactStore):
     SCRIPT = "run_rrr"
     SELECTOR_ORDER = (
         "subject", "method", "region", "temporal_window", "source_temporal_window",
-        "target_temporal_window", "held_out_subject",
-        "loso_phase", "cross_dataset_source", "basis", "delay", "rank", "fold",
+        "target_temporal_window", "held_out_subject", "loso_phase",
+        "held_out_region", "loro_phase", "cross_dataset_source", "basis", "delay",
+        "rank", "fold",
         "name",
     )
     FIELD_CONTRACT = {

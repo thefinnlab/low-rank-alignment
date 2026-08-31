@@ -1554,15 +1554,15 @@ def run_ieeg(config: RRRConfig):
         shared_selection_metadata=shared_selection_metadata,
     )
 
-    if config.mode == ScriptMode.PER_REGION:
-        from .per_region import run_per_region
-        units = run_per_region(**branch_kwargs)
-    elif config.mode == ScriptMode.PER_SUBJECT:
+    if config.mode == ScriptMode.PER_SUBJECT:
         from .per_subject import run_per_subject
         units = run_per_subject(**branch_kwargs)
     elif config.mode == ScriptMode.LEAVE_ONE_SUBJECT_OUT:
         from .leave_one_subject_out import run_leave_one_subject_out
         units = run_leave_one_subject_out(**branch_kwargs)
+    elif config.mode == ScriptMode.LEAVE_ONE_REGION_OUT:
+        from .leave_one_region_out import run_leave_one_region_out
+        units = run_leave_one_region_out(**branch_kwargs)
     elif config.mode == ScriptMode.CROSS_DATASET:
         from .cross_dataset import run_cross_dataset
         units = run_cross_dataset(**branch_kwargs)

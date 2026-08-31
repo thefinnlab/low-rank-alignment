@@ -44,8 +44,10 @@ significant-target set rather than relying on single-variant discovery.
 
 Producer classes declare required and optional fields. Fields may be scalar or
 selector collections keyed by logical values such as subject, method, rank, fold,
-region, temporal window, held-out subject, or LOSO phase. Selectors contain no
-paths. Each producer declares its own preferred selector order; undeclared selector
+region, temporal window, held-out subject/region, or LOSO/LORO phase. LORO uses
+`held_out_region` with `loro_phase` values `train_regions`, `transfer`, and
+`baseline`; the baseline is the within-region result. Selectors contain no paths.
+Each producer declares its own preferred selector order; undeclared selector
 keys sort alphabetically after those preferred keys. `load_artifacts(fields=...,
 selectors=...)` loads only requested values and returns the concrete Artifact
 instance.

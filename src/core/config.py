@@ -22,8 +22,8 @@ class ScriptMode(str, Enum):
     CROSS_SUBJECT = "cross_subject"
     CROSS_DATASET = "cross_dataset"
     PER_SUBJECT = "per_subject"
-    PER_REGION = "per_region"
     LEAVE_ONE_SUBJECT_OUT = "leave_one_subject_out"
+    LEAVE_ONE_REGION_OUT = "leave_one_region_out"
     MULTI_VIEW = "multi_view"
     TEMPORAL_WINDOWS = "temporal_windows"
     CROSS_TEMPORAL_WINDOWS = "cross_temporal_windows"
@@ -248,7 +248,7 @@ class RRRConfig:
         temporal_windows: {output_dir}/temporal_window_rrr/<window>/{rrr,pca}/
         cross_temporal_windows: directed, fold-matched transfer between saved windows
         per_subject   : {output_dir}/per_subject_rrr/
-        per_region    : {output_dir}/per_region_rrr/
+        leave_one_region_out: train/transfer/baseline per held-out atlas region
     """
 
     encoding: EncodingConfig = field(default_factory=EncodingConfig)
@@ -308,11 +308,11 @@ class RRRConfig:
     null_augmented_min_shift: int = 500
     null_augmented_seed: int = 42
 
-    # Per-region mode
+    # Region-based leave-one-out mode
     atlas_path: str | None = (
         None  # Path to Destrieux 2009 .nii.gz; None = download via nilearn
     )
-    atlas_region_groups: dict | None = None  # Required when mode=per_region
+    atlas_region_groups: dict | None = None
 
     def __post_init__(self):
         self.validate()
@@ -338,6 +338,13 @@ class RRRConfig:
             raise ValueError("banded_ridge_alphas must contain non-negative values")
         if self.mode == ScriptMode.MULTI_VIEW and not self.views:
             raise ValueError("RRRConfig.views must contain at least one view")
+        if (
+            self.mode == ScriptMode.LEAVE_ONE_REGION_OUT
+            and not self.atlas_region_groups
+        ):
+            raise ValueError(
+                "mode=leave_one_region_out requires non-empty atlas_region_groups"
+            )
         names = [view.name for view in self.views]
         duplicates = sorted({name for name in names if names.count(name) > 1})
         if duplicates:

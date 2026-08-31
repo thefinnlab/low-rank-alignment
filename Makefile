@@ -175,7 +175,7 @@ plots:
 ## Usage:
 ##   make rrr                                                          # default config
 ##   make rrr RRR_CONFIG=configs/rrr/rrr_default.yml                  # per-subject mode
-##   make rrr OVERRIDES="--mode=per_region"                           # per-region mode
+##   make rrr OVERRIDES="--mode=leave_one_region_out"                 # LORO mode
 ##   make rrr CMD=python                                               # run locally
 rrr:
 	mkdir -p logs
@@ -263,7 +263,7 @@ stage-language-resources:
 
 ## Release RRR runs for a list of configs
 ## Usage:
-##   make rrr-batch RRR_CONFIGS="configs/rrr/rrr_cross_final.yml configs/rrr/rrr_per_subject_final.yml configs/rrr/rrr_per_region_final.yml"
+##   make rrr-batch RRR_CONFIGS="configs/rrr/gpt2-xl/cross_subject.yml configs/rrr/gpt2-xl/leave_one_subject_out.yml"
 ##   make rrr-batch RRR_CONFIGS="configs/rrr/rrr_cross_final.yml configs/rrr/rrr_per_subject_final.yml" CMD=python
 rrr-batch:
 	$(call run_config_list,RRR_CONFIGS,rrr,scripts/run_rrr.py)
