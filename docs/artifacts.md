@@ -12,6 +12,7 @@ results/<script>/<mode>/<dataset>/offset-<offset>/<model>/layer-<layer>/
 ```
 
 Script components include `run_significance`, `run_rrr`,
+`run_target_dimensionality_rrr`,
 `run_language_decoding`, `run_language_reconstruction`, and `compare_subspaces`.
 Dataset components are `podcast`,
 `brain-treebank-<stimulus>`, and `deep-fmri`. fMRI always uses `offset-0`.
@@ -67,6 +68,14 @@ factors when configured. `refresh: false` reuses those checkpoints;
 RRR stores per-fold result tables separately from mean results. Unit-scoped metadata
 and named diagnostics use the same method/subject/rank/fold selectors as factors and
 metrics. fMRI source factors may additionally identify a delay and basis role.
+
+Target-dimensionality RRR reuses the RRR field and selector contract under its own
+script identity. Each fold-safe target-PCA dimension is a readable
+`target_pca_dim-<n>` variant combined with the usual significance and dataset
+variant components. Component manifests use synthetic `pc-<n>` targets because the
+fold-specific bases do not map to individual electrodes or voxels, and PCA state is
+not stored. The maximum-dimension variant additionally owns `sweep_results` and the
+correlation/R² target-dimension heatmaps compiled across the requested variants.
 
 Significance diagnostics and plots may use a name in addition to their subject
 selector, allowing distinct control correlations, alpha diagnostics, and diagnostic

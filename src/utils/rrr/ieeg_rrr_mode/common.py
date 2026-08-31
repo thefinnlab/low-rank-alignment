@@ -1329,6 +1329,7 @@ def _build_rrr_decomposition_inputs(
     word_in_glove=None,
     folds_to_build: "set[int] | None" = None,
     shared_selection_metadata: "dict | None" = None,
+    target_pca_dim: "int | None" = None,
 ):
     prepared = _get_decomposition_inputs(
         subject_ids,
@@ -1367,10 +1368,21 @@ def _build_rrr_decomposition_inputs(
             "offset": encoding_config.offset,
         },
         folds_to_build=folds_to_build,
+        target_pca_dim=target_pca_dim,
     )
 
+    target_manifest = prepared.target_manifest
+    sig_mask_flat = prepared.sig_mask_flat
+    if target_pca_dim is not None:
+        target_manifest = pd.DataFrame({
+            "target_id": [f"pc-{index + 1}" for index in range(int(target_pca_dim))],
+            "target_kind": "target_pca_component",
+            "component": np.arange(1, int(target_pca_dim) + 1, dtype=int),
+        })
+        sig_mask_flat = None
+
     return (X_raw, per_fold_baselines, prepared.test_idxs,
-            prepared.sig_mask_flat, prepared.target_manifest)
+            sig_mask_flat, target_manifest)
 
 
 def _temporal_window_target_mask(target_manifest, window) -> np.ndarray:
@@ -1397,8 +1409,10 @@ def _temporal_window_target_mask(target_manifest, window) -> np.ndarray:
 # ---------------------------------------------------------------------------
 
 
-def run_ieeg(config: RRRConfig):
+def run_ieeg(config: RRRConfig, target_pca_dim: int | None = None):
     enc = config.encoding
+    if target_pca_dim is not None and config.mode != ScriptMode.CROSS_SUBJECT:
+        raise ValueError("target_pca_dim is supported only for internal iEEG RRR")
 
     import torch
     from himalaya.backend import set_backend
@@ -1464,7 +1478,14 @@ def run_ieeg(config: RRRConfig):
         if upstream.variant is None:
             upstream._resolve_variant()
         upstreams.append(upstream.identity_record())
-    artifact = Artifact.from_ieeg_config(config, dataset_context)
+    artifact_cls = Artifact
+    if target_pca_dim is not None:
+        from scripts.run_target_dimensionality_rrr import Artifact as TargetDimArtifact
+        artifact_cls = TargetDimArtifact
+    artifact = artifact_cls.from_ieeg_config(config, dataset_context)
+    if target_pca_dim is not None:
+        artifact.target_pca_dim = int(target_pca_dim)
+        artifact.variant_extras["target_pca_dim"] = int(target_pca_dim)
     artifact.begin(
         config=config, upstreams=upstreams, refresh=config.refresh,
         variant_extras=getattr(artifact, "variant_extras", {}),
@@ -1553,6 +1574,8 @@ def run_ieeg(config: RRRConfig):
         word_in_glove=word_in_glove,
         shared_selection_metadata=shared_selection_metadata,
     )
+    if target_pca_dim is not None:
+        branch_kwargs["target_pca_dim"] = int(target_pca_dim)
 
     if config.mode == ScriptMode.PER_SUBJECT:
         from .per_subject import run_per_subject

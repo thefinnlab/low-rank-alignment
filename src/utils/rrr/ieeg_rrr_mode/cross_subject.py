@@ -18,6 +18,7 @@ def run_cross_subject(
     word_df,
     word_in_glove=None,
     shared_selection_metadata=None,
+    target_pca_dim=None,
 ):
     """RRR on raw embeddings using all subjects' significant electrodes."""
     unit = UnitSelector(method="rrr")
@@ -61,6 +62,7 @@ def run_cross_subject(
         word_in_glove=word_in_glove,
         folds_to_build=folds_to_build,
         shared_selection_metadata=shared_selection_metadata,
+        target_pca_dim=target_pca_dim,
     )
     if results is None:
         return []

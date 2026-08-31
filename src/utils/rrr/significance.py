@@ -30,6 +30,48 @@ class PreparedSignificance:
         return self.reference.identity_record()
 
 
+def ieeg_target_dimension_summary(
+    significance: PreparedSignificance,
+    subjects,
+) -> tuple[int, int]:
+    """Return original target count and fold-estimable PCA cap from saved artifacts."""
+    subject_keys = [str(subject) for subject in subjects]
+    missing = [
+        subject for subject in subject_keys
+        if subject not in significance.encoding_results
+    ]
+    if missing:
+        raise ValueError(
+            f"Significance Artifact lacks encoding results for subjects {missing}"
+        )
+
+    reference = significance.encoding_results[subject_keys[0]]
+    required = {"lags", "selection", "train_idxs"}
+    absent = sorted(required - set(reference))
+    if absent:
+        raise ValueError(
+            f"Significance encoding results lack dimension metadata {absent}"
+        )
+    for subject in subject_keys[1:]:
+        current = significance.encoding_results[subject]
+        for field in required:
+            if field not in current or not _values_equal(reference[field], current[field]):
+                raise ValueError(
+                    "Significance subjects do not share saved encoding dimension "
+                    f"metadata field {field!r}"
+                )
+
+    selected_targets = sum(
+        int(frame["significant"].astype(bool).sum())
+        for frame in significance.target_significance.values()
+    )
+    original_target_count = selected_targets * len(reference["lags"])
+    train_rows = [len(np.asarray(index)) for index in reference["train_idxs"]]
+    if not train_rows or min(train_rows) < 1:
+        raise ValueError("Significance Artifact contains no non-empty training folds")
+    return int(original_target_count), int(min(original_target_count, min(train_rows)))
+
+
 def validate_cross_dataset_significance_alignment(
     target_selection,
     target_identity: dict,

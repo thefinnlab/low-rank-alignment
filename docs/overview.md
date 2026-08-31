@@ -10,6 +10,9 @@ embeddings predict iEEG and fMRI responses. The supported executable surface is
   single-lag correlation or fMRI held-out-session implementation.
 - `scripts/run_rrr.py` dispatches reduced-rank regression by dataset while exposing
   one Config and Artifact contract.
+- `scripts/run_target_dimensionality_rrr.py` reruns internal RRR over fold-safe
+  target-PCA dimensions, with one Artifact variant per dimension and compiled
+  correlation/R² sweep outputs.
 - `scripts/rrr/compare_subspaces.py` performs configured leakage-safe comparisons
   between saved RRR/PCA spaces and publishes one source-organized Artifact per
   generating dataset/model/layer/subspace.
@@ -66,6 +69,13 @@ configuration contract.
 
 Imports use these explicit package paths. The former flat `src.utils.<module>` paths
 are intentionally unsupported.
+
+Target-dimensionality RRR is intentionally limited to ordinary internal iEEG and
+fMRI analyses. Target PCA is fitted only on each evaluation fold's training targets
+(or the fMRI training stories), and metrics are evaluated in the retained component
+space. Power-of-two outer and inner grids include exact endpoints; the outer endpoint
+is capped by the smallest fold-estimable PCA rank, and the inner RRR endpoint is also
+capped by the embedding dimension.
 
 Significance and RRR YAMLs use a top-level dataset discriminator, shared settings,
 and exactly one `ieeg` or `fmri` block. RRR uses modality-neutral `internal` and

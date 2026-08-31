@@ -209,6 +209,29 @@ def load_encoding_results(filepath: str, location=None) -> dict:
         return joblib.load(filepath)
 
 
+def fit_transform_target_pca(
+    train_targets: np.ndarray,
+    test_targets: np.ndarray,
+    target_pca_dim: int,
+    *,
+    context: str = "target PCA",
+) -> tuple[np.ndarray, np.ndarray]:
+    """Fit exact PCA on training targets and transform train/test targets."""
+    from sklearn.decomposition import PCA
+
+    available = min(train_targets.shape)
+    if int(target_pca_dim) > available:
+        raise ValueError(
+            f"target_pca_dim={target_pca_dim} exceeds {context} estimable rank "
+            f"{available}"
+        )
+    target_pca = PCA(n_components=int(target_pca_dim), svd_solver="full")
+    return (
+        target_pca.fit_transform(train_targets).astype(np.float32),
+        target_pca.transform(test_targets).astype(np.float32),
+    )
+
+
 def build_per_fold_baselines(
     X_raw: np.ndarray,
     Y_full: np.ndarray,
@@ -222,6 +245,7 @@ def build_per_fold_baselines(
     alpha_cache_dir: str | None = None,
     alpha_context: dict | None = None,
     folds_to_build: set[int] | None = None,
+    target_pca_dim: int | None = None,
 ) -> list:
     """Train a fresh ridge encoding model per fold and pre-compute baselines.
 
@@ -273,9 +297,16 @@ def build_per_fold_baselines(
         train_mask[test_idx] = False
         train_idx = np.where(train_mask)[0]
 
+        raw_train = Y_full[train_idx]
+        raw_test = Y_full[test_idx]
+        if target_pca_dim is not None:
+            raw_train, raw_test = fit_transform_target_pca(
+                raw_train, raw_test, int(target_pca_dim), context=f"fold {fold_f}"
+            )
+
         y_scaler = StandardScaler()
-        Y_train = y_scaler.fit_transform(Y_full[train_idx]).astype(np.float32)
-        Y_test = y_scaler.transform(Y_full[test_idx]).astype(np.float32)
+        Y_train = y_scaler.fit_transform(raw_train).astype(np.float32)
+        Y_test = y_scaler.transform(raw_test).astype(np.float32)
 
         fold_context = {
             "role": "full_baseline",

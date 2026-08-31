@@ -19,7 +19,11 @@ from src.utils.shared.config import (
     load_config,
     parse_args,
 )
-from src.utils.shared.encoding import extract_best_alphas, get_ridge_model_constructor
+from src.utils.shared.encoding import (
+    extract_best_alphas,
+    fit_transform_target_pca,
+    get_ridge_model_constructor,
+)
 from src.utils.shared.fmri import (
     align_fmri_stimuli,
     build_fmri_stimulus,
@@ -309,8 +313,13 @@ def _plot_results(frame: pd.DataFrame):
     return fig
 
 
-def run_fmri(config: FMRICrossDatasetRRRConfig) -> Artifact:
+def run_fmri(
+    config: FMRICrossDatasetRRRConfig,
+    target_pca_dim: int | None = None,
+) -> Artifact:
     config.validate()
+    if target_pca_dim is not None and config.source_mode != "within_fmri":
+        raise ValueError("target_pca_dim is supported only for internal fMRI RRR")
     if torch.cuda.is_available():
         set_backend("torch_cuda")
     backend_name = "torch_cuda" if torch.cuda.is_available() else "numpy"
@@ -341,7 +350,13 @@ def run_fmri(config: FMRICrossDatasetRRRConfig) -> Artifact:
             source._resolve_variant()
         source.manifest()
         upstreams.append(source.identity_record())
-    artifact = Artifact.from_fmri_config(config)
+    artifact_cls = Artifact
+    if target_pca_dim is not None:
+        from scripts.run_target_dimensionality_rrr import Artifact as TargetDimArtifact
+        artifact_cls = TargetDimArtifact
+    artifact = artifact_cls.from_fmri_config(config)
+    if target_pca_dim is not None:
+        artifact.target_pca_dim = int(target_pca_dim)
     if source is not None:
         validate_cross_dataset_significance_alignment(
             config.significance_selection,
@@ -349,7 +364,14 @@ def run_fmri(config: FMRICrossDatasetRRRConfig) -> Artifact:
             source.requested_significance_selection,
             source.identity,
         )
-    artifact.begin(config=config, upstreams=upstreams, refresh=config.refresh)
+    variant_extras = (
+        {"target_pca_dim": int(target_pca_dim)}
+        if target_pca_dim is not None else None
+    )
+    artifact.begin(
+        config=config, upstreams=upstreams, refresh=config.refresh,
+        variant_extras=variant_extras,
+    )
     artifact.save_field("effective_config", asdict(config), overwrite=config.refresh)
     artifact.save_field("upstream_identities", upstreams, overwrite=config.refresh)
 
@@ -368,6 +390,15 @@ def run_fmri(config: FMRICrossDatasetRRRConfig) -> Artifact:
         if not masks[subject].any():
             raise ValueError(f"No significant voxels found for {subject}")
     manifest = target_manifest(config.fmri.subjects, masks)
+    original_target_count = len(manifest)
+    if target_pca_dim is not None:
+        manifest = pd.DataFrame({
+            "target_id": [
+                f"pc-{index + 1}" for index in range(int(target_pca_dim))
+            ],
+            "target_kind": "target_pca_component",
+            "component": np.arange(1, int(target_pca_dim) + 1, dtype=int),
+        })
     artifact.save_field("target_manifest", manifest, overwrite=config.refresh)
     n_targets = len(manifest)
 
@@ -436,6 +467,14 @@ def run_fmri(config: FMRICrossDatasetRRRConfig) -> Artifact:
             )
         print(_array_summary("train responses", full_train.responses), flush=True)
         cv = session_cv_splits(full_train.story_slices, groups)
+        if target_pca_dim is not None:
+            full_train.responses, full_test.responses = fit_transform_target_pca(
+                full_train.responses,
+                full_test.responses,
+                int(target_pca_dim),
+                context="fMRI training targets",
+            )
+            n_targets = int(target_pca_dim)
 
     if need_full_fit:
         with _timed("fit full-embedding ridge ceiling"):
@@ -590,12 +629,13 @@ def run_fmri(config: FMRICrossDatasetRRRConfig) -> Artifact:
                 "full_corr": full_corr,
                 "full_r2": full_r2,
             }
-            row.update(
-                {
-                    f"corr_{subject}": value
-                    for subject, value in _subject_summary(corr_arr, manifest).items()
-                }
-            )
+            if target_pca_dim is None:
+                row.update(
+                    {
+                        f"corr_{subject}": value
+                        for subject, value in _subject_summary(corr_arr, manifest).items()
+                    }
+                )
             rows.append(row)
             if (method, rank) not in computed_metrics:
                 print(
@@ -645,6 +685,10 @@ def run_fmri(config: FMRICrossDatasetRRRConfig) -> Artifact:
             else None
         ),
         "rank_grid": ranks,
+        "target_pca_dim": (
+            int(target_pca_dim) if target_pca_dim is not None else None
+        ),
+        "original_target_count": int(original_target_count),
         "ceiling": "fresh_full_embedding_ridge",
     }
     artifact.save_field("metadata", metadata, overwrite=True)
