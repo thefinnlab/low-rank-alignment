@@ -23,7 +23,7 @@ Each canonical leaf contains readable variant subdirectories. RRR variants inclu
 reference and expanded selection-source set. Cross-dataset runs also describe their
 RRR upstream identity under
 `source/<mode>/<dataset>/offset-<offset>/<model>/layer-<layer>`, and specialized
-runs use names such as `orthonormalized` or `atlas-<name>`. A configuration that
+runs use names such as `atlas-<name>`. A configuration that
 would collide at the same readable location is rejected and must supply an
 explicit `variant_name`. Loading without a variant is permitted only when exactly
 one variant exists.

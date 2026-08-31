@@ -78,6 +78,13 @@ Cross-dataset RRR source identities include their own significance selection, wh
 deterministically resolves and validates the saved source variant.
 Source and target selections are required to be corresponding within-layer selections
 for the same model and layer over their respective datasets.
+Fold and delay-block subspaces can be aggregated with an equal-subspace `extrinsic`
+mean or a `factor_weighted` mean that lets raw factor magnitudes influence selection;
+both methods return an orthonormal final basis.
+RRR modes that evaluate directly fitted or fold-matched raw input factors report both
+the original projected-ridge metrics and a companion `*_orth` family fitted after a
+reduced QR decomposition. PCA and aggregated cross-dataset bases are already
+orthonormal and do not run the companion fit.
 
 ## Tests
 

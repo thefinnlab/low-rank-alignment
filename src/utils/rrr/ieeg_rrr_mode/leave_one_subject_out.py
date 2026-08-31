@@ -12,8 +12,8 @@ from src.core.config import RRRConfig
 
 from .common import (_build_results, _build_rrr_decomposition_inputs,
                      _load_existing_grid, _merge_grid_rows,
-                     _reference_encoding_results, _rrr_output_resume_plan,
-                     _run_common_subspace_fold_k, _run_rrr_for_unit)
+                     _reference_encoding_results, _run_common_subspace_fold_k,
+                     _run_rrr_for_unit)
 
 
 def _run_loso_transfer_for_unit(
@@ -58,7 +58,12 @@ def _run_loso_transfer_for_unit(
     if ranks_by_fold is None or completed_pairs is None:
         plan = artifact.resume_plan(unit=unit, ranks=config.rank_grid,
                                     folds=range(n_folds), refresh=config.refresh,
-                                    require_input_factors=False)
+                                    require_input_factors=False,
+                                    required_metric_keys={
+                                        "transfer_orth_corr",
+                                        "transfer_orth_r2_per_target",
+                                        "transfer_orth_best_alphas",
+                                    })
         ranks_by_fold, completed_pairs = plan["ranks_by_fold"], plan["completed_pairs"]
     for fold_f in range(n_folds):
         if not artifact.has_field(
@@ -130,6 +135,7 @@ def _run_loso_transfer_for_unit(
                 artifact=artifact,
                 unit=unit,
                 primary_label="transfer",
+                evaluate_orthonormalized=True,
             )
 
             row = {
@@ -189,8 +195,29 @@ def run_leave_one_subject_out(
                                   loso_phase="train_subjects")
 
         print(f"  Training subjects: {train_subs}")
-        train_resume_plan = _rrr_output_resume_plan(artifact, train_unit, config, n_folds)
-        train_folds_to_build = train_resume_plan["folds_to_build"]
+        train_rrr_plan = artifact.resume_plan(
+            unit=train_unit, ranks=config.rank_grid, folds=range(n_folds),
+            refresh=config.refresh, require_target_factors=config.save_b_matrices,
+            required_metric_keys={
+                "nr_orth_corr", "nr_orth_r2_per_target", "nr_orth_best_alphas",
+            } | (
+                {"null_aug_corr_per_target", "null_aug_r2_per_target"}
+                if config.run_null_augmented else set()
+            ),
+        )
+        train_pca_plan = (
+            artifact.resume_plan(
+                unit=UnitSelector(
+                    method="pca", held_out_subject=int(held_out_sub),
+                    loso_phase="train_subjects",
+                ),
+                ranks=config.rank_grid, folds=range(n_folds), refresh=config.refresh,
+            )
+            if config.run_pca_baseline else None
+        )
+        train_folds_to_build = set(train_rrr_plan["folds_to_build"])
+        if train_pca_plan is not None:
+            train_folds_to_build |= train_pca_plan["folds_to_build"]
         if train_folds_to_build:
             results_train = _build_rrr_decomposition_inputs(
                 train_subs,
@@ -222,10 +249,14 @@ def run_leave_one_subject_out(
                 per_fold_baselines=per_fold_baselines_train,
                 config=config,
                 sig_mask_flat=sig_mask_train,
-                ranks_by_fold=train_resume_plan["rrr_ranks_by_fold"],
-                completed_pairs=train_resume_plan["rrr_completed_pairs"],
-                pca_ranks_by_fold=train_resume_plan["pca_ranks_by_fold"],
-                pca_completed_pairs=train_resume_plan["pca_completed_pairs"],
+                ranks_by_fold=train_rrr_plan["ranks_by_fold"],
+                completed_pairs=train_rrr_plan["completed_pairs"],
+                pca_ranks_by_fold=(
+                    train_pca_plan["ranks_by_fold"] if train_pca_plan else None
+                ),
+                pca_completed_pairs=(
+                    train_pca_plan["completed_pairs"] if train_pca_plan else None
+                ),
             )
         else:
             print("  Train-subject RRR/PCA outputs complete; skipping setup.")
@@ -245,18 +276,43 @@ def run_leave_one_subject_out(
         transfer_plan = artifact.resume_plan(
             unit=transfer_unit, ranks=config.rank_grid, folds=range(n_folds),
             refresh=config.refresh, require_input_factors=False,
+            required_metric_keys={
+                "transfer_orth_corr",
+                "transfer_orth_r2_per_target",
+                "transfer_orth_best_alphas",
+            },
         )
         transfer_resume_plan = {
             "folds_to_build": transfer_plan["folds_to_build"],
             "ranks_by_fold": transfer_plan["ranks_by_fold"],
             "completed_pairs": transfer_plan["completed_pairs"],
         }
-        baseline_resume_plan = _rrr_output_resume_plan(
-            artifact, baseline_unit, config, n_folds
+        baseline_rrr_plan = artifact.resume_plan(
+            unit=baseline_unit, ranks=config.rank_grid, folds=range(n_folds),
+            refresh=config.refresh, require_target_factors=config.save_b_matrices,
+            required_metric_keys={
+                "nr_orth_corr", "nr_orth_r2_per_target", "nr_orth_best_alphas",
+            } | (
+                {"null_aug_corr_per_target", "null_aug_r2_per_target"}
+                if config.run_null_augmented else set()
+            ),
         )
+        baseline_pca_plan = (
+            artifact.resume_plan(
+                unit=UnitSelector(
+                    method="pca", held_out_subject=int(held_out_sub),
+                    loso_phase="baseline",
+                ),
+                ranks=config.rank_grid, folds=range(n_folds), refresh=config.refresh,
+            )
+            if config.run_pca_baseline else None
+        )
+        baseline_folds_to_build = set(baseline_rrr_plan["folds_to_build"])
+        if baseline_pca_plan is not None:
+            baseline_folds_to_build |= baseline_pca_plan["folds_to_build"]
         held_folds_to_build = (
             transfer_resume_plan["folds_to_build"]
-            | baseline_resume_plan["folds_to_build"]
+            | baseline_folds_to_build
         )
         if not held_folds_to_build:
             print("  Transfer/baseline outputs complete; skipping held-out setup.")
@@ -311,10 +367,14 @@ def run_leave_one_subject_out(
             per_fold_baselines=per_fold_baselines_held,
             config=config,
             sig_mask_flat=sig_mask_held,
-            ranks_by_fold=baseline_resume_plan["rrr_ranks_by_fold"],
-            completed_pairs=baseline_resume_plan["rrr_completed_pairs"],
-            pca_ranks_by_fold=baseline_resume_plan["pca_ranks_by_fold"],
-            pca_completed_pairs=baseline_resume_plan["pca_completed_pairs"],
+            ranks_by_fold=baseline_rrr_plan["ranks_by_fold"],
+            completed_pairs=baseline_rrr_plan["completed_pairs"],
+            pca_ranks_by_fold=(
+                baseline_pca_plan["ranks_by_fold"] if baseline_pca_plan else None
+            ),
+            pca_completed_pairs=(
+                baseline_pca_plan["completed_pairs"] if baseline_pca_plan else None
+            ),
         )
         units.extend([(train_unit, n_folds), (baseline_unit, n_folds),
                       (transfer_unit, n_folds, False, False)])

@@ -246,7 +246,8 @@ class TestRunRRRForUnit:
     def test_rank_specific_a_is_orthonormalized_before_ridge(
         self, tmp_path, small_data, monkeypatch
     ):
-        import run_rrr
+        from scripts.run_rrr import Artifact, UnitSelector
+        from src.utils.rrr.ieeg_rrr_mode import common as run_rrr
 
         X, Y = small_data
         A_full = np.array(
@@ -258,19 +259,21 @@ class TestRunRRRForUnit:
         def capture_evaluation(X_train, X_test, *args, **kwargs):
             captured.append((X_train.copy(), X_test.copy()))
             n_targets = args[1].shape[1]
+            label = kwargs["subspace_name"]
             return {
-                "nr_corr": 0.0,
-                "nr_r2": 0.0,
-                "nr_corr_per_target": np.zeros(n_targets),
-                "nr_r2_per_target": np.zeros(n_targets),
-                "nr_best_alphas": np.ones(n_targets),
+                f"{label}_corr": 0.0,
+                f"{label}_r2": 0.0,
+                f"{label}_corr_per_target": np.zeros(n_targets),
+                f"{label}_r2_per_target": np.zeros(n_targets),
+                f"{label}_best_alphas": np.ones(n_targets),
             }
 
         monkeypatch.setattr(run_rrr, "evaluate_input_space", capture_evaluation)
         monkeypatch.setattr(
             run_rrr, "resolve_ridge_alphas", lambda *a, **k: np.array([1.0])
         )
-        monkeypatch.setattr(run_rrr, "save_alpha_diagnostics", lambda *a, **k: None)
+        artifact = Artifact(results_root=tmp_path).begin(config={"test": True})
+        unit = UnitSelector(method="rrr")
 
         train_idx = np.arange(0, X.shape[0] // 2)
         test_idx = np.arange(X.shape[0] // 2, X.shape[0])
@@ -291,14 +294,22 @@ class TestRunRRRForUnit:
             None,
             None,
             "cpu",
-            str(tmp_path),
+            artifact,
+            unit,
             "nr",
-            orthonormalize_a_per_rank=True,
+            evaluate_orthonormalized=True,
         )
 
         Q = np.linalg.qr(A_full[:, :2], mode="reduced")[0]
-        np.testing.assert_allclose(captured[0][0], X[train_idx] @ Q)
+        np.testing.assert_allclose(captured[0][0], X[train_idx] @ A_full[:, :2])
+        np.testing.assert_allclose(captured[1][0], X[train_idx] @ Q)
         np.testing.assert_allclose(Q.T @ Q, np.eye(2), atol=1e-6)
+        metrics = artifact.load_rank_metrics(unit=unit, rank=2, fold=0)
+        assert {"nr_corr", "nr_orth_corr", "nr_orth_best_alphas"}.issubset(metrics)
+        assert artifact.has_field(
+            "diagnostics",
+            selector=artifact._selector(unit, rank=2, fold=0, name="nr_orth"),
+        )
 
     def test_b_matrices_and_raw_rrr_metrics_disabled_by_default(
         self, tmp_path, small_data

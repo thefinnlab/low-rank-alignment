@@ -93,8 +93,6 @@ def readable_variant(config: Any, upstreams: list[dict] | None = None,
                 f"offset-{int(source.get('offset', 0))}", str(source["model"]),
                 f"layer-{'none' if source.get('layer') is None else int(source['layer'])}",
             ))
-    elif normalized.get("orthonormalize_a_per_rank"):
-        parts.append("orthonormalized")
     elif extras:
         parts.extend(
             f"{key}-{value}" for key, value in sorted(_primitive(extras).items())

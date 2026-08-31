@@ -51,6 +51,7 @@ def _run_cross_dataset_subspace_for_unit(
     sig_mask_flat: "np.ndarray | None" = None,
     ranks_by_fold: "dict[int, list[int]] | None" = None,
     completed_pairs: "set[tuple[int, int]] | None" = None,
+    evaluate_orthonormalized: bool = False,
 ) -> pd.DataFrame:
     """Evaluate rank-specific source subspaces on target dataset folds."""
     for rank, A_value in A_by_rank.items():
@@ -80,9 +81,19 @@ def _run_cross_dataset_subspace_for_unit(
 
     existing_grid = _load_existing_grid(artifact, unit)
     if ranks_by_fold is None or completed_pairs is None:
+        required_metric_keys = (
+            {
+                f"{primary_label}_orth_corr",
+                f"{primary_label}_orth_r2_per_target",
+                f"{primary_label}_orth_best_alphas",
+            }
+            if evaluate_orthonormalized
+            else None
+        )
         plan = artifact.resume_plan(
             unit=unit, ranks=config.rank_grid, folds=range(n_folds),
             refresh=config.refresh, require_input_factors=False,
+            required_metric_keys=required_metric_keys,
         )
         ranks_by_fold, completed_pairs = plan["ranks_by_fold"], plan["completed_pairs"]
     missing_ranks = sorted({
@@ -145,7 +156,7 @@ def _run_cross_dataset_subspace_for_unit(
                 device=device,
                 primary_label=primary_label,
                 progress_desc=f"  cross-dataset fold {fold_f}",
-                orthonormalize_a_per_rank=config.orthonormalize_a_per_rank,
+                evaluate_orthonormalized=evaluate_orthonormalized,
                 refresh=config.refresh and rank == ranks_to_run[0],
             ))
         print(f"  Cross-dataset fold {fold_f} done in {time.time() - fold_start:.1f}s")

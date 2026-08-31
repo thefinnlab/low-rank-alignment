@@ -36,7 +36,6 @@ ieeg:
       - 0
       - 12
       - 24
-  orthonormalize_a_per_rank: false
   run_pca_baseline: true
   run_null_augmented: false
   null_augmented_repeats: 50

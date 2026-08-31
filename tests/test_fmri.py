@@ -302,7 +302,7 @@ def test_within_fmri_bases_save_fir_blocks_rank_bases_and_pre_fir_pca(
     )
     config = SimpleNamespace(
         rank_grid=[1],
-        subspace_aggregation="unnormalized",
+        subspace_aggregation="factor_weighted",
         rrr_svd_on_cpu=True,
         rrr_use_low_rank_svd=True,
         rrr_low_rank_svd_seed=17,

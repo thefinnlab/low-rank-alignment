@@ -167,48 +167,6 @@ def _X_for_fold(X_raw, fold_f: int) -> np.ndarray:
     return np.asarray(X_raw[fold_f] if isinstance(X_raw, list) else X_raw)
 
 
-def _rrr_output_resume_plan(
-    artifact: Artifact,
-    unit: UnitSelector,
-    config: RRRConfig,
-    n_folds: int,
-) -> dict:
-    rrr_plan = artifact.resume_plan(
-        unit=unit,
-        ranks=config.rank_grid,
-        folds=range(n_folds),
-        refresh=config.refresh,
-        require_target_factors=config.save_b_matrices,
-        required_metric_keys=(
-            {"null_aug_corr_per_target", "null_aug_r2_per_target"}
-            if config.run_null_augmented
-            else None
-        ),
-    )
-    folds_needed = set(rrr_plan["folds_to_build"])
-    pca_ranks_by_fold = None
-    pca_completed_pairs = None
-
-    if config.run_pca_baseline:
-        pca_plan = artifact.resume_plan(
-            unit=UnitSelector(**{**unit.mapping(), "method": "pca"}),
-            ranks=config.rank_grid,
-            folds=range(n_folds),
-            refresh=config.refresh,
-        )
-        pca_ranks_by_fold = pca_plan["ranks_by_fold"]
-        pca_completed_pairs = pca_plan["completed_pairs"]
-        folds_needed |= pca_plan["folds_to_build"]
-
-    return {
-        "folds_to_build": folds_needed,
-        "rrr_ranks_by_fold": rrr_plan["ranks_by_fold"],
-        "rrr_completed_pairs": rrr_plan["completed_pairs"],
-        "pca_ranks_by_fold": pca_ranks_by_fold,
-        "pca_completed_pairs": pca_completed_pairs,
-    }
-
-
 def _scalar_from_metric(metrics: dict, key: str) -> "float | None":
     if key in metrics:
         value = metrics[key]
@@ -251,6 +209,8 @@ def _row_from_metrics(
         "full_r2",
         f"{primary_label}_corr",
         f"{primary_label}_r2",
+        f"{primary_label}_orth_corr",
+        f"{primary_label}_orth_r2",
         "null_aug_corr",
         "null_aug_r2",
         "null_aug_corr_q05",
@@ -375,7 +335,7 @@ def _run_common_subspace_fold_k(
     full_corr_per_target: "np.ndarray | None" = None,
     null_augmented_config: "RRRConfig | None" = None,
     save_primary_corr_per_target: bool = True,
-    orthonormalize_a_per_rank: bool = False,
+    evaluate_orthonormalized: bool = False,
 ) -> dict:
     """Shared evaluation for one (fold, k) projected subspace.
 
@@ -388,61 +348,72 @@ def _run_common_subspace_fold_k(
     Returns a metrics dict with per-target arrays stripped (for grid_results.csv).
     """
     A_k = A_full[:, :k]
-    if orthonormalize_a_per_rank:
-        A_k = np.linalg.qr(A_k, mode="reduced")[0]
-
-    X_proj_train = X_train @ A_k
-    X_proj_test = X_test @ A_k
-    context = {
-        "script": "run_rrr",
-        "role": primary_label,
-        "fold": int(fold_f),
-        "k": int(k),
-        "n_features": int(X_proj_train.shape[1]),
-        "standardize": bool(standardize_subspace_inputs),
-    }
-    diagnostic_selector = artifact._selector(unit, rank=int(k), fold=int(fold_f))
-    if artifact.has_field("diagnostics", selector=diagnostic_selector):
-        resolved_alphas = np.asarray(
-            artifact.load_field("diagnostics", selector=diagnostic_selector)["alpha_grid"]
+    evaluations = [(primary_label, A_k, None)]
+    if evaluate_orthonormalized:
+        evaluations.append(
+            (f"{primary_label}_orth", np.linalg.qr(A_k, mode="reduced")[0],
+             f"{primary_label}_orth")
         )
-    else:
-        resolved_alphas = resolve_ridge_alphas(
-            alphas, X_proj_train, standardize=standardize_subspace_inputs,
-            context=context, cache_dir=None, policy=alpha_policy,
-        )
-    result = evaluate_input_space(
-        X_proj_train,
-        X_proj_test,
-        Y_train,
-        Y_test,
-        subspace_name=primary_label,
-        alphas=resolved_alphas,
-        ridge_cv_folds=ridge_cv_folds,
-        standardize=standardize_subspace_inputs,
-        ridge_solver_params=ridge_solver_params,
-        ridge_y_in_cpu=ridge_y_in_cpu,
-        ridge_force_cpu=ridge_force_cpu,
-        return_alphas=True,
-        device=device,
-    )
-    artifact.save_diagnostics(
-        unit=unit, rank=k, fold=fold_f,
-        diagnostics={"alpha_grid": resolved_alphas,
-                     "best_alphas": result[f"{primary_label}_best_alphas"],
-                     "context": context, "policy": alpha_policy or {}},
-    )
 
-    metrics = {
-        f"{primary_label}_corr": result[f"{primary_label}_corr"],
-        f"{primary_label}_r2": result[f"{primary_label}_r2"],
-        f"{primary_label}_r2_per_target": result[f"{primary_label}_r2_per_target"],
-        f"{primary_label}_best_alphas": result[f"{primary_label}_best_alphas"],
-    }
-    if save_primary_corr_per_target:
-        metrics[f"{primary_label}_corr_per_target"] = result[
-            f"{primary_label}_corr_per_target"
-        ]
+    metrics = {}
+    results = {}
+    for label, factor, diagnostic_name in evaluations:
+        X_proj_train = X_train @ factor
+        X_proj_test = X_test @ factor
+        context = {
+            "script": "run_rrr",
+            "role": label,
+            "fold": int(fold_f),
+            "k": int(k),
+            "n_features": int(X_proj_train.shape[1]),
+            "standardize": bool(standardize_subspace_inputs),
+        }
+        diagnostic_selector = artifact._selector(
+            unit, rank=int(k), fold=int(fold_f), name=diagnostic_name
+        )
+        if artifact.has_field("diagnostics", selector=diagnostic_selector):
+            resolved_alphas = np.asarray(
+                artifact.load_field(
+                    "diagnostics", selector=diagnostic_selector
+                )["alpha_grid"]
+            )
+        else:
+            resolved_alphas = resolve_ridge_alphas(
+                alphas, X_proj_train, standardize=standardize_subspace_inputs,
+                context=context, cache_dir=None, policy=alpha_policy,
+            )
+        result = evaluate_input_space(
+            X_proj_train,
+            X_proj_test,
+            Y_train,
+            Y_test,
+            subspace_name=label,
+            alphas=resolved_alphas,
+            ridge_cv_folds=ridge_cv_folds,
+            standardize=standardize_subspace_inputs,
+            ridge_solver_params=ridge_solver_params,
+            ridge_y_in_cpu=ridge_y_in_cpu,
+            ridge_force_cpu=ridge_force_cpu,
+            return_alphas=True,
+            device=device,
+        )
+        results[label] = result
+        artifact.save_diagnostics(
+            unit=unit, rank=k, fold=fold_f, name=diagnostic_name,
+            diagnostics={"alpha_grid": resolved_alphas,
+                         "best_alphas": result[f"{label}_best_alphas"],
+                         "context": context, "policy": alpha_policy or {}},
+        )
+        metrics.update({
+            f"{label}_corr": result[f"{label}_corr"],
+            f"{label}_r2": result[f"{label}_r2"],
+            f"{label}_r2_per_target": result[f"{label}_r2_per_target"],
+            f"{label}_best_alphas": result[f"{label}_best_alphas"],
+        })
+        if save_primary_corr_per_target:
+            metrics[f"{label}_corr_per_target"] = result[
+                f"{label}_corr_per_target"
+            ]
     if null_augmented_config is not None and null_augmented_config.run_null_augmented:
         if full_corr_per_target is None:
             raise ValueError(
@@ -457,7 +428,9 @@ def _run_common_subspace_fold_k(
                 Y_train,
                 Y_test,
                 full_corr_per_target=full_corr_per_target,
-                primary_corr_per_target=result[f"{primary_label}_corr_per_target"],
+                primary_corr_per_target=results[primary_label][
+                    f"{primary_label}_corr_per_target"
+                ],
                 fold_f=fold_f,
                 alphas=alphas,
                 alpha_policy=alpha_policy,
@@ -473,7 +446,9 @@ def _run_common_subspace_fold_k(
             )
         )
 
-    artifact.save_rank_metrics(unit=unit, rank=k, fold=fold_f, metrics=metrics)
+    artifact.save_rank_metrics(
+        unit=unit, rank=k, fold=fold_f, metrics=metrics, overwrite=True
+    )
     _strip_per_target_and_add_sig_nonsig(metrics, sig_mask_flat)
     for artifact_key in (
         "null_aug_shifts_train",
@@ -508,7 +483,7 @@ def _run_subspace_rank_loop_for_fold(
     null_augmented_config: "RRRConfig | None" = None,
     save_primary_corr_per_target: bool = True,
     save_rrr_corr_per_target: bool = False,
-    orthonormalize_a_per_rank: bool = False,
+    evaluate_orthonormalized: bool = False,
     refresh: bool = False,
 ) -> list[dict]:
     """Evaluate rank-k projected ridge models for one fold from a known A matrix.
@@ -568,7 +543,7 @@ def _run_subspace_rank_loop_for_fold(
             full_corr_per_target=full_corr_per_target,
             null_augmented_config=null_augmented_config,
             save_primary_corr_per_target=save_primary_corr_per_target,
-            orthonormalize_a_per_rank=orthonormalize_a_per_rank,
+            evaluate_orthonormalized=evaluate_orthonormalized,
         )
 
         existing = artifact.load_rank_metrics(unit=unit, rank=k, fold=fold_f)
@@ -836,6 +811,8 @@ def _build_results(
         "full_r2",
         f"{primary_label}_corr",
         f"{primary_label}_r2",
+        f"{primary_label}_orth_corr",
+        f"{primary_label}_orth_r2",
         "effective_rank",
         "null_aug_corr",
         "null_aug_r2",
@@ -953,10 +930,13 @@ def _run_rrr_for_unit(
         plan = artifact.resume_plan(
             unit=unit, ranks=config.rank_grid, folds=range(n_folds),
             refresh=config.refresh, require_target_factors=config.save_b_matrices,
-            required_metric_keys=(
+            required_metric_keys={
+                "nr_orth_corr",
+                "nr_orth_r2_per_target",
+                "nr_orth_best_alphas",
+            } | (
                 {"null_aug_corr_per_target", "null_aug_r2_per_target"}
-                if config.run_null_augmented
-                else None
+                if config.run_null_augmented else set()
             ),
         )
         ranks_by_fold, completed_pairs = plan["ranks_by_fold"], plan["completed_pairs"]
@@ -1102,7 +1082,7 @@ def _run_rrr_for_unit(
                 null_augmented_config=config,
                 save_primary_corr_per_target=config.save_nr_corr_per_target,
                 save_rrr_corr_per_target=config.save_rrr_corr_per_target,
-                orthonormalize_a_per_rank=config.orthonormalize_a_per_rank,
+                evaluate_orthonormalized=True,
                 refresh=config.refresh,
             )
         )

@@ -289,16 +289,17 @@ class TestDictToDataclass:
         config = dict_to_dataclass(
             {
                 "standardize_subspace_inputs": False,
-                "orthonormalize_a_per_rank": True,
             },
             RRRConfig,
         )
         assert config.standardize_subspace_inputs is False
-        assert config.orthonormalize_a_per_rank is True
 
     def test_rrr_subspace_standardization_defaults_false(self):
         assert RRRConfig().standardize_subspace_inputs is False
-        assert RRRConfig().orthonormalize_a_per_rank is False
+
+    def test_rrr_rejects_removed_orthonormalization_switch(self):
+        with pytest.raises(TypeError, match="orthonormalize_a_per_rank"):
+            RRRConfig(orthonormalize_a_per_rank=True)
 
     def test_rrr_b_matrices_default_false(self):
         assert RRRConfig().save_b_matrices is False
@@ -529,6 +530,11 @@ class TestApplyOverrides:
         assert fmri.rrr_save_b_matrix is False
         assert fmri.pca_svd_device == "auto"
         assert fmri.prefetch_rank_designs is False
+        assert RRRConfig(subspace_aggregation="factor_weighted").subspace_aggregation == (
+            "factor_weighted"
+        )
+        with pytest.raises(ValueError, match="subspace_aggregation"):
+            RRRConfig(subspace_aggregation="unnormalized")
         with pytest.raises(ValueError, match="subspace_aggregation"):
             RRRConfig(subspace_aggregation="weighted")
         with pytest.raises(ValueError, match="pca_svd_device"):

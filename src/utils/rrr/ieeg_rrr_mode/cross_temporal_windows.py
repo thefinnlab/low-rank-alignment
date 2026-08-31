@@ -63,7 +63,12 @@ def run_cross_temporal_windows(config, enc, artifact, significance, subject_ids,
                                 target_temporal_window=target_window)
             plan = artifact.resume_plan(unit=unit, ranks=config.rank_grid,
                                         folds=range(n_folds), refresh=config.refresh,
-                                        require_input_factors=False)
+                                        require_input_factors=False,
+                                        required_metric_keys=(
+                                            {"nr_orth_corr", "nr_orth_r2_per_target",
+                                             "nr_orth_best_alphas"}
+                                            if method == "rrr" else None
+                                        ))
             artifact.save_target_manifest(unit=unit, target_manifest=manifest,
                                           overwrite=config.refresh)
             per_fold_baselines = build_per_fold_baselines(
@@ -86,7 +91,8 @@ def run_cross_temporal_windows(config, enc, artifact, significance, subject_ids,
                 test_idxs=prepared.test_idxs, per_fold_baselines=per_fold_baselines,
                 config=config, primary_label="pca" if method == "pca" else "nr",
                 sig_mask_flat=sig_mask, ranks_by_fold=plan["ranks_by_fold"],
-                completed_pairs=plan["completed_pairs"])
+                completed_pairs=plan["completed_pairs"],
+                evaluate_orthonormalized=method == "rrr")
             summary = artifact.load_summary(unit=unit).copy()
             summary["source_window"], summary["target_window"] = source_window, target_window
             summary["method"] = method

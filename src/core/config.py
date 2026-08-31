@@ -39,7 +39,7 @@ class LanguageDecodingMode(str, Enum):
     FMRI_TR_PRE_FIR = "fmri_tr_pre_fir"
 
 
-SUBSPACE_AGGREGATION_METHODS = {"extrinsic", "unnormalized"}
+SUBSPACE_AGGREGATION_METHODS = {"extrinsic", "factor_weighted"}
 
 
 def _validate_subspace_aggregation(value: str) -> None:
@@ -294,10 +294,6 @@ class RRRConfig:
     standardize_subspace_inputs: bool = (
         False  # Preserve RRR/PCA subspace coordinate scales by default.
     )
-    orthonormalize_a_per_rank: bool = (
-        False  # QR-orthonormalize A[:, :k] before each projected ridge fit.
-    )
-
     # Arbitrary embedding seed for null baseline
     arbitrary_seed: int = 42
 

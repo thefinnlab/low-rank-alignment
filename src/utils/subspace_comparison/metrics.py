@@ -105,16 +105,16 @@ def extrinsic_mean_basis(
     return left_vectors[:, :rank].astype(np.float32, copy=False)
 
 
-def unnormalized_mean_basis(
+def factor_weighted_mean_basis(
     matrices: list[np.ndarray],
     rank: int,
 ) -> np.ndarray:
-    """Aggregate leading factors without normalizing their column spaces.
+    """Aggregate leading factors with their raw magnitudes as weights.
 
     The returned basis contains the leading left singular vectors of the raw
     ``matrix[:, :rank]`` blocks concatenated across inputs.  Consequently both
     between-matrix scale and within-matrix singular-value structure contribute
-    to the result.
+    to the selected subspace, while the returned basis itself is orthonormal.
     """
     if not matrices:
         raise ValueError("At least one subspace matrix is required")
@@ -164,10 +164,10 @@ def aggregate_subspace_basis(
     """Aggregate matrices into a rank-k basis using the requested method."""
     if method == "extrinsic":
         return extrinsic_mean_basis(matrices, rank=rank)
-    if method == "unnormalized":
-        return unnormalized_mean_basis(matrices, rank=rank)
+    if method == "factor_weighted":
+        return factor_weighted_mean_basis(matrices, rank=rank)
     raise ValueError(
-        "method must be 'extrinsic' or 'unnormalized', " f"got {method!r}"
+        "method must be 'extrinsic' or 'factor_weighted', " f"got {method!r}"
     )
 
 
@@ -189,7 +189,7 @@ def validate_aggregation_cache(
     refresh: bool = False,
 ) -> None:
     """Record aggregation provenance and reject incompatible cached outputs."""
-    if method not in {"extrinsic", "unnormalized"}:
+    if method not in {"extrinsic", "factor_weighted"}:
         raise ValueError(f"Unsupported subspace aggregation method: {method!r}")
     root = Path(output_dir)
     marker = root / "subspace_aggregation.json"

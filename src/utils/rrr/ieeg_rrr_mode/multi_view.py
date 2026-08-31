@@ -14,8 +14,7 @@ from src.utils.subspace_comparison.metrics import aggregate_subspace_basis
 
 from .common import (_build_rrr_decomposition_inputs,
                      _load_shared_word_selection_metadata,
-                     _reference_encoding_results, _rrr_output_resume_plan,
-                     _run_rrr_for_unit)
+                     _reference_encoding_results, _run_rrr_for_unit)
 
 
 def run_multi_view(
@@ -136,10 +135,26 @@ def run_multi_view(
     unit = UnitSelector(method="rrr")
     artifact.save_target_manifest(unit=unit, target_manifest=target_manifest,
                                   overwrite=config.refresh)
-    resume_plan = _rrr_output_resume_plan(
-        artifact, unit, config, len(test_idxs)
+    rrr_plan = artifact.resume_plan(
+        unit=unit, ranks=config.rank_grid, folds=range(len(test_idxs)),
+        refresh=config.refresh, require_target_factors=config.save_b_matrices,
+        required_metric_keys={
+            "nr_orth_corr", "nr_orth_r2_per_target", "nr_orth_best_alphas",
+        } | (
+            {"null_aug_corr_per_target", "null_aug_r2_per_target"}
+            if config.run_null_augmented else set()
+        ),
     )
-    folds_to_build = resume_plan["folds_to_build"]
+    pca_plan = (
+        artifact.resume_plan(
+            unit=UnitSelector(method="pca"), ranks=config.rank_grid,
+            folds=range(len(test_idxs)), refresh=config.refresh,
+        )
+        if config.run_pca_baseline else None
+    )
+    folds_to_build = set(rrr_plan["folds_to_build"])
+    if pca_plan is not None:
+        folds_to_build |= pca_plan["folds_to_build"]
     explicit_banded_alphas = (
         np.asarray(config.banded_ridge_alphas, dtype=float)
         if config.banded_ridge_alphas is not None
@@ -235,10 +250,10 @@ def run_multi_view(
         per_fold_baselines=baselines,
         config=config,
         sig_mask_flat=sig_mask_flat,
-        ranks_by_fold=resume_plan["rrr_ranks_by_fold"],
-        completed_pairs=resume_plan["rrr_completed_pairs"],
-        pca_ranks_by_fold=resume_plan["pca_ranks_by_fold"],
-        pca_completed_pairs=resume_plan["pca_completed_pairs"],
+        ranks_by_fold=rrr_plan["ranks_by_fold"],
+        completed_pairs=rrr_plan["completed_pairs"],
+        pca_ranks_by_fold=(pca_plan["ranks_by_fold"] if pca_plan else None),
+        pca_completed_pairs=(pca_plan["completed_pairs"] if pca_plan else None),
     )
     return [(unit, len(test_idxs))]
 
