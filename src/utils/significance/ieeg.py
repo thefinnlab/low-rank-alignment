@@ -1,4 +1,4 @@
-"""Lag-cluster significance helpers for iEEG workflows."""
+"""Correlation and lag-significance helpers for iEEG workflows."""
 
 import hashlib
 import os
@@ -551,6 +551,59 @@ def _finite_lag_max(scores):
     scores = np.asarray(scores, dtype=np.float64)
     finite_scores = np.where(np.isfinite(scores), scores, -np.inf)
     return np.max(finite_scores, axis=-1)
+
+
+def fold_local_max_lag_correlation_null_scores(
+    fold_predictions, fold_targets, *, minimal_shift=500, shift_step=1,
+    num_null_shifts=10000, seed=42, device=None, null_batch_size=16,
+    shift_matrix=None,
+):
+    """Return electrode-wise max-lag correlation null scores."""
+    _validate_fold_arrays(fold_predictions, fold_targets)
+    if isinstance(null_batch_size, bool) or not isinstance(
+        null_batch_size, (int, np.integer)
+    ):
+        raise ValueError("null_batch_size must be a positive integer")
+    null_batch_size = int(null_batch_size)
+    if null_batch_size <= 0:
+        raise ValueError("null_batch_size must be a positive integer")
+    if shift_matrix is None:
+        shift_matrix = sample_fold_shift_matrix(
+            fold_targets, minimal_shift=minimal_shift, shift_step=shift_step,
+            num_null_shifts=num_null_shifts, seed=seed,
+        )
+    else:
+        shift_matrix = np.asarray(shift_matrix, dtype=int)
+        if shift_matrix.ndim != 2 or shift_matrix.shape[1] != len(fold_targets):
+            raise ValueError(
+                "shift_matrix must have shape (n_null, n_folds), got "
+                f"{shift_matrix.shape}"
+            )
+        if len(shift_matrix) == 0:
+            raise ValueError("shift_matrix must contain at least one null sample")
+        num_null_shifts = int(len(shift_matrix))
+    n_electrodes = np.asarray(fold_predictions[0]).shape[1]
+    maxima = np.full((num_null_shifts, n_electrodes), -np.inf, dtype=np.float32)
+    for batch_start in tqdm(
+        range(0, num_null_shifts, null_batch_size),
+        desc="Max-lag fold-local circular shifts",
+    ):
+        batch_stop = min(batch_start + null_batch_size, num_null_shifts)
+        batch_fold_corrs = _compute_shifted_fold_correlations_batch(
+            fold_predictions, fold_targets,
+            shift_matrix[batch_start:batch_stop], device=device,
+        )
+        lag_scores = fisher_mean_correlations(batch_fold_corrs, axis=1)
+        maxima[batch_start:batch_stop] = _finite_lag_max(lag_scores)
+    return maxima, {
+        "shift_matrix": shift_matrix,
+        "n_null": int(num_null_shifts),
+        "minimal_shift": int(minimal_shift),
+        "shift_step": int(shift_step),
+        "fold_lengths": np.array([len(target) for target in fold_targets], dtype=int),
+        "seed": int(seed),
+        "sampling_mode": "iid_with_replacement_per_fold",
+    }
 
 
 def fold_local_comparison_null_scores(

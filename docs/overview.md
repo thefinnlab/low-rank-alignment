@@ -7,7 +7,7 @@ embeddings predict iEEG and fMRI responses. The supported executable surface is
 ## Retained workflows
 
 - `scripts/run_significance.py` dispatches significance by dataset to the iEEG
-  lag-cluster or fMRI held-out-session implementation.
+  single-lag correlation or fMRI held-out-session implementation.
 - `scripts/run_rrr.py` dispatches reduced-rank regression by dataset while exposing
   one Config and Artifact contract.
 - `scripts/rrr/compare_subspaces.py` performs configured leakage-safe comparisons
