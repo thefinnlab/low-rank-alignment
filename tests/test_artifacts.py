@@ -273,6 +273,41 @@ def test_native_codecs_and_readable_selector_paths(tmp_path):
     assert "plots/subject-UTS01/acf_diagnostic.png" in files
 
 
+def test_npz_codec_round_trips_ragged_nested_significance_payload(tmp_path):
+    artifact = SignificanceArtifact(results_root=tmp_path).begin(config={"x": 1})
+    payload = {
+        "max_lag_correlation_per_electrode": [
+            np.ones((3, 2)),
+            np.ones((3, 4)),
+        ],
+        "subjects": np.array([1, 2]),
+        "electrodes": [["A1", "A2"], ["B1", "B2", "B3", "B4"]],
+        "num_null_shifts": 3,
+        "subject_shift_metadata": {
+            1: {"shift_matrix": np.array([[1, 2], [3, 4]])},
+            2: {"shift_matrix": np.array([[5, 6]])},
+        },
+    }
+
+    artifact.save_subject_field("null_distribution", "all", payload)
+    loaded = artifact.load_field(
+        "null_distribution", selector={"subject": "all"}
+    )
+
+    assert loaded["electrodes"] == payload["electrodes"]
+    assert loaded["num_null_shifts"] == 3
+    assert np.array_equal(loaded["subjects"], payload["subjects"])
+    for actual, expected in zip(
+        loaded["max_lag_correlation_per_electrode"],
+        payload["max_lag_correlation_per_electrode"],
+    ):
+        assert np.array_equal(actual, expected)
+    assert np.array_equal(
+        loaded["subject_shift_metadata"][1]["shift_matrix"],
+        payload["subject_shift_metadata"][1]["shift_matrix"],
+    )
+
+
 def test_selector_order_is_owned_by_each_script(tmp_path):
     significance = SignificanceArtifact(results_root=tmp_path).begin(config={"x": 1})
     significance.save_field(

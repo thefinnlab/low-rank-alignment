@@ -491,13 +491,21 @@ class ArtifactStore:
             try:
                 import numpy as np
                 buffer = io.BytesIO()
-                np.savez(buffer, **value)
+                packed = {}
+                npz_types = {}
+                for key, item in value.items():
+                    key = str(key)
+                    if isinstance(item, np.ndarray):
+                        packed[key] = item
+                        npz_types[key] = "ndarray"
+                    else:
+                        wrapped = np.empty((), dtype=object)
+                        wrapped[()] = item
+                        packed[key] = wrapped
+                        npz_types[key] = "python"
+                np.savez(buffer, **packed)
                 return "npz", ".npz", buffer.getvalue(), {
-                    "npz_types": {
-                        str(key): "ndarray" if isinstance(item, np.ndarray)
-                        else "python"
-                        for key, item in value.items()
-                    }
+                    "npz_types": npz_types
                 }
             except (TypeError, ValueError):
                 pass
