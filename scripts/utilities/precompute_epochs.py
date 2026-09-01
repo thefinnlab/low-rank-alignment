@@ -38,6 +38,23 @@ _TMIN = -2.0
 _TMAX = 2.0
 
 
+def provenance_config_filename(dataset_context) -> str:
+    """Return a stimulus-scoped filename for an epoch cache's provenance."""
+    rereference = getattr(dataset_context, "rereference", None)
+    if getattr(dataset_context, "dataset", None) != "brain_treebank":
+        return (
+            "config.yml"
+            if rereference in (None, "common_average")
+            else f"config_ref-{rereference}.yml"
+        )
+
+    stimulus = dataset_context.stimulus_id
+    suffix = (
+        "" if rereference in (None, "common_average") else f"_ref-{rereference}"
+    )
+    return f"config_movie-{stimulus}{suffix}.yml"
+
+
 def precompute_subject(raw, df_word):
     """Precompute and return cache components for one subject.
 
@@ -111,14 +128,10 @@ def main():
             per_dataset_config=config.per_dataset_config,
             dataset_context=dataset_context,
         )
-        rereference = getattr(dataset_context, "rereference", None)
-        config_filename = (
-            "config.yml"
-            if rereference in (None, "common_average")
-            else f"config_ref-{rereference}.yml"
-        )
         save_effective_config(
-            config, os.path.dirname(cache_path), filename=config_filename
+            config,
+            os.path.dirname(cache_path),
+            filename=provenance_config_filename(dataset_context),
         )
         print(f"\n{'='*60}")
         print(f"Subject {sub_id}")

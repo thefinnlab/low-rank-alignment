@@ -33,9 +33,20 @@ Common-average caches retain the legacy filename. Laplacian caches add
 `_ref-laplacian` before `_ieeg.h5`, so both sets can coexist. Each new cache also
 records its rereference mode, and the loader rejects a cache whose mode differs from
 the requested configuration. Legacy Brain Treebank caches without this metadata are
-treated as `common_average`. Laplacian precomputation provenance is written to
-`config_ref-laplacian.yml`, alongside the legacy `config.yml` used by common-average
-precomputation.
+treated as `common_average`. Precomputation provenance is stimulus-scoped within each
+subject directory: common-average uses `config_movie-<movie>.yml`, and Laplacian uses
+`config_movie-<movie>_ref-laplacian.yml`. This prevents two movies watched by the same
+subject from attempting to reuse one provenance file.
+
+Legacy provenance files can be migrated without changing epoch data. For example,
+preview and then migrate the Cars 2 Laplacian files with:
+
+```bash
+uv run python scripts/utilities/migrate_brain_treebank_epoch_provenance.py \
+  --movie cars-2 --rereference laplacian --dry-run
+uv run python scripts/utilities/migrate_brain_treebank_epoch_provenance.py \
+  --movie cars-2 --rereference laplacian
+```
 
 Use the same `per_dataset_config.rereference` value in precomputation and every
 downstream significance, RRR, comparison, or language-analysis encoding configuration.
