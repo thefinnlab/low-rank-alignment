@@ -22,9 +22,9 @@ def test_common_rank_evaluation_uses_raw_and_reduced_qr_designs(
     )
     captured = {}
 
-    def evaluate(x_train, x_test, y_train, y_test, *, subspace_name, **kwargs):
+    def evaluate(factor, x_train, x_test, y_train, y_test, *, subspace_name, **kwargs):
         del x_test, y_train, kwargs
-        captured[subspace_name] = x_train.copy()
+        captured[subspace_name] = x_train @ factor
         n_targets = y_test.shape[1]
         return {
             f"{subspace_name}_corr": 0.0,
@@ -32,12 +32,9 @@ def test_common_rank_evaluation_uses_raw_and_reduced_qr_designs(
             f"{subspace_name}_corr_per_target": np.zeros(n_targets),
             f"{subspace_name}_r2_per_target": np.zeros(n_targets),
             f"{subspace_name}_best_alphas": np.ones(n_targets),
-        }
+        }, np.array([1.0])
 
-    monkeypatch.setattr(runner, "evaluate_input_space", evaluate)
-    monkeypatch.setattr(
-        runner, "resolve_ridge_alphas", lambda *args, **kwargs: np.array([1.0])
-    )
+    monkeypatch.setattr(runner, "evaluate_projected_input_space", evaluate)
     artifact = Artifact(results_root=tmp_path).begin(config={"test": True})
     unit = UnitSelector(method="rrr")
     train, test = np.arange(10), np.arange(10, 20)
@@ -48,9 +45,17 @@ def test_common_rank_evaluation_uses_raw_and_reduced_qr_designs(
         artifact, unit, "nr", evaluate_orthonormalized=True,
     )
 
-    q = np.linalg.qr(a[:, :2], mode="reduced")[0]
+    from src.utils.rrr.core import canonical_qr
+    q = canonical_qr(a[:, :2])[0]
     np.testing.assert_allclose(captured["nr"], x[train] @ a[:, :2])
     np.testing.assert_allclose(captured["nr_orth"], x[train] @ q)
+    metrics = artifact.load_rank_metrics(unit=unit, rank=2, fold=0)
+    assert "nr_best_alphas" not in metrics
+    assert "nr_orth_best_alphas" not in metrics
+    assert not artifact.has_field(
+        "diagnostics",
+        selector=artifact._selector(unit, rank=2, fold=0, name="nr_orth"),
+    )
     np.testing.assert_allclose(q.T @ q, np.eye(2), atol=1e-6)
 
 
@@ -62,7 +67,9 @@ def test_numerical_rrr_writes_and_resumes_only_through_artifact(tmp_path, monkey
     y = x @ a @ b.T + .01 * rng.standard_normal((48, 4)).astype(np.float32)
     test_idxs = [np.arange(24, 48)]
     baselines = build_per_fold_baselines(x, y, test_idxs)
-    config = RRRConfig(rank_grid=[1, 2], plot=False, save_b_matrices=True)
+    config = RRRConfig(
+        rank_grid=[1, 2], plot=False, save_b_matrices=True, log_alphas=True
+    )
     artifact = Artifact(results_root=tmp_path).begin(config=config)
     unit = UnitSelector(method="rrr")
 
@@ -79,6 +86,10 @@ def test_numerical_rrr_writes_and_resumes_only_through_artifact(tmp_path, monkey
         "nr_orth_r2_per_target",
         "nr_orth_best_alphas",
     }.issubset(rank_metrics)
+    assert artifact.has_field(
+        "diagnostics",
+        selector=artifact._selector(unit, rank=2, fold=0, name="nr_orth"),
+    )
     assert artifact.has_field(
         "diagnostics",
         selector=artifact._selector(unit, rank=2, fold=0, name="nr_orth"),

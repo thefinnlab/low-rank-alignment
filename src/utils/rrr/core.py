@@ -302,6 +302,35 @@ def select_directions(
 # ---------------------------------------------------------------------------
 
 
+def canonical_qr(A: np.ndarray, B: np.ndarray | None = None):
+    """Orthonormalize A with deterministic signs and optionally preserve A @ B.T."""
+    Q, R = np.linalg.qr(np.asarray(A), mode="reduced")
+    diagonal = np.diag(R)
+    signs = np.where(diagonal < 0, -1.0, 1.0).astype(Q.dtype)
+    Q = Q * signs[np.newaxis, :]
+    R = signs[:, np.newaxis] * R
+    adjusted = None if B is None else np.asarray(B) @ R.T
+    return Q.astype(np.float32), R.astype(np.float32), (
+        None if adjusted is None else adjusted.astype(np.float32)
+    )
+
+
+def orthogonal_rank_factors(A: np.ndarray, B: np.ndarray, rank: int) -> dict:
+    """Truncate ordered RRR factors first, then QR exactly that rank's A."""
+    rank = int(rank)
+    if rank < 1 or rank > min(A.shape[1], B.shape[1]):
+        raise ValueError(
+            f"rank={rank} is unavailable for A={A.shape}, B={B.shape}"
+        )
+    A_k = np.asarray(A)[:, :rank]
+    B_k = np.asarray(B)[:, :rank]
+    Q_k, R_k, B_orth_k = canonical_qr(A_k, B_k)
+    return {
+        "Q": Q_k, "R": R_k, "B_raw": B_k.astype(np.float32),
+        "B_orth": B_orth_k,
+    }
+
+
 def fit_dense_rrr(
     X_proj_train: np.ndarray,
     Y_train: np.ndarray,
@@ -467,6 +496,61 @@ def fit_dense_rrr(
     if B_dense is not None:
         result["B_dense"] = to_numpy(B_dense)
     return result
+
+
+def fit_full_rrr(
+    X: np.ndarray,
+    Y: np.ndarray,
+    max_rank: int,
+    *,
+    X_test=None,
+    Y_test=None,
+    alphas=None,
+    alpha_policy=None,
+    ridge_cv_folds: int = 5,
+    ridge_solver_params=None,
+    ridge_y_in_cpu=None,
+    ridge_force_cpu=None,
+    use_low_rank_svd: bool = True,
+    low_rank_svd_seed: int = 0,
+    alpha_context: dict | None = None,
+) -> dict:
+    """Fit the shared full ridge baseline and its maximum-rank RRR factors."""
+    from src.utils.shared.encoding import fit_encoding_baseline
+
+    baseline = fit_encoding_baseline(
+        X, Y, X_test, Y_test,
+        alphas=(None if alphas is None else np.asarray(alphas, dtype=float)),
+        ridge_cv_folds=ridge_cv_folds,
+        ridge_solver_params=ridge_solver_params,
+        ridge_y_in_cpu=ridge_y_in_cpu,
+        ridge_force_cpu=ridge_force_cpu,
+        alpha_policy=alpha_policy,
+        alpha_context=alpha_context,
+    )
+    fitted = fit_dense_rrr(
+        X, baseline["Y_train"], k=max_rank,
+        selected_idx=np.arange(X.shape[1]),
+        precomputed_Y_hat_ols=baseline["Y_hat_full_train"],
+        precomputed_beta_full=baseline["beta_full_raw"],
+        use_low_rank_svd=use_low_rank_svd,
+        low_rank_svd_seed=low_rank_svd_seed,
+        return_b=True,
+    )
+    return {
+        "A_raw": np.asarray(fitted["A_dense"], dtype=np.float32),
+        "B_raw": np.asarray(fitted["B_dense"], dtype=np.float32),
+        "ridge_weights": baseline["beta_full_raw"],
+        "ridge_intercept": baseline["ridge_intercept"],
+        "full_prediction": baseline["Y_hat_full_train"],
+        "full_prediction_test": baseline["Y_hat_full_test"],
+        "Y_train": baseline["Y_train"],
+        "Y_test": baseline["Y_test"],
+        "target_mean": baseline["target_mean"],
+        "target_scale": baseline["target_scale"],
+        "alpha_grid": baseline["alpha_grid"],
+        "best_alphas": baseline["best_alphas"],
+    }
 
 
 def predict_from_factors(
@@ -861,4 +945,3 @@ def find_knee_lambda(
         )
 
     return float(lambdas[int(np.argmax(r2))])
-

@@ -63,8 +63,8 @@ def _run_leave_one_out_transfer_for_unit(
                                     required_metric_keys={
                                         "transfer_orth_corr",
                                         "transfer_orth_r2_per_target",
-                                        "transfer_orth_best_alphas",
-                                    })
+                                    } | ({"transfer_orth_best_alphas"}
+                                         if config.log_alphas else set()))
         ranks_by_fold, completed_pairs = plan["ranks_by_fold"], plan["completed_pairs"]
     for fold_f in range(n_folds):
         if not artifact.has_field(
@@ -137,6 +137,7 @@ def _run_leave_one_out_transfer_for_unit(
                 unit=unit,
                 primary_label="transfer",
                 evaluate_orthonormalized=True,
+                log_alphas=config.log_alphas,
             )
 
             row = {
@@ -243,8 +244,8 @@ def run_leave_one_out(
                 refresh=config.refresh,
                 require_target_factors=config.save_b_matrices,
                 required_metric_keys={
-                    "nr_orth_corr", "nr_orth_r2_per_target", "nr_orth_best_alphas",
-                } | (
+                    "nr_orth_corr", "nr_orth_r2_per_target",
+                } | ({"nr_orth_best_alphas"} if config.log_alphas else set()) | (
                     {"null_aug_corr_per_target", "null_aug_r2_per_target"}
                     if config.run_null_augmented else set()
                 ),
@@ -318,15 +319,15 @@ def run_leave_one_out(
                 require_input_factors=False,
                 required_metric_keys={
                     "transfer_orth_corr", "transfer_orth_r2_per_target",
-                    "transfer_orth_best_alphas",
-                },
+                } | ({"transfer_orth_best_alphas"}
+                     if config.log_alphas else set()),
             )
         baseline_rrr_plan = artifact.resume_plan(
             unit=partition.baseline_unit, ranks=config.rank_grid, folds=range(n_folds),
             refresh=config.refresh, require_target_factors=config.save_b_matrices,
             required_metric_keys={
-                "nr_orth_corr", "nr_orth_r2_per_target", "nr_orth_best_alphas",
-            } | (
+                "nr_orth_corr", "nr_orth_r2_per_target",
+            } | ({"nr_orth_best_alphas"} if config.log_alphas else set()) | (
                 {"null_aug_corr_per_target", "null_aug_r2_per_target"}
                 if config.run_null_augmented else set()
             ),

@@ -10,6 +10,10 @@ embeddings predict iEEG and fMRI responses. The supported executable surface is
   single-lag correlation or fMRI held-out-session implementation.
 - `scripts/run_rrr.py` dispatches reduced-rank regression by dataset while exposing
   one Config and Artifact contract.
+- `scripts/run_cross_stimulus_rrr.py` runs standalone within-subject Brain Treebank
+  transfer across every directed movie pair using common Laplacian contacts, no
+  significance filtering, and orthogonalized RRR input spaces; see
+  [cross_stimulus_rrr.md](cross_stimulus_rrr.md).
 - `scripts/run_target_dimensionality_rrr.py` reruns internal RRR over fold-safe
   target-PCA dimensions, with one Artifact variant per dimension and compiled
   correlation/R² sweep outputs.
@@ -50,7 +54,7 @@ significance artifacts rather than submitting significance jobs.
   their reusable statistical helpers.
 - `src/utils/rrr/` contains the modality-specific RRR runners, dense fitting, input
   preparation, evaluation, multiview handling, cross-temporal-window transfer, and
-  result helpers. iEEG RRR mode implementations are organized under
+  result helpers, including the standalone cross-stimulus mechanics. iEEG RRR mode implementations are organized under
   `src/utils/rrr/ieeg_rrr_mode/`, with `rrr_ieeg.py` retained as the compatibility
   facade.
 - `src/utils/subspace_comparison/` contains saved-space metrics and directed comparison
@@ -87,6 +91,9 @@ is configured uniformly across modalities as `within-layer` or as an explicit
 `cross-model-layer` union; union artifact entries may compactly list several layers
 for one model. Cross-model-layer batch RRR uses per-model configs so model-specific
 rank and ridge-memory settings can be retained for both iEEG and fMRI.
+Selected ridge alphas are optional output: iEEG RRR uses `ieeg.log_alphas`, fMRI
+RRR uses `fmri.ridge.log_alphas`, and the standalone cross-stimulus runner uses its
+top-level `log_alphas`; all default to false while alpha selection itself still runs.
 Cross-dataset RRR source identities include their own significance selection, which
 deterministically resolves and validates the saved source variant.
 Source and target selections are required to be corresponding within-layer selections

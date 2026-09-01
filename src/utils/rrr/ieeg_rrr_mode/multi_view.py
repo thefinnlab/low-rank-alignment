@@ -139,8 +139,8 @@ def run_multi_view(
         unit=unit, ranks=config.rank_grid, folds=range(len(test_idxs)),
         refresh=config.refresh, require_target_factors=config.save_b_matrices,
         required_metric_keys={
-            "nr_orth_corr", "nr_orth_r2_per_target", "nr_orth_best_alphas",
-        } | (
+            "nr_orth_corr", "nr_orth_r2_per_target",
+        } | ({"nr_orth_best_alphas"} if config.log_alphas else set()) | (
             {"null_aug_corr_per_target", "null_aug_r2_per_target"}
             if config.run_null_augmented else set()
         ),
@@ -209,12 +209,13 @@ def run_multi_view(
             y_in_cpu=enc.ridge_y_in_cpu,
             force_cpu=enc.ridge_force_cpu,
         )
-        artifact.save_diagnostics(unit=unit, fold=fold_f, diagnostics={
-            "view_names": view_names, "band_boundaries": boundaries,
-            "alphas": banded_alphas, "deltas": fitted.deltas,
-            "kernel_weights": np.exp(fitted.deltas),
-            "best_alphas": fitted.best_alphas, "intercept": fitted.intercept,
-        }, overwrite=config.refresh)
+        if config.log_alphas:
+            artifact.save_diagnostics(unit=unit, fold=fold_f, diagnostics={
+                "view_names": view_names, "band_boundaries": boundaries,
+                "alphas": banded_alphas, "deltas": fitted.deltas,
+                "kernel_weights": np.exp(fitted.deltas),
+                "best_alphas": fitted.best_alphas, "intercept": fitted.intercept,
+            }, overwrite=config.refresh)
         baselines[fold_f] = {
             "train_idx": train_idx,
             "test_idx": test_idx,

@@ -497,10 +497,12 @@ def run_fmri(
             full_test.responses, full_fit.test_prediction
         )
         full_r2_arr = _r2_per_target(full_test.responses, full_fit.test_prediction)
-        artifact.save_field("full_metrics", {
+        full_metrics = {
             "corr_per_target": full_corr_arr, "r2_per_target": full_r2_arr,
-            "best_alphas": full_fit.best_alphas,
-        }, overwrite=config.refresh)
+        }
+        if config.ridge.log_alphas:
+            full_metrics["best_alphas"] = full_fit.best_alphas
+        artifact.save_field("full_metrics", full_metrics, overwrite=config.refresh)
         if config.ridge.log_alphas:
             artifact.save_field("diagnostics", {
                 "alpha_grid": full_fit.alpha_grid,
@@ -595,10 +597,13 @@ def run_fmri(
             full_test.responses, fitted.test_prediction
         )
         r2_arr = _r2_per_target(full_test.responses, fitted.test_prediction)
-        artifact.save_rank_metrics(method=method, rank=rank, metrics={
-            "corr_per_target": corr_arr, "r2_per_target": r2_arr,
-            "best_alphas": fitted.best_alphas,
-        }, overwrite=config.refresh)
+        rank_metrics = {"corr_per_target": corr_arr, "r2_per_target": r2_arr}
+        if config.ridge.log_alphas:
+            rank_metrics["best_alphas"] = fitted.best_alphas
+        artifact.save_rank_metrics(
+            method=method, rank=rank, metrics=rank_metrics,
+            overwrite=config.refresh,
+        )
         if config.ridge.log_alphas:
             artifact.save_field("diagnostics", {
                 "alpha_grid": fitted.alpha_grid,

@@ -1,0 +1,16 @@
+data_root: data/brain-treebank
+results_root: results
+model: transformer
+per_model_config:
+  model_dir: gpt2
+  layer: 12
+subjects: null
+movies: {}
+offset: 0
+rank_grid: [1, 2, 4, 8, 16, 32, 64]
+num_folds: 5
+rereference: laplacian
+use_low_rank_svd: true
+low_rank_svd_seed: 0
+log_alphas: false
+refresh: false

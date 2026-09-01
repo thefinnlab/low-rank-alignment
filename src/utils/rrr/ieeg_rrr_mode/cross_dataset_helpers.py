@@ -85,8 +85,8 @@ def _run_cross_dataset_subspace_for_unit(
             {
                 f"{primary_label}_orth_corr",
                 f"{primary_label}_orth_r2_per_target",
-                f"{primary_label}_orth_best_alphas",
-            }
+            } | ({f"{primary_label}_orth_best_alphas"}
+                 if config.log_alphas else set())
             if evaluate_orthonormalized
             else None
         )
@@ -157,6 +157,7 @@ def _run_cross_dataset_subspace_for_unit(
                 primary_label=primary_label,
                 progress_desc=f"  cross-dataset fold {fold_f}",
                 evaluate_orthonormalized=evaluate_orthonormalized,
+                log_alphas=config.log_alphas,
                 refresh=config.refresh and rank == ranks_to_run[0],
             ))
         print(f"  Cross-dataset fold {fold_f} done in {time.time() - fold_start:.1f}s")

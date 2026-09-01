@@ -65,8 +65,9 @@ def run_cross_temporal_windows(config, enc, artifact, significance, subject_ids,
                                         folds=range(n_folds), refresh=config.refresh,
                                         require_input_factors=False,
                                         required_metric_keys=(
-                                            {"nr_orth_corr", "nr_orth_r2_per_target",
-                                             "nr_orth_best_alphas"}
+                                            {"nr_orth_corr", "nr_orth_r2_per_target"}
+                                            | ({"nr_orth_best_alphas"}
+                                               if config.log_alphas else set())
                                             if method == "rrr" else None
                                         ))
             artifact.save_target_manifest(unit=unit, target_manifest=manifest,
