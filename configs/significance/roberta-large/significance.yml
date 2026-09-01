@@ -16,6 +16,7 @@ ieeg:
     subjects: null
     batch: true
     num_folds: 5
+    shared_word_selection: true
     per_model_config:
       model_dir: roberta-large
       layer:
