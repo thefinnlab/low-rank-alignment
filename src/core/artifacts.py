@@ -262,8 +262,11 @@ class ArtifactStore:
             manifest = self._read_json(path)
             expected_config = normalized_config(config)
             expected_upstreams = _primitive(upstreams or [])
+            stored_upstreams = manifest.get("upstreams")
+            if stored_upstreams is None:
+                stored_upstreams = []
             if (manifest.get("configuration") != expected_config
-                    or manifest.get("upstreams") != expected_upstreams):
+                    or stored_upstreams != expected_upstreams):
                 raise ArtifactAmbiguityError(
                     f"Readable variant {selected!r} already represents a different "
                     "configuration; set an explicit variant_name"

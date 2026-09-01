@@ -108,6 +108,43 @@ def test_readable_variant_collision_requires_explicit_name(tmp_path):
         SignificanceArtifact(results_root=tmp_path).begin(config={"parameter": 2})
 
 
+@pytest.mark.parametrize("legacy_upstreams", [None, "missing"])
+def test_legacy_manifest_without_upstreams_resumes(tmp_path, legacy_upstreams):
+    artifact = SignificanceArtifact(results_root=tmp_path).begin(
+        config={"parameter": 1}
+    )
+    manifest_path = artifact._manifest_path()
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    if legacy_upstreams == "missing":
+        manifest.pop("upstreams")
+    else:
+        manifest["upstreams"] = None
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    resumed = SignificanceArtifact(results_root=tmp_path).begin(
+        config={"parameter": 1}, refresh=False
+    )
+
+    assert resumed.variant == "default"
+
+
+def test_legacy_manifest_without_upstreams_rejects_expected_dependency(tmp_path):
+    artifact = SignificanceArtifact(results_root=tmp_path).begin(
+        config={"parameter": 1}
+    )
+    manifest_path = artifact._manifest_path()
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest.pop("upstreams")
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    with pytest.raises(ArtifactAmbiguityError, match="variant_name"):
+        SignificanceArtifact(results_root=tmp_path).begin(
+            config={"parameter": 1},
+            upstreams=[{"script": "run_significance", "model": "gpt2"}],
+            refresh=False,
+        )
+
+
 def test_rrr_variant_distinguishes_significance_selection_and_source_sets():
     reference = {"dataset": "podcast", "model": "gpt2", "layer": 12}
     within = {

@@ -172,6 +172,9 @@ storage. Canonical script roots are excluded from legacy discovery;
 rank-saturation, subspace-comparison, multiview, and config-less nested
 cross-dataset outputs are intentionally deferred.
 
+Legacy manifests with a missing or null `upstreams` field are read as having no
+upstream dependencies. They remain incompatible with runs that declare an upstream.
+
 For older iEEG significance artifacts that lack the saved stimulus-row `selection`,
 `scripts/utilities/migrate_ieeg_selection.py` performs a metadata-only repair from
 the existing epoch caches. It does not retrain significance models or recompute
