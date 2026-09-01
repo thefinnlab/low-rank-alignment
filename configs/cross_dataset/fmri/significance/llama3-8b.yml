@@ -2,7 +2,7 @@ dataset: deep-fmri
 mode: held_out_session
 results_root: results
 plot: true
-refresh: true
+refresh: false
 num_null_shifts: 10000
 null_seed: 42
 null_batch_size: 1024
@@ -21,10 +21,10 @@ fmri:
     log_alphas: true
   model_dir: llama3-8b
   layer:
-  # - 0
-  # - 8
-  # - 16
-  # - 24
+  - 0
+  - 8
+  - 16
+  - 24
   - 32
   pooling: mean
   batch_subjects: true

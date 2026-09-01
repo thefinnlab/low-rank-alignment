@@ -121,7 +121,7 @@ def _fmri_significance(model_dir: str, layers: list[int]) -> dict:
         "null_batch_size": 1024,
         "minimal_shift": 10,
         "fdr_q": 0.05,
-        "refresh": True,
+        "refresh": False,
     }
 
 
