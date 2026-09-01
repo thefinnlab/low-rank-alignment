@@ -281,7 +281,8 @@ rrr-cross-model-layer-batch:
 	case "$(DATASET)" in \
 		podcast) config_root="configs/rrr"; models="$(CROSS_MODEL_LAYER_MODELS)" ;; \
 		cars-2) config_root="configs/brain_treebank/cars_2/rrr"; models="$(CROSS_MODEL_LAYER_CARS_MODELS)" ;; \
-		*) echo "Unsupported DATASET '$(DATASET)'; expected podcast or cars-2" >&2; exit 2 ;; \
+		megamind) config_root="configs/brain_treebank/megamind/rrr"; models="$(CROSS_MODEL_LAYER_CARS_MODELS)" ;; \
+		*) echo "Unsupported DATASET '$(DATASET)'; expected podcast, cars-2, or megamind" >&2; exit 2 ;; \
 	esac; \
 	for model in $$models; do \
 		config="$$config_root/$$model/cross_model_layer.yml"; \
@@ -324,6 +325,13 @@ sig-rrr-cross-model-layer-batch:
 			sig_override=""; \
 			rrr_modality="ieeg"; \
 			;; \
+		megamind) \
+			sig_root="configs/brain_treebank/megamind/significance"; \
+			rrr_root="configs/brain_treebank/megamind/rrr"; \
+			models="$(SIG_RRR_CARS_MODELS)"; \
+			sig_override=""; \
+			rrr_modality="ieeg"; \
+			;; \
 		fmri) \
 			sig_root="configs/cross_dataset/fmri/significance"; \
 			rrr_root="configs/fmri/within_fmri_cross_model_layer"; \
@@ -331,7 +339,7 @@ sig-rrr-cross-model-layer-batch:
 			sig_override=""; \
 			rrr_modality="fmri"; \
 			;; \
-		*) echo "Unsupported DATASET '$(DATASET)'; expected podcast, cars-2, or fmri" >&2; exit 2 ;; \
+		*) echo "Unsupported DATASET '$(DATASET)'; expected podcast, cars-2, megamind, or fmri" >&2; exit 2 ;; \
 	esac; \
 	sig_ids=""; \
 	for model in $$models; do \
@@ -396,8 +404,9 @@ temporal-windows-batch:
 		case "$$dataset" in \
 			podcast) config_root="configs/rrr" ;; \
 			cars-2) config_root="configs/brain_treebank/cars_2/rrr" ;; \
+			megamind) config_root="configs/brain_treebank/megamind/rrr" ;; \
 			*) \
-				echo "Unsupported temporal-window dataset '$$dataset'; expected podcast or cars-2" >&2; \
+				echo "Unsupported temporal-window dataset '$$dataset'; expected podcast, cars-2, or megamind" >&2; \
 				exit 2; \
 				;; \
 		esac; \
@@ -413,6 +422,7 @@ temporal-windows-batch:
 		case "$$dataset" in \
 			podcast) config_root="configs/rrr" ;; \
 			cars-2) config_root="configs/brain_treebank/cars_2/rrr" ;; \
+			megamind) config_root="configs/brain_treebank/megamind/rrr" ;; \
 		esac; \
 		for model in $(PIPELINE_MODELS); do \
 			config="$$config_root/$$model/temporal_windows.yml"; \
@@ -445,7 +455,8 @@ cross-temporal-pipeline:
 		case "$$dataset" in \
 			podcast) config_root="configs/rrr" ;; \
 			cars-2) config_root="configs/brain_treebank/cars_2/rrr" ;; \
-			*) echo "Unsupported cross-temporal dataset '$$dataset'; expected podcast or cars-2" >&2; exit 2 ;; \
+			megamind) config_root="configs/brain_treebank/megamind/rrr" ;; \
+			*) echo "Unsupported cross-temporal dataset '$$dataset'; expected podcast, cars-2, or megamind" >&2; exit 2 ;; \
 		esac; \
 		for model in $(CROSS_TEMPORAL_MODELS); do \
 			temporal_config="$$config_root/$$model/temporal_windows.yml"; \
@@ -459,7 +470,7 @@ cross-temporal-pipeline:
 		done; \
 	done; \
 	for dataset in $(CROSS_TEMPORAL_DATASETS); do \
-		case "$$dataset" in podcast) config_root="configs/rrr" ;; cars-2) config_root="configs/brain_treebank/cars_2/rrr" ;; esac; \
+		case "$$dataset" in podcast) config_root="configs/rrr" ;; cars-2) config_root="configs/brain_treebank/cars_2/rrr" ;; megamind) config_root="configs/brain_treebank/megamind/rrr" ;; esac; \
 		for model in $(CROSS_TEMPORAL_MODELS); do \
 			temporal_config="$$config_root/$$model/temporal_windows.yml"; \
 			cross_config="$$config_root/$$model/cross_temporal_windows.yml"; \
@@ -493,8 +504,12 @@ sig-rrr-batch:
 			sig_root="configs/brain_treebank/cars_2/significance"; \
 			rrr_root="configs/brain_treebank/cars_2/rrr"; \
 			;; \
+		megamind) \
+			sig_root="configs/brain_treebank/megamind/significance"; \
+			rrr_root="configs/brain_treebank/megamind/rrr"; \
+			;; \
 		*) \
-			echo "Unsupported DATASET '$(DATASET)'; expected podcast or cars-2" >&2; \
+			echo "Unsupported DATASET '$(DATASET)'; expected podcast, cars-2, or megamind" >&2; \
 			exit 2; \
 			;; \
 	esac; \

@@ -30,6 +30,7 @@ ieeg:
     shared_word_selection: true
     per_dataset_config:
       movie: cars-2
+      rereference: laplacian
     per_model_config:
       model_dir: gpt-j-6b
       layer: [0, 7, 14, 21, 28]

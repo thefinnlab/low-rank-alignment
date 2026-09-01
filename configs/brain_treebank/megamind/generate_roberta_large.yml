@@ -1,0 +1,25 @@
+hf_model_id: model_cache/models/roberta-large/
+tokenizer_name_or_path: model_cache/models/roberta-large/
+output_name: roberta-large
+data_root: data/brain-treebank
+dataset: brain_treebank
+per_dataset_config:
+  movie: megamind
+  rereference: laplacian
+context_window: 511
+stride: 1
+layers:
+- 0
+- 6
+- 12
+- 18
+- 24
+pooling: mean
+attention_mode: bidirectional_strict
+dtype: float32
+output_dtype: float16
+device: cuda
+batch_size: 4
+local_files_only: true
+add_prefix_space: true
+refresh: true

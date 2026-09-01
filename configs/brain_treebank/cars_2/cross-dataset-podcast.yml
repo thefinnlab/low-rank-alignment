@@ -44,6 +44,7 @@ ieeg:
     data_root: data/brain-treebank
     per_dataset_config:
       movie: cars-2
+      rereference: laplacian
     model: transformer
     shared_word_selection: true
     num_folds: 5

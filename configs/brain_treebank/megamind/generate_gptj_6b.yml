@@ -1,0 +1,25 @@
+hf_model_id: model_cache/models/gpt-j-6b
+tokenizer_name_or_path: model_cache/models/gpt2-xl
+output_name: gpt-j-6b
+data_root: data/brain-treebank
+dataset: brain_treebank
+per_dataset_config:
+  movie: megamind
+  rereference: laplacian
+context_window: 1023
+stride: 512
+layers:
+- 0
+- 7
+- 14
+- 21
+- 28
+pooling: mean
+attention_mode: auto
+dtype: float16
+output_dtype: float16
+device: cuda
+batch_size: 32
+local_files_only: true
+add_prefix_space: true
+refresh: true

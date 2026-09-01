@@ -35,6 +35,7 @@ ieeg:
     data_root: data/brain-treebank
     per_dataset_config:
       movie: cars-2
+      rereference: laplacian
     model: transformer
     offset: 0
     subjects:
