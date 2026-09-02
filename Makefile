@@ -31,6 +31,11 @@ FMRI_EMBED_CONFIG ?= configs/fmri/generate_gpt2_xl.yml
 FMRI_SIG_CONFIG ?= configs/fmri/significance_gpt2_xl_layer24.yml
 FMRI_RRR_CONFIG ?= configs/fmri/cross_dataset_rrr_gpt2_xl_layer24.yml
 RANDOM_EMBED_CONFIG ?= configs/embeddings/generate_random_gpt2_xl.yml
+BTB_EMBED_CONFIGS ?= configs/brain_treebank/cars_2/generate_gpt2.yml
+BTB_DATA_ROOT ?= data/brain-treebank
+BTB_PRECOMPUTE_CONFIG ?= configs/brain_treebank/cross_stimulus/gpt2.yml
+BTB_SUBJECT ?=
+BTB_TRIAL ?=
 PIPELINE_MODELS ?= gpt-j-6b gpt2-xl llama3-8b roberta-large random-gpt2-xl gpt2 glove
 CROSS_MODEL_LAYER_MODELS ?= gpt-j-6b gpt2-xl llama3-8b roberta-large random-gpt2-xl gpt2
 CROSS_MODEL_LAYER_CARS_MODELS ?= $(filter-out glove,$(PIPELINE_MODELS))
@@ -117,6 +122,31 @@ sig-batch:
 precompute-epochs:
 	mkdir -p logs
 	$(CMD) scripts/utilities/precompute_epochs.py --config $(PRECOMPUTE_EPOCHS_CONFIG) $(OVERRIDES)
+
+## Download Brain Treebank metadata and multi-movie-subject trial recordings.
+## Usage: make download-brain-treebank BTB_DATA_ROOT=data/brain-treebank
+download-brain-treebank:
+	scripts/download_brain_treebank.sh --data-root $(BTB_DATA_ROOT)
+
+## Generate missing embeddings for every movie in the cross-stimulus cohort.
+## Usage: make generate-brain-treebank-embeddings CMD="uv run python"
+generate-brain-treebank-embeddings:
+	mkdir -p logs
+	$(CMD) scripts/generate_brain_treebank_embeddings.py $(foreach c,$(BTB_EMBED_CONFIGS),--config $(c)) $(OVERRIDES)
+
+## Precompute all missing Laplacian epoch caches needed by cross-stimulus RRR.
+## Usage: make precompute-cross-stimulus-epochs CMD="uv run python"
+precompute-cross-stimulus-epochs:
+	mkdir -p logs
+	$(CMD) scripts/utilities/precompute_epochs.py --config $(BTB_PRECOMPUTE_CONFIG) --cross-stimulus $(OVERRIDES)
+
+## Precompute one exact Brain Treebank subject/trial cache.
+## Usage: make precompute-trial-epochs BTB_SUBJECT=2 BTB_TRIAL=4 CMD="uv run python"
+precompute-trial-epochs:
+	@test -n "$(BTB_SUBJECT)" || (echo "BTB_SUBJECT is required" >&2; exit 2)
+	@test -n "$(BTB_TRIAL)" || (echo "BTB_TRIAL is required" >&2; exit 2)
+	mkdir -p logs
+	$(CMD) scripts/utilities/precompute_epochs.py --config $(BTB_PRECOMPUTE_CONFIG) --subject $(BTB_SUBJECT) --trial $(BTB_TRIAL) $(OVERRIDES)
 
 ## Generate per-token contextual embeddings for the podcast transcript from a HuggingFace model
 ## Usage:
@@ -566,4 +596,4 @@ sig-test:
 test:
 	python -m pytest tests/ -v
 
-.PHONY: sig sig-batch train plots rrr rrr-batch rrr-cross-model-layer-batch temporal-windows-batch cross-temporal-pipeline sig-rrr-batch submit-rrr-matrix sig-test test generate-embeddings generate-embeddings-batch generate-random-embeddings download-models precompute-epochs print-atlas-regions compare-subspaces compare-subspaces-batch
+.PHONY: sig sig-batch train plots rrr rrr-batch rrr-cross-model-layer-batch temporal-windows-batch cross-temporal-pipeline sig-rrr-batch submit-rrr-matrix sig-test test generate-embeddings generate-embeddings-batch generate-random-embeddings download-models precompute-epochs download-brain-treebank generate-brain-treebank-embeddings precompute-cross-stimulus-epochs precompute-trial-epochs print-atlas-regions compare-subspaces compare-subspaces-batch

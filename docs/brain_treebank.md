@@ -1,5 +1,43 @@
 # Brain Treebank preprocessing
 
+## Cross-stimulus setup
+
+The cross-stimulus workflow needs the source HDF5 recordings, movie metadata,
+timings, labels, localization, and transcripts. Download the shared archives and
+only the trials for subjects who watched at least two movies with:
+
+```bash
+scripts/download_brain_treebank.sh --data-root data/brain-treebank
+```
+
+Use `--dry-run` to inspect the selected subjects and movies before downloading
+the trial recordings. The downloader resumes partial ZIP files and reuses valid
+downloads and extracted HDF5 files.
+
+Generate the missing contextual embeddings for every distinct movie in that
+cohort with:
+
+```bash
+uv run python scripts/generate_brain_treebank_embeddings.py \
+  --config configs/brain_treebank/cars_2/generate_gpt2.yml
+```
+
+The command preserves the normal per-model/per-movie embedding layout and skips
+movies whose features, transcript, metadata, and requested layers are complete.
+
+Finally, precompute all missing Laplacian epoch caches using the existing
+preprocessing implementation:
+
+```bash
+uv run python scripts/utilities/precompute_epochs.py \
+  --config configs/brain_treebank/cross_stimulus/gpt2.yml \
+  --cross-stimulus
+```
+
+This mode discovers eligible subjects, gathers every exact subject/trial pair,
+and invokes the same per-trial preprocessing used by the standard command. A
+single trial can be run with `--subject SUBJECT --trial TRIAL`.
+
 Brain Treebank word-aligned epoch preprocessing computes a 70–200 Hz Hilbert envelope
 from the source HDF5 voltage traces. It drops contacts listed in `corrupted_elec.json`,
 resamples the continuous recording to 512 Hz, despikes each contact, rereferences the

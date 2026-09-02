@@ -69,7 +69,9 @@ Brain Treebank high-gamma preprocessing supports common-average and shaft-Laplac
 rereferencing. Common average remains the default. Laplacian caches and downstream
 analyses are selected with `per_dataset_config.rereference: laplacian`; see
 [brain_treebank.md](brain_treebank.md) for the cache naming, contact-retention, and
-configuration contract.
+configuration contract. The cross-stimulus setup helpers download the eligible
+subject trials, generate missing movie embeddings, and precompute missing
+Laplacian epoch caches through the existing preprocessing implementation.
 The checked-in Cars 2 and Megamind pipeline configs use Laplacian rereferencing;
 Megamind covers subjects 4, 6, and 7 and mirrors the Cars 2 significance and RRR
 model/mode matrix.

@@ -41,6 +41,22 @@ Sample-level predictions and observations are not saved.
 
 ## Running
 
+To prepare a remote host from an empty Brain Treebank data directory, run:
+
+```bash
+scripts/download_brain_treebank.sh --data-root data/brain-treebank
+uv run python scripts/generate_brain_treebank_embeddings.py \
+  --config configs/brain_treebank/cars_2/generate_gpt2.yml
+uv run python scripts/utilities/precompute_epochs.py \
+  --config configs/brain_treebank/cross_stimulus/gpt2.yml \
+  --cross-stimulus
+```
+
+Each preparation step is resumable. Embeddings and epoch caches are skipped
+when their complete artifacts already exist. The equivalent Make targets are
+`download-brain-treebank`, `generate-brain-treebank-embeddings`, and
+`precompute-cross-stimulus-epochs`.
+
 The checked-in example runs one GPT-2 layer:
 
 ```bash
