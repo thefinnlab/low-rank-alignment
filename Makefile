@@ -80,10 +80,10 @@ RRR_CONFIGS     ?= configs/rrr/gpt-j-6b/cross_subject.yml \
 				   configs/rrr/gpt2-xl/leave_one_subject_out.yml \
 				   configs/rrr/llama3-8b/cross_subject.yml \
 				   configs/rrr/llama3-8b/leave_one_subject_out.yml \
+				   configs/rrr/random-gpt2-xl/cross_subject.yml \
+				   configs/rrr/random-gpt2-xl/leave_one_subject_out.yml \
 				   configs/rrr/roberta-large/cross_subject.yml \
-				   configs/rrr/roberta-large/leave_one_subject_out.yml \
-				   configs/rrr/glove/cross_subject.yml \
-				   configs/rrr/glove/leave_one_subject_out.yml
+				   configs/rrr/roberta-large/leave_one_subject_out.yml
 
 
 define run_config_list

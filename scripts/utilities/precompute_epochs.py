@@ -341,8 +341,11 @@ def _run_standard(config: EncodingConfig):
 
 
 def _run_cross_stimulus(config: EncodingConfig):
-    if config.dataset != "brain_treebank":
-        raise ValueError("--cross-stimulus requires dataset=brain_treebank.")
+    # The standalone cross-stimulus RRR config intentionally omits ``dataset``
+    # because its own Config is Brain Treebank-specific. When that config is
+    # reused here as an EncodingConfig, the dataclass default would otherwise
+    # be ``podcast``.
+    config.dataset = "brain_treebank"
     per_dataset_config = dict(config.per_dataset_config)
     per_dataset_config.setdefault("rereference", "laplacian")
     config.per_dataset_config = per_dataset_config
@@ -388,6 +391,8 @@ def main():
     if args.cross_stimulus:
         _run_cross_stimulus(config)
     elif args.subject is not None:
+        # Subject/trial selection is a Brain Treebank-specific interface.
+        config.dataset = "brain_treebank"
         precompute_trial(config, args.subject, args.trial)
     else:
         _run_standard(config)
