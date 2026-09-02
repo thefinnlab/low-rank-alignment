@@ -21,7 +21,13 @@ GloVe dimensions are part of the model (`glove-300`) and its layer is
 
 Each canonical leaf contains readable variant subdirectories. RRR variants include
 `significance-<selection-mode>-<digest>`, where the stable digest identifies the
-reference and expanded selection-source set. Cross-dataset runs also describe their
+reference and expanded selection-source set. Every configured subspace aggregation
+adds an `aggregation-<method>` component, including `aggregation-extrinsic` and
+`aggregation-prediction_weighted`. An unspecified (`null`) aggregation adds no path
+component; this is the usual EEG default and computes extrinsic aggregation wherever
+aggregation is needed. When such an Artifact is used as an RRR source, its tagged
+method propagates as `source-aggregation-<method>` so downstream results
+also remain distinct. Cross-dataset runs additionally describe their
 RRR upstream identity under
 `source/<mode>/<dataset>/offset-<offset>/<model>/layer-<layer>`, and specialized
 runs use names such as `atlas-<name>`. A configuration that
@@ -35,9 +41,10 @@ rereference label alongside its other readable variant components. Dependency bl
 must select the matching Laplacian variant.
 
 RRR consumers may pass `significance_selection` directly to the `Artifact`
-constructor in place of `variant`. The Artifact computes the same stable digest,
-selects that variant, and verifies the selection recorded in its manifest. Explicit
-`variant` and `significance_selection` arguments are mutually exclusive. Cross-dataset
+constructor in place of `variant`, together with `subspace_aggregation` when selecting
+an explicitly named aggregation result. The Artifact computes the same readable variant,
+selects it, and verifies both requested values against its manifest. Explicit
+`variant` and derived selection arguments are mutually exclusive. Cross-dataset
 RRR source blocks use this form so the source factors are constrained to the intended
 significant-target set rather than relying on single-variant discovery.
 

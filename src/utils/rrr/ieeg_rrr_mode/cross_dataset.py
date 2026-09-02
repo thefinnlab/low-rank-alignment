@@ -29,11 +29,9 @@ def run_cross_dataset(
         source_kwargs.setdefault("results_root", config.results_root)
         source = Artifact(**source_kwargs)
     elif config.fmri_rrr_source:
-        from scripts.fmri.run_cross_dataset_rrr import Artifact as FMRIRRRArtifact
-
         source_kwargs = dict(config.fmri_rrr_source)
         source_kwargs.setdefault("results_root", config.results_root)
-        source = FMRIRRRArtifact(**source_kwargs)
+        source = Artifact(**source_kwargs)
     else:
         raise ValueError("cross_dataset requires an explicit RRR source Artifact")
     if source.variant is None:

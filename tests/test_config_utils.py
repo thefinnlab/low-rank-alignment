@@ -521,9 +521,14 @@ class TestApplyOverrides:
         assert config.refresh is False
 
     def test_subspace_aggregation_defaults_and_validation(self):
-        assert RRRConfig().subspace_aggregation == "extrinsic"
+        assert RRRConfig().subspace_aggregation is None
         fmri = FMRICrossDatasetRRRConfig(source_mode="within_fmri")
-        assert fmri.subspace_aggregation == "extrinsic"
+        assert fmri.subspace_aggregation == "prediction_weighted"
+        cross_dataset_fmri = FMRICrossDatasetRRRConfig(
+            source_mode="cross_dataset",
+            ieeg_rrr_source={"variant": "source"},
+        )
+        assert cross_dataset_fmri.subspace_aggregation is None
         assert fmri.rrr_svd_on_cpu is False
         assert fmri.rrr_use_low_rank_svd is False
         assert fmri.rrr_low_rank_svd_seed == 0
@@ -533,6 +538,16 @@ class TestApplyOverrides:
         assert RRRConfig(subspace_aggregation="factor_weighted").subspace_aggregation == (
             "factor_weighted"
         )
+        assert FMRICrossDatasetRRRConfig(
+            source_mode="within_fmri",
+            subspace_aggregation="prediction_weighted",
+        ).subspace_aggregation == "prediction_weighted"
+        with pytest.raises(ValueError, match="subspace_aggregation"):
+            FMRICrossDatasetRRRConfig(
+                source_mode="cross_dataset",
+                subspace_aggregation="prediction_weighted",
+                ieeg_rrr_source={"variant": "source"},
+            )
         with pytest.raises(ValueError, match="subspace_aggregation"):
             RRRConfig(subspace_aggregation="unnormalized")
         with pytest.raises(ValueError, match="subspace_aggregation"):

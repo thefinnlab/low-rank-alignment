@@ -104,6 +104,7 @@ def run_multi_view(
     _, prepared_baselines, test_idxs, sig_mask_flat, target_manifest = prepared_values
     selection = np.asarray(reference["selection"])
     bases, basis_modes = {}, {}
+    aggregation_method = config.subspace_aggregation or "extrinsic"
     for view in config.views:
         source = sources[view.name]
         rank = int(view.rank)
@@ -119,10 +120,10 @@ def run_multi_view(
         else:
             mean_basis = aggregate_subspace_basis(
                 list(fold_factors.values()), rank=rank,
-                method=config.subspace_aggregation,
+                method=aggregation_method,
             )
             bases[view.name] = {fold: mean_basis for fold in range(len(test_idxs))}
-            basis_modes[view.name] = f"cross_dataset_fold_{config.subspace_aggregation}"
+            basis_modes[view.name] = f"cross_dataset_fold_{aggregation_method}"
     view_names = [view.name for view in config.views]
     n_words = len(selection)
     all_rows = np.arange(n_words, dtype=int)

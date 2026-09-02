@@ -23,7 +23,7 @@ significance_selection:
     offset: 0
     model: roberta-large
     layer: '{layer}'
-subspace_aggregation: extrinsic
+subspace_aggregation: prediction_weighted
 ieeg: null
 fmri:
   ridge:

@@ -81,6 +81,7 @@ def load_view_embeddings(config, resolved, subject_ids):
 
 def load_view_bases(config, resolved, target_key, selection, test_idxs):
     bases, modes = {}, {}
+    aggregation_method = config.subspace_aggregation or "extrinsic"
     for view in config.views:
         run = resolved[view.name]
         rank = int(view.rank)
@@ -95,9 +96,9 @@ def load_view_bases(config, resolved, target_key, selection, test_idxs):
             modes[view.name] = "matching_target_fold_raw"
         else:
             mean = aggregate_subspace_basis(list(fold_values.values()), rank=rank,
-                                            method=config.subspace_aggregation)
+                                            method=aggregation_method)
             bases[view.name] = {fold: mean for fold in range(len(test_idxs))}
-            modes[view.name] = f"cross_dataset_fold_{config.subspace_aggregation}"
+            modes[view.name] = f"cross_dataset_fold_{aggregation_method}"
     return bases, modes
 
 def project_view_bands(

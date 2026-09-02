@@ -40,6 +40,9 @@ class LanguageDecodingMode(str, Enum):
 
 
 SUBSPACE_AGGREGATION_METHODS = {"extrinsic", "factor_weighted"}
+FMRI_FIR_SUBSPACE_AGGREGATION_METHODS = (
+    SUBSPACE_AGGREGATION_METHODS | {"prediction_weighted"}
+)
 
 
 def _validate_subspace_aggregation(value: str) -> None:
@@ -266,7 +269,7 @@ class RRRConfig:
     temporal_window_pairs: list[RRRCrossTemporalWindowPairConfig] = field(
         default_factory=list
     )
-    subspace_aggregation: str = "extrinsic"
+    subspace_aggregation: str | None = None
 
     # Full-model banded ridge used by mode=multi_view.
     banded_ridge_alphas: list[float] | None = None
@@ -319,7 +322,8 @@ class RRRConfig:
 
     def validate(self):
         self.significance_selection.validate()
-        _validate_subspace_aggregation(self.subspace_aggregation)
+        if self.subspace_aggregation is not None:
+            _validate_subspace_aggregation(self.subspace_aggregation)
         if self.cross_source_format not in {"fold_factors", "rank_bases"}:
             raise ValueError(
                 "cross_source_format must be 'fold_factors' or 'rank_bases', "
@@ -975,7 +979,7 @@ class FMRICrossDatasetRRRConfig:
     )
     ieeg_rrr_source: dict | None = None
     source_mode: str = "cross_dataset"
-    subspace_aggregation: str = "extrinsic"
+    subspace_aggregation: str | None = None
     rrr_svd_on_cpu: bool = False
     rrr_use_low_rank_svd: bool = False
     rrr_low_rank_svd_seed: int = 0
@@ -989,11 +993,26 @@ class FMRICrossDatasetRRRConfig:
 
     def validate(self):
         self.significance_selection.validate()
-        _validate_subspace_aggregation(self.subspace_aggregation)
         if self.source_mode not in {"cross_dataset", "within_fmri"}:
             raise ValueError(
                 "source_mode must be 'cross_dataset' or 'within_fmri', "
                 f"got {self.source_mode!r}"
+            )
+        if self.subspace_aggregation is None and self.source_mode == "within_fmri":
+            self.subspace_aggregation = "prediction_weighted"
+        allowed_aggregation = (
+            FMRI_FIR_SUBSPACE_AGGREGATION_METHODS
+            if self.source_mode == "within_fmri"
+            else SUBSPACE_AGGREGATION_METHODS
+        )
+        if (
+            self.subspace_aggregation is not None
+            and self.subspace_aggregation not in allowed_aggregation
+        ):
+            raise ValueError(
+                "subspace_aggregation must be one of "
+                f"{sorted(allowed_aggregation)} for source_mode={self.source_mode!r}, "
+                f"got {self.subspace_aggregation!r}"
             )
         if not self.fmri.subjects:
             raise ValueError("At least one fMRI subject is required")

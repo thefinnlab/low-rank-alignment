@@ -392,6 +392,7 @@ def fit_dense_rrr(
         dict with keys:
             A_dense: (n_selected, k)
             B_dense: (n_targets, k), present only when return_b is True
+            singular_values: (k,) singular values of the fitted training predictions
             selected_idx: the input selected_idx
     """
     if device is None:
@@ -402,6 +403,7 @@ def fit_dense_rrr(
     if n_selected == 0:
         result = {
             "A_dense": np.zeros((0, k), dtype=np.float32),
+            "singular_values": np.zeros(k, dtype=np.float32),
             "selected_idx": selected_idx,
         }
         if return_b:
@@ -463,14 +465,17 @@ def fit_dense_rrr(
         fork_devices = [svd_input.device] if svd_input.device.type == "cuda" else []
         with torch.random.fork_rng(devices=fork_devices):
             torch.manual_seed(low_rank_svd_seed)
-            _, _, V = torch.svd_lowrank(svd_input, q=q, niter=2)
+            _, singular_values, V = torch.svd_lowrank(svd_input, q=q, niter=2)
         Vh = V.T
     else:
-        _, _, Vh = torch.linalg.svd(svd_input, full_matrices=False)
+        _, singular_values, Vh = torch.linalg.svd(svd_input, full_matrices=False)
 
     print("Vh:", Vh.shape)
     actual_k = min(k, Vh.shape[0])
     Vh_k = Vh[:actual_k, :].to(device=beta_ols.device, dtype=beta_ols.dtype)
+    retained_singular_values = singular_values[:actual_k].to(
+        device=beta_ols.device, dtype=beta_ols.dtype
+    )
 
     # Step 3: Factor matrices
     # A = beta_ols @ Vh_k^T  (n_selected, actual_k)
@@ -488,9 +493,16 @@ def fit_dense_rrr(
             B_dense = torch.cat(
                 [B_dense, torch.zeros(n_targets, pad, device=device)], dim=1
             )
+        retained_singular_values = torch.cat(
+            [
+                retained_singular_values,
+                torch.zeros(pad, dtype=beta_ols.dtype, device=beta_ols.device),
+            ]
+        )
 
     result = {
         "A_dense": to_numpy(A_dense),
+        "singular_values": to_numpy(retained_singular_values),
         "selected_idx": selected_idx,
     }
     if B_dense is not None:

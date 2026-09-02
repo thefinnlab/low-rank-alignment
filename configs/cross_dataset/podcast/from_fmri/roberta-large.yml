@@ -30,6 +30,7 @@ rrr_source:
   offset: 0
   model: roberta-large
   layer: '{layer}'
+  subspace_aggregation: prediction_weighted
   significance_selection:
     mode: within-layer
     reference_artifact:

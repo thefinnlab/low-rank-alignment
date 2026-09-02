@@ -293,7 +293,10 @@ def test_within_fmri_bases_save_fir_blocks_rank_bases_and_pre_fir_pca(
 
     def fake_fit_dense_rrr(*args, **kwargs):
         fit_kwargs.update(kwargs)
-        return {"A_dense": fir_a}
+        return {
+            "A_dense": fir_a,
+            "singular_values": np.array([7.0], dtype=np.float32),
+        }
 
     monkeypatch.setattr(
         runner,
@@ -322,6 +325,7 @@ def test_within_fmri_bases_save_fir_blocks_rank_bases_and_pre_fir_pca(
     )
 
     np.testing.assert_array_equal(factors["full_fir"], fir_a)
+    np.testing.assert_array_equal(factors["prediction_singular_values"], [7.0])
     assert len(factors["delay_blocks"]) == 2
     assert abs(float(bases["rrr"][1][:, 0] @ np.array([1.0, 0.0, 0.0]))) > 0.999
     assert abs(float(bases["pca"][1][:, 0] @ np.array([1.0, 0.0, 0.0]))) > 0.999
@@ -329,6 +333,67 @@ def test_within_fmri_bases_save_fir_blocks_rank_bases_and_pre_fir_pca(
     assert fit_kwargs["use_low_rank_svd"] is True
     assert fit_kwargs["low_rank_svd_seed"] == 17
     assert fit_kwargs["return_b"] is False
+
+
+def test_within_fmri_prediction_weighted_basis_uses_prediction_singular_values(
+    monkeypatch,
+):
+    from src.utils.rrr import rrr_fmri as runner
+
+    prepared = fmri.PreparedFMRI(
+        stimulus=np.zeros((8, 6), dtype=np.float32),
+        pre_fir_stimulus=np.eye(8, 3, dtype=np.float32),
+        responses=np.zeros((8, 3), dtype=np.float32),
+        story_slices={"story": slice(0, 8)},
+    )
+    fir_a = np.array(
+        [
+            [100.0, 0.0],
+            [0.0, 0.0],
+            [0.0, 1000.0],
+            [0.0, 0.0],
+            [100.0, 0.0],
+            [0.0, 1000.0],
+        ],
+        dtype=np.float32,
+    )
+    monkeypatch.setattr(
+        runner,
+        "fit_dense_rrr",
+        lambda *args, **kwargs: {
+            "A_dense": fir_a,
+            "singular_values": np.array([10.0, 1.0], dtype=np.float32),
+        },
+    )
+    config = SimpleNamespace(
+        rank_grid=[2],
+        subspace_aggregation="prediction_weighted",
+        rrr_svd_on_cpu=False,
+        rrr_use_low_rank_svd=False,
+        rrr_low_rank_svd_seed=0,
+        rrr_save_b_matrix=False,
+        pca_svd_device="cpu",
+        fmri=SimpleNamespace(ndelays=2),
+    )
+    ridge_fit = runner.FinalRidgeFit(
+        test_prediction=np.zeros((2, 3), dtype=np.float32),
+        train_prediction=np.zeros((8, 3), dtype=np.float32),
+        coefficients=np.zeros((6, 3), dtype=np.float32),
+        best_alphas=np.ones(3),
+        alpha_grid=np.ones(1),
+    )
+
+    bases, _ = runner._fit_within_fmri_bases(
+        prepared, ridge_fit, ambient_dim=3, config=config
+    )
+
+    basis = bases["rrr"][2]
+    np.testing.assert_allclose(basis.T @ basis, np.eye(2), atol=1e-6)
+    np.testing.assert_allclose(
+        basis @ basis.T,
+        np.diag([1.0, 1.0, 0.0]),
+        atol=1e-6,
+    )
 
 
 def test_final_ridge_skips_unused_train_prediction_and_coefficients(

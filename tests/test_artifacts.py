@@ -205,12 +205,127 @@ def test_rrr_artifact_loads_variant_from_significance_selection(tmp_path):
     assert loaded.variant == readable_variant({"significance_selection": selection})
 
 
+def test_subspace_aggregation_is_a_distinct_readable_variant(tmp_path):
+    selection = {
+        "mode": "within-layer",
+        "reference_artifact": {
+            "mode": "held_out_session",
+            "dataset": "deep-fmri",
+            "offset": 0,
+            "model": "gpt2",
+            "layer": 12,
+        },
+    }
+    extrinsic_config = {
+        "significance_selection": selection,
+        "subspace_aggregation": "extrinsic",
+    }
+    factor_config = {
+        "significance_selection": selection,
+        "subspace_aggregation": "factor_weighted",
+    }
+    prediction_config = {
+        "significance_selection": selection,
+        "subspace_aggregation": "prediction_weighted",
+    }
+    unspecified_config = {"significance_selection": selection}
+
+    extrinsic = RRRArtifact(results_root=tmp_path).begin(config=extrinsic_config)
+    factor = RRRArtifact(results_root=tmp_path).begin(config=factor_config)
+    prediction = RRRArtifact(results_root=tmp_path).begin(config=prediction_config)
+    unspecified = RRRArtifact(results_root=tmp_path).begin(config=unspecified_config)
+
+    assert extrinsic.variant.startswith("aggregation-extrinsic/significance-")
+    assert factor.variant.startswith("aggregation-factor_weighted/significance-")
+    assert prediction.variant.startswith(
+        "aggregation-prediction_weighted/significance-"
+    )
+    assert unspecified.variant.startswith("significance-within-layer-")
+    assert "aggregation-" not in unspecified.variant
+    assert len({
+        extrinsic.variant, factor.variant, prediction.variant, unspecified.variant,
+    }) == 4
+
+    loaded = RRRArtifact(
+        results_root=tmp_path,
+        significance_selection=selection,
+        subspace_aggregation="factor_weighted",
+    )
+    assert loaded.manifest()["configuration"]["subspace_aggregation"] == (
+        "factor_weighted"
+    )
+
+
+def test_source_aggregation_propagates_into_downstream_variant():
+    base_source = {
+        "script": "run_rrr",
+        "mode": "internal",
+        "dataset": "deep-fmri",
+        "offset": 0,
+        "model": "gpt2",
+        "layer": 12,
+    }
+    target_config = {
+        "significance_selection": {
+            "mode": "within-layer",
+            "reference_artifact": {
+                "dataset": "podcast",
+                "model": "gpt2",
+                "layer": 12,
+            },
+        }
+    }
+
+    extrinsic = readable_variant(
+        target_config,
+        [{
+            **base_source,
+            "variant": "aggregation-extrinsic/significance-within-layer-source",
+        }],
+    )
+    factor = readable_variant(
+        target_config,
+        [
+            {
+                **base_source,
+                "variant": (
+                    "aggregation-factor_weighted/"
+                    "significance-within-layer-source"
+                ),
+            }
+        ],
+    )
+    prediction = readable_variant(
+        target_config,
+        [
+            {
+                **base_source,
+                "variant": (
+                    "aggregation-prediction_weighted/"
+                    "significance-within-layer-source"
+                ),
+            }
+        ],
+    )
+
+    assert "source-aggregation-extrinsic" in extrinsic
+    assert "source-aggregation-factor_weighted" in factor
+    assert "source-aggregation-prediction_weighted" in prediction
+    assert len({extrinsic, factor, prediction}) == 3
+
+
 def test_rrr_artifact_rejects_variant_and_significance_selection(tmp_path):
     with pytest.raises(ValueError, match="mutually exclusive"):
         RRRArtifact(
             results_root=tmp_path,
             variant="manual",
             significance_selection={"reference_artifact": {"dataset": "podcast"}},
+        )
+    with pytest.raises(ValueError, match="mutually exclusive"):
+        RRRArtifact(
+            results_root=tmp_path,
+            variant="manual",
+            subspace_aggregation="factor_weighted",
         )
 
 

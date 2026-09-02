@@ -93,10 +93,25 @@ def readable_variant(config: Any, upstreams: list[dict] | None = None,
                 f"offset-{int(source.get('offset', 0))}", str(source["model"]),
                 f"layer-{'none' if source.get('layer') is None else int(source['layer'])}",
             ))
+            source_variant = str(source.get("variant") or "")
+            source_aggregation = next(
+                (
+                    component
+                    for component in source_variant.split("/")
+                    if component.startswith("aggregation-")
+                ),
+                None,
+            )
+            if source_aggregation is not None:
+                parts.append(f"source-{source_aggregation}")
     elif extras:
         parts.extend(
             f"{key}-{value}" for key, value in sorted(_primitive(extras).items())
         )
+
+    aggregation = normalized.get("subspace_aggregation")
+    if aggregation is not None:
+        parts.append(f"aggregation-{aggregation}")
 
     selection = normalized.get("significance_selection")
     if isinstance(selection, dict) and selection.get("reference_artifact"):

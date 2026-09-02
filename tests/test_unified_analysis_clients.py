@@ -60,6 +60,17 @@ def test_rrr_internal_mode_and_generic_source_translation():
     ).selected_config()
     assert isinstance(ieeg, RRRConfig)
     assert ieeg.mode.value == "cross_subject"
+    assert ieeg.subspace_aggregation is None
+
+    within_fmri = RRRClientConfig(
+        dataset="deep-fmri", mode="internal", ieeg=None,
+        significance_selection={
+            "mode": "within-layer",
+            "reference_artifact": {"dataset": "deep-fmri"},
+        },
+        fmri={"data": {"subjects": ["UTS01"]}},
+    ).selected_config()
+    assert within_fmri.subspace_aggregation == "prediction_weighted"
 
     fmri = RRRClientConfig(
         dataset="deep-fmri", mode="cross_dataset", ieeg=None,
@@ -73,6 +84,24 @@ def test_rrr_internal_mode_and_generic_source_translation():
     assert isinstance(fmri, FMRICrossDatasetRRRConfig)
     assert fmri.source_mode == "cross_dataset"
     assert fmri.ieeg_rrr_source["dataset"] == "podcast"
+    assert fmri.subspace_aggregation is None
+
+
+def test_rrr_fmri_source_defaults_to_prediction_weighted():
+    selected = RRRClientConfig(
+        mode="cross_dataset",
+        significance_selection={
+            "mode": "within-layer",
+            "reference_artifact": {"dataset": "podcast"},
+        },
+        rrr_source={"dataset": "deep-fmri", "mode": "internal"},
+        ieeg={"encoding": {}},
+    ).selected_config()
+
+    assert selected.subspace_aggregation is None
+    assert selected.fmri_rrr_source["subspace_aggregation"] == (
+        "prediction_weighted"
+    )
 
 
 def test_rrr_cross_temporal_mode_translates_generic_source():

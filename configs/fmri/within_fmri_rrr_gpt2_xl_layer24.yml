@@ -24,7 +24,7 @@ significance_selection:
     offset: 0
     model: gpt2-xl
     layer: 24
-subspace_aggregation: extrinsic
+subspace_aggregation: prediction_weighted
 ieeg: null
 fmri:
   ridge:

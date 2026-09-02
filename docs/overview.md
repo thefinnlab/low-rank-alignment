@@ -104,7 +104,12 @@ at each rank. Its optional PCA basis is likewise fit on all source words. Saved 
 fold factors are not loaded or averaged for transfer. fMRI sources expose saved
 whole-training-stimulus rank bases; aggregation remains only where the fMRI FIR RRR
 factor is combined across delay blocks, using the configured equal-subspace
-`extrinsic` or `factor_weighted` method.
+`extrinsic` method, raw-coefficient `factor_weighted` method, or normalized
+prediction-energy `prediction_weighted` method. The prediction-weighted option uses
+squared singular-value energy from the SVD of the full ridge model's training
+predictions and is available only for within-fMRI FIR aggregation. It is the default
+for internal fMRI FIR fitting and for loading an fMRI source into cross-dataset RRR;
+unspecified EEG aggregation continues to compute with the extrinsic method.
 RRR modes that evaluate directly fitted or fold-matched raw input factors report both
 the original projected-ridge metrics and a companion `*_orth` family fitted after a
 reduced QR decomposition. PCA and aggregated cross-dataset bases are already

@@ -7,13 +7,35 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from src.utils.rrr.core import save_rrr_factors, save_rrr_result, load_rrr_result
+from src.utils.rrr.core import (
+    fit_dense_rrr,
+    load_rrr_result,
+    save_rrr_factors,
+    save_rrr_result,
+)
 from src.utils.rrr.rrr_ieeg import _load_cross_dataset_A_by_rank
 from src.core.config import RRRTemporalWindowConfig
 
 # ---------------------------------------------------------------------------
 # Shared fixtures
 # ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("use_low_rank_svd", [False, True])
+def test_fit_dense_rrr_returns_prediction_singular_values(use_low_rank_svd):
+    prediction = np.diag([3.0, 2.0]).astype(np.float32)
+    result = fit_dense_rrr(
+        np.eye(2, dtype=np.float32),
+        prediction,
+        k=3,
+        selected_idx=np.arange(2),
+        precomputed_Y_hat_ols=prediction,
+        precomputed_beta_full=np.eye(2, dtype=np.float32),
+        device="cpu",
+        use_low_rank_svd=use_low_rank_svd,
+    )
+
+    np.testing.assert_allclose(result["singular_values"], [3.0, 2.0, 0.0])
 
 
 @pytest.fixture

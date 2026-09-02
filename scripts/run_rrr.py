@@ -66,7 +66,7 @@ class Config:
     )
     rrr_source: dict | None = None
     views: list[dict] = field(default_factory=list)
-    subspace_aggregation: str = "extrinsic"
+    subspace_aggregation: str | None = None
     ieeg: dict | None = field(default_factory=dict)
     fmri: dict | None = None
 
@@ -102,13 +102,20 @@ class Config:
         payload = deepcopy(self.fmri if self.modality == "fmri" else self.ieeg) or {}
         if self.modality == "fmri" and "data" in payload:
             payload["fmri"] = payload.pop("data")
+        aggregation = self.subspace_aggregation
+        if (
+            aggregation is None
+            and self.modality == "fmri"
+            and self.mode == ScriptMode.INTERNAL
+        ):
+            aggregation = "prediction_weighted"
         payload.update({
             "results_root": self.results_root,
             "plot": self.plot,
             "refresh": self.refresh,
             "rank_grid": self.rank_grid,
             "significance_selection": deepcopy(self.significance_selection),
-            "subspace_aggregation": self.subspace_aggregation,
+            "subspace_aggregation": aggregation,
         })
         if self.modality == "fmri":
             payload["source_mode"] = (
@@ -127,6 +134,11 @@ class Config:
         if self.rrr_source:
             key = "fmri_rrr_source" if _is_fmri(self.rrr_source.get("dataset")) else "ieeg_rrr_source"
             payload[key] = self._legacy_source(self.rrr_source)
+            if (
+                key == "fmri_rrr_source"
+                and payload[key].get("subspace_aggregation") is None
+            ):
+                payload[key]["subspace_aggregation"] = "prediction_weighted"
             payload["cross_source_format"] = (
                 "rank_bases" if key == "fmri_rrr_source" else "fold_factors"
             )
@@ -183,18 +195,26 @@ class Artifact(ArtifactStore):
 
     def __init__(self, *, mode="internal", dataset="podcast", offset=0,
                  model="gpt2-xl", layer=24, variant=None,
-                 significance_selection=None, results_root="results"):
-        if variant is not None and significance_selection is not None:
+                 significance_selection=None, subspace_aggregation=None,
+                 results_root="results"):
+        if variant is not None and (
+            significance_selection is not None or subspace_aggregation is not None
+        ):
             raise ValueError(
-                "RRR Artifact variant and significance_selection are mutually exclusive"
+                "RRR Artifact variant, significance_selection, and "
+                "subspace_aggregation are mutually exclusive"
             )
-        if significance_selection is not None:
+        if significance_selection is not None or subspace_aggregation is not None:
             variant = readable_variant(
-                {"significance_selection": significance_selection}
+                {
+                    "significance_selection": significance_selection,
+                    "subspace_aggregation": subspace_aggregation,
+                }
             )
         self._init_store(mode=mode, dataset=dataset, offset=offset, model=model,
                          layer=layer, variant=variant, results_root=results_root)
         self.requested_significance_selection = significance_selection
+        self.requested_subspace_aggregation = subspace_aggregation
 
     def _manifest(self):
         manifest = super()._manifest()
@@ -211,6 +231,15 @@ class Artifact(ArtifactStore):
                 raise ArtifactError(
                     "Selected RRR Artifact significance_selection does not match "
                     "the requested selection"
+                )
+        if self.requested_subspace_aggregation is not None:
+            saved = manifest.get("configuration", {}).get(
+                "subspace_aggregation", "extrinsic"
+            )
+            if saved != self.requested_subspace_aggregation:
+                raise ArtifactError(
+                    "Selected RRR Artifact subspace_aggregation does not match "
+                    "the requested method"
                 )
         return manifest
 

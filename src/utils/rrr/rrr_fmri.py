@@ -207,11 +207,17 @@ def _fit_within_fmri_bases(full_train, ridge_fit, ambient_dim, config):
         return_b=config.rrr_save_b_matrix,
     )
     fir_a = np.asarray(rrr_result["A_dense"], dtype=np.float32)
+    prediction_singular_values = np.asarray(
+        rrr_result["singular_values"], dtype=np.float32
+    )
     delay_blocks = list(np.split(fir_a, ndelays, axis=0))
     rrr_bases = {}
     for rank in ranks:
         basis = aggregate_subspace_basis(
-            delay_blocks, rank=rank, method=config.subspace_aggregation
+            delay_blocks,
+            rank=rank,
+            method=config.subspace_aggregation,
+            prediction_singular_values=prediction_singular_values,
         )
         rrr_bases[rank] = basis
 
@@ -234,6 +240,7 @@ def _fit_within_fmri_bases(full_train, ridge_fit, ambient_dim, config):
         "full_fir": fir_a,
         "target": (rrr_result.get("B_dense") if config.rrr_save_b_matrix else None),
         "delay_blocks": delay_blocks,
+        "prediction_singular_values": prediction_singular_values,
         "pca_full": pca_a,
     }
     return {"rrr": rrr_bases, "pca": pca_bases}, factors
@@ -526,6 +533,12 @@ def run_fmri(
                                       overwrite=config.refresh)
         artifact.save_factors(method="rrr_full_fir", factors=factor_values["full_fir"],
                               target_factors=factor_values["target"], overwrite=config.refresh)
+        artifact.save_field(
+            "diagnostics",
+            factor_values["prediction_singular_values"],
+            selector={"method": "rrr_full_fir", "name": "prediction_singular_values"},
+            overwrite=config.refresh,
+        )
         artifact.save_factors(method="pca_full", factors=factor_values["pca_full"],
                               overwrite=config.refresh)
         for delay, block in enumerate(factor_values["delay_blocks"], start=1):
@@ -658,6 +671,11 @@ def run_fmri(
         "source_artifact": source.identity_record() if source is not None else None,
         "source_mode": config.source_mode,
         "subspace_aggregation": config.subspace_aggregation,
+        "subspace_aggregation_weighting": (
+            "prediction_singular_value_squared_energy_after_full_fir_component_normalization"
+            if config.subspace_aggregation == "prediction_weighted"
+            else None
+        ),
         "rrr_svd_on_cpu": config.rrr_svd_on_cpu,
         "rrr_use_low_rank_svd": config.rrr_use_low_rank_svd,
         "rrr_low_rank_svd_seed": config.rrr_low_rank_svd_seed,
