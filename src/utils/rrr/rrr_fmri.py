@@ -532,15 +532,13 @@ def run_fmri(
             artifact.save_factors(method="rrr_delay", delay=delay, factors=block,
                                   overwrite=config.refresh)
     elif config.source_mode == "cross_dataset" and missing_jobs:
+        from src.utils.rrr.ieeg_source_bases import fit_whole_stimulus_ieeg_bases
+        requested_ranks = sorted({rank for _, rank in missing_jobs})
+        whole_source_bases = fit_whole_stimulus_ieeg_bases(source, requested_ranks)
         bases_by_method = {
             method: {
-                rank: aggregate_subspace_basis([
-                    value for selector, value in source.load_collection(
-                        "input_factors", {"method": method}
-                    ).items() if "fold" in dict(selector)
-                ], rank=rank, method=config.subspace_aggregation)
-                for rank in ranks
-                if (method, rank) in missing_jobs
+                rank: whole_source_bases[method][rank]
+                for rank in ranks if (method, rank) in missing_jobs
             }
             for method in method_names
         }

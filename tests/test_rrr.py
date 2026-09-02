@@ -134,6 +134,37 @@ class TestSaveLoadRRRResult:
 
 
 class TestCrossDatasetRankBasisLoading:
+    def test_whole_stimulus_source_bases_are_rank_specific_and_orthonormal(
+        self, monkeypatch, rng
+    ):
+        from types import SimpleNamespace
+        from src.utils.rrr import ieeg_source_bases
+
+        X = rng.standard_normal((20, 5)).astype(np.float32)
+        Y = rng.standard_normal((20, 4)).astype(np.float32)
+        beta = rng.standard_normal((5, 4)).astype(np.float32)
+        monkeypatch.setattr(ieeg_source_bases, "fit_encoding_baseline", lambda *a, **k: {
+            "Y_train": Y,
+            "Y_hat_full_train": X @ beta,
+            "beta_full_raw": beta,
+        })
+        enc = SimpleNamespace(
+            ridge_alphas=None, ridge_cv_folds=2, ridge_solver_params=None,
+            ridge_y_in_cpu=None, ridge_force_cpu=None, alpha_grid={},
+            model="test", per_model_config={}, offset=0,
+        )
+
+        bases = ieeg_source_bases._fit_bases(X, Y, enc, [1, 3])
+
+        assert bases["rrr"][1].shape == (5, 1)
+        assert bases["rrr"][3].shape == (5, 3)
+        np.testing.assert_allclose(
+            bases["rrr"][3].T @ bases["rrr"][3], np.eye(3), atol=1e-5
+        )
+        np.testing.assert_allclose(
+            bases["pca"][3].T @ bases["pca"][3], np.eye(3), atol=1e-5
+        )
+
     def test_cross_temporal_loader_preserves_fold_specific_factors(
         self, tmp_path, rng
     ):

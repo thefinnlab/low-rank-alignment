@@ -98,9 +98,13 @@ Cross-dataset RRR source identities include their own significance selection, wh
 deterministically resolves and validates the saved source variant.
 Source and target selections are required to be corresponding within-layer selections
 for the same model and layer over their respective datasets.
-Fold and delay-block subspaces can be aggregated with an equal-subspace `extrinsic`
-mean or a `factor_weighted` mean that lets raw factor magnitudes influence selection;
-both methods return an orthonormal final basis.
+Cross-dataset transfer from an iEEG source refits one ridge/RRR model on all source
+stimulus words and significant electrodes, then transfers the reduced-QR input basis
+at each rank. Its optional PCA basis is likewise fit on all source words. Saved iEEG
+fold factors are not loaded or averaged for transfer. fMRI sources expose saved
+whole-training-stimulus rank bases; aggregation remains only where the fMRI FIR RRR
+factor is combined across delay blocks, using the configured equal-subspace
+`extrinsic` or `factor_weighted` method.
 RRR modes that evaluate directly fitted or fold-matched raw input factors report both
 the original projected-ridge metrics and a companion `*_orth` family fitted after a
 reduced QR decomposition. PCA and aggregated cross-dataset bases are already

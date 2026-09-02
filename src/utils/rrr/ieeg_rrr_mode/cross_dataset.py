@@ -23,7 +23,7 @@ def run_cross_dataset(
     word_in_glove=None,
     shared_selection_metadata=None,
 ):
-    """Evaluate target-dataset NR models using rank-specific source A averages."""
+    """Evaluate target models using whole-stimulus source input bases."""
     if config.ieeg_rrr_source:
         source_kwargs = dict(config.ieeg_rrr_source)
         source_kwargs.setdefault("results_root", config.results_root)
@@ -45,30 +45,9 @@ def run_cross_dataset(
         source.identity,
     )
     unit = UnitSelector(method="rrr")
-    print(f"Loading source RRR subspaces from {source.identity_record()}")
-    A_rrr_by_rank = _load_cross_dataset_A_by_rank(
-        source,
-        kind="rrr",
-        ranks=config.rank_grid,
-        aggregation=config.subspace_aggregation,
-        source_format=config.cross_source_format,
-    )
-
-    A_pca_by_rank = None
     pca_unit = None
     pca_resume_plan = None
     if config.run_pca_baseline:
-        print(
-            "Loading rank-specific cross-dataset source PCA subspaces from "
-            f"{source.identity_record()}"
-        )
-        A_pca_by_rank = _load_cross_dataset_A_by_rank(
-            source,
-            kind="pca",
-            ranks=config.rank_grid,
-            aggregation=config.subspace_aggregation,
-            source_format=config.cross_source_format,
-        )
         pca_unit = UnitSelector(method="pca")
 
     reference = _reference_encoding_results(significance, subject_ids)
@@ -104,6 +83,25 @@ def run_cross_dataset(
     if not folds_to_build:
         print("  Cross-dataset RRR/PCA outputs complete; skipping data/regression setup.")
         return
+
+    if config.ieeg_rrr_source:
+        from src.utils.rrr.ieeg_source_bases import fit_whole_stimulus_ieeg_bases
+        print(f"Fitting whole-stimulus source bases from {source.identity_record()}")
+        source_bases = fit_whole_stimulus_ieeg_bases(source, config.rank_grid)
+        A_rrr_by_rank = source_bases["rrr"]
+        A_pca_by_rank = source_bases["pca"] if config.run_pca_baseline else None
+    else:
+        print(f"Loading source RRR subspaces from {source.identity_record()}")
+        A_rrr_by_rank = _load_cross_dataset_A_by_rank(
+            source, kind="rrr", ranks=config.rank_grid, source_format="rank_bases"
+        )
+        A_pca_by_rank = None
+        if config.run_pca_baseline:
+            print(f"Loading source PCA subspaces from {source.identity_record()}")
+            A_pca_by_rank = _load_cross_dataset_A_by_rank(
+                source, kind="pca", ranks=config.rank_grid,
+                source_format="rank_bases",
+            )
 
     results = _build_rrr_decomposition_inputs(
         subject_ids,
