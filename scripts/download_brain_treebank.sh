@@ -32,8 +32,27 @@ download_file() {
   curl --fail --location --retry 4 --continue-at - --output "$destination" "$url"
 }
 
+extracted_archive_is_complete() {
+  local name="$1"
+  case "$name" in
+    subject_metadata.zip) [[ -n "$(find "$DATA_ROOT/subject_metadata" -type f -name 'sub_*_trial*_metadata.json' -print -quit 2>/dev/null)" ]] ;;
+    subject_timings.zip) [[ -n "$(find "$DATA_ROOT/subject_timings" -type f -print -quit 2>/dev/null)" ]] ;;
+    electrode_labels.zip) [[ -n "$(find "$DATA_ROOT/electrode_labels" -type f -print -quit 2>/dev/null)" ]] ;;
+    localization.zip) [[ -n "$(find "$DATA_ROOT/localization" -type f -print -quit 2>/dev/null)" ]] ;;
+    speaker_annotations.zip) [[ -n "$(find "$DATA_ROOT/speaker_annotations" -type f -print -quit 2>/dev/null)" ]] ;;
+    scene_annotations.zip) [[ -s "$DATA_ROOT/scene_annotations.json" ]] ;;
+    transcripts.zip) [[ -n "$(find "$DATA_ROOT/transcripts" -type f -print -quit 2>/dev/null)" ]] ;;
+    trees.zip) [[ -n "$(find "$DATA_ROOT/trees" -type f -print -quit 2>/dev/null)" ]] ;;
+    *) return 1 ;;
+  esac
+}
+
 download_zip() {
   local name="$1" archive="$DOWNLOAD_DIR/$1"
+  if extracted_archive_is_complete "$name"; then
+    echo "Using existing extracted data for $name"
+    return
+  fi
   download_file "$BASE_URL/$name" "$archive"
   if ! unzip -tq "$archive" >/dev/null; then
     rm -f "$archive"
