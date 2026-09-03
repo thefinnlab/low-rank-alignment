@@ -171,6 +171,7 @@ def precompute_trial(
     *,
     skip_existing=True,
     epoch_batch_size: int = 64,
+    high_gamma_channel_batch_size: int | None = None,
 ):
     """Precompute one Brain Treebank subject/trial using the normal pipeline."""
     if config.dataset != "brain_treebank":
@@ -227,6 +228,7 @@ def precompute_trial(
         dataset=config.dataset,
         per_dataset_config=per_dataset_config,
         dataset_context=dataset_context,
+        high_gamma_channel_batch_size=high_gamma_channel_batch_size,
     )
     raw = raws[0]
     print(f"  Loaded raw: {len(raw.ch_names)} electrodes, {raw.info['sfreq']} Hz")
@@ -261,7 +263,11 @@ def precompute_trial(
     return True
 
 
-def _run_standard(config: EncodingConfig, epoch_batch_size: int):
+def _run_standard(
+    config: EncodingConfig,
+    epoch_batch_size: int,
+    high_gamma_channel_batch_size: int | None,
+):
     subject_ids = config.subjects or list(range(1, 10))
     dataset_context = resolve_dataset_context(
         dataset=config.dataset,
@@ -311,6 +317,7 @@ def _run_standard(config: EncodingConfig, epoch_batch_size: int):
             dataset=config.dataset,
             per_dataset_config=config.per_dataset_config,
             dataset_context=dataset_context,
+            high_gamma_channel_batch_size=high_gamma_channel_batch_size,
         )
         raw = raws[0]
         print(f"  Loaded raw: {len(raw.ch_names)} electrodes, {raw.info['sfreq']} Hz")
@@ -349,7 +356,11 @@ def _run_standard(config: EncodingConfig, epoch_batch_size: int):
     print("\nDone.")
 
 
-def _run_cross_stimulus(config: EncodingConfig, epoch_batch_size: int):
+def _run_cross_stimulus(
+    config: EncodingConfig,
+    epoch_batch_size: int,
+    high_gamma_channel_batch_size: int | None,
+):
     # The standalone cross-stimulus RRR config intentionally omits ``dataset``
     # because its own Config is Brain Treebank-specific. When that config is
     # reused here as an EncodingConfig, the dataclass default would otherwise
@@ -369,6 +380,7 @@ def _run_cross_stimulus(config: EncodingConfig, epoch_batch_size: int):
             subject,
             trial,
             epoch_batch_size=epoch_batch_size,
+            high_gamma_channel_batch_size=high_gamma_channel_batch_size,
         )
         for subject, trial, _ in trials
     )
@@ -400,6 +412,16 @@ def main():
         default=64,
         help="Number of word epochs held in memory during extraction (default: 64).",
     )
+    parser.add_argument(
+        "--high-gamma-channel-batch-size",
+        type=int,
+        default=None,
+        help=(
+            "Number of channels processed at once during high-gamma despiking, "
+            "filtering, and envelope extraction. Omit to process all channels "
+            "at once."
+        ),
+    )
     args, unknown = parser.parse_known_args()
     overrides = parse_override_args(unknown)
     config: EncodingConfig = load_config(args.config, overrides, EncodingConfig)
@@ -410,8 +432,14 @@ def main():
         parser.error("--subject and --trial must be provided together")
     if args.epoch_batch_size < 1:
         parser.error("--epoch-batch-size must be positive")
+    if args.high_gamma_channel_batch_size < 1:
+        parser.error("--high-gamma-channel-batch-size must be positive")
     if args.cross_stimulus:
-        _run_cross_stimulus(config, args.epoch_batch_size)
+        _run_cross_stimulus(
+            config,
+            args.epoch_batch_size,
+            args.high_gamma_channel_batch_size,
+        )
     elif args.subject is not None:
         # Subject/trial selection is a Brain Treebank-specific interface.
         config.dataset = "brain_treebank"
@@ -420,9 +448,14 @@ def main():
             args.subject,
             args.trial,
             epoch_batch_size=args.epoch_batch_size,
+            high_gamma_channel_batch_size=args.high_gamma_channel_batch_size,
         )
     else:
-        _run_standard(config, args.epoch_batch_size)
+        _run_standard(
+            config,
+            args.epoch_batch_size,
+            args.high_gamma_channel_batch_size,
+        )
 
 
 if __name__ == "__main__":

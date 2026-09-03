@@ -36,6 +36,7 @@ def load_raws(
     per_subject_electrodes=None,
     channel_reg_ex=None,
     no_preload=False,
+    high_gamma_channel_batch_size=None,
     dataset="podcast",
     per_dataset_config=None,
     dataset_context=None,
@@ -61,6 +62,7 @@ def load_raws(
         "per_subject_electrodes": per_subject_electrodes,
         "channel_reg_ex": channel_reg_ex,
         "no_preload": no_preload,
+        "high_gamma_channel_batch_size": high_gamma_channel_batch_size,
         "rereference": getattr(context, "rereference", None),
     }
 

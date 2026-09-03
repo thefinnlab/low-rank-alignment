@@ -941,35 +941,50 @@ class BrainTreebankDatasetAdapter:
         )
         return raw
 
-    def _despike(self, raw, iqr_mult: float = 4.0, dil_len: float = 0.10):
+    def _despike(
+        self,
+        raw,
+        iqr_mult: float = 4.0,
+        dil_len: float = 0.10,
+        channel_batch_size: int | None = None,
+    ):
         """Match the Podcast derivative's per-channel spike interpolation."""
         from scipy import interpolate, signal, stats
 
         raw.load_data()
         data = raw._data
-        medians = np.median(data, axis=-1, keepdims=True)
-        iqrs = stats.iqr(data, axis=-1)
-        spike_mask = np.abs(data - medians) > (iqrs[:, np.newaxis] * iqr_mult)
+        if channel_batch_size is None:
+            channel_batch_size = len(raw.ch_names)
+        if channel_batch_size < 1:
+            raise ValueError("channel_batch_size must be positive")
+        dilation_filter = (
+            np.ones(int(dil_len * raw.info["sfreq"])) if dil_len > 0 else None
+        )
+        for batch_start in range(0, len(raw.ch_names), channel_batch_size):
+            batch_stop = min(batch_start + channel_batch_size, len(raw.ch_names))
+            batch = data[batch_start:batch_stop]
+            medians = np.median(batch, axis=-1, keepdims=True)
+            iqrs = stats.iqr(batch, axis=-1)
+            spike_mask = np.abs(batch - medians) > (iqrs[:, np.newaxis] * iqr_mult)
+            if dilation_filter is not None:
+                spike_mask = signal.filtfilt(dilation_filter, 1, spike_mask) > 0
 
-        if dil_len > 0:
-            dilation_filter = np.ones(int(dil_len * raw.info["sfreq"]))
-            spike_mask = signal.filtfilt(dilation_filter, 1, spike_mask) > 0
-
-        for channel_idx, spikes in enumerate(spike_mask):
-            if not np.any(spikes):
-                continue
-            good_indices = np.flatnonzero(~spikes)
-            if good_indices.size < 2:
-                raise ValueError(
-                    f"Cannot interpolate spikes for {raw.ch_names[channel_idx]}: "
-                    "fewer than two clean samples remain."
+            for local_idx, spikes in enumerate(spike_mask):
+                if not np.any(spikes):
+                    continue
+                good_indices = np.flatnonzero(~spikes)
+                channel_idx = batch_start + local_idx
+                if good_indices.size < 2:
+                    raise ValueError(
+                        f"Cannot interpolate spikes for {raw.ch_names[channel_idx]}: "
+                        "fewer than two clean samples remain."
+                    )
+                spike_indices = np.flatnonzero(spikes)
+                data[channel_idx, spikes] = interpolate.pchip_interpolate(
+                    good_indices,
+                    data[channel_idx, ~spikes],
+                    spike_indices,
                 )
-            spike_indices = np.flatnonzero(spikes)
-            raw._data[channel_idx, spikes] = interpolate.pchip_interpolate(
-                good_indices,
-                raw._data[channel_idx, ~spikes],
-                spike_indices,
-            )
         return raw
 
     @staticmethod
@@ -1033,11 +1048,18 @@ class BrainTreebankDatasetAdapter:
         )
         return raw
 
-    def _apply_high_gamma(self, raw, rereference: str = "common_average"):
-        raw = raw.copy()
+    def _apply_high_gamma(
+        self,
+        raw,
+        rereference: str = "common_average",
+        channel_batch_size: int | None = None,
+    ):
         if int(raw.info["sfreq"]) != int(self.preprocessing_sfreq):
             raw.resample(sfreq=self.preprocessing_sfreq)
-        raw = self._despike(raw)
+        if channel_batch_size is None:
+            raw = self._despike(raw)
+        else:
+            raw = self._despike(raw, channel_batch_size=channel_batch_size)
         if rereference == "common_average":
             raw.set_eeg_reference(
                 ref_channels="average", ch_type="seeg", verbose=False
@@ -1048,22 +1070,32 @@ class BrainTreebankDatasetAdapter:
             raise ValueError(
                 f"Unsupported Brain Treebank rereference mode: {rereference!r}."
             )
-        raw.notch_filter(
-            freqs=[60, 120, 180],
-            notch_widths=2,
-            picks="data",
-            n_jobs=1,
-            verbose=False,
-        )
-        raw.filter(
-            l_freq=70.0,
-            h_freq=200.0,
-            method="iir",
-            iir_params={"order": 4, "ftype": "butter"},
-            picks="data",
-            verbose=False,
-        )
-        raw.apply_hilbert(picks="data", envelope=True, verbose=False)
+        if channel_batch_size is None:
+            channel_picks = ["data"]
+        else:
+            if channel_batch_size < 1:
+                raise ValueError("channel_batch_size must be positive")
+            channel_picks = [
+                np.arange(start, min(start + channel_batch_size, len(raw.ch_names)))
+                for start in range(0, len(raw.ch_names), channel_batch_size)
+            ]
+        for picks in channel_picks:
+            raw.notch_filter(
+                freqs=[60, 120, 180],
+                notch_widths=2,
+                picks=picks,
+                n_jobs=1,
+                verbose=False,
+            )
+            raw.filter(
+                l_freq=70.0,
+                h_freq=200.0,
+                method="iir",
+                iir_params={"order": 4, "ftype": "butter"},
+                picks=picks,
+                verbose=False,
+            )
+            raw.apply_hilbert(picks=picks, envelope=True, verbose=False)
         return raw
 
     def load_raw_recording(
@@ -1103,12 +1135,16 @@ class BrainTreebankDatasetAdapter:
 
         if load_options.get("use_high_gamma", False):
             print("  - [Config] Computing high-gamma envelope (70-200 Hz)")
-            raw = self._apply_high_gamma(
-                raw,
-                rereference=load_options.get(
+            high_gamma_kwargs = {
+                "rereference": load_options.get(
                     "rereference", context.rereference or self.default_rereference
                 ),
-            )
+            }
+            if load_options.get("high_gamma_channel_batch_size") is not None:
+                high_gamma_kwargs["channel_batch_size"] = load_options[
+                    "high_gamma_channel_batch_size"
+                ]
+            raw = self._apply_high_gamma(raw, **high_gamma_kwargs)
 
         signal_unit = load_options.get("signal_unit")
         if signal_unit == "uV":

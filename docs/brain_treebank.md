@@ -44,6 +44,18 @@ uv run python scripts/utilities/precompute_epochs.py \
   --epoch-batch-size 8
 ```
 
+High-gamma preprocessing can optionally use a separate channel batch size. By
+default, all channels are processed at once. Set this value if the job runs out
+of memory while calculating the high-gamma envelope:
+
+```bash
+uv run python scripts/utilities/precompute_epochs.py \
+  --config configs/brain_treebank/cross_stimulus/gpt2.yml \
+  --cross-stimulus \
+  --epoch-batch-size 8 \
+  --high-gamma-channel-batch-size 8
+```
+
 This mode discovers eligible subjects, gathers every exact subject/trial pair,
 and invokes the same per-trial preprocessing used by the standard command. A
 single trial can be run with `--subject SUBJECT --trial TRIAL`.

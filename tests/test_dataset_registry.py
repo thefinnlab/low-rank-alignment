@@ -609,6 +609,54 @@ class TestDatasetRegistry:
             ("hilbert",),
         ]
 
+    def test_brain_treebank_high_gamma_batches_channels(self, monkeypatch):
+        adapter = get_dataset_adapter("brain_treebank")
+
+        class FakeRaw:
+            def __init__(self):
+                self.info = {"sfreq": 512.0}
+                self.ch_names = ["A1", "A2", "A3", "A4", "A5"]
+                self.calls = []
+
+            def set_eeg_reference(self, ref_channels, ch_type, verbose=False):
+                self.calls.append(("reference", ref_channels, ch_type))
+                return self
+
+            def notch_filter(self, freqs, picks, **kwargs):
+                self.calls.append(("notch", list(picks)))
+                return self
+
+            def filter(self, l_freq, h_freq, picks, **kwargs):
+                self.calls.append(("filter", l_freq, h_freq, list(picks)))
+                return self
+
+            def apply_hilbert(self, picks, **kwargs):
+                self.calls.append(("hilbert", list(picks)))
+                return self
+
+        raw = FakeRaw()
+        monkeypatch.setattr(
+            adapter,
+            "_despike",
+            lambda inst, channel_batch_size: inst,
+        )
+
+        processed = adapter._apply_high_gamma(raw, channel_batch_size=2)
+
+        assert processed is raw
+        assert raw.calls == [
+            ("reference", "average", "seeg"),
+            ("notch", [0, 1]),
+            ("filter", 70.0, 200.0, [0, 1]),
+            ("hilbert", [0, 1]),
+            ("notch", [2, 3]),
+            ("filter", 70.0, 200.0, [2, 3]),
+            ("hilbert", [2, 3]),
+            ("notch", [4]),
+            ("filter", 70.0, 200.0, [4]),
+            ("hilbert", [4]),
+        ]
+
     def test_brain_treebank_laplacian_keeps_only_two_neighbor_contacts(self):
         mne = pytest.importorskip("mne")
         adapter = get_dataset_adapter("brain_treebank")
