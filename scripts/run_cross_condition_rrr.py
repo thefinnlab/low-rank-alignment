@@ -1,10 +1,9 @@
-"""Standalone within-subject cross-stimulus orthogonal RRR analysis."""
+"""Standalone pairwise cross-condition orthogonal RRR analysis."""
 
 from __future__ import annotations
 
 import hashlib
 import json
-from copy import deepcopy
 from dataclasses import asdict, dataclass, field, replace
 from typing import ClassVar
 
@@ -12,23 +11,28 @@ import numpy as np
 import pandas as pd
 
 from src.core.artifacts import ArtifactStore, normalize_model, normalized_config
-from src.utils.rrr.cross_stimulus import (
-    cache_header,
-    discover_subject_movies,
+from src.utils.rrr.cross_condition import (
+    ComparisonGroup,
+    ItemProvider,
     evaluate_projected_ridge,
-    load_stimulus_data,
-    ordered_electrode_intersection,
+    validate_comparison_items,
+)
+from src.utils.rrr.cross_condition_items.stimulus import (
+    discover_subject_movies,
+    get_stimulus_items,
 )
 from src.utils.rrr.core import fit_full_rrr, orthogonal_rank_factors
 from src.utils.rrr.evaluation import fit_pca_input_basis, score_predictions
-from src.utils.rrr.inputs import build_target_manifest
 from src.utils.shared.encoding import contiguous_folds
 from src.utils.shared.config import load_config, parse_args
 
 
+ARTIFACT_CONTRACT_VERSION = 3
+
+
 @dataclass
 class Config:
-    """Configuration for one model/layer cross-stimulus study."""
+    """Configuration for one model/layer cross-condition study."""
 
     STRICT_CONFIG: ClassVar[bool] = True
 
@@ -58,9 +62,9 @@ class Config:
 
     def validate(self):
         if self.rereference != "laplacian":
-            raise ValueError("Cross-stimulus RRR currently requires rereference='laplacian'")
+            raise ValueError("Cross-condition RRR currently requires rereference='laplacian'")
         if self.num_folds != 5:
-            raise ValueError("Cross-stimulus RRR currently requires five target folds")
+            raise ValueError("Cross-condition RRR currently requires five target folds")
         if not self.rank_grid or any(int(rank) < 1 for rank in self.rank_grid):
             raise ValueError("rank_grid must contain positive integers")
         if len(set(map(int, self.rank_grid))) != len(self.rank_grid):
@@ -75,11 +79,11 @@ class Config:
 
 
 class Artifact(ArtifactStore):
-    """Storage contract owned only by the cross-stimulus producer."""
+    """Storage contract owned only by the cross-condition producer."""
 
-    SCRIPT = "run_cross_stimulus_rrr"
+    SCRIPT = "run_cross_condition_rrr"
     SELECTOR_ORDER = (
-        "subject", "source_stimulus", "target_stimulus", "method", "rank", "fold",
+        "subject", "source_item", "target_item", "method", "rank", "fold",
     )
     FIELD_CONTRACT = {
         "effective_config": True,
@@ -96,7 +100,7 @@ class Artifact(ArtifactStore):
     def __init__(self, *, model="gpt2", layer=12, offset=0, variant=None,
                  results_root="results"):
         self._init_store(
-            mode="cross_stimulus", dataset="brain-treebank", offset=offset,
+            mode="cross_condition", dataset="brain-treebank", offset=offset,
             model=normalize_model(model), layer=layer, variant=variant,
             results_root=results_root,
         )
@@ -106,12 +110,20 @@ class Artifact(ArtifactStore):
         model = config.per_model_config.get("model_dir", config.model)
         model = normalize_model(model, glove_dim=config.per_model_config.get("dim"))
         layer = None if config.model == "glove" else config.per_model_config.get("layer")
-        digest = hashlib.sha256(
-            json.dumps(normalized_config(config), sort_keys=True).encode("utf-8")
-        ).hexdigest()[:10]
+        digest = hashlib.sha256(json.dumps(
+            _artifact_config(config), sort_keys=True
+        ).encode("utf-8")).hexdigest()[:10]
         variant = config.variant_name or f"rereference-{config.rereference}-{digest}"
         return cls(model=model, layer=layer, offset=config.offset, variant=variant,
                    results_root=config.results_root)
+
+
+def _artifact_config(config: Config) -> dict:
+    """Version the persisted selector/field contract independently of YAML."""
+    return {
+        "artifact_contract_version": ARTIFACT_CONTRACT_VERSION,
+        "config": normalized_config(config),
+    }
 
 
 def _ridge_kwargs(config: Config) -> dict:
@@ -163,50 +175,6 @@ def _selected_movies(config: Config) -> dict[int, list[str]]:
     return selected
 
 
-def _load_subject(config: Config, subject: int, movies: list[str]):
-    """Load every viable movie, recomputing the contact intersection after failures."""
-    exclusions = []
-    headers = {}
-    for movie in movies:
-        try:
-            headers[movie] = cache_header(
-                config.data_root, subject, movie, config.rereference
-            )
-        except Exception as error:
-            exclusions.append({
-                "subject": subject, "stimulus": movie, "stage": "cache_header",
-                "reason": f"{type(error).__name__}: {error}",
-            })
-    while len(headers) >= 2:
-        electrodes = ordered_electrode_intersection(headers)
-        if not electrodes:
-            exclusions.append({
-                "subject": subject, "stimulus": "*", "stage": "electrodes",
-                "reason": "No usable Laplacian contact is common to all movies",
-            })
-            return {}, [], exclusions
-        loaded, failures = {}, []
-        for movie in headers:
-            try:
-                loaded[movie] = load_stimulus_data(
-                    data_root=config.data_root, subject=subject, stimulus=movie,
-                    rereference=config.rereference, model=config.model,
-                    per_model_config=deepcopy(config.per_model_config), offset=config.offset,
-                    electrodes=electrodes,
-                )
-            except Exception as error:
-                failures.append(movie)
-                exclusions.append({
-                    "subject": subject, "stimulus": movie, "stage": "data_loading",
-                    "reason": f"{type(error).__name__}: {error}",
-                })
-        if not failures:
-            return loaded, electrodes, exclusions
-        for movie in failures:
-            headers.pop(movie, None)
-    return {}, [], exclusions
-
-
 def _save_metric(artifact: Artifact, selector: dict, result: dict, refresh: bool,
                  log_alphas: bool):
     payload = _metric_payload(result, log_alphas=log_alphas)
@@ -216,46 +184,48 @@ def _save_metric(artifact: Artifact, selector: dict, result: dict, refresh: bool
     return payload
 
 
-def _run_subject(config: Config, artifact: Artifact, subject: int, movies: list[str]):
-    data, electrodes, exclusions = _load_subject(config, subject, movies)
-    if len(data) < 2:
-        exclusions.append({
-            "subject": subject, "stimulus": "*", "stage": "eligibility",
-            "reason": "Fewer than two fully loadable movies remain",
-        })
-        return [], [], exclusions, []
+def run_item_comparisons(
+    config: Config, artifact: Artifact, item_provider: ItemProvider,
+):
+    """Run shared within-item and directed cross-item comparisons for one group."""
+    group = item_provider()
+    if not isinstance(group, ComparisonGroup):
+        raise TypeError("An item provider must return a ComparisonGroup")
+    if len(group.items) < 2:
+        return [], group.eligibility, group.exclusions, []
 
-    ordered_movies = list(data)
-    reference = data[ordered_movies[0]]
-    artifact.save_field(
-        "target_manifest", build_target_manifest(
-            [subject], {subject: electrodes}, [electrodes], reference.lags
-        ), selector={"subject": subject},
-        overwrite=config.refresh,
-    )
-    max_rank = max(map(int, config.rank_grid))
-    for movie, item in data.items():
-        feasible = min(item.X.shape[0], item.X.shape[1], item.Y.shape[1])
-        if max_rank > feasible:
-            raise ValueError(
-                f"Subject {subject} movie {movie!r} cannot estimate rank {max_rank}; "
-                f"maximum is {feasible} from X={item.X.shape}, Y={item.Y.shape}"
+    validate_comparison_items(group.items, config.rank_grid, config.num_folds)
+    context = dict(group.context)
+    reserved = {
+        "source_item", "target_item", "method", "rank", "fold",
+        "source_words", "target_words", "corr", "r2",
+    }
+    overlap = sorted(reserved.intersection(context))
+    if overlap:
+        raise ValueError(f"Comparison group context uses reserved keys: {overlap}")
+    for item in group.items:
+        manifest = group.target_manifests.get(item.name)
+        if manifest is not None:
+            artifact.save_field(
+                "target_manifest", manifest,
+                selector={**context, "target_item": item.name},
+                overwrite=config.refresh,
             )
+
+    max_rank = max(map(int, config.rank_grid))
 
     ridge_kwargs = _ridge_kwargs(config)
     source_models = {}
-    for movie, item in data.items():
+    for item in group.items:
         model = fit_full_rrr(
             item.X, item.Y, max_rank,
-            alpha_context={"script": "run_cross_stimulus_rrr", "role": "source_full"},
+            alpha_context={"script": "run_cross_condition_rrr", "role": "source_full"},
             **ridge_kwargs,
         )
         model["pca_Q"] = fit_pca_input_basis(item.X, max_rank)
         model["rank_factors"] = {}
-        source_models[movie] = model
-        base_selector = {
-            "subject": subject, "source_stimulus": movie,
-        }
+        source_models[item.name] = model
+        base_selector = {**context, "source_item": item.name}
         artifact.save_field(
             "source_factors", model["A_raw"],
             selector={**base_selector, "method": "rrr"},
@@ -267,8 +237,24 @@ def _run_subject(config: Config, artifact: Artifact, subject: int, movies: list[
             )
             model["rank_factors"][rank] = factors
 
+    diagnostics = []
+    for target in group.items:
+        for source in group.items:
+            if source.name == target.name:
+                continue
+            if source.target_set is None or target.target_set is None:
+                reason = "target_set_missing"
+            elif source.target_set != target.target_set:
+                reason = "target_set_mismatch"
+            else:
+                continue
+            diagnostics.append({
+                **context, "source_item": source.name, "target_item": target.name,
+                "method": "transfer_rrr_full", "reason": reason,
+            })
+
     rows = []
-    for target_movie, target in data.items():
+    for target in group.items:
         folds = contiguous_folds(len(target.X), config.num_folds)
         for fold, (train_idx, test_idx) in enumerate(folds):
             X_train, X_test = target.X[train_idx], target.X[test_idx]
@@ -276,7 +262,7 @@ def _run_subject(config: Config, artifact: Artifact, subject: int, movies: list[
             oracle = fit_full_rrr(
                 X_train, raw_train, max_rank, X_test=X_test, Y_test=raw_test,
                 alpha_context={
-                    "script": "run_cross_stimulus_rrr", "role": "source_full"
+                    "script": "run_cross_condition_rrr", "role": "source_full"
                 },
                 **ridge_kwargs,
             )
@@ -285,8 +271,8 @@ def _run_subject(config: Config, artifact: Artifact, subject: int, movies: list[
             full_prediction = oracle["full_prediction_test"]
             full_score = score_predictions(Y_test, full_prediction)
             full_selector = {
-                "subject": subject, "source_stimulus": target_movie,
-                "target_stimulus": target_movie, "method": "target_full_ridge",
+                **context, "source_item": target.name,
+                "target_item": target.name, "method": "target_full_ridge",
                 "fold": fold,
             }
             payload = _save_metric(
@@ -306,8 +292,8 @@ def _run_subject(config: Config, artifact: Artifact, subject: int, movies: list[
                         Q, rank, X_train, X_test, Y_train, Y_test, **ridge_kwargs
                     )
                     selector = {
-                        "subject": subject, "source_stimulus": target_movie,
-                        "target_stimulus": target_movie, "method": method,
+                        **context, "source_item": target.name,
+                        "target_item": target.name, "method": method,
                         "rank": rank, "fold": fold,
                     }
                     payload = _save_metric(
@@ -317,10 +303,10 @@ def _run_subject(config: Config, artifact: Artifact, subject: int, movies: list[
                         selector, payload, len(target.X), len(target.X)
                     ))
 
-                for source_movie, source in data.items():
-                    if source_movie == target_movie:
+                for source in group.items:
+                    if source.name == target.name:
                         continue
-                    source_model = source_models[source_movie]
+                    source_model = source_models[source.name]
                     source_factors = source_model["rank_factors"][rank]
                     for method, Q in (
                         ("transfer_rrr_basis", source_factors["Q"]),
@@ -330,8 +316,8 @@ def _run_subject(config: Config, artifact: Artifact, subject: int, movies: list[
                             Q, rank, X_train, X_test, Y_train, Y_test, **ridge_kwargs
                         )
                         selector = {
-                            "subject": subject, "source_stimulus": source_movie,
-                            "target_stimulus": target_movie, "method": method,
+                            **context, "source_item": source.name,
+                            "target_item": target.name, "method": method,
                             "rank": rank, "fold": fold,
                         }
                         payload = _save_metric(
@@ -341,16 +327,17 @@ def _run_subject(config: Config, artifact: Artifact, subject: int, movies: list[
                             selector, payload, len(source.X), len(target.X)
                         ))
 
+                    if (source.target_set is None or target.target_set is None
+                            or source.target_set != target.target_set):
+                        continue
                     B_raw = source_factors["B_raw"]
                     B_orth = source_factors["B_orth"]
                     intercept = source_model["ridge_intercept"] @ B_raw @ B_raw.T
-                    prediction = (
-                        X_test @ source_factors["Q"] @ B_orth.T + intercept
-                    )
+                    prediction = X_test @ source_factors["Q"] @ B_orth.T + intercept
                     result = score_predictions(Y_test, prediction)
                     selector = {
-                        "subject": subject, "source_stimulus": source_movie,
-                        "target_stimulus": target_movie, "method": "transfer_rrr_full",
+                        **context, "source_item": source.name,
+                        "target_item": target.name, "method": "transfer_rrr_full",
                         "rank": rank, "fold": fold,
                     }
                     payload = _save_metric(
@@ -360,27 +347,35 @@ def _run_subject(config: Config, artifact: Artifact, subject: int, movies: list[
                         selector, payload, len(source.X), len(target.X)
                     ))
 
-    eligibility = [{
-        "subject": subject, "stimulus": movie, "n_words": len(item.X),
-        "n_common_electrodes": len(electrodes), "n_lags": len(item.lags),
-        "eligible": True,
-    } for movie, item in data.items()]
-    return rows, eligibility, exclusions, ordered_movies
+    return rows, group.eligibility, group.exclusions, diagnostics
+
+
+def _run_subject(config: Config, artifact: Artifact, subject: int, movies: list[str]):
+    """Adapt the Brain Treebank stimulus provider to the shared comparison loop."""
+    return run_item_comparisons(
+        config, artifact,
+        lambda: get_stimulus_items(config, subject, movies),
+    )
 
 
 def _summary(frame: pd.DataFrame) -> pd.DataFrame:
     if frame.empty:
         return frame
+    metric_columns = {
+        "source_item", "target_item", "method", "rank", "fold",
+        "source_words", "target_words", "corr", "r2",
+    }
+    context_keys = [column for column in frame.columns if column not in metric_columns]
     keys = [
-        "subject", "source_stimulus", "target_stimulus", "method", "rank",
+        *context_keys, "source_item", "target_item", "method", "rank",
         "source_words", "target_words",
     ]
     summary = frame.groupby(keys, as_index=False, dropna=False)[["corr", "r2"]].mean()
     oracle = summary[summary["method"] == "within_rrr"][
-        ["subject", "target_stimulus", "rank", "corr", "r2"]
+        [*context_keys, "target_item", "rank", "corr", "r2"]
     ].rename(columns={"corr": "oracle_corr", "r2": "oracle_r2"})
     summary = summary.merge(
-        oracle, on=["subject", "target_stimulus", "rank"], how="left"
+        oracle, on=[*context_keys, "target_item", "rank"], how="left"
     )
     summary["target_oracle_corr_gap"] = summary["corr"] - summary["oracle_corr"]
     summary["target_oracle_r2_gap"] = summary["r2"] - summary["oracle_r2"]
@@ -398,13 +393,13 @@ def run_config(config: Config):
         return outputs
 
     artifact = Artifact.from_config(config)
-    artifact.begin(config=config, refresh=config.refresh)
+    artifact.begin(config=_artifact_config(config), refresh=config.refresh)
     if artifact.complete and not config.refresh:
         print(f"Artifact complete; reusing {artifact.identity_record()}")
         return [artifact]
     artifact.save_field("effective_config", asdict(config), overwrite=config.refresh)
 
-    all_rows, eligibility, exclusions = [], [], []
+    all_rows, eligibility, exclusions, diagnostics = [], [], [], []
     all_discovered = discover_subject_movies(
         config.data_root, config.subjects, min_movies=1
     )
@@ -412,33 +407,38 @@ def run_config(config: Config):
     for subject, movies in all_discovered.items():
         if subject not in selected:
             exclusions.append({
-                "subject": subject, "stimulus": movies[0] if movies else "*",
+                "subject": subject, "item": movies[0] if movies else "*",
                 "stage": "eligibility",
                 "reason": "Subject has fewer than two selected movies",
             })
     for subject, movies in selected.items():
-        rows, eligible, excluded, _ = _run_subject(
+        rows, eligible, excluded, skipped = _run_subject(
             config, artifact, subject, movies
         )
         all_rows.extend(rows)
         eligibility.extend(eligible)
         exclusions.extend(excluded)
+        diagnostics.extend(skipped)
 
     eligibility_frame = pd.DataFrame(eligibility, columns=[
-        "subject", "stimulus", "n_words", "n_common_electrodes", "n_lags", "eligible",
+        "subject", "item", "n_words", "n_common_electrodes", "n_lags", "eligible",
     ])
     exclusion_frame = pd.DataFrame(
-        exclusions, columns=["subject", "stimulus", "stage", "reason"]
+        exclusions, columns=["subject", "item", "stage", "reason"]
     )
+    diagnostic_frame = pd.DataFrame(diagnostics, columns=[
+        "subject", "source_item", "target_item", "method", "reason",
+    ])
     fold_frame = pd.DataFrame(all_rows)
     summary = _summary(fold_frame)
     artifact.save_field("eligibility", eligibility_frame, overwrite=config.refresh)
     artifact.save_field("exclusions", exclusion_frame, overwrite=config.refresh)
     artifact.save_field("fold_results", fold_frame, overwrite=config.refresh)
     artifact.save_field("summary", summary, overwrite=config.refresh)
+    artifact.save_field("diagnostics", diagnostic_frame, overwrite=config.refresh)
     if fold_frame.empty:
         raise ValueError(
-            "Cross-stimulus preflight found no subject with at least two fully "
+            "Cross-condition preflight found no subject with at least two fully "
             "loadable movies; inspect the saved exclusions table"
         )
     artifact.mark_complete()

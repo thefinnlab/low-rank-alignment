@@ -1,4 +1,4 @@
-"""Generate missing embeddings for all movies in the cross-stimulus cohort.
+"""Generate missing embeddings for all movies in the cross-condition cohort.
 
 This is an orchestration entrypoint around the repository's existing embedding
 generator. It discovers movies from Brain Treebank metadata, then runs each
@@ -23,7 +23,7 @@ if str(REPO_ROOT) not in sys.path:
 
 from src.core.config import GenerateEmbeddingsConfig
 from src.core.registry import get_dataset_adapter, resolve_dataset_context
-from src.utils.rrr.cross_stimulus import discover_subject_movies
+from src.utils.rrr.cross_condition_items.stimulus import discover_subject_movies
 from src.utils.shared.config import load_config, parse_override_args
 from scripts.utilities.generate_embeddings import _auto_output_name, generate
 

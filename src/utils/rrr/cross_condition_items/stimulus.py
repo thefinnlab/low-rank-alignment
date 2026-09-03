@@ -1,16 +1,31 @@
-"""Reusable mechanics for within-subject, cross-stimulus orthogonal RRR."""
+"""Brain Treebank stimulus items for cross-condition RRR."""
 
 from __future__ import annotations
 
+import re
+from copy import deepcopy
 from dataclasses import dataclass
+from pathlib import Path
+from typing import Protocol
 
 import numpy as np
 
 from src.core.registry import get_dataset_adapter, resolve_dataset_context
-from src.utils.rrr.evaluation import evaluate_projected_input_space
+from src.utils.rrr.cross_condition import ComparisonGroup, ComparisonItem
+from src.utils.rrr.inputs import build_target_manifest
 from src.utils.shared.embeddings import load_embeddings
 from src.utils.shared.encoding import apply_offset
 from src.utils.shared.ieeg import load_precomputed_epochs
+
+
+class StimulusItemConfig(Protocol):
+    """Configuration fields consumed by the stimulus item provider."""
+
+    data_root: str
+    model: str
+    per_model_config: dict
+    offset: int
+    rereference: str
 
 
 @dataclass
@@ -32,25 +47,29 @@ def discover_subject_movies(
     """Discover Brain Treebank movie identifiers from subject metadata."""
     adapter = get_dataset_adapter("brain_treebank")
     if subjects is None:
-        from pathlib import Path
-        import re
-
         found = set()
-        for path in Path(data_root, "subject_metadata").glob("sub_*_trial*_metadata.json"):
+        for path in Path(data_root, "subject_metadata").glob(
+            "sub_*_trial*_metadata.json"
+        ):
             match = re.match(r"sub_(\d+)_", path.name)
             if match:
                 found.add(int(match.group(1)))
         subjects = sorted(found)
     result = {}
     for subject in subjects:
-        movies = [record["movie"] for record in adapter._metadata_records(data_root, subject)]
+        movies = [
+            record["movie"]
+            for record in adapter._metadata_records(data_root, subject)
+        ]
         movies = list(dict.fromkeys(movie for movie in movies if movie))
         if len(movies) >= int(min_movies):
             result[int(subject)] = movies
     return result
 
 
-def cache_header(data_root: str, subject: int, stimulus: str, rereference: str) -> dict:
+def cache_header(
+    data_root: str, subject: int, stimulus: str, rereference: str,
+) -> dict:
     """Load only the portable metadata for one epoch cache."""
     context = resolve_dataset_context(
         "brain_treebank", [subject],
@@ -123,29 +142,88 @@ def load_stimulus_data(
     )
 
 
-def _device() -> str:
-    import torch
-    return "cuda" if torch.cuda.is_available() else "cpu"
+def get_stimulus_items(
+    config: StimulusItemConfig, subject: int, movies: list[str],
+) -> ComparisonGroup:
+    """Build one subject's comparison items from its viable movie stimuli."""
+    exclusions = []
+    headers = {}
+    for movie in movies:
+        try:
+            headers[movie] = cache_header(
+                config.data_root, subject, movie, config.rereference
+            )
+        except Exception as error:
+            exclusions.append({
+                "subject": subject, "item": movie, "stage": "cache_header",
+                "reason": f"{type(error).__name__}: {error}",
+            })
+    while len(headers) >= 2:
+        electrodes = ordered_electrode_intersection(headers)
+        if not electrodes:
+            exclusions.append({
+                "subject": subject, "item": "*", "stage": "electrodes",
+                "reason": "No usable Laplacian contact is common to all movies",
+            })
+            return ComparisonGroup([], {"subject": subject}, exclusions=exclusions)
+        loaded, failures = {}, []
+        for movie in headers:
+            try:
+                loaded[movie] = load_stimulus_data(
+                    data_root=config.data_root, subject=subject, stimulus=movie,
+                    rereference=config.rereference, model=config.model,
+                    per_model_config=deepcopy(config.per_model_config),
+                    offset=config.offset, electrodes=electrodes,
+                )
+            except Exception as error:
+                failures.append(movie)
+                exclusions.append({
+                    "subject": subject, "item": movie, "stage": "data_loading",
+                    "reason": f"{type(error).__name__}: {error}",
+                })
+        if not failures:
+            break
+        for movie in failures:
+            headers.pop(movie, None)
+    else:
+        loaded, electrodes = {}, []
 
+    if len(loaded) < 2:
+        exclusions.append({
+            "subject": subject, "item": "*", "stage": "eligibility",
+            "reason": "Fewer than two fully loadable movies remain",
+        })
+        return ComparisonGroup([], {"subject": subject}, exclusions=exclusions)
 
-def evaluate_projected_ridge(
-    Q: np.ndarray, rank: int, X_train: np.ndarray, X_test: np.ndarray,
-    Y_train: np.ndarray, Y_test: np.ndarray, *, alphas=None,
-    alpha_policy=None, ridge_cv_folds=5, ridge_solver_params=None,
-    ridge_y_in_cpu=None, ridge_force_cpu=None, use_low_rank_svd=True,
-    low_rank_svd_seed=0,
-) -> dict:
-    """Fit a target readout on orthogonal projected coordinates."""
-    result, _ = evaluate_projected_input_space(
-        Q[:, :rank], X_train, X_test, Y_train, Y_test,
-        alphas=(None if alphas is None else np.asarray(alphas, dtype=float)),
-        alpha_policy=alpha_policy,
-        alpha_context={
-            "script": "run_cross_stimulus_rrr", "role": "orthogonal_projection",
-            "rank": int(rank),
-        }, standardize=False, ridge_cv_folds=ridge_cv_folds,
-        ridge_solver_params=ridge_solver_params,
-        ridge_y_in_cpu=ridge_y_in_cpu, ridge_force_cpu=ridge_force_cpu,
-        device=_device(),
+    items = []
+    target_manifests = {}
+    eligibility = []
+    for movie, stimulus in loaded.items():
+        manifest = build_target_manifest(
+            [subject], {subject: electrodes}, [electrodes], stimulus.lags
+        )
+        items.append(ComparisonItem(
+            name=movie, X=stimulus.X, Y=stimulus.Y,
+            target_set=f"subject-{subject}-targets",
+        ))
+        target_manifests[movie] = manifest
+        eligibility.append({
+            "subject": subject, "item": movie, "n_words": len(stimulus.X),
+            "n_common_electrodes": len(electrodes),
+            "n_lags": len(stimulus.lags), "eligible": True,
+        })
+    return ComparisonGroup(
+        items=items, context={"subject": subject},
+        target_manifests=target_manifests, eligibility=eligibility,
+        exclusions=exclusions,
     )
-    return result
+
+
+__all__ = [
+    "StimulusData",
+    "cache_header",
+    "discover_subject_movies",
+    "get_stimulus_items",
+    "load_stimulus_data",
+    "ordered_electrode_intersection",
+]

@@ -1,3 +1,4 @@
+# Cross-condition Brain Treebank example.
 data_root: data/brain-treebank
 results_root: results
 model: transformer

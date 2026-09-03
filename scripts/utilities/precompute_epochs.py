@@ -39,7 +39,7 @@ from src.utils.shared.ieeg import (
 from src.utils.shared.embeddings import load_embeddings
 from src.core.config import EncodingConfig
 from src.core.registry import get_dataset_adapter, resolve_dataset_context
-from src.utils.rrr.cross_stimulus import discover_subject_movies
+from src.utils.rrr.cross_condition_items.stimulus import discover_subject_movies
 from src.utils.shared.config import (
     load_config,
     parse_override_args,
@@ -356,12 +356,12 @@ def _run_standard(
     print("\nDone.")
 
 
-def _run_cross_stimulus(
+def _run_cross_condition(
     config: EncodingConfig,
     epoch_batch_size: int,
     high_gamma_channel_batch_size: int | None,
 ):
-    # The standalone cross-stimulus RRR config intentionally omits ``dataset``
+    # The standalone cross-condition RRR config intentionally omits ``dataset``
     # because its own Config is Brain Treebank-specific. When that config is
     # reused here as an EncodingConfig, the dataclass default would otherwise
     # be ``podcast``.
@@ -369,9 +369,9 @@ def _run_cross_stimulus(
     per_dataset_config = dict(config.per_dataset_config)
     per_dataset_config.setdefault("rereference", "laplacian")
     config.per_dataset_config = per_dataset_config
-    trials = cross_stimulus_trials(config.data_root, config.subjects)
+    trials = cross_condition_trials(config.data_root, config.subjects)
     subjects = sorted({subject for subject, _, _ in trials})
-    print(f"Cross-stimulus epoch plan: {len(trials)} trials across subjects {subjects}")
+    print(f"Cross-condition epoch plan: {len(trials)} trials across subjects {subjects}")
     for subject, trial, movie in trials:
         print(f"  sub-{subject} trial-{trial:03d}: {movie}")
     completed = sum(
@@ -387,7 +387,7 @@ def _run_cross_stimulus(
     print(f"\nDone. Precomputed {completed}/{len(trials)} missing trial caches.")
 
 
-def cross_stimulus_trials(
+def cross_condition_trials(
     data_root: str, subjects: list[int] | None = None, *, min_movies: int = 2
 ):
     """Return exact ``(subject, trial, movie)`` records for the cohort."""
@@ -403,7 +403,7 @@ def cross_stimulus_trials(
 def main():
     parser = argparse.ArgumentParser(description="Precompute 32 Hz epochs cache")
     parser.add_argument("--config", default=None, help="Path to YAML config file")
-    parser.add_argument("--cross-stimulus", action="store_true")
+    parser.add_argument("--cross-condition", action="store_true")
     parser.add_argument("--subject", type=int)
     parser.add_argument("--trial", type=int)
     parser.add_argument(
@@ -426,16 +426,16 @@ def main():
     overrides = parse_override_args(unknown)
     config: EncodingConfig = load_config(args.config, overrides, EncodingConfig)
 
-    if args.cross_stimulus and (args.subject is not None or args.trial is not None):
-        parser.error("--cross-stimulus cannot be combined with --subject or --trial")
+    if args.cross_condition and (args.subject is not None or args.trial is not None):
+        parser.error("--cross-condition cannot be combined with --subject or --trial")
     if (args.subject is None) != (args.trial is None):
         parser.error("--subject and --trial must be provided together")
     if args.epoch_batch_size < 1:
         parser.error("--epoch-batch-size must be positive")
     if args.high_gamma_channel_batch_size < 1:
         parser.error("--high-gamma-channel-batch-size must be positive")
-    if args.cross_stimulus:
-        _run_cross_stimulus(
+    if args.cross_condition:
+        _run_cross_condition(
             config,
             args.epoch_batch_size,
             args.high_gamma_channel_batch_size,

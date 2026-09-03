@@ -33,7 +33,7 @@ FMRI_RRR_CONFIG ?= configs/fmri/cross_dataset_rrr_gpt2_xl_layer24.yml
 RANDOM_EMBED_CONFIG ?= configs/embeddings/generate_random_gpt2_xl.yml
 BTB_EMBED_CONFIGS ?= configs/brain_treebank/cars_2/generate_gpt2.yml
 BTB_DATA_ROOT ?= data/brain-treebank
-BTB_PRECOMPUTE_CONFIG ?= configs/brain_treebank/cross_stimulus/gpt2.yml
+BTB_PRECOMPUTE_CONFIG ?= configs/brain_treebank/cross_condition/gpt2.yml
 BTB_EPOCH_BATCH_SIZE ?= 64
 BTB_HIGH_GAMMA_CHANNEL_BATCH_SIZE ?=
 BTB_SUBJECT ?=
@@ -132,17 +132,17 @@ precompute-epochs:
 download-brain-treebank:
 	scripts/download_brain_treebank.sh --data-root $(BTB_DATA_ROOT)
 
-## Generate missing embeddings for every movie in the cross-stimulus cohort.
+## Generate missing embeddings for every movie in the cross-condition cohort.
 ## Usage: make generate-brain-treebank-embeddings CMD="uv run python"
 generate-brain-treebank-embeddings:
 	mkdir -p logs
 	$(CMD) scripts/generate_brain_treebank_embeddings.py $(foreach c,$(BTB_EMBED_CONFIGS),--config $(c)) $(OVERRIDES)
 
-## Precompute all missing Laplacian epoch caches needed by cross-stimulus RRR.
-## Usage: make precompute-cross-stimulus-epochs CMD="uv run python"
-precompute-cross-stimulus-epochs:
+## Precompute all missing Laplacian epoch caches needed by cross-condition RRR.
+## Usage: make precompute-cross-condition-epochs CMD="uv run python"
+precompute-cross-condition-epochs:
 	mkdir -p logs
-	$(CMD) scripts/utilities/precompute_epochs.py --config $(BTB_PRECOMPUTE_CONFIG) --cross-stimulus --epoch-batch-size $(BTB_EPOCH_BATCH_SIZE) $(if $(BTB_HIGH_GAMMA_CHANNEL_BATCH_SIZE),--high-gamma-channel-batch-size $(BTB_HIGH_GAMMA_CHANNEL_BATCH_SIZE)) $(OVERRIDES)
+	$(CMD) scripts/utilities/precompute_epochs.py --config $(BTB_PRECOMPUTE_CONFIG) --cross-condition --epoch-batch-size $(BTB_EPOCH_BATCH_SIZE) $(if $(BTB_HIGH_GAMMA_CHANNEL_BATCH_SIZE),--high-gamma-channel-batch-size $(BTB_HIGH_GAMMA_CHANNEL_BATCH_SIZE)) $(OVERRIDES)
 
 ## Precompute one exact Brain Treebank subject/trial cache.
 ## Usage: make precompute-trial-epochs BTB_SUBJECT=2 BTB_TRIAL=4 CMD="uv run python"
@@ -627,4 +627,4 @@ sig-test:
 test:
 	python -m pytest tests/ -v
 
-.PHONY: sig sig-batch train plots rrr rrr-batch rrr-loso-batch rrr-cross-model-layer-batch temporal-windows-batch cross-temporal-pipeline sig-rrr-batch submit-rrr-matrix sig-test test generate-embeddings generate-embeddings-batch generate-random-embeddings download-models precompute-epochs download-brain-treebank generate-brain-treebank-embeddings precompute-cross-stimulus-epochs precompute-trial-epochs print-atlas-regions compare-subspaces compare-subspaces-batch
+.PHONY: sig sig-batch train plots rrr rrr-batch rrr-loso-batch rrr-cross-model-layer-batch temporal-windows-batch cross-temporal-pipeline sig-rrr-batch submit-rrr-matrix sig-test test generate-embeddings generate-embeddings-batch generate-random-embeddings download-models precompute-epochs download-brain-treebank generate-brain-treebank-embeddings precompute-cross-condition-epochs precompute-trial-epochs print-atlas-regions compare-subspaces compare-subspaces-batch

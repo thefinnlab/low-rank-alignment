@@ -13,6 +13,7 @@ results/<script>/<mode>/<dataset>/offset-<offset>/<model>/layer-<layer>/
 
 Script components include `run_significance`, `run_rrr`,
 `run_target_dimensionality_rrr`,
+`run_cross_condition_rrr`,
 `run_language_decoding`, `run_language_reconstruction`, and `compare_subspaces`.
 Dataset components are `podcast`,
 `brain-treebank-<stimulus>`, and `deep-fmri`. fMRI always uses `offset-0`.
@@ -66,6 +67,10 @@ NPY, array mappings are NPZ, plots are PNG, JSON-compatible values are JSON, and
 fitted encoding/reconstruction objects are joblib files. Partial runs are valid.
 Required fields and selector combinations are checked only by `mark_complete()`.
 Plot fields are optional, and `plot: false` never prevents completion.
+
+The cross-condition producer uses generic `source_item` and `target_item` selectors
+for pair metrics and item-scoped target manifests. Its configuration includes a
+producer contract version so legacy stimulus-named variants are not silently resumed.
 
 RRR resume planning is based exclusively on manifest entries. A rank/fold is
 complete only when its metrics and required fold factors exist, including target

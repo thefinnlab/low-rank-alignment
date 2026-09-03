@@ -7,7 +7,7 @@ from scripts.generate_brain_treebank_embeddings import embedding_is_complete
 from scripts.utilities.precompute_epochs import (
     _cache_is_complete,
     _trial_record,
-    cross_stimulus_trials,
+    cross_condition_trials,
 )
 from src.core.config import GenerateEmbeddingsConfig
 
@@ -25,7 +25,7 @@ def test_trial_record_resolves_exact_trial(tmp_path):
     assert record["recording_path"].endswith("sub_2_trial004.h5")
 
 
-def test_cross_stimulus_trial_plan_includes_all_trials_for_eligible_subjects(tmp_path):
+def test_cross_condition_trial_plan_includes_all_trials_for_eligible_subjects(tmp_path):
     metadata_dir = tmp_path / "subject_metadata"
     metadata_dir.mkdir()
     records = (
@@ -38,7 +38,7 @@ def test_cross_stimulus_trial_plan_includes_all_trials_for_eligible_subjects(tmp
             json.dumps({"filename": movie})
         )
 
-    assert cross_stimulus_trials(str(tmp_path)) == [
+    assert cross_condition_trials(str(tmp_path)) == [
         (1, 0, "cars-2"),
         (1, 1, "megamind"),
     ]

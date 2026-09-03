@@ -1,8 +1,8 @@
 # Brain Treebank preprocessing
 
-## Cross-stimulus setup
+## Cross-condition setup
 
-The cross-stimulus workflow needs the source HDF5 recordings, movie metadata,
+The cross-condition workflow needs the source HDF5 recordings, movie metadata,
 timings, labels, localization, and transcripts. Download the shared archives and
 only the trials for subjects who watched at least two movies with:
 
@@ -30,8 +30,8 @@ preprocessing implementation:
 
 ```bash
 uv run python scripts/utilities/precompute_epochs.py \
-  --config configs/brain_treebank/cross_stimulus/gpt2.yml \
-  --cross-stimulus
+  --config configs/brain_treebank/cross_condition/gpt2.yml \
+  --cross-condition
 ```
 
 If system memory is limited, reduce the temporary epoch-extraction batch, for
@@ -39,8 +39,8 @@ example:
 
 ```bash
 uv run python scripts/utilities/precompute_epochs.py \
-  --config configs/brain_treebank/cross_stimulus/gpt2.yml \
-  --cross-stimulus \
+  --config configs/brain_treebank/cross_condition/gpt2.yml \
+  --cross-condition \
   --epoch-batch-size 8
 ```
 
@@ -50,8 +50,8 @@ of memory while calculating the high-gamma envelope:
 
 ```bash
 uv run python scripts/utilities/precompute_epochs.py \
-  --config configs/brain_treebank/cross_stimulus/gpt2.yml \
-  --cross-stimulus \
+  --config configs/brain_treebank/cross_condition/gpt2.yml \
+  --cross-condition \
   --epoch-batch-size 8 \
   --high-gamma-channel-batch-size 8
 ```
