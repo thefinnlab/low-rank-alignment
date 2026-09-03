@@ -147,6 +147,8 @@ def get_glove_embeddings(data_root, transcript_df, dim):
     glove_vectors = _load_glove_vectors(str(data_root), int(dim))
 
     def preprocess_word(word):
+        if not isinstance(word, str):
+            return ""
         # Convert to lowercase
         word = word.lower()
         # Remove punctuation outside of words. i.e. keep apostrophes

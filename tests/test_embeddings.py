@@ -114,6 +114,39 @@ class TestLoadEmbeddings:
 
         assert loaded == [str(shared_glove)]
 
+    def test_glove_treats_null_words_as_out_of_vocabulary(self, monkeypatch):
+        from src.utils.shared import embeddings as embedding_utils
+
+        class FakeVectors:
+            vector_size = 2
+
+            def __contains__(self, word):
+                return word == "known"
+
+            def __getitem__(self, word):
+                return np.array([1.0, 2.0], dtype=np.float32)
+
+        monkeypatch.setattr(
+            embedding_utils,
+            "_load_glove_vectors",
+            lambda data_root, dim: FakeVectors(),
+        )
+        transcript = pd.DataFrame(
+            {
+                "word_idx": [0, 1],
+                "word": ["known", None],
+                "start": [0.0, 1.0],
+                "end": [0.5, 1.5],
+            }
+        )
+
+        vectors, word_df = embedding_utils.get_glove_embeddings(
+            "data", transcript, dim=300
+        )
+
+        np.testing.assert_array_equal(vectors, [[1.0, 2.0], [0.0, 0.0]])
+        assert word_df["in_glove"].tolist() == [True, False]
+
     def test_single_token_words(self, tmp_path):
         """When each token is its own word, output equals raw embedding rows."""
         rng = np.random.default_rng(1)
