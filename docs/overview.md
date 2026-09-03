@@ -42,6 +42,9 @@ The `cross-temporal-pipeline` Make target submits per-model temporal-window RRR 
 cross-temporal-window transfer chains for podcast and Cars 2, using Slurm `afterok`
 dependencies between those artifact-producing stages. It consumes existing
 significance artifacts rather than submitting significance jobs.
+The `rrr-loso-batch` Make target submits one model-named podcast
+leave-one-subject-out RRR job per non-GloVe pipeline model and consumes the
+cross-model-layer significance artifacts already generated for those models.
 
 ## Source layout
 

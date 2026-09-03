@@ -39,6 +39,7 @@ BTB_HIGH_GAMMA_CHANNEL_BATCH_SIZE ?=
 BTB_SUBJECT ?=
 BTB_TRIAL ?=
 PIPELINE_MODELS ?= gpt-j-6b gpt2-xl llama3-8b roberta-large random-gpt2-xl gpt2 glove
+LOSO_MODELS     ?= $(filter-out glove,$(PIPELINE_MODELS))
 CROSS_MODEL_LAYER_MODELS ?= gpt-j-6b gpt2-xl llama3-8b roberta-large random-gpt2-xl gpt2
 CROSS_MODEL_LAYER_CARS_MODELS ?= $(filter-out glove,$(PIPELINE_MODELS))
 CROSS_MODEL_LAYER_INCLUDE_FMRI ?= true
@@ -48,6 +49,7 @@ SIG_RRR_FMRI_MODELS ?= $(CROSS_MODEL_LAYER_MODELS)
 DATASET         ?= podcast
 SIG_OVERRIDES   ?=
 RRR_OVERRIDES   ?=
+LOSO_SBATCH_ARGS ?=
 RUN_DIR         ?=   # required for plots: RUN_DIR=results/my_run
 DATA_ROOT       ?= data
 ATLAS_PATH      ?= atlases/destrieux_2009/destrieux2009_rois_lateralized.nii.gz
@@ -299,6 +301,33 @@ stage-language-resources:
 ##   make rrr-batch RRR_CONFIGS="configs/rrr/rrr_cross_final.yml configs/rrr/rrr_per_subject_final.yml" CMD=python
 rrr-batch:
 	$(call run_config_list,RRR_CONFIGS,rrr,scripts/run_rrr.py)
+
+## Submit one podcast leave-one-subject-out RRR job per non-GloVe pipeline model.
+## Each job expands the configured layer list and receives a model-specific
+## Slurm job name. Cross-model-layer significance artifacts must already exist.
+## Usage:
+##   make rrr-loso-batch
+##   make rrr-loso-batch LOSO_MODELS="gpt2 gpt2-xl"
+##   make rrr-loso-batch RRR_OVERRIDES="--refresh=true"
+rrr-loso-batch:
+	@set -eu; \
+	mkdir -p logs; \
+	if [ -z "$(strip $(LOSO_MODELS))" ]; then \
+		echo "LOSO_MODELS must contain at least one model" >&2; \
+		exit 2; \
+	fi; \
+	for model in $(LOSO_MODELS); do \
+		config="configs/rrr/$$model/leave_one_subject_out.yml"; \
+		if [ ! -f "$$config" ]; then \
+			echo "Missing LOSO RRR config: $$config" >&2; \
+			exit 2; \
+		fi; \
+	done; \
+	for model in $(LOSO_MODELS); do \
+		config="configs/rrr/$$model/leave_one_subject_out.yml"; \
+		echo "Submitting podcast LOSO RRR for $$model: $$config"; \
+		$(if $(filter sbatch%,$(CMD)),$(SBATCH) --job-name="rrr-loso-podcast-$$model-$(USR)-$(DT)" $(LOSO_SBATCH_ARGS) submit.sh,$(CMD)) scripts/run_rrr.py --config "$$config" $(RRR_OVERRIDES); \
+	done
 
 ## Run cross-model-layer significance-union RRR for every non-GloVe model.
 ## Each model uses its own config, so model-specific dimensions and ridge
@@ -598,4 +627,4 @@ sig-test:
 test:
 	python -m pytest tests/ -v
 
-.PHONY: sig sig-batch train plots rrr rrr-batch rrr-cross-model-layer-batch temporal-windows-batch cross-temporal-pipeline sig-rrr-batch submit-rrr-matrix sig-test test generate-embeddings generate-embeddings-batch generate-random-embeddings download-models precompute-epochs download-brain-treebank generate-brain-treebank-embeddings precompute-cross-stimulus-epochs precompute-trial-epochs print-atlas-regions compare-subspaces compare-subspaces-batch
+.PHONY: sig sig-batch train plots rrr rrr-batch rrr-loso-batch rrr-cross-model-layer-batch temporal-windows-batch cross-temporal-pipeline sig-rrr-batch submit-rrr-matrix sig-test test generate-embeddings generate-embeddings-batch generate-random-embeddings download-models precompute-epochs download-brain-treebank generate-brain-treebank-embeddings precompute-cross-stimulus-epochs precompute-trial-epochs print-atlas-regions compare-subspaces compare-subspaces-batch

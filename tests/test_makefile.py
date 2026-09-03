@@ -119,6 +119,21 @@ def test_sig_rrr_batch_stops_when_significance_submission_fails(
     assert "scripts/run_significance.py" in submissions[0]
 
 
+def test_rrr_loso_batch_submits_one_named_job_per_non_glove_model(tmp_path: Path):
+    result, submissions = _run_make(tmp_path, target="rrr-loso-batch")
+
+    assert result.returncode == 0, result.stderr
+    assert len(submissions) == 6
+    assert all("scripts/run_rrr.py" in submission for submission in submissions)
+    assert all("leave_one_subject_out.yml" in submission for submission in submissions)
+    assert all("--job-name=rrr-loso-podcast-" in submission for submission in submissions)
+    assert all("glove" not in submission for submission in submissions)
+    assert len({
+        submission.split("--job-name=", 1)[1].split(" ", 1)[0]
+        for submission in submissions
+    }) == 6
+
+
 def test_cross_temporal_pipeline_submits_complete_dependency_chain(tmp_path: Path):
     result, submissions = _run_make(
         tmp_path,
