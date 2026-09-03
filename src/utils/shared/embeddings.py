@@ -73,9 +73,16 @@ def load_embeddings(
             **kwargs,
         )
 
-    embeddings, word_df = embedding_getter_registry[embedding_getter_name](
-        data_root, transcript_df, **kwargs
-    )
+    if embedding_getter_name == "glove":
+        # GloVe is a static word-level embedding and therefore does not use the
+        # registry of contextual/token embedding getters below.
+        embeddings, word_df = get_glove_embeddings(
+            data_root, transcript_df, dim=int(kwargs.get("dim", glove_dim))
+        )
+    else:
+        embeddings, word_df = embedding_getter_registry[embedding_getter_name](
+            data_root, transcript_df, **kwargs
+        )
     if limit_to_glove and "in_glove" not in word_df.columns:
         _, glove_word_df = get_glove_embeddings(
             data_root, word_df, dim=int(glove_dim)
@@ -106,6 +113,13 @@ def _to_word_level_df(transcript_df: pd.DataFrame) -> pd.DataFrame:
 @lru_cache(maxsize=None)
 def _load_glove_vectors(data_root: str, dim: int):
     glove_file = os.path.join(data_root, f"glove/glove.6B.{dim}d.txt")
+    # Dataset-specific iEEG roots (for example ``data/brain-treebank``) share
+    # the repository-level GloVe cache in their parent data directory.
+    if not os.path.exists(glove_file):
+        parent_root = os.path.dirname(os.path.normpath(data_root))
+        parent_file = os.path.join(parent_root, f"glove/glove.6B.{dim}d.txt")
+        if os.path.exists(parent_file):
+            glove_file = parent_file
     return KeyedVectors.load_word2vec_format(
         glove_file, binary=False, no_header=True
     )
