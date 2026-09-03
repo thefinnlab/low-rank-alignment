@@ -2,7 +2,7 @@ dataset: brain_treebank
 mode: cross_dataset
 results_root: results
 plot: true
-refresh: true
+refresh: false
 rank_grid:
 - 1
 - 2

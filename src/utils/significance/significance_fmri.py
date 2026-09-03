@@ -133,6 +133,8 @@ def run_fmri(config: FMRISignificanceConfig):
         train_stories,
         config.layer,
         config.pooling,
+        fmri_repo_root=config.fmri.fmri_repo_root,
+        glove_data_root=config.fmri.glove_data_root,
     )
     voxel_masks, excluded_by_story = finite_response_voxel_masks(
         config.fmri.fmri_repo_root, config.fmri.subjects, train_stories

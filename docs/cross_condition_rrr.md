@@ -79,9 +79,10 @@ uv run python scripts/utilities/precompute_epochs.py \
 Each preparation step is resumable. Embeddings and epoch caches are skipped
 when their complete artifacts already exist.
 
-Checked-in region and stimulus configs cover the full default model set. Transformer
-configs use layers at 0%, 25%, 50%, 75%, and 100% depth; GloVe uses 300 dimensions and
-no layer selector. All configs restrict analysis rows to words covered by GloVe.
+Checked-in region and stimulus configs cover the full default model set, including
+randomly initialized GPT-2. Transformer configs use layers at 0%, 25%, 50%, 75%, and
+100% depth; GloVe uses 300 dimensions and no layer selector. All configs restrict
+analysis rows to words covered by GloVe.
 For example:
 
 ```bash

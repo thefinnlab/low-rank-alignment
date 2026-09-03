@@ -63,6 +63,28 @@ def test_load_story_embeddings_pools_words_from_hdf5(tmp_path):
     np.testing.assert_allclose(result["story"], [[2.0, 4.0], [8.0, 10.0]])
 
 
+def test_load_story_embeddings_supports_glove(monkeypatch):
+    frame = pd.DataFrame({
+        "word_idx": [0, 1], "word": ["one", "two"],
+        "start": [0.0, 1.0], "end": [0.5, 1.5],
+    })
+    monkeypatch.setattr(
+        fmri, "load_story_word_data",
+        lambda root, stories: ({"story": frame}, {}),
+    )
+    monkeypatch.setattr(
+        "src.utils.shared.embeddings.get_glove_embeddings",
+        lambda root, words, dim: (np.ones((2, dim), dtype=np.float32), words),
+    )
+
+    result = fmri.load_story_embeddings(
+        "unused", "glove-300", ["story"], None,
+        fmri_repo_root="fmri", glove_data_root="data",
+    )
+
+    assert result["story"].shape == (2, 300)
+
+
 def test_finite_response_voxel_masks_require_complete_stories(tmp_path):
     base = (
         tmp_path
@@ -469,8 +491,17 @@ def test_cross_dataset_completed_resume_skips_embeddings_and_responses(
         pd.DataFrame({"subject": ["UTS01"], "target_id": [0],
                       "target_kind": ["voxel"], "significant": [True]}),
     )
-    source = IEEGArtifact(model="gpt2-xl", layer=24,
-                          results_root=results_root).begin(config={"rrr": 1})
+    source_selection = {
+        "mode": "within-layer",
+        "reference_artifact": {
+            "mode": "sig_lags", "dataset": "podcast", "offset": 0,
+            "model": "gpt2-xl", "layer": 24,
+        },
+    }
+    source = IEEGArtifact(
+        model="gpt2-xl", layer=24, results_root=results_root,
+        significance_selection=source_selection,
+    ).begin(config={"rrr": 1, "significance_selection": source_selection})
     source.save_factors(unit=UnitSelector(method="rrr"), fold=0,
                         input_factors=np.ones((2, 1), dtype=np.float32))
     config = FMRICrossDatasetRRRConfig(
@@ -486,9 +517,11 @@ def test_cross_dataset_completed_resume_skips_embeddings_and_responses(
                 "variant": sig.variant,
             }
         ),
-        ieeg_rrr_source={"mode": "internal", "dataset": "podcast",
-                         "offset": 0, "model": "gpt2-xl", "layer": 24,
-                         "variant": source.variant},
+        ieeg_rrr_source={
+            "mode": "internal", "dataset": "podcast", "offset": 0,
+            "model": "gpt2-xl", "layer": 24,
+            "significance_selection": source_selection,
+        },
         source_mode="cross_dataset",
         rank_grid=[1],
     )

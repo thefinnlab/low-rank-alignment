@@ -19,6 +19,12 @@ def _fake_sbatch(tmp_path: Path) -> tuple[Path, Path]:
         """#!/bin/sh
 set -eu
 printf '%s\n' "$*" >> "$SBATCH_LOG"
+counter_path="$SBATCH_LOG.counter"
+counter=0
+[ ! -f "$counter_path" ] || counter=$(cat "$counter_path")
+counter=$((counter + 1))
+printf '%s' "$counter" > "$counter_path"
+printf '%s\n' "$counter"
 """
     )
     executable.chmod(0o755)
@@ -55,15 +61,15 @@ def test_significance_uses_shared_dataset_and_models(tmp_path: Path):
     assert all("scripts/run_significance.py" in item for item in submissions)
 
 
-def test_fmri_significance_uses_supported_models_and_skips_glove(tmp_path: Path):
+def test_fmri_significance_supports_glove(tmp_path: Path):
     result, submissions = _run_make(
         tmp_path, "significance", "DATASET=fmri", "MODELS=gpt2 glove"
     )
 
     assert result.returncode == 0, result.stderr
-    assert len(submissions) == 1
+    assert len(submissions) == 2
     assert "configs/cross_dataset/fmri/significance/gpt2.yml" in submissions[0]
-    assert "Skipping glove" in result.stderr
+    assert "configs/cross_dataset/fmri/significance/glove.yml" in submissions[1]
 
 
 def test_rrr_resolves_dataset_and_mode(tmp_path: Path):
@@ -155,6 +161,7 @@ def test_cross_condition_configs_cover_final_models_and_depths():
         "llama3-8b": [0, 8, 16, 24, 32],
         "gpt-j-6b": [0, 7, 14, 21, 28],
         "roberta-large": [0, 6, 12, 18, 24],
+        "random-gpt2": [0, 3, 6, 9, 12],
     }
     for mode in ("region", "stimulus"):
         root = REPO_ROOT / "configs" / "cross_condition" / mode
@@ -170,3 +177,77 @@ def test_cross_condition_configs_cover_final_models_and_depths():
         glove = yaml.safe_load((root / "glove.yml").read_text())
         assert glove["model"] == "glove"
         assert glove["per_model_config"] == {"dim": 300}
+
+
+def test_final_results_submits_cross_dataset_jobs_after_all_fmri_jobs(tmp_path: Path):
+    result, submissions = _run_make(
+        tmp_path,
+        "final-results",
+        "SIGNIFICANCE_CHECK=true",
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert len(submissions) == 63
+    assert any("random-gpt2/cross_model_layer.yml" in item for item in submissions)
+    assert not any("random-gpt2-xl" in item for item in submissions)
+    fmri_ids = [3, 10, 17, 24, 31, 38, 45]
+    dependency = "--dependency=afterok:" + ":".join(map(str, fmri_ids))
+    assert all(dependency in item for item in submissions[-14:])
+
+
+def test_final_rrr_configs_use_one_equivalent_significance_union():
+    expected = {
+        ("gpt2", (0, 3, 6, 9, 12)),
+        ("gpt2-xl-batch", (0, 12, 24, 36, 48)),
+        ("gpt-j-6b", (0, 7, 14, 21, 28)),
+        ("roberta-large", (0, 6, 12, 18, 24)),
+        ("llama3-8b", (0, 8, 16, 24, 32)),
+        ("random-gpt2", (0, 3, 6, 9, 12)),
+        ("glove-300", (None,)),
+    }
+
+    def signature(selection):
+        assert selection["mode"] == "cross-model-layer"
+        return {
+            (
+                artifact["model"],
+                tuple(
+                    artifact["layer"]
+                    if isinstance(artifact["layer"], list)
+                    else [artifact["layer"]]
+                ),
+            )
+            for artifact in selection["artifacts"]
+        }
+
+    models = [
+        "gpt2", "gpt2-xl", "gpt-j-6b", "roberta-large", "llama3-8b",
+        "random-gpt2", "glove",
+    ]
+    configs = []
+    for model in models:
+        configs.extend([
+            REPO_ROOT / "configs/rrr" / model / "cross_model_layer.yml",
+            REPO_ROOT / "configs/rrr" / model / "leave_one_subject_out.yml",
+            REPO_ROOT / "configs/brain_treebank/cars_2/rrr" / model
+            / "cross_model_layer.yml",
+            REPO_ROOT / "configs/brain_treebank/cars_2/rrr" / model
+            / "leave_one_subject_out.yml",
+            REPO_ROOT / "configs/fmri/within_fmri_cross_model_layer"
+            / f"{model}.yml",
+        ])
+        for target in ("podcast", "cars-2"):
+            path = (
+                REPO_ROOT / "configs/cross_dataset" / target / "from_fmri"
+                / f"{model}.yml"
+            )
+            payload = yaml.safe_load(path.read_text())
+            assert signature(payload["significance_selection"]) == expected
+            assert signature(
+                payload["rrr_source"]["significance_selection"]
+            ) == expected
+
+    for path in configs:
+        text = path.read_text()
+        assert "random-gpt2-xl" not in text
+        assert signature(yaml.safe_load(text)["significance_selection"]) == expected

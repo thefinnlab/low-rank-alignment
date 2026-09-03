@@ -78,17 +78,16 @@ def validate_cross_dataset_significance_alignment(
     source_selection,
     source_identity: dict,
 ) -> None:
-    """Require source and target RRR runs to use corresponding within-layer targets."""
+    """Require source and target RRR runs to use corresponding target selections."""
     if source_selection is None:
         raise ValueError(
             "Cross-dataset RRR sources must define significance_selection"
         )
     target = canonical_significance_selection(target_selection)
     source = canonical_significance_selection(source_selection)
-    if target["mode"] != "within-layer" or source["mode"] != "within-layer":
+    if target["mode"] != source["mode"]:
         raise ValueError(
-            "Cross-dataset RRR currently requires within-layer significance "
-            "selections for both source and target"
+            "Cross-dataset source and target significance selection modes must match"
         )
 
     def validate_reference(label: str, selection: dict, identity: dict) -> dict:
@@ -121,6 +120,25 @@ def validate_cross_dataset_significance_alignment(
             "Cross-dataset source and target significance selections must use "
             f"the same model and layer: {mismatches}"
         )
+    if target["mode"] == "cross-model-layer":
+
+        def union_signature(selection: dict) -> list[tuple]:
+            return sorted(
+                (
+                    int(item.get("offset", 0)),
+                    item.get("model"),
+                    item.get("layer"),
+                )
+                for item in selection["artifacts"]
+            )
+
+        target_union = union_signature(target)
+        source_union = union_signature(source)
+        if target_union != source_union:
+            raise ValueError(
+                "Cross-dataset cross-model-layer significance selections must "
+                "contain the same model/layer union"
+            )
 
 
 def expand_significance_artifact_specs(specs: list[dict]) -> list[dict]:

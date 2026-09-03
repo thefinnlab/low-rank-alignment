@@ -5,13 +5,16 @@ DT  := $(shell date +"%Y%m%d-%H:%M:%S")
 
 # Shared controls. Override any of these on the make command line.
 DATASET ?= podcast
-MODELS ?= gpt2 gpt2-xl llama3-8b gpt-j-6b roberta-large glove
+MODELS ?= gpt2 gpt2-xl llama3-8b gpt-j-6b roberta-large random-gpt2 glove
+FINAL_MODELS ?= gpt2 gpt2-xl gpt-j-6b roberta-large llama3-8b random-gpt2 glove
+SIGNIFICANCE_MODELS := gpt2 gpt2-xl gpt-j-6b roberta-large llama3-8b random-gpt2 glove
 RRR_MODE ?= cross_subject
 CROSS_MODE ?= region
 SOURCE_DATASET ?=
 CMD ?= sbatch
 SBATCH ?= sbatch
 OVERRIDES ?=
+SIGNIFICANCE_CHECK ?= python -m scripts.utilities.check_final_significance
 
 export PYTHONPATH := $(CURDIR)
 
@@ -39,10 +42,6 @@ significance:
 		*) echo "Unsupported significance DATASET '$(DATASET)'" >&2; exit 2 ;;
 	esac
 	models="$(MODELS)"
-	if [ "$(DATASET)" = "fmri" ]; then
-		case " $$models " in *" glove "*) echo "Skipping glove: fMRI GloVe is not currently supported" >&2 ;; esac
-		models="$(filter-out glove,$(MODELS))"
-	fi
 	[ -n "$$models" ] || { echo "MODELS contains no models supported by $(DATASET) significance" >&2; exit 2; }
 	for model in $$models; do
 		config="$$config_root/$$model$$suffix"
@@ -52,6 +51,33 @@ significance:
 		config="$$config_root/$$model$$suffix"
 		echo "Running significance for $(DATASET) / $$model: $$config"
 		$(call launch,significance-$(DATASET),scripts/run_significance.py)
+	done
+
+## Submit significance jobs only for missing/incomplete final-results artifacts.
+## Each model/layer is checked independently; complete layers are skipped.
+significance-missing:
+	@set -eu
+	mkdir -p logs
+	missing="$$($(SIGNIFICANCE_CHECK) --results-root results --models $(SIGNIFICANCE_MODELS) --missing)"
+	if [ -z "$$missing" ]; then
+		echo "All required significance Artifacts are complete."
+		exit 0
+	fi
+	printf '%s\n' "$$missing" | while IFS="$$(printf '\t')" read -r dataset model layer; do
+		case "$$dataset" in
+			podcast) config="configs/significance/$$model/significance.yml"; override="--ieeg.encoding.per_model_config.layer=$$layer"; label="significance-podcast" ;;
+			brain-treebank-cars-2) config="configs/brain_treebank/cars_2/significance/$$model/significance.yml"; override="--ieeg.encoding.per_model_config.layer=$$layer"; label="significance-cars-2" ;;
+			deep-fmri) config="configs/cross_dataset/fmri/significance/$$model.yml"; override="--fmri.layer=$$layer"; label="significance-fmri" ;;
+			*) echo "Unsupported missing-significance dataset '$$dataset'" >&2; exit 2 ;;
+		esac
+		[ "$$layer" != "none" ] || override=""
+		[ -f "$$config" ] || { echo "Missing significance config: $$config" >&2; exit 2; }
+		echo "Submitting missing significance for $$dataset / $$model / layer $$layer"
+		if [ "$(CMD)" = "sbatch" ]; then
+			$(SBATCH) --job-name="$$label-$$model-layer$$layer-$(USR)-$(DT)" submit.sh scripts/run_significance.py --config "$$config" $$override $(OVERRIDES)
+		else
+			$(CMD) scripts/run_significance.py --config "$$config" $$override $(OVERRIDES)
+		fi
 	done
 
 ## Run one RRR mode once per selected model.
@@ -90,10 +116,6 @@ rrr:
 		esac
 	fi
 	models="$(MODELS)"
-	if [ "$(DATASET)" = "fmri" ]; then
-		case " $$models " in *" glove "*) echo "Skipping glove: fMRI GloVe is not currently supported" >&2 ;; esac
-		models="$(filter-out glove,$(MODELS))"
-	fi
 	[ -n "$$models" ] || { echo "MODELS contains no models supported by $(DATASET) RRR" >&2; exit 2; }
 	for model in $$models; do
 		if [ "$(DATASET)" = "fmri" ] || [ "$$mode" = "cross_dataset" ]; then
@@ -137,4 +159,77 @@ cross-condition:
 		$(call launch,cross-condition-$(CROSS_MODE),scripts/run_cross_condition_rrr.py)
 	done
 
-.PHONY: significance rrr cross-condition
+## Submit the complete final-results RRR matrix after checking significance.
+## Cross-dataset jobs sourced from fMRI wait for every internal fMRI job.
+## Use CMD="uv run python" to execute the same matrix sequentially and locally.
+final-results:
+	@set -eu
+	mkdir -p logs
+	models="$(FINAL_MODELS)"
+	[ -n "$$models" ] || { echo "FINAL_MODELS must contain at least one model" >&2; exit 2; }
+	for model in $$models; do
+		for config in \
+			"configs/rrr/$$model/cross_model_layer.yml" \
+			"configs/brain_treebank/cars_2/rrr/$$model/cross_model_layer.yml" \
+			"configs/fmri/within_fmri_cross_model_layer/$$model.yml" \
+			"configs/rrr/$$model/leave_one_subject_out.yml" \
+			"configs/brain_treebank/cars_2/rrr/$$model/leave_one_subject_out.yml" \
+			"configs/cross_condition/region/$$model.yml" \
+			"configs/cross_condition/stimulus/$$model.yml" \
+			"configs/cross_dataset/podcast/from_fmri/$$model.yml" \
+			"configs/cross_dataset/cars-2/from_fmri/$$model.yml"; do
+			[ -f "$$config" ] || { echo "Missing final-results config: $$config" >&2; exit 2; }
+		done
+	done
+	$(SIGNIFICANCE_CHECK) --results-root results --models $(SIGNIFICANCE_MODELS)
+	if [ "$(CMD)" = "sbatch" ]; then
+		submit_job() {
+			label="$$1"; model="$$2"; script="$$3"; config="$$4"; dependency="$${5:-}"
+			if [ -n "$$dependency" ]; then
+				job_id="$$($(SBATCH) --parsable --dependency="afterok:$$dependency" \
+					--job-name="$$label-$$model-$(USR)-$(DT)" submit.sh \
+					"$$script" --config "$$config" $(OVERRIDES))"
+			else
+				job_id="$$($(SBATCH) --parsable \
+					--job-name="$$label-$$model-$(USR)-$(DT)" submit.sh \
+					"$$script" --config "$$config" $(OVERRIDES))"
+			fi
+			job_id="$${job_id%%;*}"
+			[ -n "$$job_id" ] || { echo "No Slurm job ID returned for $$label / $$model" >&2; exit 2; }
+			echo "Submitted $$label / $$model as $$job_id" >&2
+			printf '%s' "$$job_id"
+		}
+		fmri_dependencies=""
+		for model in $$models; do
+			submit_job internal-podcast "$$model" scripts/run_rrr.py "configs/rrr/$$model/cross_model_layer.yml" >/dev/null
+			submit_job internal-cars-2 "$$model" scripts/run_rrr.py "configs/brain_treebank/cars_2/rrr/$$model/cross_model_layer.yml" >/dev/null
+			fmri_id="$$(submit_job internal-fmri "$$model" scripts/run_rrr.py "configs/fmri/within_fmri_cross_model_layer/$$model.yml")"
+			fmri_dependencies="$${fmri_dependencies:+$$fmri_dependencies:}$$fmri_id"
+			submit_job loso-podcast "$$model" scripts/run_rrr.py "configs/rrr/$$model/leave_one_subject_out.yml" >/dev/null
+			submit_job loso-cars-2 "$$model" scripts/run_rrr.py "configs/brain_treebank/cars_2/rrr/$$model/leave_one_subject_out.yml" >/dev/null
+			submit_job cross-condition-region "$$model" scripts/run_cross_condition_rrr.py "configs/cross_condition/region/$$model.yml" >/dev/null
+			submit_job cross-condition-stimulus "$$model" scripts/run_cross_condition_rrr.py "configs/cross_condition/stimulus/$$model.yml" >/dev/null
+		done
+		for model in $$models; do
+			submit_job from-fmri-to-podcast "$$model" scripts/run_rrr.py "configs/cross_dataset/podcast/from_fmri/$$model.yml" "$$fmri_dependencies" >/dev/null
+			submit_job from-fmri-to-cars-2 "$$model" scripts/run_rrr.py "configs/cross_dataset/cars-2/from_fmri/$$model.yml" "$$fmri_dependencies" >/dev/null
+		done
+	else
+		for model in $$models; do
+			$(CMD) scripts/run_rrr.py --config "configs/rrr/$$model/cross_model_layer.yml" $(OVERRIDES)
+			$(CMD) scripts/run_rrr.py --config "configs/brain_treebank/cars_2/rrr/$$model/cross_model_layer.yml" $(OVERRIDES)
+			$(CMD) scripts/run_rrr.py --config "configs/fmri/within_fmri_cross_model_layer/$$model.yml" $(OVERRIDES)
+			$(CMD) scripts/run_rrr.py --config "configs/rrr/$$model/leave_one_subject_out.yml" $(OVERRIDES)
+			$(CMD) scripts/run_rrr.py --config "configs/brain_treebank/cars_2/rrr/$$model/leave_one_subject_out.yml" $(OVERRIDES)
+			$(CMD) scripts/run_cross_condition_rrr.py --config "configs/cross_condition/region/$$model.yml" $(OVERRIDES)
+			$(CMD) scripts/run_cross_condition_rrr.py --config "configs/cross_condition/stimulus/$$model.yml" $(OVERRIDES)
+		done
+		for model in $$models; do
+			$(CMD) scripts/run_rrr.py --config "configs/cross_dataset/podcast/from_fmri/$$model.yml" $(OVERRIDES)
+			$(CMD) scripts/run_rrr.py --config "configs/cross_dataset/cars-2/from_fmri/$$model.yml" $(OVERRIDES)
+		done
+	fi
+
+.PHONY: significance significance-missing missing-significance rrr cross-condition final-results
+
+missing-significance: significance-missing

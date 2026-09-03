@@ -122,10 +122,28 @@ def load_story_embeddings(
     embedding_root: str,
     model_dir: str,
     stories: list[str],
-    layer: int,
+    layer: int | None,
     pooling: str = "mean",
+    *,
+    fmri_repo_root: str | None = None,
+    glove_data_root: str = "data",
 ) -> dict[str, np.ndarray]:
-    """Load token HDF5 files and pool them into one vector per fMRI word."""
+    """Load transformer HDF5s or construct word-level GloVe story embeddings."""
+    if model_dir == "glove" or model_dir.startswith("glove-"):
+        if layer is not None:
+            raise ValueError("fMRI GloVe embeddings require layer=None")
+        if fmri_repo_root is None:
+            raise ValueError("fmri_repo_root is required for fMRI GloVe embeddings")
+        dim = int(model_dir.split("-", 1)[1]) if "-" in model_dir else 300
+        from src.utils.shared.embeddings import get_glove_embeddings
+
+        frames, _ = load_story_word_data(fmri_repo_root, stories)
+        return {
+            story: get_glove_embeddings(glove_data_root, frames[story], dim)[0]
+            .astype(np.float32, copy=False)
+            for story in stories
+        }
+
     reducers = {
         "mean": lambda values: values.mean(axis=0),
         "first": lambda values: values[0],

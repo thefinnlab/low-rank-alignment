@@ -34,15 +34,23 @@ embeddings predict iEEG and fMRI responses. The supported executable surface is
   refit utility parses that comparison's console report and recomputes all-lag
   correlations for only the union of selected electrodes, without permutation tests.
 
-The Makefile has three analysis targets: `significance`, `rrr`, and
+The Makefile has three individual analysis targets: `significance`, `rrr`, and
 `cross-condition`. They share `DATASET`, `MODELS`, `CMD`, and `OVERRIDES` controls;
 RRR additionally uses `RRR_MODE` (and `SOURCE_DATASET` for cross-dataset transfer),
 while cross-condition uses `CROSS_MODE=region|stimulus`. Slurm submission is the
 default, and `CMD="uv run python"` runs the same jobs locally. The default model set
-is GPT-2, GPT-2 XL, Llama 3 8B, GPT-J 6B, RoBERTa Large, and GloVe 300D. fMRI uses
-the currently supported transformer subset and supports its internal,
+is GPT-2, GPT-2 XL, Llama 3 8B, GPT-J 6B, RoBERTa Large, randomly initialized
+GPT-2, and GloVe 300D. fMRI supports this complete set and supports its internal,
 cross-model-layer, and cross-dataset RRR configurations; cross-condition remains
 iEEG-only.
+The `final-results` target checks that every significance Artifact in the configured
+cross-model/layer union is complete, submits internal RRR for podcast, Cars 2, and
+fMRI, leave-one-subject-out RRR for both iEEG datasets, and both cross-condition
+families. Its fMRI-to-podcast and fMRI-to-Cars-2 jobs use Slurm `afterok`
+dependencies on the complete internal-fMRI batch.
+The `significance-missing` (also available as `missing-significance`) target checks
+the same model/layer matrix and submits only missing or incomplete significance
+Artifacts, one scalar layer per job.
 
 Each retained analysis workflow owns one client-facing `Artifact` class. Their canonical
 identity, variants, selector fields, resume behavior, and legacy migration are
@@ -108,8 +116,9 @@ RRR uses `fmri.ridge.log_alphas`, and the standalone cross-condition runner uses
 top-level `log_alphas`; all default to false while alpha selection itself still runs.
 Cross-dataset RRR source identities include their own significance selection, which
 deterministically resolves and validates the saved source variant.
-Source and target selections are required to be corresponding within-layer selections
-for the same model and layer over their respective datasets.
+Source and target selections must use the same selection mode, reference model/layer,
+and, for cross-model-layer selection, the same model/layer union over their respective
+datasets.
 Cross-dataset transfer from an iEEG source refits one ridge/RRR model on all source
 stimulus words and significant electrodes, then transfers the reduced-QR input basis
 at each rank. Its optional PCA basis is likewise fit on all source words. Saved iEEG

@@ -2,7 +2,7 @@ dataset: podcast
 mode: sig_lags
 results_root: results
 plot: true
-refresh: true
+refresh: false
 num_null_shifts: 10000
 null_seed: 42
 null_batch_size: 16

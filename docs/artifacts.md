@@ -105,11 +105,13 @@ recorded as upstreams.
 Cross-dataset and multiview inputs use generic `rrr_source`/`source` identities;
 there are no modality-named dependency fields. `internal` identifies the ordinary
 within-dataset RRR producer for both modalities.
-Cross-dataset RRR currently requires corresponding `within-layer` source and target
-significance selections: their model and layer must match, while each reference must
-match its own dataset-specific RRR identity. The concrete source Artifact is recorded
-as an upstream dependency; rank and fold field selectors therefore need only the RRR
-or PCA method rather than a serialized source identity.
+Cross-dataset RRR requires corresponding source and target significance selections.
+Their selection modes and reference model/layer must match, while each reference must
+match its own dataset-specific RRR identity. For `cross-model-layer`, the complete
+expanded model/layer union must also be identical across source and target. The
+concrete source Artifact is recorded as an upstream dependency; rank and fold field
+selectors therefore need only the RRR or PCA method rather than a serialized source
+identity.
 
 Significance exposes complete subject-keyed `target_significance` tables with
 `target_id`, `target_kind`, and `significant` columns. RRR exposes common factor,

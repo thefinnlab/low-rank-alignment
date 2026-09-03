@@ -361,6 +361,47 @@ def test_cross_dataset_significance_alignment_allows_only_dataset_to_differ():
         )
 
 
+def test_cross_dataset_significance_alignment_accepts_matching_cross_layer_unions():
+    target_identity = {
+        "dataset": "podcast", "offset": 0, "model": "gpt2", "layer": 0,
+    }
+    source_identity = {
+        "dataset": "deep-fmri", "offset": 0, "model": "gpt2", "layer": 0,
+    }
+    artifacts = [
+        {"offset": 0, "model": "gpt2", "layer": [0, 3, 6, 9, 12]},
+        {"offset": 0, "model": "glove-300", "layer": None},
+    ]
+    target = {
+        "mode": "cross-model-layer",
+        "reference_artifact": {**target_identity, "mode": "sig_lags"},
+        "artifacts": [
+            {**item, "dataset": "podcast", "mode": "sig_lags"}
+            for item in artifacts
+        ],
+    }
+    source = {
+        "mode": "cross-model-layer",
+        "reference_artifact": {
+            **source_identity, "mode": "held_out_session",
+        },
+        "artifacts": [
+            {**item, "dataset": "deep-fmri", "mode": "held_out_session"}
+            for item in artifacts
+        ],
+    }
+
+    validate_cross_dataset_significance_alignment(
+        target, target_identity, source, source_identity
+    )
+
+    source["artifacts"][0]["layer"] = [0, 6, 12]
+    with pytest.raises(ValueError, match="same model/layer union"):
+        validate_cross_dataset_significance_alignment(
+            target, target_identity, source, source_identity
+        )
+
+
 def test_rrr_manifest_resume_is_selector_complete(tmp_path):
     artifact = RRRArtifact(results_root=tmp_path).begin(config={"rank_grid": [1, 2]})
     unit = UnitSelector(method="rrr", region="superior-temporal")

@@ -439,6 +439,8 @@ def run_fmri(
                 all_stories,
                 config.layer,
                 config.pooling,
+                fmri_repo_root=config.fmri.fmri_repo_root,
+                glove_data_root=config.fmri.glove_data_root,
             )
         ambient_dim = next(iter(embeddings.values())).shape[1]
         with _timed("Lanczos-align all stories"):

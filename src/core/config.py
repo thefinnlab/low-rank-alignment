@@ -887,6 +887,7 @@ class FMRIDataConfig:
 
     fmri_repo_root: str = "data/deep-fMRI-dataset"
     embedding_root: str = "data/fmri/stimuli"
+    glove_data_root: str = "data"
     sessions: list[int] = field(default_factory=lambda: [1, 2, 3, 4, 5])
     subjects: list[str] = field(default_factory=lambda: ["UTS03"])
     trim: int = 5
@@ -921,7 +922,7 @@ class FMRISignificanceConfig:
     fmri: FMRIDataConfig = field(default_factory=FMRIDataConfig)
     ridge: FMRIRidgeConfig = field(default_factory=FMRIRidgeConfig)
     model_dir: str = "gpt2-xl"
-    layer: int | list[int] = 24
+    layer: int | list[int] | None = 24
     pooling: str = "mean"
     results_root: str = "results"
     plot: bool = True
@@ -934,6 +935,9 @@ class FMRISignificanceConfig:
     refresh: bool = False
 
     def validate(self):
+        is_glove = self.model_dir == "glove" or self.model_dir.startswith("glove-")
+        if is_glove and self.layer is not None:
+            raise ValueError("fMRI GloVe configurations require layer=null")
         if len(self.fmri.sessions) < 2:
             raise ValueError("fMRI significance requires at least two sessions")
         if not self.fmri.subjects:
@@ -956,7 +960,7 @@ class FMRICrossDatasetRRRConfig:
     fmri: FMRIDataConfig = field(default_factory=FMRIDataConfig)
     ridge: FMRIRidgeConfig = field(default_factory=FMRIRidgeConfig)
     model_dir: str = "gpt2-xl"
-    layer: int | list[int] = 24
+    layer: int | list[int] | None = 24
     pooling: str = "mean"
     results_root: str = "results"
     plot: bool = True
@@ -979,6 +983,9 @@ class FMRICrossDatasetRRRConfig:
 
     def validate(self):
         self.significance_selection.validate()
+        is_glove = self.model_dir == "glove" or self.model_dir.startswith("glove-")
+        if is_glove and self.layer is not None:
+            raise ValueError("fMRI GloVe configurations require layer=null")
         if self.source_mode not in {"cross_dataset", "within_fmri"}:
             raise ValueError(
                 "source_mode must be 'cross_dataset' or 'within_fmri', "

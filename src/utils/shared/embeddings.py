@@ -2,6 +2,7 @@
 
 import os
 import re
+from functools import lru_cache
 from gensim.models import KeyedVectors
 import h5py
 import numpy as np
@@ -102,6 +103,14 @@ def _to_word_level_df(transcript_df: pd.DataFrame) -> pd.DataFrame:
     raise ValueError("Transcript DataFrame must contain word/start/end information.")
 
 
+@lru_cache(maxsize=None)
+def _load_glove_vectors(data_root: str, dim: int):
+    glove_file = os.path.join(data_root, f"glove/glove.6B.{dim}d.txt")
+    return KeyedVectors.load_word2vec_format(
+        glove_file, binary=False, no_header=True
+    )
+
+
 def get_glove_embeddings(data_root, transcript_df, dim):
     """
     Retrieves GloVe embeddings for each word in the input DataFrame.
@@ -121,10 +130,7 @@ def get_glove_embeddings(data_root, transcript_df, dim):
     Returns:
 
     """
-    glove_file = os.path.join(data_root, f"glove/glove.6B.{dim}d.txt")
-    glove_vectors = KeyedVectors.load_word2vec_format(
-        glove_file, binary=False, no_header=True
-    )
+    glove_vectors = _load_glove_vectors(str(data_root), int(dim))
 
     def preprocess_word(word):
         # Convert to lowercase
