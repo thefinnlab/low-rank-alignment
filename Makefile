@@ -209,7 +209,7 @@ plots:
 ## Usage:
 ##   make rrr                                                          # default config
 ##   make rrr RRR_CONFIG=configs/rrr/rrr_default.yml                  # per-subject mode
-##   make rrr OVERRIDES="--mode=leave_one_region_out"                 # LORO mode
+##   make rrr OVERRIDES="--mode=leave_one_subject_out"                # LOSO mode
 ##   make rrr CMD=python                                               # run locally
 rrr:
 	mkdir -p logs

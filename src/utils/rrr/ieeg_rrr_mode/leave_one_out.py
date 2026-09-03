@@ -12,6 +12,7 @@ from scripts.run_rrr import Artifact
 from src.core.config import RRRConfig
 
 from .common import (_build_results, _build_rrr_decomposition_inputs,
+                     _fit_rrr_input_factors_for_unit,
                      _load_existing_grid, _merge_grid_rows,
                      _reference_encoding_results, _run_common_subspace_fold_k,
                      _run_rrr_for_unit)
@@ -31,12 +32,11 @@ def _run_leave_one_out_transfer_for_unit(
 ) -> pd.DataFrame:
     """Evaluate a learned input factor on one held-out leave-one-out unit.
 
-    For each fold and rank k, loads the A matrix saved by _run_rrr_for_unit on the
-    training subjects, projects X through A_k, trains a fresh ridge on the held-out
+    For each fold and rank k, loads the A matrix fitted on the training subjects,
+    orthonormalizes A_k with reduced QR, trains a fresh ridge on the held-out
     subject's training data, and evaluates on the held-out fold.
 
     Args:
-        transfer_dir: Output directory for transfer metrics.
         X_raw: (n_words, n_embed) embedding matrix (shared across all subjects).
         test_idxs: List of test index arrays (one per fold); used only for n_folds.
         per_fold_baselines: Fold baselines built from the held-out subject's Y matrix.
@@ -102,7 +102,7 @@ def _run_leave_one_out_transfer_for_unit(
         fold_start = time.time()
         print(f"\n[Transfer fold {fold_f + 1}/{n_folds}]")
 
-        # Load A matrix from training subjects (saved by _run_rrr_for_unit)
+        # Load the factor-only A matrix fitted on the training subjects.
         A_full = artifact.load_factors(unit=train_unit, fold=fold_f)["input_factors"]
 
         baseline = per_fold_baselines[fold_f]
@@ -136,7 +136,7 @@ def _run_leave_one_out_transfer_for_unit(
                 artifact=artifact,
                 unit=unit,
                 primary_label="transfer",
-                evaluate_orthonormalized=True,
+                orthogonal_only=True,
                 log_alphas=config.log_alphas,
             )
 
@@ -176,7 +176,6 @@ class LeaveOneOutPartition:
     train_unit: UnitSelector
     transfer_unit: UnitSelector
     baseline_unit: UnitSelector
-    allow_baseline_without_training: bool = False
 
 
 def _electrode_identities(
@@ -219,7 +218,7 @@ def run_leave_one_out(
     *,
     partitions: list[LeaveOneOutPartition],
 ):
-    """Run shared train, transfer, and held-out baseline leave-one-out phases."""
+    """Fit LOSO factors, then run held-out transfer and within-subject phases."""
     units = []
     for partition in partitions:
         print(f"\n{'='*60}\nHeld out: {partition.label}")
@@ -236,31 +235,16 @@ def run_leave_one_out(
         reference = _reference_encoding_results(significance, reference_subjects)
         test_idxs = reference["test_idxs"]
         n_folds = len(test_idxs)
-        train_rrr_plan = train_pca_plan = None
         if train_available:
             print(f"  Training subjects: {partition.train_subjects}")
-            train_rrr_plan = artifact.resume_plan(
-                unit=partition.train_unit, ranks=config.rank_grid, folds=range(n_folds),
-                refresh=config.refresh,
-                require_target_factors=config.save_b_matrices,
-                required_metric_keys={
-                    "nr_orth_corr", "nr_orth_r2_per_target",
-                } | ({"nr_orth_best_alphas"} if config.log_alphas else set()) | (
-                    {"null_aug_corr_per_target", "null_aug_r2_per_target"}
-                    if config.run_null_augmented else set()
-                ),
-            )
-            train_pca_plan = (
-                artifact.resume_plan(
-                    unit=replace(partition.train_unit, method="pca"),
-                    ranks=config.rank_grid, folds=range(n_folds),
-                    refresh=config.refresh,
+            train_folds_to_build = {
+                fold
+                for fold in range(n_folds)
+                if config.refresh or not artifact.has_field(
+                    "input_factors",
+                    selector=artifact._selector(partition.train_unit, fold=fold),
                 )
-                if config.run_pca_baseline else None
-            )
-            train_folds_to_build = set(train_rrr_plan["folds_to_build"])
-            if train_pca_plan is not None:
-                train_folds_to_build |= train_pca_plan["folds_to_build"]
+            }
             if train_folds_to_build:
                 results_train = _build_rrr_decomposition_inputs(
                     partition.train_subjects,
@@ -278,31 +262,19 @@ def run_leave_one_out(
                 if results_train is None:
                     train_available = False
                 else:
-                    (X_raw, per_fold_baselines_train, test_idxs, sig_mask_train,
-                     train_manifest) = results_train
-                    artifact.save_target_manifest(
-                        unit=partition.train_unit,
-                        target_manifest=train_manifest,
-                        overwrite=config.refresh,
-                    )
-                    print("  Running leave-one-out training RRR")
-                    _run_rrr_for_unit(
+                    (X_raw, per_fold_baselines_train, test_idxs, _, _) = results_train
+                    print("  Fitting leave-one-out training A matrices")
+                    _fit_rrr_input_factors_for_unit(
                         artifact=artifact, unit=partition.train_unit, X_raw=X_raw,
-                        test_idxs=test_idxs,
-                        per_fold_baselines=per_fold_baselines_train, config=config,
-                        sig_mask_flat=sig_mask_train,
-                        ranks_by_fold=train_rrr_plan["ranks_by_fold"],
-                        completed_pairs=train_rrr_plan["completed_pairs"],
-                        pca_ranks_by_fold=(train_pca_plan["ranks_by_fold"]
-                                           if train_pca_plan else None),
-                        pca_completed_pairs=(train_pca_plan["completed_pairs"]
-                                              if train_pca_plan else None),
+                        per_fold_baselines=per_fold_baselines_train,
+                        folds_to_fit=train_folds_to_build,
+                        refresh=config.refresh,
                     )
             else:
-                print("  Leave-one-out training RRR/PCA outputs complete; skipping setup.")
+                print("  Leave-one-out training A matrices complete; skipping setup.")
         else:
             print("  No leave-one-out training electrodes.")
-        if not train_available and not partition.allow_baseline_without_training:
+        if not train_available:
             print("  Skipping held-out phases because training data are unavailable.")
             continue
         if not _electrode_identities(
@@ -327,10 +299,7 @@ def run_leave_one_out(
             refresh=config.refresh, require_target_factors=config.save_b_matrices,
             required_metric_keys={
                 "nr_orth_corr", "nr_orth_r2_per_target",
-            } | ({"nr_orth_best_alphas"} if config.log_alphas else set()) | (
-                {"null_aug_corr_per_target", "null_aug_r2_per_target"}
-                if config.run_null_augmented else set()
-            ),
+            } | ({"nr_orth_best_alphas"} if config.log_alphas else set()),
         )
         baseline_pca_plan = (
             artifact.resume_plan(
@@ -406,16 +375,12 @@ def run_leave_one_out(
             pca_completed_pairs=(
                 baseline_pca_plan["completed_pairs"] if baseline_pca_plan else None
             ),
+            orthogonal_only=True,
         )
         if train_available:
-            units.extend([
-                (partition.train_unit, n_folds),
-                (partition.transfer_unit, n_folds, False, False),
-            ])
+            units.append((partition.transfer_unit, n_folds, False, False))
         units.append((partition.baseline_unit, n_folds))
         if config.run_pca_baseline:
-            if train_available:
-                units.append((replace(partition.train_unit, method="pca"), n_folds))
             units.append((replace(partition.baseline_unit, method="pca"), n_folds))
     return units
 

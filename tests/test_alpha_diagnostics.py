@@ -176,8 +176,7 @@ class TestDimensionAwareAlphaGrid:
 
         grid = build_dimension_aware_alpha_grid(X, standardize=True)
 
-        assert len(grid) >= 21
-        assert len(grid) <= 49
+        assert len(grid) == 25
         assert grid[0] > 1e-2
         assert grid[-1] > grid[0]
 
@@ -188,7 +187,7 @@ class TestDimensionAwareAlphaGrid:
         grid = build_dimension_aware_alpha_grid(X, standardize=True)
 
         assert grid[0] <= 1e-2
-        assert len(grid) >= 21
+        assert len(grid) == 25
 
     def test_explicit_alphas_override_auto_and_cache(self, tmp_path):
         rng = np.random.default_rng(789)
@@ -231,5 +230,5 @@ class TestDimensionAwareAlphaGrid:
             cache_dir=tmp_path,
         )
 
-        assert len(second_grid) == 31
+        assert len(second_grid) == 25
         assert second_grid[-1] >= first_grid[-1]

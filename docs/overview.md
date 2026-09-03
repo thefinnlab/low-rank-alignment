@@ -124,11 +124,13 @@ RRR modes that evaluate directly fitted or fold-matched raw input factors report
 the original projected-ridge metrics and a companion `*_orth` family fitted after a
 reduced QR decomposition. PCA and aggregated cross-dataset bases are already
 orthonormal and do not run the companion fit.
-The iEEG `leave_one_subject_out` and `leave_one_region_out` modes share one
-train/transfer/within-held-out implementation. LORO trains on significant electrodes
-in the other configured atlas groups, transfers the learned factor to the held-out
-region, and also produces the within-region baseline that replaces the former
-`per_region` mode. Leave-one-out partitions are validated to have disjoint
+Automatically generated ridge-alpha grids use 25 log-spaced values, including
+cached boundary-refined grids; explicitly configured alpha lists are used unchanged.
+The iEEG `leave_one_subject_out` mode fits only the fold-specific RRR input factors on
+the non-held-out subjects, without evaluating that training cohort or running its PCA
+baseline. For the held-out subject it evaluates ridge models only after reduced-QR
+orthonormalization of the transferred A matrix, plus the matching within-subject RRR
+baseline (and its optional PCA baseline). Partitions are validated to have disjoint
 `(subject, electrode)` target identities before fitting.
 
 ## Tests

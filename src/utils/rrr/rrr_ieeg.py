@@ -24,9 +24,6 @@ from src.utils.rrr.ieeg_rrr_mode.leave_one_subject_out import (
     run_leave_one_subject_out as _run_leave_one_subject_out_rrr,
 )
 from src.utils.rrr.ieeg_rrr_mode.multi_view import run_multi_view as _run_multi_view_rrr
-from src.utils.rrr.ieeg_rrr_mode.leave_one_region_out import (
-    run_leave_one_region_out as _run_leave_one_region_out_rrr,
-)
 from src.utils.rrr.ieeg_rrr_mode.per_subject import (
     run_per_subject as _run_per_subject_rrr,
 )

@@ -445,6 +445,9 @@ def plot_rrr_rank_results(
     primary_corr_col = f"{primary_label}_corr"
     orth_corr_col = f"{primary_label}_orth_corr"
     has_orth = orth_corr_col in summary_df.columns
+    corr_fold_col = (
+        primary_corr_col if primary_corr_col in grid_df.columns else orth_corr_col
+    )
     _fold_traces(ax_corr, primary_corr_col, primary_color)
     _fold_traces(ax_corr, orth_corr_col, orth_color)
     _mean_line(
@@ -528,16 +531,17 @@ def plot_rrr_rank_results(
         ax_corr_folds,
         "Rank k",
         "Correlation",
-        f"{title}\n(per-fold: {primary_label}_corr)",
+        f"{title}\n(per-fold: {corr_fold_col})",
         hline=0,
     )
 
-    _heatmap(axes[0, 2], primary_corr_col, "Blues", f"{primary_label}_corr")
+    _heatmap(axes[0, 2], corr_fold_col, "Blues", corr_fold_col)
 
     # ===== Row 1: R² vs rank =====
 
     primary_r2_col = f"{primary_label}_r2"
     orth_r2_col = f"{primary_label}_orth_r2"
+    r2_fold_col = primary_r2_col if primary_r2_col in grid_df.columns else orth_r2_col
     comp_joint_r2_col = f"{primary_label}_complement_joint_r2"
     comp_joint_ridge_r2_col = f"{primary_label}_complement_joint_ridge_r2"
     arb_joint_r2_col = f"{primary_label}_arbitrary_joint_r2"
@@ -615,10 +619,10 @@ def plot_rrr_rank_results(
         f"{primary_label} (QR A)", ls="--", mk="s",
     )
     _panel_finish(
-        ax_r2_folds, "Rank k", "R²", f"{title}\n(per-fold: {primary_label}_r2)", hline=0
+        ax_r2_folds, "Rank k", "R²", f"{title}\n(per-fold: {r2_fold_col})", hline=0
     )
 
-    _heatmap(axes[1, 2], primary_r2_col, "Blues", f"{primary_label}_r2")
+    _heatmap(axes[1, 2], r2_fold_col, "Blues", r2_fold_col)
 
     next_row = 2
 

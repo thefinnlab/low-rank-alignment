@@ -165,8 +165,6 @@ class UnitSelector:
     target_temporal_window: str | None = None
     held_out_subject: int | str | None = None
     loso_phase: str | None = None
-    held_out_region: str | None = None
-    loro_phase: str | None = None
     cross_dataset_source: str | None = None
 
     def mapping(self):
@@ -180,7 +178,7 @@ class Artifact(ArtifactStore):
     SELECTOR_ORDER = (
         "subject", "method", "region", "temporal_window", "source_temporal_window",
         "target_temporal_window", "held_out_subject", "loso_phase",
-        "held_out_region", "loro_phase", "cross_dataset_source", "basis", "delay",
+        "cross_dataset_source", "basis", "delay",
         "rank", "fold",
         "name",
     )
@@ -260,10 +258,8 @@ class Artifact(ArtifactStore):
         rereference = getattr(dataset_context, "rereference", None)
         if rereference not in (None, "common_average"):
             artifact.variant_extras["rereference"] = rereference
-        if config.atlas_path:
-            artifact.variant_extras["atlas"] = (
-                config.atlas_path.rsplit("/", 1)[-1].rsplit(".", 1)[0]
-            )
+        if config.mode == ScriptMode.LEAVE_ONE_SUBJECT_OUT:
+            artifact.variant_extras["loso_contract"] = "orthogonal-held-out-v2"
         return artifact
 
     @classmethod
@@ -340,8 +336,12 @@ class Artifact(ArtifactStore):
         primary = "pca" if method == "pca" else "nr"
         if "corr" not in frame and f"{primary}_corr" in frame:
             frame["corr"] = frame[f"{primary}_corr"]
+        if "corr" not in frame and f"{primary}_orth_corr" in frame:
+            frame["corr"] = frame[f"{primary}_orth_corr"]
         if "r2" not in frame and f"{primary}_r2" in frame:
             frame["r2"] = frame[f"{primary}_r2"]
+        if "r2" not in frame and f"{primary}_orth_r2" in frame:
+            frame["r2"] = frame[f"{primary}_orth_r2"]
         self.save_mean_results(results=frame, unit=unit, overwrite=overwrite)
 
     def save_fold_results(self, *, results, unit=None, overwrite=False):

@@ -339,6 +339,7 @@ def _run_common_subspace_fold_k(
     null_augmented_config: "RRRConfig | None" = None,
     save_primary_corr_per_target: bool = True,
     evaluate_orthonormalized: bool = False,
+    orthogonal_only: bool = False,
     log_alphas: bool = False,
 ) -> dict:
     """Shared evaluation for one (fold, k) projected subspace.
@@ -352,8 +353,8 @@ def _run_common_subspace_fold_k(
     Returns a metrics dict with per-target arrays stripped (for grid_results.csv).
     """
     A_k = A_full[:, :k]
-    evaluations = [(primary_label, A_k, None)]
-    if evaluate_orthonormalized:
+    evaluations = [] if orthogonal_only else [(primary_label, A_k, None)]
+    if evaluate_orthonormalized or orthogonal_only:
         evaluations.append(
             (f"{primary_label}_orth", canonical_qr(A_k)[0],
              f"{primary_label}_orth")
@@ -487,6 +488,7 @@ def _run_subspace_rank_loop_for_fold(
     save_primary_corr_per_target: bool = True,
     save_rrr_corr_per_target: bool = False,
     evaluate_orthonormalized: bool = False,
+    orthogonal_only: bool = False,
     log_alphas: bool = False,
     refresh: bool = False,
 ) -> list[dict]:
@@ -548,6 +550,7 @@ def _run_subspace_rank_loop_for_fold(
             null_augmented_config=null_augmented_config,
             save_primary_corr_per_target=save_primary_corr_per_target,
             evaluate_orthonormalized=evaluate_orthonormalized,
+            orthogonal_only=orthogonal_only,
             log_alphas=log_alphas,
         )
 
@@ -887,6 +890,45 @@ def _build_results(
 # ---------------------------------------------------------------------------
 
 
+def _fit_rrr_input_factors_for_unit(
+    artifact: Artifact,
+    unit: UnitSelector,
+    X_raw: "np.ndarray | list[np.ndarray]",
+    per_fold_baselines: list,
+    folds_to_fit: set[int],
+    *,
+    refresh: bool = False,
+) -> None:
+    """Fit and save only the fold-specific RRR input factors."""
+    if not folds_to_fit:
+        return
+
+    n_embed = _X_for_fold(X_raw, 0).shape[1]
+    selected_idx = np.arange(n_embed)
+    for fold_f in sorted(folds_to_fit):
+        baseline = per_fold_baselines[fold_f]
+        X_fold = _X_for_fold(X_raw, fold_f)
+        X_train = X_fold[baseline["train_idx"]]
+        Y_train = baseline["Y_train"]
+        max_k = min(X_train.shape[1], Y_train.shape[1])
+        rrr_result = fit_dense_rrr(
+            X_train,
+            Y_train,
+            k=max_k,
+            selected_idx=selected_idx,
+            precomputed_Y_hat_ols=baseline["Y_hat_full_train"],
+            precomputed_beta_full=baseline["beta_full_raw"],
+            return_b=False,
+        )
+        artifact.save_factors(
+            unit=unit,
+            fold=fold_f,
+            input_factors=rrr_result["A_dense"],
+            target_factors=None,
+            overwrite=refresh,
+        )
+
+
 def _run_rrr_for_unit(
     artifact: Artifact,
     unit: UnitSelector,
@@ -899,12 +941,15 @@ def _run_rrr_for_unit(
     completed_pairs: "set[tuple[int, int]] | None" = None,
     pca_ranks_by_fold: "dict[int, list[int]] | None" = None,
     pca_completed_pairs: "set[tuple[int, int]] | None" = None,
+    orthogonal_only: bool = False,
 ) -> pd.DataFrame:
-    """Core RRR loop for one analysis unit (cross-subject, per-subject, or per-region).
+    """Core RRR loop for one cross-subject or per-subject analysis unit.
 
     Fits RRR once at max rank per fold, sweeps the rank grid, and evaluates:
         - Raw RRR predictions (via B matrix projection)
         - NR ridge from k-dim RRR subspace (via A matrix projection)
+
+    With ``orthogonal_only=True``, only ridge on the reduced-QR A basis is evaluated.
 
     Args:
         artifact: Producing script's result abstraction.
@@ -939,7 +984,7 @@ def _run_rrr_for_unit(
                 "nr_orth_corr", "nr_orth_r2_per_target",
             } | ({"nr_orth_best_alphas"} if config.log_alphas else set()) | (
                 {"null_aug_corr_per_target", "null_aug_r2_per_target"}
-                if config.run_null_augmented else set()
+                if config.run_null_augmented and not orthogonal_only else set()
             ),
         )
         ranks_by_fold, completed_pairs = plan["ranks_by_fold"], plan["completed_pairs"]
@@ -1067,7 +1112,7 @@ def _run_rrr_for_unit(
                 artifact=artifact,
                 unit=unit,
                 A_full=A_full,
-                B_full=B_full,
+                B_full=None if orthogonal_only else B_full,
                 ranks_to_run=ranks_to_run,
                 X_raw=X_fold,
                 baseline=baseline,
@@ -1083,10 +1128,11 @@ def _run_rrr_for_unit(
                 device=device,
                 primary_label="nr",
                 progress_desc=f"  fold {fold_f}",
-                null_augmented_config=config,
+                null_augmented_config=None if orthogonal_only else config,
                 save_primary_corr_per_target=config.save_nr_corr_per_target,
                 save_rrr_corr_per_target=config.save_rrr_corr_per_target,
-                evaluate_orthonormalized=True,
+                evaluate_orthonormalized=not orthogonal_only,
+                orthogonal_only=orthogonal_only,
                 log_alphas=config.log_alphas,
                 refresh=config.refresh,
             )
@@ -1589,9 +1635,6 @@ def run_ieeg(config: RRRConfig, target_pca_dim: int | None = None):
     elif config.mode == ScriptMode.LEAVE_ONE_SUBJECT_OUT:
         from .leave_one_subject_out import run_leave_one_subject_out
         units = run_leave_one_subject_out(**branch_kwargs)
-    elif config.mode == ScriptMode.LEAVE_ONE_REGION_OUT:
-        from .leave_one_region_out import run_leave_one_region_out
-        units = run_leave_one_region_out(**branch_kwargs)
     elif config.mode == ScriptMode.CROSS_DATASET:
         from .cross_dataset import run_cross_dataset
         units = run_cross_dataset(**branch_kwargs)

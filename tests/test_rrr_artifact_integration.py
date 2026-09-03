@@ -59,6 +59,46 @@ def test_common_rank_evaluation_uses_raw_and_reduced_qr_designs(
     np.testing.assert_allclose(q.T @ q, np.eye(2), atol=1e-6)
 
 
+def test_common_rank_evaluation_can_run_only_reduced_qr_design(tmp_path, monkeypatch):
+    import src.utils.rrr.ieeg_rrr_mode.common as runner
+
+    rng = np.random.default_rng(13)
+    x = rng.standard_normal((20, 4)).astype(np.float32)
+    y = rng.standard_normal((20, 3)).astype(np.float32)
+    a = rng.standard_normal((4, 2)).astype(np.float32)
+    captured = {}
+
+    def evaluate(factor, x_train, x_test, y_train, y_test, *, subspace_name, **kwargs):
+        del x_test, y_train, kwargs
+        captured[subspace_name] = x_train @ factor
+        n_targets = y_test.shape[1]
+        return {
+            f"{subspace_name}_corr": 0.0,
+            f"{subspace_name}_r2": 0.0,
+            f"{subspace_name}_corr_per_target": np.zeros(n_targets),
+            f"{subspace_name}_r2_per_target": np.zeros(n_targets),
+            f"{subspace_name}_best_alphas": np.ones(n_targets),
+        }, np.array([1.0])
+
+    monkeypatch.setattr(runner, "evaluate_projected_input_space", evaluate)
+    artifact = Artifact(results_root=tmp_path).begin(config={"test": True})
+    unit = UnitSelector(method="rrr")
+
+    _run_common_subspace_fold_k(
+        a, 2, x[:10], x[10:], y[:10], y[10:], None, 0,
+        np.array([1.0]), None, False, 2, None, None, None, "cpu",
+        artifact, unit, "nr", orthogonal_only=True,
+    )
+
+    from src.utils.rrr.core import canonical_qr
+    q = canonical_qr(a)[0]
+    assert set(captured) == {"nr_orth"}
+    np.testing.assert_allclose(captured["nr_orth"], x[:10] @ q)
+    metrics = artifact.load_rank_metrics(unit=unit, rank=2, fold=0)
+    assert "nr_corr" not in metrics
+    assert "nr_orth_corr" in metrics
+
+
 def test_numerical_rrr_writes_and_resumes_only_through_artifact(tmp_path, monkeypatch):
     rng = np.random.default_rng(7)
     x = rng.standard_normal((48, 8)).astype(np.float32)

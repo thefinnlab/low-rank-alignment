@@ -374,25 +374,6 @@ def test_rrr_manifest_resume_is_selector_complete(tmp_path):
     assert plan["ranks_by_fold"] == {0: [2]}
 
 
-def test_loro_selectors_have_readable_artifact_paths(tmp_path):
-    artifact = RRRArtifact(
-        mode="leave_one_region_out", results_root=tmp_path
-    ).begin(config={"rank_grid": [1]})
-    unit = UnitSelector(
-        method="rrr", held_out_region="superior-temporal", loro_phase="baseline"
-    )
-    artifact.save_factors(unit=unit, fold=0, input_factors=np.eye(2))
-
-    paths = {
-        path.relative_to(artifact._variant_dir()).as_posix()
-        for path in artifact._variant_dir().rglob("*.npy")
-    }
-    assert paths == {
-        "input_factors/method-rrr/held_out_region-superior-temporal/"
-        "loro_phase-baseline/fold-0/factors.npy"
-    }
-
-
 def test_atomic_manifest_contains_codec_and_size(tmp_path):
     artifact = SignificanceArtifact(results_root=tmp_path).begin(config={"x": 1})
     artifact.save_field("effective_config", {"x": 1})
