@@ -34,6 +34,16 @@ uv run python scripts/utilities/precompute_epochs.py \
   --cross-stimulus
 ```
 
+If system memory is limited, reduce the temporary epoch-extraction batch, for
+example:
+
+```bash
+uv run python scripts/utilities/precompute_epochs.py \
+  --config configs/brain_treebank/cross_stimulus/gpt2.yml \
+  --cross-stimulus \
+  --epoch-batch-size 8
+```
+
 This mode discovers eligible subjects, gathers every exact subject/trial pair,
 and invokes the same per-trial preprocessing used by the standard command. A
 single trial can be run with `--subject SUBJECT --trial TRIAL`.

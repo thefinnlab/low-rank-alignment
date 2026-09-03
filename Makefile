@@ -34,6 +34,7 @@ RANDOM_EMBED_CONFIG ?= configs/embeddings/generate_random_gpt2_xl.yml
 BTB_EMBED_CONFIGS ?= configs/brain_treebank/cars_2/generate_gpt2.yml
 BTB_DATA_ROOT ?= data/brain-treebank
 BTB_PRECOMPUTE_CONFIG ?= configs/brain_treebank/cross_stimulus/gpt2.yml
+BTB_EPOCH_BATCH_SIZE ?= 64
 BTB_SUBJECT ?=
 BTB_TRIAL ?=
 PIPELINE_MODELS ?= gpt-j-6b gpt2-xl llama3-8b roberta-large random-gpt2-xl gpt2 glove
@@ -138,7 +139,7 @@ generate-brain-treebank-embeddings:
 ## Usage: make precompute-cross-stimulus-epochs CMD="uv run python"
 precompute-cross-stimulus-epochs:
 	mkdir -p logs
-	$(CMD) scripts/utilities/precompute_epochs.py --config $(BTB_PRECOMPUTE_CONFIG) --cross-stimulus $(OVERRIDES)
+	$(CMD) scripts/utilities/precompute_epochs.py --config $(BTB_PRECOMPUTE_CONFIG) --cross-stimulus --epoch-batch-size $(BTB_EPOCH_BATCH_SIZE) $(OVERRIDES)
 
 ## Precompute one exact Brain Treebank subject/trial cache.
 ## Usage: make precompute-trial-epochs BTB_SUBJECT=2 BTB_TRIAL=4 CMD="uv run python"
@@ -146,7 +147,7 @@ precompute-trial-epochs:
 	@test -n "$(BTB_SUBJECT)" || (echo "BTB_SUBJECT is required" >&2; exit 2)
 	@test -n "$(BTB_TRIAL)" || (echo "BTB_TRIAL is required" >&2; exit 2)
 	mkdir -p logs
-	$(CMD) scripts/utilities/precompute_epochs.py --config $(BTB_PRECOMPUTE_CONFIG) --subject $(BTB_SUBJECT) --trial $(BTB_TRIAL) $(OVERRIDES)
+	$(CMD) scripts/utilities/precompute_epochs.py --config $(BTB_PRECOMPUTE_CONFIG) --subject $(BTB_SUBJECT) --trial $(BTB_TRIAL) --epoch-batch-size $(BTB_EPOCH_BATCH_SIZE) $(OVERRIDES)
 
 ## Generate per-token contextual embeddings for the podcast transcript from a HuggingFace model
 ## Usage:

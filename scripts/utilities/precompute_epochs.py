@@ -68,7 +68,7 @@ def provenance_config_filename(dataset_context) -> str:
     return f"config_movie-{stimulus}{suffix}.yml"
 
 
-def precompute_subject(raw, df_word):
+def precompute_subject(raw, df_word, *, batch_size: int = 64):
     """Precompute and return cache components for one subject.
 
     Extracts word epochs on the source-rate grid, then resamples aligned
@@ -90,7 +90,7 @@ def precompute_subject(raw, df_word):
         tmin=_TMIN,
         tmax=_TMAX,
         target_sfreq=_TARGET_SFREQ,
-        batch_size=64,
+        batch_size=batch_size,
     )
     n_lags = epoch_data.shape[-1]
     print(f"  epoch_data shape: {epoch_data.shape}")
@@ -165,7 +165,12 @@ def _per_trial_context(config: EncodingConfig, subject: int, trial: int):
 
 
 def precompute_trial(
-    config: EncodingConfig, subject: int, trial: int, *, skip_existing=True
+    config: EncodingConfig,
+    subject: int,
+    trial: int,
+    *,
+    skip_existing=True,
+    epoch_batch_size: int = 64,
 ):
     """Precompute one Brain Treebank subject/trial using the normal pipeline."""
     if config.dataset != "brain_treebank":
@@ -235,7 +240,9 @@ def precompute_trial(
             drop_untimed_words=True,
         )
         print(f"  Subject-aligned words: {len(subject_df_word)}")
-    epoch_data, selection, ch_names, _ = precompute_subject(raw, subject_df_word)
+    epoch_data, selection, ch_names, _ = precompute_subject(
+        raw, subject_df_word, batch_size=epoch_batch_size
+    )
     save_precomputed_epochs(
         subject,
         config.data_root,
@@ -254,7 +261,7 @@ def precompute_trial(
     return True
 
 
-def _run_standard(config: EncodingConfig):
+def _run_standard(config: EncodingConfig, epoch_batch_size: int):
     subject_ids = config.subjects or list(range(1, 10))
     dataset_context = resolve_dataset_context(
         dataset=config.dataset,
@@ -320,7 +327,9 @@ def _run_standard(config: EncodingConfig):
             )
             print(f"  Subject-aligned words: {len(subject_df_word)}")
 
-        epoch_data, selection, ch_names, _ = precompute_subject(raw, subject_df_word)
+        epoch_data, selection, ch_names, _ = precompute_subject(
+            raw, subject_df_word, batch_size=epoch_batch_size
+        )
         save_precomputed_epochs(
             sub_id,
             config.data_root,
@@ -340,7 +349,7 @@ def _run_standard(config: EncodingConfig):
     print("\nDone.")
 
 
-def _run_cross_stimulus(config: EncodingConfig):
+def _run_cross_stimulus(config: EncodingConfig, epoch_batch_size: int):
     # The standalone cross-stimulus RRR config intentionally omits ``dataset``
     # because its own Config is Brain Treebank-specific. When that config is
     # reused here as an EncodingConfig, the dataclass default would otherwise
@@ -355,7 +364,12 @@ def _run_cross_stimulus(config: EncodingConfig):
     for subject, trial, movie in trials:
         print(f"  sub-{subject} trial-{trial:03d}: {movie}")
     completed = sum(
-        precompute_trial(config, subject, trial)
+        precompute_trial(
+            config,
+            subject,
+            trial,
+            epoch_batch_size=epoch_batch_size,
+        )
         for subject, trial, _ in trials
     )
     print(f"\nDone. Precomputed {completed}/{len(trials)} missing trial caches.")
@@ -380,6 +394,12 @@ def main():
     parser.add_argument("--cross-stimulus", action="store_true")
     parser.add_argument("--subject", type=int)
     parser.add_argument("--trial", type=int)
+    parser.add_argument(
+        "--epoch-batch-size",
+        type=int,
+        default=64,
+        help="Number of word epochs held in memory during extraction (default: 64).",
+    )
     args, unknown = parser.parse_known_args()
     overrides = parse_override_args(unknown)
     config: EncodingConfig = load_config(args.config, overrides, EncodingConfig)
@@ -388,14 +408,21 @@ def main():
         parser.error("--cross-stimulus cannot be combined with --subject or --trial")
     if (args.subject is None) != (args.trial is None):
         parser.error("--subject and --trial must be provided together")
+    if args.epoch_batch_size < 1:
+        parser.error("--epoch-batch-size must be positive")
     if args.cross_stimulus:
-        _run_cross_stimulus(config)
+        _run_cross_stimulus(config, args.epoch_batch_size)
     elif args.subject is not None:
         # Subject/trial selection is a Brain Treebank-specific interface.
         config.dataset = "brain_treebank"
-        precompute_trial(config, args.subject, args.trial)
+        precompute_trial(
+            config,
+            args.subject,
+            args.trial,
+            epoch_batch_size=args.epoch_batch_size,
+        )
     else:
-        _run_standard(config)
+        _run_standard(config, args.epoch_batch_size)
 
 
 if __name__ == "__main__":
