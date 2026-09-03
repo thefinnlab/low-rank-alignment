@@ -21,6 +21,7 @@ from src.utils.rrr.cross_condition_items.stimulus import (
     get_stimulus_items,
     ordered_electrode_intersection,
 )
+from src.utils.rrr.cross_condition_items.region import get_region_items
 from src.utils.rrr.core import canonical_qr, fit_full_rrr, orthogonal_rank_factors
 from src.utils.shared.encoding import contiguous_folds
 
@@ -43,6 +44,24 @@ def test_config_locks_initial_study_controls():
         Config(num_folds=2).validate()
     with pytest.raises(ValueError, match="duplicate"):
         Config(rank_grid=[1, 1]).validate()
+
+
+def test_region_config_uses_podcast_controls_instead_of_stimulus_controls():
+    config = Config(
+        dataset="podcast",
+        item_getter="region",
+        rereference="common_average",
+        num_folds=2,
+        atlas_region_groups={"temporal": ["L temporal"]},
+    )
+    config.validate()
+    artifact = Artifact.from_config(config)
+
+    assert artifact.identity["dataset"] == "podcast"
+    with pytest.raises(ValueError, match="atlas_region_groups"):
+        Config(dataset="podcast", item_getter="region").validate()
+    with pytest.raises(ValueError, match="requires dataset='podcast'"):
+        Config(item_getter="region", atlas_region_groups={"x": ["L x"]}).validate()
 
 
 def test_cross_condition_alpha_metrics_follow_log_alphas():
@@ -234,6 +253,72 @@ def test_stimulus_provider_builds_named_items_with_subject_target_set(monkeypatc
     assert [item.name for item in group.items] == ["movie-a", "movie-b"]
     assert {item.target_set for item in group.items} == {"subject-7-targets"}
     assert set(group.target_manifests) == {"movie-a", "movie-b"}
+
+
+def test_region_provider_pools_all_mapped_electrodes_and_marks_distinct_targets(
+    monkeypatch,
+):
+    config = Config(
+        dataset="podcast",
+        item_getter="region",
+        data_root="data",
+        subjects=[1, 2],
+        rank_grid=[1],
+        atlas_region_groups={
+            "temporal": ["L temporal"],
+            "frontal": ["L frontal"],
+        },
+    )
+    region_map = {
+        "temporal": {1: ["A1", "A2"], 2: ["B1"]},
+        "frontal": {1: ["A3"], 2: ["B2", "B3"]},
+    }
+    monkeypatch.setattr(
+        "src.utils.rrr.cross_condition_items.region.build_electrode_region_map",
+        lambda *args: region_map,
+    )
+    monkeypatch.setattr(
+        "src.utils.rrr.cross_condition_items.region.load_embeddings",
+        lambda *args, **kwargs: (np.ones((12, 3), dtype=np.float32), None),
+    )
+    selections = []
+
+    def load_data(subjects, _root, _offset, embeddings, electrodes, **kwargs):
+        selections.append(electrodes)
+        groups = [electrodes[subject] for subject in subjects]
+        width = sum(len(group) for group in groups) * 2
+        return (
+            embeddings[:10],
+            np.ones((10, width), dtype=np.float32),
+            np.arange(10),
+            groups,
+        )
+
+    monkeypatch.setattr(
+        "src.utils.rrr.cross_condition_items.region.load_data_from_cache", load_data
+    )
+    monkeypatch.setattr(
+        "src.utils.rrr.cross_condition_items.region.load_precomputed_epochs",
+        lambda *args, **kwargs: {"tmin": -1.0, "tmax": 1.0, "n_lags": 2},
+    )
+
+    group = get_region_items(config)
+
+    assert [item.name for item in group.items] == ["temporal", "frontal"]
+    assert [item.target_set for item in group.items] == [
+        "region-temporal-targets", "region-frontal-targets",
+    ]
+    assert selections == [region_map["temporal"], region_map["frontal"]]
+    assert all(np.array_equal(group.items[0].X, item.X) for item in group.items)
+    assert len(group.target_manifests["temporal"]) == 6
+    assert group.eligibility[0]["n_electrodes"] == 3
+
+    monkeypatch.setattr(
+        "src.utils.rrr.cross_condition_items.region.load_data_from_cache",
+        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("broken cache")),
+    )
+    with pytest.raises(RuntimeError, match="broken cache"):
+        get_region_items(config)
 
 
 @pytest.mark.parametrize(

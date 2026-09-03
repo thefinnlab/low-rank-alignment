@@ -21,13 +21,14 @@ from src.utils.rrr.cross_condition_items.stimulus import (
     discover_subject_movies,
     get_stimulus_items,
 )
+from src.utils.rrr.cross_condition_items.region import get_region_items
 from src.utils.rrr.core import fit_full_rrr, orthogonal_rank_factors
 from src.utils.rrr.evaluation import fit_pca_input_basis, score_predictions
 from src.utils.shared.encoding import contiguous_folds
 from src.utils.shared.config import load_config, parse_args
 
 
-ARTIFACT_CONTRACT_VERSION = 3
+ARTIFACT_CONTRACT_VERSION = 4
 
 
 @dataclass
@@ -36,6 +37,8 @@ class Config:
 
     STRICT_CONFIG: ClassVar[bool] = True
 
+    dataset: str = "brain_treebank"
+    item_getter: str = "stimulus"
     data_root: str = "data/brain-treebank"
     results_root: str = "results"
     model: str = "transformer"
@@ -48,6 +51,8 @@ class Config:
     rank_grid: list[int] = field(default_factory=lambda: [1, 2, 4, 8, 16, 32, 64])
     num_folds: int = 5
     rereference: str = "laplacian"
+    atlas_path: str | None = None
+    atlas_region_groups: dict[str, list[str]] = field(default_factory=dict)
     ridge_alphas: list[float] | None = None
     ridge_cv_folds: int = 5
     ridge_solver_params: dict | None = None
@@ -61,10 +66,30 @@ class Config:
     refresh: bool = False
 
     def validate(self):
-        if self.rereference != "laplacian":
-            raise ValueError("Cross-condition RRR currently requires rereference='laplacian'")
-        if self.num_folds != 5:
-            raise ValueError("Cross-condition RRR currently requires five target folds")
+        if self.item_getter not in {"stimulus", "region"}:
+            raise ValueError("item_getter must be 'stimulus' or 'region'")
+        if self.item_getter == "stimulus":
+            if self.dataset not in {"brain_treebank", "brain-treebank"}:
+                raise ValueError("item_getter='stimulus' requires dataset='brain_treebank'")
+            if self.rereference != "laplacian":
+                raise ValueError(
+                    "Brain Treebank stimulus items require rereference='laplacian'"
+                )
+            if self.num_folds != 5:
+                raise ValueError(
+                    "Brain Treebank stimulus items currently require five target folds"
+                )
+        else:
+            if self.dataset != "podcast":
+                raise ValueError("item_getter='region' requires dataset='podcast'")
+            if not self.atlas_region_groups:
+                raise ValueError(
+                    "item_getter='region' requires non-empty atlas_region_groups"
+                )
+            if self.subjects is not None and not self.subjects:
+                raise ValueError("subjects must be null or a non-empty list")
+            if self.num_folds < 2:
+                raise ValueError("num_folds must be at least two")
         if not self.rank_grid or any(int(rank) < 1 for rank in self.rank_grid):
             raise ValueError("rank_grid must contain positive integers")
         if len(set(map(int, self.rank_grid))) != len(self.rank_grid):
@@ -98,9 +123,9 @@ class Artifact(ArtifactStore):
     }
 
     def __init__(self, *, model="gpt2", layer=12, offset=0, variant=None,
-                 results_root="results"):
+                 results_root="results", dataset="brain-treebank"):
         self._init_store(
-            mode="cross_condition", dataset="brain-treebank", offset=offset,
+            mode="cross_condition", dataset=dataset, offset=offset,
             model=normalize_model(model), layer=layer, variant=variant,
             results_root=results_root,
         )
@@ -113,9 +138,15 @@ class Artifact(ArtifactStore):
         digest = hashlib.sha256(json.dumps(
             _artifact_config(config), sort_keys=True
         ).encode("utf-8")).hexdigest()[:10]
-        variant = config.variant_name or f"rereference-{config.rereference}-{digest}"
+        if config.variant_name:
+            variant = config.variant_name
+        elif config.item_getter == "stimulus":
+            variant = f"rereference-{config.rereference}-{digest}"
+        else:
+            variant = f"region-{digest}"
+        dataset = "podcast" if config.dataset == "podcast" else "brain-treebank"
         return cls(model=model, layer=layer, offset=config.offset, variant=variant,
-                   results_root=config.results_root)
+                   results_root=config.results_root, dataset=dataset)
 
 
 def _artifact_config(config: Config) -> dict:
@@ -358,6 +389,46 @@ def _run_subject(config: Config, artifact: Artifact, subject: int, movies: list[
     )
 
 
+def _collect_provider_results(config: Config, artifact: Artifact):
+    """Run the configured item provider and return its combined records."""
+    if config.item_getter == "region":
+        return run_item_comparisons(
+            config, artifact, lambda: get_region_items(config)
+        )
+
+    all_rows, eligibility, exclusions, diagnostics = [], [], [], []
+    all_discovered = discover_subject_movies(
+        config.data_root, config.subjects, min_movies=1
+    )
+    selected = _selected_movies(config)
+    for subject, movies in all_discovered.items():
+        if subject not in selected:
+            exclusions.append({
+                "subject": subject, "item": movies[0] if movies else "*",
+                "stage": "eligibility",
+                "reason": "Subject has fewer than two selected movies",
+            })
+    for subject, movies in selected.items():
+        rows, eligible, excluded, skipped = _run_subject(
+            config, artifact, subject, movies
+        )
+        all_rows.extend(rows)
+        eligibility.extend(eligible)
+        exclusions.extend(excluded)
+        diagnostics.extend(skipped)
+    return all_rows, eligibility, exclusions, diagnostics
+
+
+def _records_frame(records: list[dict], base_columns: list[str]) -> pd.DataFrame:
+    """Build a stable empty table while retaining provider-specific columns."""
+    if not records:
+        return pd.DataFrame(columns=base_columns)
+    frame = pd.DataFrame(records)
+    ordered = [column for column in base_columns if column in frame]
+    ordered.extend(column for column in frame if column not in ordered)
+    return frame[ordered]
+
+
 def _summary(frame: pd.DataFrame) -> pd.DataFrame:
     if frame.empty:
         return frame
@@ -399,36 +470,19 @@ def run_config(config: Config):
         return [artifact]
     artifact.save_field("effective_config", asdict(config), overwrite=config.refresh)
 
-    all_rows, eligibility, exclusions, diagnostics = [], [], [], []
-    all_discovered = discover_subject_movies(
-        config.data_root, config.subjects, min_movies=1
+    all_rows, eligibility, exclusions, diagnostics = _collect_provider_results(
+        config, artifact
     )
-    selected = _selected_movies(config)
-    for subject, movies in all_discovered.items():
-        if subject not in selected:
-            exclusions.append({
-                "subject": subject, "item": movies[0] if movies else "*",
-                "stage": "eligibility",
-                "reason": "Subject has fewer than two selected movies",
-            })
-    for subject, movies in selected.items():
-        rows, eligible, excluded, skipped = _run_subject(
-            config, artifact, subject, movies
-        )
-        all_rows.extend(rows)
-        eligibility.extend(eligible)
-        exclusions.extend(excluded)
-        diagnostics.extend(skipped)
-
-    eligibility_frame = pd.DataFrame(eligibility, columns=[
-        "subject", "item", "n_words", "n_common_electrodes", "n_lags", "eligible",
-    ])
-    exclusion_frame = pd.DataFrame(
-        exclusions, columns=["subject", "item", "stage", "reason"]
+    eligibility_frame = _records_frame(
+        eligibility, ["subject", "item", "n_words", "n_lags", "eligible"]
     )
-    diagnostic_frame = pd.DataFrame(diagnostics, columns=[
-        "subject", "source_item", "target_item", "method", "reason",
-    ])
+    exclusion_frame = _records_frame(
+        exclusions, ["subject", "item", "stage", "reason"]
+    )
+    diagnostic_frame = _records_frame(
+        diagnostics,
+        ["subject", "source_item", "target_item", "method", "reason"],
+    )
     fold_frame = pd.DataFrame(all_rows)
     summary = _summary(fold_frame)
     artifact.save_field("eligibility", eligibility_frame, overwrite=config.refresh)
@@ -438,8 +492,8 @@ def run_config(config: Config):
     artifact.save_field("diagnostics", diagnostic_frame, overwrite=config.refresh)
     if fold_frame.empty:
         raise ValueError(
-            "Cross-condition preflight found no subject with at least two fully "
-            "loadable movies; inspect the saved exclusions table"
+            "Cross-condition preflight found fewer than two fully loadable items; "
+            "inspect the saved exclusions table"
         )
     artifact.mark_complete()
     print(f"Artifact: {artifact.identity_record()}")

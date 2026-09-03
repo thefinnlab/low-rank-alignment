@@ -71,6 +71,9 @@ Plot fields are optional, and `plot: false` never prevents completion.
 The cross-condition producer uses generic `source_item` and `target_item` selectors
 for pair metrics and item-scoped target manifests. Its configuration includes a
 producer contract version so legacy stimulus-named variants are not silently resumed.
+Its dataset identity is `brain-treebank` for stimulus items and `podcast` for region
+items. Region items intentionally have different target sets, so only input-basis
+transfer metrics—not frozen full-map transfer metrics—are produced between regions.
 
 RRR resume planning is based exclusively on manifest entries. A rank/fold is
 complete only when its metrics and required fold factors exist, including target

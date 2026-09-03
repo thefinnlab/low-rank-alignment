@@ -10,11 +10,11 @@ embeddings predict iEEG and fMRI responses. The supported executable surface is
   single-lag correlation or fMRI held-out-session implementation.
 - `scripts/run_rrr.py` dispatches reduced-rank regression by dataset while exposing
   one Config and Artifact contract.
-- `scripts/run_cross_condition_rrr.py` runs standalone within-subject Brain Treebank
-  transfer across every directed movie pair using common Laplacian contacts, no
-  significance filtering, and orthogonalized RRR input spaces. Its shared comparison
-  loop consumes provider-generated named X/Y items, with movies as the current
-  provider; see
+- `scripts/run_cross_condition_rrr.py` runs standalone directed transfer between
+  provider-generated X/Y items with no significance filtering and orthogonalized RRR
+  input spaces. Its selectable providers compare Brain Treebank movies within subject
+  using common Laplacian contacts or podcast atlas regions using all mapped contacts;
+  see
   [cross_condition_rrr.md](cross_condition_rrr.md).
 - `scripts/run_target_dimensionality_rrr.py` reruns internal RRR over fold-safe
   target-PCA dimensions, with one Artifact variant per dimension and compiled
@@ -61,7 +61,8 @@ cross-model-layer significance artifacts already generated for those models.
   preparation, evaluation, multiview handling, cross-temporal-window transfer, and
   result helpers, including the standalone cross-condition mechanics.
   `src/utils/rrr/cross_condition_items/` keeps each condition-specific item provider
-  in its own module; the current Brain Treebank provider is `stimulus.py`. iEEG RRR mode implementations are organized under
+  in its own module: `stimulus.py` provides Brain Treebank movie items and `region.py`
+  provides podcast atlas-region items. iEEG RRR mode implementations are organized under
   `src/utils/rrr/ieeg_rrr_mode/`, with `rrr_ieeg.py` retained as the compatibility
   facade.
 - `src/utils/subspace_comparison/` contains saved-space metrics and directed comparison

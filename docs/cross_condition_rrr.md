@@ -1,33 +1,38 @@
 # Cross-condition orthogonal RRR
 
-`scripts/run_cross_condition_rrr.py` is a standalone Brain Treebank workflow for
-measuring within-subject transfer of an embedding-space RRR subspace between movies.
-It deliberately does not dispatch through `scripts/run_rrr.py`: stimulus discovery,
-all-electrode selection, source fitting, directed pairing, and its Artifact selectors
-are different from ordinary significance-backed RRR.
+`scripts/run_cross_condition_rrr.py` is a standalone workflow for measuring transfer
+of an embedding-space RRR subspace between named conditions. It supports Brain
+Treebank movies and podcast atlas regions. It deliberately does not dispatch through
+`scripts/run_rrr.py`: all-electrode selection, source fitting, directed pairing, and
+its Artifact selectors are different from ordinary significance-backed RRR.
 
 The fitting and directed-pairing code is item-based rather than stimulus-based.
 `ComparisonItem` requires a unique `name`, a two-dimensional `X`, and an aligned
 two-dimensional `Y`; it may also carry a compact `target_set` name. An `ItemProvider`
 returns one `ComparisonGroup` at a time, including context selectors and optional
-provider-specific manifests and preflight tables. `get_stimulus_items` is the
-current provider and produces one group per subject. A future provider can therefore
-construct items from conditions such as brain regions without duplicating the
-pairwise analysis.
+provider-specific manifests and preflight tables. `get_stimulus_items` produces one
+group per Brain Treebank subject, while `get_region_items` produces one podcast group
+containing one item per configured atlas region.
 Condition-specific providers live under `src/utils/rrr/cross_condition_items/`, one
-provider module per item-construction approach. The current getter and its Brain
-Treebank loading helpers are in `stimulus.py`; a region getter can be added alongside
-it without adding dataset-specific code to the generic comparison module.
+provider module per item-construction approach. Brain Treebank loading helpers are in
+`stimulus.py`; podcast atlas grouping and cache loading are in `region.py`. Select the
+provider with the top-level `item_getter: stimulus` or `item_getter: region` config
+field. `dataset` must respectively be `brain_treebank` or `podcast`.
 Because every movie in a subject group uses the same ordered common contacts and lag
 axis, the stimulus provider assigns all of them `subject-<id>-targets`.
+Every podcast region uses the same aligned embedding rows but contains all mapped
+electrodes from that region across configured subjects. Region items have distinct
+`target_set` values, so they never attempt frozen full-mapping transfer.
 
 ## Estimand
 
-For every subject with at least two loadable movies, the workflow uses the ordered
-intersection of usable Laplacian contacts and the complete -2 to +2 second lag axis.
-It fits a source RRR model on all words in one movie and evaluates every directed
-source-to-target pair over five contiguous target folds. No significance Artifact is
-loaded and no significance filtering is applied.
+For every Brain Treebank subject with at least two loadable movies, the stimulus
+provider uses the ordered intersection of usable Laplacian contacts and the complete
+-2 to +2 second lag axis. The podcast provider instead groups all electrodes assigned
+to each configured atlas region, pooling targets across subjects while retaining the
+shared podcast embeddings as X. It fits a source RRR model on all words in one item
+and evaluates every directed source-to-target pair over contiguous target folds. No
+significance Artifact is loaded and no significance filtering is applied.
 
 For each requested rank, the ordered raw factor is first truncated to `A[:, :k]` and
 that rank-specific matrix is independently decomposed as `A_k = Q_k R_k`, with
@@ -76,7 +81,7 @@ when their complete artifacts already exist. The equivalent Make targets are
 `download-brain-treebank`, `generate-brain-treebank-embeddings`, and
 `precompute-cross-condition-epochs`.
 
-The checked-in example runs one GPT-2 layer:
+The checked-in Brain Treebank example runs one GPT-2 layer:
 
 ```bash
 uv run python scripts/run_cross_condition_rrr.py \
@@ -90,24 +95,31 @@ included subject/movie. The default low-rank SVD computes only the required lead
 RRR target directions and has a fixed configurable seed; set `use_low_rank_svd: false`
 only when an exact decomposition is computationally practical.
 
+For podcast regions, set `dataset: podcast`, `item_getter: region`, the podcast
+`data_root`, and `atlas_region_groups` using the same region-to-Destrieux-label mapping
+accepted by leave-one-region-out RRR. `subjects: null` uses subjects 1–9, and
+`atlas_path: null` uses nilearn's cached/downloaded Destrieux 2009 atlas. Unlike the
+stimulus provider, the region provider neither uses nor validates `rereference`, and
+`num_folds` may be any value of at least two.
+
 Alpha selection always runs because it is part of fitting the ridge readouts, but
 its selected-alpha arrays are not saved by default. Set `log_alphas: true` to retain
 them in the metric payloads; leave it false to keep only the resulting scores.
 
-Preflight records missing caches, embeddings, transcripts, empty contact
-intersections, and single-movie exclusions. A run with no analyzable subject saves
-its exclusion diagnostics but is not marked complete. The current checkout contains
-only legacy common-average Cars 2 caches, so the example requires Laplacian caches
-and the remaining recordings in the execution environment.
+Preflight records empty contact selections and groups with fewer than two items.
+Provider loading, alignment, and shape errors are raised immediately. A run with no
+analyzable comparison saves its exclusion diagnostics but is not marked complete.
 
 ## Artifact contract
 
-The producer identity is `run_cross_condition_rrr/cross_condition/brain-treebank`.
-Rank metrics are selected by subject, source item, target item, method, rank
-(except the unreduced baseline), and target fold. Factor storage is not rank-expanded:
-each subject/source movie has one full raw RRR `A` matrix, selected only by subject,
-`source_item`, and `method: rrr`. Target manifests are selected by subject and
-`target_item`. Rank-specific `Q_k` and `R_k` can be regenerated
+The producer identity is `run_cross_condition_rrr/cross_condition/<dataset>`, where
+the dataset is `brain-treebank` for stimulus items or `podcast` for region items.
+Rank metrics are selected by provider context (subject for stimulus items), source
+item, target item, method, rank (except the unreduced baseline), and target fold.
+Factor storage is not rank-expanded: each group/source item has one full raw RRR `A`
+matrix, selected by provider context, `source_item`, and `method: rrr`. Target
+manifests are selected by provider context and `target_item`. Rank-specific `Q_k` and
+`R_k` can be regenerated
 by applying deterministic QR to `A[:, :k]`. No Q, R, B, intercept, PCA basis, or
 rank-specific factor copies are persisted. Eligibility, exclusions, target manifests,
 fold results, pair summaries, and skipped-comparison diagnostics are stored as

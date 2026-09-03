@@ -1,4 +1,6 @@
 # Cross-condition Brain Treebank example.
+dataset: brain_treebank
+item_getter: stimulus
 data_root: data/brain-treebank
 results_root: results
 model: transformer
