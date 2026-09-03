@@ -49,6 +49,14 @@ def _run_make(
     return result, submissions
 
 
+def _fake_significance_check(tmp_path: Path, rows: list[tuple[str, str, str]]) -> Path:
+    executable = tmp_path / "check-significance"
+    output = "".join("\t".join(row) + "\n" for row in rows)
+    executable.write_text(f"#!/bin/sh\nprintf %s '{output}'\n")
+    executable.chmod(0o755)
+    return executable
+
+
 def test_significance_uses_shared_dataset_and_models(tmp_path: Path):
     result, submissions = _run_make(
         tmp_path, "significance", "DATASET=podcast", "MODELS=gpt2 glove"
@@ -152,6 +160,30 @@ def test_makefile_validates_every_config_before_submission(tmp_path: Path):
     assert result.returncode != 0
     assert "Missing significance config" in result.stderr
     assert submissions == []
+
+
+def test_significance_missing_groups_missing_layers_by_dataset_and_model(tmp_path: Path):
+    check = _fake_significance_check(tmp_path, [
+        ("podcast", "gpt2", "0"),
+        ("podcast", "gpt2", "6"),
+        ("deep-fmri", "gpt2", "3"),
+        ("podcast", "glove", "none"),
+    ])
+    result, submissions = _run_make(
+        tmp_path,
+        "significance-missing",
+        f"SIGNIFICANCE_CHECK={check}",
+        "SIGNIFICANCE_MODELS=gpt2 glove",
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert len(submissions) == 3
+    assert "configs/significance/gpt2/significance.yml" in submissions[0]
+    assert "--ieeg.encoding.per_model_config.layer=[0,6]" in submissions[0]
+    assert "configs/cross_dataset/fmri/significance/gpt2.yml" in submissions[1]
+    assert "--fmri.layer=[3]" in submissions[1]
+    assert "configs/significance/glove/significance.yml" in submissions[2]
+    assert "per_model_config.layer" not in submissions[2]
 
 
 def test_cross_condition_configs_cover_final_models_and_depths():

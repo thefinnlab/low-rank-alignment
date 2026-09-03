@@ -50,7 +50,8 @@ families. Its fMRI-to-podcast and fMRI-to-Cars-2 jobs use Slurm `afterok`
 dependencies on the complete internal-fMRI batch.
 The `significance-missing` (also available as `missing-significance`) target checks
 the same model/layer matrix and submits only missing or incomplete significance
-Artifacts, one scalar layer per job.
+Artifacts, grouping all missing layers into one job per dataset/model. With the
+default `refresh: false`, the client skips already-present layer artifacts.
 
 Each retained analysis workflow owns one client-facing `Artifact` class. Their canonical
 identity, variants, selector fields, resume behavior, and legacy migration are

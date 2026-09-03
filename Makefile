@@ -54,7 +54,7 @@ significance:
 	done
 
 ## Submit significance jobs only for missing/incomplete final-results artifacts.
-## Each model/layer is checked independently; complete layers are skipped.
+## Missing layers are grouped into one job per dataset/model.
 significance-missing:
 	@set -eu
 	mkdir -p logs
@@ -63,18 +63,34 @@ significance-missing:
 		echo "All required significance Artifacts are complete."
 		exit 0
 	fi
-	printf '%s\n' "$$missing" | while IFS="$$(printf '\t')" read -r dataset model layer; do
+	grouped="$$(printf '%s\n' "$$missing" | awk -F '\t' '
+		function emit() {
+			if (dataset == "") return
+			if (layers == "none") print dataset "\t" model "\t" layers
+			else print dataset "\t" model "\t[" layers "]"
+		}
+		$$1 != dataset || $$2 != model {
+			emit()
+			dataset = $$1
+			model = $$2
+			layers = $$3
+			next
+		}
+		{ layers = layers "," $$3 }
+		END { emit() }
+	')"
+	printf '%s\n' "$$grouped" | while IFS="$$(printf '\t')" read -r dataset model layers; do
 		case "$$dataset" in
-			podcast) config="configs/significance/$$model/significance.yml"; override="--ieeg.encoding.per_model_config.layer=$$layer"; label="significance-podcast" ;;
-			brain-treebank-cars-2) config="configs/brain_treebank/cars_2/significance/$$model/significance.yml"; override="--ieeg.encoding.per_model_config.layer=$$layer"; label="significance-cars-2" ;;
-			deep-fmri) config="configs/cross_dataset/fmri/significance/$$model.yml"; override="--fmri.layer=$$layer"; label="significance-fmri" ;;
+			podcast) config="configs/significance/$$model/significance.yml"; override="--ieeg.encoding.per_model_config.layer=$$layers"; label="significance-podcast" ;;
+			brain-treebank-cars-2) config="configs/brain_treebank/cars_2/significance/$$model/significance.yml"; override="--ieeg.encoding.per_model_config.layer=$$layers"; label="significance-cars-2" ;;
+			deep-fmri) config="configs/cross_dataset/fmri/significance/$$model.yml"; override="--fmri.layer=$$layers"; label="significance-fmri" ;;
 			*) echo "Unsupported missing-significance dataset '$$dataset'" >&2; exit 2 ;;
 		esac
-		[ "$$layer" != "none" ] || override=""
+		[ "$$layers" != "none" ] || override=""
 		[ -f "$$config" ] || { echo "Missing significance config: $$config" >&2; exit 2; }
-		echo "Submitting missing significance for $$dataset / $$model / layer $$layer"
+		echo "Submitting missing significance for $$dataset / $$model / layers $$layers"
 		if [ "$(CMD)" = "sbatch" ]; then
-			$(SBATCH) --job-name="$$label-$$model-layer$$layer-$(USR)-$(DT)" submit.sh scripts/run_significance.py --config "$$config" $$override $(OVERRIDES)
+			$(SBATCH) --job-name="$$label-$$model-$(USR)-$(DT)" submit.sh scripts/run_significance.py --config "$$config" $$override $(OVERRIDES)
 		else
 			$(CMD) scripts/run_significance.py --config "$$config" $$override $(OVERRIDES)
 		fi
