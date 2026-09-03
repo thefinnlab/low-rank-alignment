@@ -21,8 +21,17 @@ def load_embeddings(
     dataset: str = "podcast",
     per_dataset_config: dict | None = None,
     dataset_context=None,
+    limit_to_glove: bool = False,
+    glove_dim: int = 300,
     **kwargs,
 ) -> tuple:
+    """Load model embeddings and optionally annotate shared GloVe coverage.
+
+    The embedding matrix is deliberately left at its original row count so its
+    rows remain compatible with cached word selections. When ``limit_to_glove``
+    is true, the returned word table contains an ``in_glove`` boolean column
+    for downstream alignment to apply.
+    """
     if isinstance(embedding_getter_name, int):
         kwargs.setdefault("layer", embedding_getter_name)
         embedding_getter_name = "gpt2xl"
@@ -63,9 +72,20 @@ def load_embeddings(
             **kwargs,
         )
 
-    return embedding_getter_registry[embedding_getter_name](
+    embeddings, word_df = embedding_getter_registry[embedding_getter_name](
         data_root, transcript_df, **kwargs
     )
+    if limit_to_glove and "in_glove" not in word_df.columns:
+        _, glove_word_df = get_glove_embeddings(
+            data_root, word_df, dim=int(glove_dim)
+        )
+        if len(glove_word_df) != len(word_df):
+            raise ValueError(
+                "GloVe coverage rows do not align with the loaded embeddings"
+            )
+        word_df = word_df.copy()
+        word_df["in_glove"] = glove_word_df["in_glove"].to_numpy(dtype=bool)
+    return embeddings, word_df
 
 
 def _to_word_level_df(transcript_df: pd.DataFrame) -> pd.DataFrame:

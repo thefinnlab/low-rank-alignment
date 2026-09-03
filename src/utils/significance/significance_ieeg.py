@@ -12,7 +12,7 @@ from statsmodels.stats.multitest import multipletests
 from src.core.config import SignificanceConfig
 from src.core.registry import get_dataset_adapter, resolve_dataset_context
 from src.utils.shared.alpha_grids import resolve_ridge_alphas
-from src.utils.shared.embeddings import get_glove_embeddings, load_embeddings
+from src.utils.shared.embeddings import load_embeddings
 from src.utils.shared.encoding import extract_best_alphas, get_ridge_model_constructor, train_encoding
 from src.utils.shared.ieeg import build_word_selection_metadata, compute_shared_word_selection, load_data_from_cache
 from src.utils.significance.ieeg import (
@@ -69,13 +69,13 @@ def run_ieeg(config: SignificanceConfig):
     embeddings, transcript = load_embeddings(
         enc.data_root, enc.model, dataset=enc.dataset,
         per_dataset_config=enc.per_dataset_config, dataset_context=context,
+        limit_to_glove=enc.limit_to_glove or enc.model == "glove",
+        glove_dim=enc.per_model_config.get("dim", 300),
         **enc.per_model_config,
     )
     word_in_glove = None
     if enc.limit_to_glove or enc.model == "glove":
-        word_in_glove = get_glove_embeddings(
-            enc.data_root, transcript, **enc.per_model_config
-        )[1]["in_glove"]
+        word_in_glove = transcript["in_glove"]
     shared = None
     if enc.shared_word_selection:
         shared = compute_shared_word_selection(

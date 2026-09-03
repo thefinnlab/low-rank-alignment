@@ -72,20 +72,21 @@ scripts/download_brain_treebank.sh --data-root data/brain-treebank
 uv run python scripts/generate_brain_treebank_embeddings.py \
   --config configs/brain_treebank/cars_2/generate_gpt2.yml
 uv run python scripts/utilities/precompute_epochs.py \
-  --config configs/brain_treebank/cross_condition/gpt2.yml \
+  --config configs/cross_condition/stimulus/gpt2.yml \
   --cross-condition
 ```
 
 Each preparation step is resumable. Embeddings and epoch caches are skipped
-when their complete artifacts already exist. The equivalent Make targets are
-`download-brain-treebank`, `generate-brain-treebank-embeddings`, and
-`precompute-cross-condition-epochs`.
+when their complete artifacts already exist.
 
-The checked-in Brain Treebank example runs one GPT-2 layer:
+Checked-in region and stimulus configs cover the full default model set. Transformer
+configs use layers at 0%, 25%, 50%, 75%, and 100% depth; GloVe uses 300 dimensions and
+no layer selector. All configs restrict analysis rows to words covered by GloVe.
+For example:
 
 ```bash
 uv run python scripts/run_cross_condition_rrr.py \
-  --config configs/brain_treebank/cross_condition/gpt2.yml
+  --config configs/cross_condition/stimulus/gpt2.yml
 ```
 
 `per_model_config.layer` may be a scalar or list. Subjects are discovered from
@@ -95,9 +96,10 @@ included subject/movie. The default low-rank SVD computes only the required lead
 RRR target directions and has a fixed configurable seed; set `use_low_rank_svd: false`
 only when an exact decomposition is computationally practical.
 
-For podcast regions, set `dataset: podcast`, `item_getter: region`, the podcast
-`data_root`, and `atlas_region_groups` using the same region-to-Destrieux-label mapping
-accepted by leave-one-region-out RRR. `subjects: null` uses subjects 1–9, and
+For podcast regions, set `dataset: podcast`, `item_getter: region`, and the podcast
+`data_root`. `atlas_region_groups` defaults to `REGION_GROUPS` from
+`src/utils/atlas/core.py` and can still be overridden in a config. `subjects: null`
+uses subjects 1–9, and
 `atlas_path: null` uses nilearn's cached/downloaded Destrieux 2009 atlas. Unlike the
 stimulus provider, the region provider neither uses nor validates `rereference`, and
 `num_folds` may be any value of at least two.
@@ -105,6 +107,14 @@ stimulus provider, the region provider neither uses nor validates `rereference`,
 Alpha selection always runs because it is part of fitting the ridge readouts, but
 its selected-alpha arrays are not saved by default. Set `log_alphas: true` to retain
 them in the metric payloads; leave it false to keep only the resulting scores.
+
+The Makefile runs either comparison family for any selected models:
+
+```bash
+make cross-condition DATASET=podcast CROSS_MODE=region
+make cross-condition DATASET=brain-treebank CROSS_MODE=stimulus
+make cross-condition DATASET=podcast CROSS_MODE=region CMD="uv run python"
+```
 
 Preflight records empty contact selections and groups with fewer than two items.
 Provider loading, alignment, and shape errors are raised immediately. A run with no

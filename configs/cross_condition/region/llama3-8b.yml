@@ -1,0 +1,15 @@
+dataset: podcast
+item_getter: region
+data_root: data/
+results_root: results
+model: transformer
+per_model_config:
+  model_dir: llama3-8b
+  layer: [0, 8, 16, 24, 32]
+subjects: null
+offset: 0
+rank_grid: [1, 2, 4, 8, 16, 32, 64]
+num_folds: 5
+limit_to_glove: true
+glove_dim: 300
+refresh: false

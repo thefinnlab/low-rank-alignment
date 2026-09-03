@@ -613,6 +613,8 @@ def run_language_reconstruction(config: LanguageReconstructionConfig) -> Path:
         dataset=enc.dataset,
         per_dataset_config=enc.per_dataset_config,
         dataset_context=dataset_context,
+        limit_to_glove=enc.limit_to_glove or enc.model == "glove",
+        glove_dim=enc.per_model_config.get("dim", 300),
         **enc.per_model_config,
     )
     embeddings = np.asarray(embeddings, dtype=np.float32)

@@ -16,11 +16,11 @@ Deep-fMRI generation uses one document and artifact directory per story. Run
 Segment Any Text supplies sentence boundaries for the unpunctuated word tier, while PSST
 supplies audio-derived IU boundaries. Both are snapped back to the exact TextGrid words.
 The boundary and feature sweeps resume at the story-artifact level.
-`scripts/utilities/generate_surprisal.py` (or `make surprisal`) updates only the shared
+`scripts/utilities/generate_surprisal.py` updates only the shared
 GPT-2 surprisal and entropy columns in existing artifacts, and creates canonical minimal artifacts
 when a story has no completed full-provider output. It is resumable by model checksum
 and avoids rerunning unrelated audio and document-level providers.
-`scripts/utilities/generate_self_surprisal.py` (or `make self-surprisal`) creates
+`scripts/utilities/generate_self_surprisal.py` creates
 separate model/dataset/stimulus artifacts under
 `processed_data/language_features/self_surprisal/`. Each target receives all available
 real preceding tokens up to the configured context limit. Left padding is excluded by
@@ -31,13 +31,12 @@ Causal models use their configured tokenizer, final LM head, and initialization.
 windows are batched without changing their contexts, and the batch size halves
 automatically on CUDA OOM. The random GPT-2 XL uses its configured seed. RoBERTa uses
 the same procedure with GPT-2 small and records that fallback in `manifest.json`.
-Generate these model-specific values with `make self-surprisal` or invoke
-`scripts/utilities/generate_self_surprisal.py` directly with the desired config.
-`scripts/utilities/generate_fmri_iu_features.py` (or `make fmri-iu-features`) similarly
+Generate these model-specific values by invoking
+`scripts/utilities/generate_self_surprisal.py` with the desired config.
+`scripts/utilities/generate_fmri_iu_features.py` similarly
 populates IU position, onset, end, and length from the already aligned PSST boundaries
 without rerunning audio inference or unrelated providers.
-`scripts/utilities/generate_fmri_interpretable_features.py` (or
-`make fmri-interpretable-features`) adds the shared decoding subset from native timing
+`scripts/utilities/generate_fmri_interpretable_features.py` adds the shared decoding subset from native timing
 and sentence structure, Stanza UD syntax, and lexical norms without invoking the heavy
 diarization or document-level coreference providers.
 
@@ -229,8 +228,8 @@ the combined morphology string, and `aspect` are intentionally not decoding targ
 Run:
 
 ```bash
-make stage-language-resources \
-  LANGUAGE_FEATURE_CONFIG=configs/language_features/podcast.yml
+uv run python scripts/utilities/generate_language_features.py \
+  --config configs/language_features/podcast.yml --stage-resources
 ```
 
 The Podcast speaker model is gated. Before staging, accept the conditions for

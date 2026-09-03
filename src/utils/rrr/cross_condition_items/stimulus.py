@@ -26,6 +26,8 @@ class StimulusItemConfig(Protocol):
     per_model_config: dict
     offset: int
     rereference: str
+    limit_to_glove: bool
+    glove_dim: int
 
 
 @dataclass
@@ -105,15 +107,17 @@ def ordered_electrode_intersection(headers: dict[str, dict]) -> list[str]:
 def load_stimulus_data(
     *, data_root: str, subject: int, stimulus: str, rereference: str,
     model: str, per_model_config: dict, offset: int, electrodes: list[str],
+    limit_to_glove: bool, glove_dim: int,
 ) -> StimulusData:
     """Load one movie and align embeddings to its cached neural epochs."""
     per_dataset = {"movie": stimulus, "rereference": rereference}
     context = resolve_dataset_context(
         "brain_treebank", [subject], per_dataset, data_root
     )
-    embeddings, _ = load_embeddings(
+    embeddings, word_df = load_embeddings(
         data_root, model, dataset="brain_treebank",
         per_dataset_config=per_dataset, dataset_context=context,
+        limit_to_glove=limit_to_glove, glove_dim=glove_dim,
         **per_model_config,
     )
     cache = load_precomputed_epochs(
@@ -128,7 +132,13 @@ def load_stimulus_data(
     indices = [cache["ch_names"].index(name) for name in electrodes]
     epoch_data = cache["epoch_data"].read(electrode_indices=indices)
     selection = np.asarray(cache["selection"], dtype=int)
-    X, Y = apply_offset(np.asarray(embeddings)[selection], epoch_data, offset)
+    valid_rows = None
+    if limit_to_glove:
+        valid_rows = word_df["in_glove"].to_numpy(dtype=bool)[selection]
+    X, Y = apply_offset(
+        np.asarray(embeddings)[selection], epoch_data, offset,
+        valid_rows=valid_rows,
+    )
     if len(X) < 2:
         raise ValueError(f"Stimulus {stimulus!r} has fewer than two aligned rows")
     lags = np.linspace(
@@ -174,6 +184,8 @@ def get_stimulus_items(
                     rereference=config.rereference, model=config.model,
                     per_model_config=deepcopy(config.per_model_config),
                     offset=config.offset, electrodes=electrodes,
+                    limit_to_glove=config.limit_to_glove,
+                    glove_dim=config.glove_dim,
                 )
             except Exception as error:
                 failures.append(movie)

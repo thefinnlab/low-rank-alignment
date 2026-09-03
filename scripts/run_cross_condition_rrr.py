@@ -17,6 +17,7 @@ from src.utils.rrr.cross_condition import (
     evaluate_projected_ridge,
     validate_comparison_items,
 )
+from src.utils.atlas.core import REGION_GROUPS
 from src.utils.rrr.cross_condition_items.stimulus import (
     discover_subject_movies,
     get_stimulus_items,
@@ -48,11 +49,17 @@ class Config:
     subjects: list[int] | None = None
     movies: dict = field(default_factory=dict)
     offset: int = 0
+    limit_to_glove: bool = True
+    glove_dim: int = 300
     rank_grid: list[int] = field(default_factory=lambda: [1, 2, 4, 8, 16, 32, 64])
     num_folds: int = 5
     rereference: str = "laplacian"
     atlas_path: str | None = None
-    atlas_region_groups: dict[str, list[str]] = field(default_factory=dict)
+    atlas_region_groups: dict[str, list[str]] = field(
+        default_factory=lambda: {
+            name: list(labels) for name, labels in REGION_GROUPS.items()
+        }
+    )
     ridge_alphas: list[float] | None = None
     ridge_cv_folds: int = 5
     ridge_solver_params: dict | None = None

@@ -34,19 +34,21 @@ embeddings predict iEEG and fMRI responses. The supported executable surface is
   refit utility parses that comparison's console report and recomputes all-lag
   correlations for only the union of selected electrodes, without permutation tests.
 
-The Makefile exposes significance and RRR through the unified entry points. Each
-retained analysis workflow owns one client-facing `Artifact` class. Their canonical
+The Makefile has three analysis targets: `significance`, `rrr`, and
+`cross-condition`. They share `DATASET`, `MODELS`, `CMD`, and `OVERRIDES` controls;
+RRR additionally uses `RRR_MODE` (and `SOURCE_DATASET` for cross-dataset transfer),
+while cross-condition uses `CROSS_MODE=region|stimulus`. Slurm submission is the
+default, and `CMD="uv run python"` runs the same jobs locally. The default model set
+is GPT-2, GPT-2 XL, Llama 3 8B, GPT-J 6B, RoBERTa Large, and GloVe 300D. fMRI uses
+the currently supported transformer subset and supports its internal,
+cross-model-layer, and cross-dataset RRR configurations; cross-condition remains
+iEEG-only.
+
+Each retained analysis workflow owns one client-facing `Artifact` class. Their canonical
 identity, variants, selector fields, resume behavior, and legacy migration are
 described in [artifacts.md](artifacts.md). Language decoding and reconstruction load
 RRR/PCA factors through RRR Artifact identities and publish task-level results through
 their own Artifacts.
-The `cross-temporal-pipeline` Make target submits per-model temporal-window RRR to
-cross-temporal-window transfer chains for podcast and Cars 2, using Slurm `afterok`
-dependencies between those artifact-producing stages. It consumes existing
-significance artifacts rather than submitting significance jobs.
-The `rrr-loso-batch` Make target submits one model-named podcast
-leave-one-subject-out RRR job per non-GloVe pipeline model and consumes the
-cross-model-layer significance artifacts already generated for those models.
 
 ## Source layout
 
@@ -126,6 +128,14 @@ reduced QR decomposition. PCA and aggregated cross-dataset bases are already
 orthonormal and do not run the companion fit.
 Automatically generated ridge-alpha grids use 25 log-spaced values, including
 cached boundary-refined grids; explicitly configured alpha lists are used unchanged.
+Word-aligned iEEG analyses default to the shared GloVe-covered vocabulary through
+`EncodingConfig.limit_to_glove`. Cross-condition configs expose the matching
+`limit_to_glove` and `glove_dim` controls and enable the same 300D vocabulary filter.
+Contextual embeddings are still generated for the complete transcript; filtering is
+applied when embeddings and neural epochs are aligned for analysis.
+`load_embeddings(..., limit_to_glove=True, glove_dim=300)` owns the auxiliary GloVe
+lookup and adds the `in_glove` column to its returned word table, so analysis clients
+do not load GloVe separately.
 The iEEG `leave_one_subject_out` mode fits only the fold-specific RRR input factors on
 the non-held-out subjects, without evaluating that training cohort or running its PCA
 baseline. For the held-out subject it evaluates ridge models only after reduced-QR
@@ -137,8 +147,8 @@ baseline (and its optional PCA baseline). Partitions are validated to have disjo
 
 Tests cover behavior reachable from retained scripts: configuration and layer fanout,
 data/epoch loading, embeddings, significance, RRR and multiview analysis, fMRI,
-subspace comparison, language interpretation/features, atlas lookup, and Makefile batch
-submission behavior.
+subspace comparison, language interpretation/features, atlas lookup, and Makefile
+analysis submission behavior.
 
 See [language_feature_generation.md](language_feature_generation.md) for the reusable
 language-feature artifact contract and provider details.

@@ -35,6 +35,10 @@ from src.utils.shared.config import (
 # ---------------------------------------------------------------------------
 
 
+def test_ieeg_encoding_defaults_to_glove_vocabulary():
+    assert EncodingConfig().limit_to_glove is True
+
+
 class TestParseOverrideArgs:
     def test_int(self):
         result = parse_override_args(["--layer=48"])

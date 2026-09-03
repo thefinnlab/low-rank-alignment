@@ -25,19 +25,28 @@ class RegionItemConfig(Protocol):
     offset: int
     atlas_path: str | None
     atlas_region_groups: dict[str, list[str]]
+    limit_to_glove: bool
+    glove_dim: int
 
 
 def get_region_items(config: RegionItemConfig) -> ComparisonGroup:
     """Build one item per configured podcast region using all mapped electrodes."""
     subjects = list(config.subjects or range(1, 10))
     context = resolve_dataset_context("podcast", subjects, {}, config.data_root)
-    embeddings, _ = load_embeddings(
+    embeddings, word_df = load_embeddings(
         config.data_root,
         config.model,
         dataset="podcast",
         per_dataset_config={},
         dataset_context=context,
+        limit_to_glove=config.limit_to_glove,
+        glove_dim=config.glove_dim,
         **deepcopy(config.per_model_config),
+    )
+    valid_rows = (
+        word_df["in_glove"].to_numpy(dtype=bool)
+        if config.limit_to_glove
+        else None
     )
     electrode_region_map = build_electrode_region_map(
         subjects,
@@ -67,6 +76,7 @@ def get_region_items(config: RegionItemConfig) -> ComparisonGroup:
             config.offset,
             embeddings,
             per_subject,
+            valid_rows=valid_rows,
             dataset="podcast",
             per_dataset_config={},
             dataset_context=context,

@@ -28,7 +28,7 @@ from scripts.utilities.compare_significance_methods import (
 )
 from src.core.registry import get_dataset_adapter, resolve_dataset_context
 from src.utils.shared.correlation import fisher_z_mean
-from src.utils.shared.embeddings import get_glove_embeddings, load_embeddings
+from src.utils.shared.embeddings import load_embeddings
 from src.utils.shared.ieeg import compute_shared_word_selection
 
 
@@ -157,13 +157,13 @@ def _load_analysis_inputs(config, subjects):
         dataset=enc.dataset,
         per_dataset_config=enc.per_dataset_config,
         dataset_context=context,
+        limit_to_glove=enc.limit_to_glove or enc.model == "glove",
+        glove_dim=enc.per_model_config.get("dim", 300),
         **enc.per_model_config,
     )
     word_in_glove = None
     if enc.limit_to_glove or enc.model == "glove":
-        word_in_glove = get_glove_embeddings(
-            enc.data_root, transcript, **enc.per_model_config
-        )[1]["in_glove"]
+        word_in_glove = transcript["in_glove"]
     shared = None
     if enc.shared_word_selection:
         shared = compute_shared_word_selection(

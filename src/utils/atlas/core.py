@@ -157,6 +157,89 @@ DESTRIEUX_2009_LABELS: list[str] = [
     "R S_temporal_transverse",         # 150
 ]
 
+REGION_GROUPS: dict[str, list[str]] = {
+    "EAC": [
+        "L G_temp_sup-G_T_transv",
+        "L G_temp_sup-Plan_polar",
+        "L G_temp_sup-Lateral",
+        "L S_temporal_sup",
+        "L G_temp_sup-Plan_tempo",
+        "L S_temporal_transverse",
+    ],
+    "MTG": [
+        "L G_temporal_middle",
+    ],
+    "ITG": [
+        "L G_oc-temp_lat-fusifor",
+        "L S_oc-temp_lat",
+        "L G_temporal_inf",
+        "L S_temporal_inf",
+    ],
+    "TP": [
+        "L Pole_temporal",
+    ],
+    "IFG": [
+        "L G_front_inf-Triangul",
+        "L G_front_inf-Opercular",
+        "L G_front_inf-Orbital",
+        "L S_front_inf",
+        "L Lat_Fis-ant-Vertical",
+        "L Lat_Fis-ant-Horizont",
+    ],
+    "TPJ": [
+        "L G_pariet_inf-Supramar",
+        "L G_pariet_inf-Angular",
+        "L Lat_Fis-post",
+        "L S_intrapariet_and_P_trans",
+        "L S_interm_prim-Jensen",
+    ],
+    "PRC": [
+        "L G_precentral",
+        "L S_precentral-inf-part",
+        "L S_precentral-sup-part",
+    ],
+    "PC": [
+        "L G_postcentral",
+        "L S_postcentral",
+        "L G_and_S_subcentral",
+        "L S_central",
+        "L G_and_S_paracentral",
+    ],
+    "RIGHT": [
+        "R G_postcentral",
+        "R S_postcentral",
+        "R S_interm_prim-Jensen",
+        "R Lat_Fis-ant-Horizont",
+        "R S_central",
+        "R G_and_S_paracentral",
+        "R G_and_S_subcentral",
+        "R G_precentral",
+        "R G_pariet_inf-Angular",
+        "R S_intrapariet_and_P_trans",
+        "R Lat_Fis-post",
+        "R S_precentral-inf-part",
+        "R S_precentral-sup-part",
+        "R G_pariet_inf-Supramar",
+        "R G_front_inf-Orbital",
+        "R G_front_inf-Opercular",
+        "R G_front_inf-Triangul",
+        "R G_oc-temp_lat-fusifor",
+        "R G_temporal_inf",
+        "R Lat_Fis-ant-Vertical",
+        "R S_front_inf",
+        "R S_oc-temp_lat",
+        "R G_temporal_middle",
+        "R S_temporal_sup",
+        "R G_temp_sup-Lateral",
+        "R G_temp_sup-G_T_transv",
+        "R G_temp_sup-Plan_polar",
+        "R G_temp_sup-Plan_tempo",
+        "R Pole_temporal",
+        "R S_temporal_transverse",
+        "R S_temporal_inf",
+    ],
+}
+
 
 def _lookup_atlas_labels(
     coords: np.ndarray,

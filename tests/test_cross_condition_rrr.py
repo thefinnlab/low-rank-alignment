@@ -23,6 +23,7 @@ from src.utils.rrr.cross_condition_items.stimulus import (
 )
 from src.utils.rrr.cross_condition_items.region import get_region_items
 from src.utils.rrr.core import canonical_qr, fit_full_rrr, orthogonal_rank_factors
+from src.utils.atlas.core import REGION_GROUPS
 from src.utils.shared.encoding import contiguous_folds
 
 
@@ -58,8 +59,9 @@ def test_region_config_uses_podcast_controls_instead_of_stimulus_controls():
     artifact = Artifact.from_config(config)
 
     assert artifact.identity["dataset"] == "podcast"
-    with pytest.raises(ValueError, match="atlas_region_groups"):
-        Config(dataset="podcast", item_getter="region").validate()
+    default = Config(dataset="podcast", item_getter="region")
+    default.validate()
+    assert default.atlas_region_groups == REGION_GROUPS
     with pytest.raises(ValueError, match="requires dataset='podcast'"):
         Config(item_getter="region", atlas_region_groups={"x": ["L x"]}).validate()
 
@@ -264,6 +266,7 @@ def test_region_provider_pools_all_mapped_electrodes_and_marks_distinct_targets(
         data_root="data",
         subjects=[1, 2],
         rank_grid=[1],
+        limit_to_glove=False,
         atlas_region_groups={
             "temporal": ["L temporal"],
             "frontal": ["L frontal"],

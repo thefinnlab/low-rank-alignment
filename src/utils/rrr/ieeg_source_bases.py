@@ -12,7 +12,7 @@ from src.utils.rrr.evaluation import fit_pca_input_basis
 from src.utils.rrr.inputs import _get_decomposition_inputs
 from src.utils.rrr.significance import load_significance_selection
 from src.utils.shared.config import dict_to_dataclass
-from src.utils.shared.embeddings import get_glove_embeddings, load_embeddings
+from src.utils.shared.embeddings import load_embeddings
 from src.utils.shared.encoding import fit_encoding_baseline
 
 
@@ -89,13 +89,13 @@ def fit_whole_stimulus_ieeg_bases(source, ranks: list[int]) -> dict[str, dict[in
     embeddings, word_df = load_embeddings(
         enc.data_root, enc.model, dataset=enc.dataset,
         per_dataset_config=enc.per_dataset_config, dataset_context=context,
+        limit_to_glove=enc.limit_to_glove or enc.model == "glove",
+        glove_dim=enc.per_model_config.get("dim", 300),
         **enc.per_model_config,
     )
     word_in_glove = None
     if enc.limit_to_glove or enc.model == "glove":
-        word_in_glove = get_glove_embeddings(
-            enc.data_root, word_df, **enc.per_model_config
-        )[1]["in_glove"]
+        word_in_glove = word_df["in_glove"]
     shared_selection = None
     if enc.shared_word_selection:
         from src.utils.rrr.ieeg_rrr_mode.common import _load_shared_word_selection_metadata

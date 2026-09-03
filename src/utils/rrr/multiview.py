@@ -67,7 +67,11 @@ def load_view_embeddings(config, resolved, subject_ids):
         values, words = load_embeddings(
             target.data_root, enc.model, dataset=target.dataset,
             per_dataset_config=target.per_dataset_config,
-            dataset_context=context, **enc.per_model_config)
+            dataset_context=context,
+            limit_to_glove=target.limit_to_glove or enc.model == "glove",
+            glove_dim=enc.per_model_config.get("dim", 300),
+            **enc.per_model_config,
+        )
         if reference is not None and not np.array_equal(
                 reference["word"].astype(str).to_numpy(),
                 words["word"].astype(str).to_numpy()):

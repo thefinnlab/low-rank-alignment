@@ -49,6 +49,29 @@ class TestLoadEmbeddings:
         _, df_word = load_embeddings(data_root, layer=24)
         assert {"word", "start", "end"} <= set(df_word.columns)
 
+    def test_limit_to_glove_annotates_words_without_filtering_embeddings(
+        self, tmp_hdf5_and_transcript, monkeypatch
+    ):
+        data_root, _ = tmp_hdf5_and_transcript
+        calls = []
+
+        def fake_glove(root, word_df, dim):
+            calls.append((root, dim, word_df["word"].tolist()))
+            annotated = word_df.copy()
+            annotated["in_glove"] = [True, False, True]
+            return np.zeros((3, dim), dtype=np.float32), annotated
+
+        monkeypatch.setattr(
+            "src.utils.shared.embeddings.get_glove_embeddings", fake_glove
+        )
+        embeddings, word_df = load_embeddings(
+            data_root, layer=24, limit_to_glove=True, glove_dim=300
+        )
+
+        assert embeddings.shape == (3, 4)
+        assert word_df["in_glove"].tolist() == [True, False, True]
+        assert calls == [(data_root, 300, ["hello", "world", "foo"])]
+
     def test_single_token_words(self, tmp_path):
         """When each token is its own word, output equals raw embedding rows."""
         rng = np.random.default_rng(1)

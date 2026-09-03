@@ -19,7 +19,6 @@ from src.utils.shared.config import (
     load_config,
     expand_per_model_layer_configs,
 )
-from src.utils.shared.embeddings import get_glove_embeddings
 from src.utils.shared.encoding import build_per_fold_baselines
 from src.utils.rrr.core import (
     canonical_qr,
@@ -1605,14 +1604,14 @@ def run_ieeg(config: RRRConfig, target_pca_dim: int | None = None):
         dataset=enc.dataset,
         per_dataset_config=enc.per_dataset_config,
         dataset_context=dataset_context,
+        limit_to_glove=enc.limit_to_glove or enc.model == "glove",
+        glove_dim=enc.per_model_config.get("dim", 300),
         **enc.per_model_config,
     )
 
     word_in_glove = None
     if enc.limit_to_glove or enc.model == "glove":
-        word_in_glove = get_glove_embeddings(
-            enc.data_root, word_df, **enc.per_model_config
-        )[1]["in_glove"]
+        word_in_glove = word_df["in_glove"]
 
     branch_kwargs = dict(
         config=config,

@@ -8,7 +8,7 @@ from src.core.registry import resolve_dataset_context
 from src.utils.rrr.multiview import fit_banded_ridge_baseline, project_view_bands
 from src.utils.rrr.significance import PreparedSignificance
 from src.utils.shared.alpha_grids import resolve_ridge_alphas
-from src.utils.shared.embeddings import get_glove_embeddings, load_embeddings
+from src.utils.shared.embeddings import load_embeddings
 from src.utils.shared.tensors import to_numpy
 from src.utils.subspace_comparison.metrics import aggregate_subspace_basis
 
@@ -65,7 +65,12 @@ def run_multi_view(
             config.encoding.data_root, view_enc["model"],
             dataset=config.encoding.dataset,
             per_dataset_config=config.encoding.per_dataset_config,
-            dataset_context=target_context, **view_enc.get("per_model_config", {}),
+            dataset_context=target_context,
+            limit_to_glove=(
+                config.encoding.limit_to_glove or view_enc["model"] == "glove"
+            ),
+            glove_dim=view_enc.get("per_model_config", {}).get("dim", 300),
+            **view_enc.get("per_model_config", {}),
         )
         if word_df is not None and not np.array_equal(
             word_df["word"].astype(str).to_numpy(), words["word"].astype(str).to_numpy()
@@ -77,9 +82,7 @@ def run_multi_view(
     enc = config.encoding
     word_in_glove = None
     if enc.limit_to_glove or enc.model == "glove":
-        word_in_glove = get_glove_embeddings(
-            enc.data_root, word_df, **enc.per_model_config
-        )[1]["in_glove"]
+        word_in_glove = word_df["in_glove"]
     shared_selection_metadata = None
     if enc.shared_word_selection:
         shared_selection_metadata = _load_shared_word_selection_metadata(

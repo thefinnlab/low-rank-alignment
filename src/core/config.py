@@ -118,7 +118,7 @@ class EncodingConfig:
     arbitrary_seed: int = 42  # Seed used for generating arbitrary embedding baseline
     num_folds: int = 2  # Number of cross-validation folds
     limit_to_glove: bool = (
-        False  # If true, only run over words which have a glove embedding.
+        True  # Keep model comparisons on the shared GloVe-covered vocabulary.
     )
     shared_word_selection: bool = (
         False  # If true, use the intersection of cached word selections across subjects.
