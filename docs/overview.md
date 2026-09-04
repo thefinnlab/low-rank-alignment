@@ -58,6 +58,8 @@ identity, variants, selector fields, resume behavior, and legacy migration are
 described in [artifacts.md](artifacts.md). Language decoding and reconstruction load
 RRR/PCA factors through RRR Artifact identities and publish task-level results through
 their own Artifacts.
+RRR and cross-condition RRR variants compact their non-plot fields into one compressed
+HDF5 container while keeping plots as separately browsable PNG files.
 
 ## Source layout
 

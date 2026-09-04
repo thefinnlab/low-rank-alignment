@@ -177,7 +177,10 @@ def test_source_factor_contract_saves_one_full_a_without_rank_selector(tmp_path)
     assert np.array_equal(saved, A)
     entries = artifact.manifest()["entries"]["source_factors"]
     assert len(entries) == 1
-    assert entries[next(iter(entries))]["selector"] == selector
+    entry = entries[next(iter(entries))]
+    assert entry["selector"] == selector
+    assert entry["container"] == "artifact.h5"
+    assert not list(artifact._variant_dir().rglob("*.npy"))
 
 
 def test_completed_artifact_resumes_without_discovering_data(tmp_path, monkeypatch):

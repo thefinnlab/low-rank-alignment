@@ -61,6 +61,7 @@ class Artifact(RRRArtifact):
     """RRR-compatible outputs for one target-PCA dimensionality variant."""
 
     SCRIPT = "run_target_dimensionality_rrr"
+    COMPACT_STORAGE = False
     FIELD_CONTRACT = {**RRRArtifact.FIELD_CONTRACT, "sweep_results": False}
 
     def __init__(self, *, target_pca_dim=None, **kwargs):

@@ -175,6 +175,7 @@ class Artifact(ArtifactStore):
     """Unified storage and loading contract for iEEG and fMRI RRR results."""
 
     SCRIPT = "run_rrr"
+    COMPACT_STORAGE = True
     SELECTOR_ORDER = (
         "subject", "method", "region", "temporal_window", "source_temporal_window",
         "target_temporal_window", "held_out_subject", "loso_phase",

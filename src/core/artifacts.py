@@ -12,12 +12,14 @@ import json
 import os
 import re
 import tempfile
+import uuid
 from dataclasses import asdict, is_dataclass
 from pathlib import Path
 from typing import Any, ClassVar
 
 
 SCHEMA_VERSION = 2
+COMPACT_SCHEMA_VERSION = 3
 _OPERATIONAL_KEYS = {"refresh", "plot", "results_root"}
 
 
@@ -198,6 +200,8 @@ class ArtifactStore:
     SCRIPT: ClassVar[str]
     FIELD_CONTRACT: ClassVar[dict[str, bool]]
     SELECTOR_ORDER: ClassVar[tuple[str, ...]] = ()
+    COMPACT_STORAGE: ClassVar[bool] = False
+    CONTAINER_NAME: ClassVar[str] = "artifact.h5"
 
     def _init_store(
         self,
@@ -289,7 +293,9 @@ class ArtifactStore:
             self.complete = bool(manifest.get("complete"))
             return self
         manifest = {
-            "schema_version": SCHEMA_VERSION,
+            "schema_version": (
+                COMPACT_SCHEMA_VERSION if self.COMPACT_STORAGE else SCHEMA_VERSION
+            ),
             "identity": self.identity,
             "variant": selected,
             "configuration": normalized_config(config),
@@ -300,6 +306,8 @@ class ArtifactStore:
             "entries": {},
             "complete": False,
         }
+        if self.COMPACT_STORAGE:
+            manifest["storage"] = "hdf5"
         self._write_json(path, manifest)
         self._update_index(selected, complete=False)
         return self
@@ -314,19 +322,32 @@ class ArtifactStore:
             return
         codec, suffix, payload, codec_metadata = self._encode(field, value)
         relative = self._field_path(field, selector or {}, suffix)
-        destination = self._variant_dir() / relative
-        self._atomic_bytes(destination, payload)
-        entry = {
-            "selector": _primitive(selector or {}),
-            "codec": codec,
-            "file": relative.as_posix(),
-            "size": len(payload),
-            **codec_metadata,
-        }
+        if manifest.get("storage") == "hdf5" and field != "plots":
+            object_path = self._write_container_payload(relative, payload)
+            entry = {
+                "selector": _primitive(selector or {}),
+                "codec": codec,
+                "container": self.CONTAINER_NAME,
+                "object": object_path,
+                "size": len(payload),
+                **codec_metadata,
+            }
+        else:
+            destination = self._variant_dir() / relative
+            self._atomic_bytes(destination, payload)
+            entry = {
+                "selector": _primitive(selector or {}),
+                "codec": codec,
+                "file": relative.as_posix(),
+                "size": len(payload),
+                **codec_metadata,
+            }
         manifest["entries"].setdefault(field, {})[key] = entry
         manifest["complete"] = False
         self._write_json(self._manifest_path(), manifest)
         self._update_index(str(self.variant), complete=False)
+        if existing and existing.get("container") and existing.get("object"):
+            self._delete_container_object(existing["object"])
 
     def has_field(self, field: str, *, selector: dict | None = None) -> bool:
         self._validate_field(field)
@@ -339,7 +360,10 @@ class ArtifactStore:
         )
         if entry is None:
             raise KeyError(f"Artifact field {field!r} selector {selector or {}} is not saved")
-        payload = (self._variant_dir() / entry["file"]).read_bytes()
+        if "container" in entry:
+            payload = self._read_container_payload(entry)
+        else:
+            payload = (self._variant_dir() / entry["file"]).read_bytes()
         try:
             return self._decode(entry, payload)
         except Exception as error:
@@ -430,6 +454,44 @@ class ArtifactStore:
         })
         index["variants"][variant] = {"complete": bool(complete)}
         self._write_json(path, index)
+
+    def _write_container_payload(self, relative: Path, payload: bytes) -> str:
+        """Write one versioned payload into the variant's HDF5 container."""
+        import h5py
+        import numpy as np
+
+        logical = relative.with_suffix("").as_posix()
+        object_path = f"/entries/{logical}/versions/{uuid.uuid4().hex}"
+        container = self._variant_dir() / self.CONTAINER_NAME
+        container.parent.mkdir(parents=True, exist_ok=True)
+        with h5py.File(container, "a") as handle:
+            handle.create_dataset(
+                object_path,
+                data=np.frombuffer(payload, dtype=np.uint8),
+                compression="gzip",
+                shuffle=True,
+            )
+            handle.flush()
+        return object_path
+
+    def _read_container_payload(self, entry: dict) -> bytes:
+        import h5py
+
+        container = self._variant_dir() / entry["container"]
+        with h5py.File(container, "r") as handle:
+            return handle[entry["object"]][...].tobytes()
+
+    def _delete_container_object(self, object_path: str) -> None:
+        """Remove a superseded payload after its replacement is manifested."""
+        import h5py
+
+        container = self._variant_dir() / self.CONTAINER_NAME
+        if not container.exists():
+            return
+        with h5py.File(container, "a") as handle:
+            if object_path in handle:
+                del handle[object_path]
+                handle.flush()
 
     @staticmethod
     def _read_json(path: Path, default: Any = None) -> Any:

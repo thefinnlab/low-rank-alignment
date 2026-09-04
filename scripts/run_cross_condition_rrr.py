@@ -114,6 +114,7 @@ class Artifact(ArtifactStore):
     """Storage contract owned only by the cross-condition producer."""
 
     SCRIPT = "run_cross_condition_rrr"
+    COMPACT_STORAGE = True
     SELECTOR_ORDER = (
         "subject", "source_item", "target_item", "method", "rank", "fold",
     )

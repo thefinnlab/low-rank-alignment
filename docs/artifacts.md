@@ -59,10 +59,14 @@ keys sort alphabetically after those preferred keys. `load_artifacts(fields=...,
 selectors=...)` loads only requested values and returns the concrete Artifact
 instance.
 
-Writes publish payloads atomically and then update the manifest, with the physical
-codec and file size recorded for every selector entry. Tables are CSV, arrays are
-NPY, array mappings are NPZ, plots are PNG, JSON-compatible values are JSON, and
-fitted encoding/reconstruction objects are joblib files. Partial runs are valid.
+Writes publish payloads and then update the manifest, with the physical codec and
+uncompressed size recorded for every selector entry. `run_rrr` and
+`run_cross_condition_rrr` store all non-plot payloads in one compressed
+`artifact.h5` container per variant; their plots remain ordinary PNG files in the
+existing selector-based subdirectories. The Artifact API still exposes each field
+and selector independently. Other producers use individual files: tables are CSV,
+arrays are NPY, array mappings are NPZ, plots are PNG, JSON-compatible values are
+JSON, and fitted encoding/reconstruction objects are joblib files. Partial runs are valid.
 Required fields and selector combinations are checked only by `mark_complete()`.
 Plot fields are optional, and `plot: false` never prevents completion.
 

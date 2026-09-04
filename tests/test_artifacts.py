@@ -425,7 +425,7 @@ def test_atomic_manifest_contains_codec_and_size(tmp_path):
     assert not list(tmp_path.rglob(".*.tmp"))
 
 
-def test_native_codecs_and_readable_selector_paths(tmp_path):
+def test_rrr_compacts_data_and_keeps_readable_plot_paths(tmp_path):
     import pandas as pd
 
     artifact = RRRArtifact(results_root=tmp_path).begin(config={"rank_grid": [1]})
@@ -442,9 +442,17 @@ def test_native_codecs_and_readable_selector_paths(tmp_path):
 
     files = {path.relative_to(artifact._variant_dir()).as_posix()
              for path in artifact._variant_dir().rglob("*") if path.is_file()}
-    assert "rank_metrics/method-rrr/rank-1/fold-0/metrics.npz" in files
-    assert "fold_results/method-rrr/fold_results.csv" in files
+    assert "artifact.h5" in files
     assert "plots/subject-UTS01/acf_diagnostic.png" in files
+    assert not any(path.endswith((".csv", ".npy", ".npz", ".json"))
+                   for path in files if not path.endswith("manifest.json"))
+    assert np.array_equal(
+        artifact.load_rank_metrics(unit=unit, rank=1, fold=0)["corr"],
+        np.array([0.25]),
+    )
+    assert artifact.load_fold_results().to_dict("records") == [
+        {"fold": 0, "score": 0.25, "method": "rrr"}
+    ]
 
 
 def test_npz_codec_round_trips_ragged_nested_significance_payload(tmp_path):
@@ -501,6 +509,7 @@ def test_selector_order_is_owned_by_each_script(tmp_path):
         selector={"fold": 2, "method": "rrr", "rank": 64},
     )
     rrr_entry = next(iter(rrr.manifest()["entries"]["rank_metrics"].values()))
-    assert rrr_entry["file"] == (
-        "rank_metrics/method-rrr/rank-64/fold-2/metrics.npz"
+    assert rrr_entry["container"] == "artifact.h5"
+    assert rrr_entry["object"].startswith(
+        "/entries/rank_metrics/method-rrr/rank-64/fold-2/metrics/versions/"
     )
