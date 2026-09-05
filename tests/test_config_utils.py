@@ -9,6 +9,7 @@ import yaml
 from src.core.config import (
     EncodingConfig,
     FMRICrossDatasetRRRConfig,
+    FMRIDataConfig,
     FMRISignificanceConfig,
     RRRConfig,
     RRRTemporalWindowConfig,
@@ -37,6 +38,13 @@ from src.utils.shared.config import (
 
 def test_ieeg_encoding_defaults_to_glove_vocabulary():
     assert EncodingConfig().limit_to_glove is True
+
+
+def test_fmri_glove_vocabulary_controls_are_opt_in_and_validated():
+    assert FMRIDataConfig().limit_to_glove is False
+    assert FMRIDataConfig().glove_dim == 300
+    with pytest.raises(ValueError, match="fmri.glove_dim"):
+        FMRISignificanceConfig(fmri=FMRIDataConfig(glove_dim=25))
 
 
 class TestParseOverrideArgs:

@@ -85,6 +85,44 @@ def test_load_story_embeddings_supports_glove(monkeypatch):
     assert result["story"].shape == (2, 300)
 
 
+def test_load_story_embeddings_zero_masks_glove_oov_words(tmp_path, monkeypatch):
+    story_dir = tmp_path / "model" / "story"
+    story_dir.mkdir(parents=True)
+    pd.DataFrame({"word_idx": [0, 1, 2]}).to_csv(
+        story_dir / "transcript.tsv", sep="\t", index=False
+    )
+    token_values = np.arange(6, dtype=np.float32).reshape(3, 2) + 1
+    with h5py.File(story_dir / "features.hdf5", "w") as handle:
+        handle.create_dataset("layer-2", data=token_values)
+    frame = pd.DataFrame({
+        "word_idx": [0, 1, 2], "word": ["one", "oov", "three"],
+        "start": [0.0, 1.0, 2.0], "end": [0.5, 1.5, 2.5],
+    })
+    monkeypatch.setattr(
+        fmri, "load_story_word_data",
+        lambda root, stories: ({"story": frame}, {}),
+    )
+
+    def fake_glove(root, words, dim):
+        covered = words.copy()
+        covered["in_glove"] = [True, False, True]
+        return np.ones((3, dim), dtype=np.float32), covered
+
+    monkeypatch.setattr(
+        "src.utils.shared.embeddings.get_glove_embeddings", fake_glove
+    )
+
+    result = fmri.load_story_embeddings(
+        str(tmp_path), "model", ["story"], layer=2,
+        fmri_repo_root="fmri", glove_data_root="data",
+        limit_to_glove=True, glove_dim=300,
+    )
+
+    np.testing.assert_array_equal(
+        result["story"], [[1.0, 2.0], [0.0, 0.0], [5.0, 6.0]]
+    )
+
+
 def test_finite_response_voxel_masks_require_complete_stories(tmp_path):
     base = (
         tmp_path

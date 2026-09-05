@@ -148,6 +148,9 @@ applied when embeddings and neural epochs are aligned for analysis.
 `load_embeddings(..., limit_to_glove=True, glove_dim=300)` owns the auxiliary GloVe
 lookup and adds the `in_glove` column to its returned word table, so analysis clients
 do not load GloVe separately.
+fMRI significance and RRR expose the same controls through `FMRIDataConfig`. Because
+fMRI embeddings are interpolated onto TRs, GloVe-OOV word rows retain their timestamps
+and are zeroed for every model before Lanczos interpolation rather than being removed.
 The iEEG `leave_one_subject_out` mode fits only the fold-specific RRR input factors on
 the non-held-out subjects, without evaluating that training cohort or running its PCA
 baseline. For the held-out subject it evaluates ridge models only after reduced-QR

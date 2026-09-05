@@ -51,6 +51,8 @@ fmri:
   data:
     fmri_repo_root: data/deep-fMRI-dataset
     embedding_root: data/fmri/stimuli
+    limit_to_glove: true
+    glove_dim: 300
     sessions:
     - 1
     - 2

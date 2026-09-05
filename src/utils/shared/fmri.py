@@ -127,8 +127,15 @@ def load_story_embeddings(
     *,
     fmri_repo_root: str | None = None,
     glove_data_root: str = "data",
+    limit_to_glove: bool = False,
+    glove_dim: int = 300,
 ) -> dict[str, np.ndarray]:
-    """Load transformer HDF5s or construct word-level GloVe story embeddings."""
+    """Load story embeddings and optionally zero words outside GloVe coverage.
+
+    Zero masking preserves every word timestamp for fMRI interpolation while making
+    the represented word set identical across embedding models.
+    """
+    frames = None
     if model_dir == "glove" or model_dir.startswith("glove-"):
         if layer is not None:
             raise ValueError("fMRI GloVe embeddings require layer=None")
@@ -138,34 +145,54 @@ def load_story_embeddings(
         from src.utils.shared.embeddings import get_glove_embeddings
 
         frames, _ = load_story_word_data(fmri_repo_root, stories)
-        return {
+        result = {
             story: get_glove_embeddings(glove_data_root, frames[story], dim)[0]
             .astype(np.float32, copy=False)
             for story in stories
         }
+    else:
+        reducers = {
+            "mean": lambda values: values.mean(axis=0),
+            "first": lambda values: values[0],
+            "last": lambda values: values[-1],
+        }
+        if pooling not in reducers:
+            raise ValueError(f"Unknown pooling strategy: {pooling}")
+        result = {}
+        for story in stories:
+            story_dir = Path(embedding_root) / model_dir / story
+            transcript = pd.read_csv(story_dir / "transcript.tsv", sep="\t")
+            transcript = transcript.loc[:, ~transcript.columns.astype(str).str.startswith("Unnamed:")]
+            with h5py.File(story_dir / "features.hdf5", "r") as handle:
+                token_values = handle[f"layer-{int(layer)}"]
+                pooled = []
+                for _, group in transcript.groupby("word_idx", sort=True):
+                    indices = group.index.to_numpy()
+                    # Pool one word at a time so long stories do not require a
+                    # second in-memory copy of the complete token-level layer.
+                    values = token_values[indices]
+                    pooled.append(reducers[pooling](values))
+            result[story] = np.asarray(pooled, dtype=np.float32)
 
-    reducers = {
-        "mean": lambda values: values.mean(axis=0),
-        "first": lambda values: values[0],
-        "last": lambda values: values[-1],
-    }
-    if pooling not in reducers:
-        raise ValueError(f"Unknown pooling strategy: {pooling}")
-    result = {}
-    for story in stories:
-        story_dir = Path(embedding_root) / model_dir / story
-        transcript = pd.read_csv(story_dir / "transcript.tsv", sep="\t")
-        transcript = transcript.loc[:, ~transcript.columns.astype(str).str.startswith("Unnamed:")]
-        with h5py.File(story_dir / "features.hdf5", "r") as handle:
-            token_values = handle[f"layer-{int(layer)}"]
-            pooled = []
-            for _, group in transcript.groupby("word_idx", sort=True):
-                indices = group.index.to_numpy()
-                # Pool one word at a time so long stories do not require a
-                # second in-memory copy of the complete token-level layer.
-                values = token_values[indices]
-                pooled.append(reducers[pooling](values))
-        result[story] = np.asarray(pooled, dtype=np.float32)
+    if limit_to_glove:
+        if fmri_repo_root is None:
+            raise ValueError("fmri_repo_root is required when limit_to_glove=True")
+        if frames is None:
+            frames, _ = load_story_word_data(fmri_repo_root, stories)
+        from src.utils.shared.embeddings import get_glove_embeddings
+
+        for story in stories:
+            _, coverage = get_glove_embeddings(
+                glove_data_root, frames[story], int(glove_dim)
+            )
+            mask = coverage["in_glove"].to_numpy(dtype=bool)
+            if len(result[story]) != len(mask):
+                raise ValueError(
+                    f"Story {story} has {len(result[story])} embeddings for "
+                    f"{len(mask)} GloVe coverage rows"
+                )
+            result[story] = result[story].copy()
+            result[story][~mask] = 0.0
     return result
 
 

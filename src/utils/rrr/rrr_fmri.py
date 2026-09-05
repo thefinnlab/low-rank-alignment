@@ -441,6 +441,8 @@ def run_fmri(
                 config.pooling,
                 fmri_repo_root=config.fmri.fmri_repo_root,
                 glove_data_root=config.fmri.glove_data_root,
+                limit_to_glove=config.fmri.limit_to_glove,
+                glove_dim=config.fmri.glove_dim,
             )
         ambient_dim = next(iter(embeddings.values())).shape[1]
         with _timed("Lanczos-align all stories"):
@@ -701,6 +703,12 @@ def run_fmri(
         "effective_start_trim": 5 + config.fmri.trim,
         "effective_end_trim": config.fmri.trim,
         "ndelays": config.fmri.ndelays,
+        "limit_to_glove": config.fmri.limit_to_glove,
+        "glove_dim": config.fmri.glove_dim,
+        "glove_oov_handling": (
+            "zero_before_lanczos_interpolation"
+            if config.fmri.limit_to_glove else None
+        ),
         "delay_order": list(range(1, int(config.fmri.ndelays) + 1)),
         "pre_fir_training_shape": (
             list(full_train.pre_fir_stimulus.shape)

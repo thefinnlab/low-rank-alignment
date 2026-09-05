@@ -888,10 +888,16 @@ class FMRIDataConfig:
     fmri_repo_root: str = "data/deep-fMRI-dataset"
     embedding_root: str = "data/fmri/stimuli"
     glove_data_root: str = "data"
+    limit_to_glove: bool = False
+    glove_dim: int = 300
     sessions: list[int] = field(default_factory=lambda: [1, 2, 3, 4, 5])
     subjects: list[str] = field(default_factory=lambda: ["UTS03"])
     trim: int = 5
     ndelays: int = 4
+
+    def validate(self):
+        if self.glove_dim not in {50, 100, 200, 300}:
+            raise ValueError("fmri.glove_dim must be one of [50, 100, 200, 300]")
 
 
 @dataclass
@@ -935,6 +941,7 @@ class FMRISignificanceConfig:
     refresh: bool = False
 
     def validate(self):
+        self.fmri.validate()
         is_glove = self.model_dir == "glove" or self.model_dir.startswith("glove-")
         if is_glove and self.layer is not None:
             raise ValueError("fMRI GloVe configurations require layer=null")
@@ -982,6 +989,7 @@ class FMRICrossDatasetRRRConfig:
     refresh: bool = False
 
     def validate(self):
+        self.fmri.validate()
         self.significance_selection.validate()
         is_glove = self.model_dir == "glove" or self.model_dir.startswith("glove-")
         if is_glove and self.layer is not None:
