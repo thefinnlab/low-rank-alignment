@@ -22,6 +22,7 @@ ieeg:
     - 10
     batch: true
     num_folds: 5
+    limit_to_glove: true
     shared_word_selection: true
     per_model_config:
       model_dir: gpt2-large

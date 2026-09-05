@@ -17,13 +17,87 @@ rank_grid:
 - 1024
 - 1600
 significance_selection:
-  mode: within-layer
+  mode: cross-model-layer
   reference_artifact:
     mode: sig_lags
     dataset: brain-treebank-cars-2
     offset: 0
     model: gpt2-xl-batch
     layer: '{layer}'
+    variant: rereference-laplacian
+  artifacts:
+  - mode: sig_lags
+    dataset: brain-treebank-cars-2
+    offset: 0
+    model: gpt2
+    layer:
+    - 0
+    - 3
+    - 6
+    - 9
+    - 12
+    variant: rereference-laplacian
+  - mode: sig_lags
+    dataset: brain-treebank-cars-2
+    offset: 0
+    model: gpt2-xl-batch
+    layer:
+    - 0
+    - 12
+    - 24
+    - 36
+    - 48
+    variant: rereference-laplacian
+  - mode: sig_lags
+    dataset: brain-treebank-cars-2
+    offset: 0
+    model: gpt-j-6b
+    layer:
+    - 0
+    - 7
+    - 14
+    - 21
+    - 28
+    variant: rereference-laplacian
+  - mode: sig_lags
+    dataset: brain-treebank-cars-2
+    offset: 0
+    model: roberta-large
+    layer:
+    - 0
+    - 6
+    - 12
+    - 18
+    - 24
+    variant: rereference-laplacian
+  - mode: sig_lags
+    dataset: brain-treebank-cars-2
+    offset: 0
+    model: llama3-8b
+    layer:
+    - 0
+    - 8
+    - 16
+    - 24
+    - 32
+    variant: rereference-laplacian
+  - mode: sig_lags
+    dataset: brain-treebank-cars-2
+    offset: 0
+    model: random-gpt2
+    layer:
+    - 0
+    - 3
+    - 6
+    - 9
+    - 12
+    variant: rereference-laplacian
+  - mode: sig_lags
+    dataset: brain-treebank-cars-2
+    offset: 0
+    model: glove-300
+    layer: null
+    variant: rereference-laplacian
 subspace_aggregation: extrinsic
 rrr_source:
   mode: internal
@@ -32,13 +106,79 @@ rrr_source:
   model: gpt2-xl-batch
   layer: '{layer}'
   significance_selection:
-    mode: within-layer
+    mode: cross-model-layer
     reference_artifact:
       mode: sig_lags
       dataset: podcast
       offset: 0
       model: gpt2-xl-batch
       layer: '{layer}'
+    artifacts:
+    - mode: sig_lags
+      dataset: podcast
+      offset: 0
+      model: gpt2
+      layer:
+      - 0
+      - 3
+      - 6
+      - 9
+      - 12
+    - mode: sig_lags
+      dataset: podcast
+      offset: 0
+      model: gpt2-xl-batch
+      layer:
+      - 0
+      - 12
+      - 24
+      - 36
+      - 48
+    - mode: sig_lags
+      dataset: podcast
+      offset: 0
+      model: gpt-j-6b
+      layer:
+      - 0
+      - 7
+      - 14
+      - 21
+      - 28
+    - mode: sig_lags
+      dataset: podcast
+      offset: 0
+      model: roberta-large
+      layer:
+      - 0
+      - 6
+      - 12
+      - 18
+      - 24
+    - mode: sig_lags
+      dataset: podcast
+      offset: 0
+      model: llama3-8b
+      layer:
+      - 0
+      - 8
+      - 16
+      - 24
+      - 32
+    - mode: sig_lags
+      dataset: podcast
+      offset: 0
+      model: random-gpt2
+      layer:
+      - 0
+      - 3
+      - 6
+      - 9
+      - 12
+    - mode: sig_lags
+      dataset: podcast
+      offset: 0
+      model: glove-300
+      layer: null
 ieeg:
   encoding:
     data_root: data/brain-treebank

@@ -279,6 +279,23 @@ def test_final_rrr_configs_use_one_equivalent_significance_union():
                 payload["rrr_source"]["significance_selection"]
             ) == expected
 
+    for model in [*models, "random-gpt2-xl"]:
+        for target, source in (
+            ("podcast", "cars-2"),
+            ("cars-2", "podcast"),
+            ("fmri", "podcast"),
+            ("fmri", "cars-2"),
+        ):
+            path = (
+                REPO_ROOT / "configs/cross_dataset" / target / f"from_{source}"
+                / f"{model}.yml"
+            )
+            payload = yaml.safe_load(path.read_text())
+            assert signature(payload["significance_selection"]) == expected
+            assert signature(
+                payload["rrr_source"]["significance_selection"]
+            ) == expected
+
     for path in configs:
         text = path.read_text()
         assert "random-gpt2-xl" not in text
