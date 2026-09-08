@@ -152,6 +152,59 @@ def test_cross_dataset_rrr_requires_and_uses_source_dataset(tmp_path: Path):
     assert "configs/cross_dataset/fmri/from_podcast/gpt2.yml" in submissions[0]
 
 
+def test_target_dimensionality_resolves_internal_rrr_configs(tmp_path: Path):
+    ieeg_path = tmp_path / "ieeg"
+    ieeg_path.mkdir()
+    ieeg, ieeg_submissions = _run_make(
+        ieeg_path,
+        "target-dimensionality",
+        "DATASET=cars-2",
+        "RRR_MODE=cross_model_layer",
+        "MODELS=gpt2 glove",
+    )
+    assert ieeg.returncode == 0, ieeg.stderr
+    assert len(ieeg_submissions) == 2
+    assert all(
+        "scripts/run_target_dimensionality_rrr.py" in item
+        for item in ieeg_submissions
+    )
+    assert (
+        "configs/brain_treebank/cars_2/rrr/gpt2/cross_model_layer.yml"
+        in ieeg_submissions[0]
+    )
+    assert (
+        "configs/brain_treebank/cars_2/rrr/glove/cross_model_layer.yml"
+        in ieeg_submissions[1]
+    )
+
+    fmri_path = tmp_path / "fmri"
+    fmri_path.mkdir()
+    fmri, fmri_submissions = _run_make(
+        fmri_path,
+        "target-dimensionality",
+        "DATASET=fmri",
+        "RRR_MODE=cross_subject",
+        "MODELS=gpt2",
+    )
+    assert fmri.returncode == 0, fmri.stderr
+    assert len(fmri_submissions) == 1
+    assert "configs/cross_dataset/fmri/within/gpt2.yml" in fmri_submissions[0]
+
+
+def test_target_dimensionality_rejects_non_internal_rrr_modes(tmp_path: Path):
+    result, submissions = _run_make(
+        tmp_path,
+        "target-dimensionality",
+        "DATASET=podcast",
+        "RRR_MODE=leave_one_subject_out",
+        "MODELS=gpt2",
+    )
+
+    assert result.returncode != 0
+    assert "unsupported for target-dimensionality RRR" in result.stderr
+    assert submissions == []
+
+
 def test_cross_condition_resolves_region_and_stimulus_configs(tmp_path: Path):
     region, region_submissions = _run_make(
         tmp_path,

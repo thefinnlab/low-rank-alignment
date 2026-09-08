@@ -34,13 +34,17 @@ embeddings predict iEEG and fMRI responses. The supported executable surface is
   refit utility parses that comparison's console report and recomputes all-lag
   correlations for only the union of selected electrodes, without permutation tests.
 
-The Makefile has three individual analysis targets: `significance`, `rrr`, and
-`cross-condition`. They share `DATASET`, `MODELS`, `CMD`, and `OVERRIDES` controls;
-RRR additionally uses `RRR_MODE` (and `SOURCE_DATASET` for cross-dataset transfer),
-while cross-condition uses `CROSS_MODE=region|stimulus`. Slurm submission is the
-default; cross-condition submits one job per configured model layer (and one layerless
-job for GloVe), as does iEEG leave-one-subject-out RRR. `CMD="uv run python"` runs
-the same jobs locally. The default model set
+The Makefile has four individual analysis targets: `significance`, `rrr`,
+`target-dimensionality`, and `cross-condition`. They share `DATASET`, `MODELS`,
+`CMD`, and `OVERRIDES` controls; RRR and target-dimensionality additionally use
+`RRR_MODE`, while RRR uses `SOURCE_DATASET` for cross-dataset transfer and
+cross-condition uses `CROSS_MODE=region|stimulus`. Target-dimensionality accepts
+the ordinary internal `cross_subject` and `cross_model_layer` configurations and
+submits one job per selected model; the script expands configured model layers and
+PCA dimensions within each job. Slurm submission is the default; cross-condition
+submits one job per configured model layer (and one layerless job for GloVe), as does
+iEEG leave-one-subject-out RRR. `CMD="uv run python"` runs the same jobs locally. The
+default model set
 is GPT-2, GPT-2 XL, Llama 3 8B, GPT-J 6B, RoBERTa Large, randomly initialized
 GPT-2, and GloVe 300D. fMRI supports this complete set and supports its internal,
 cross-model-layer, and cross-dataset RRR configurations; cross-condition remains

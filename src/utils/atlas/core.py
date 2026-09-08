@@ -158,7 +158,7 @@ DESTRIEUX_2009_LABELS: list[str] = [
 ]
 
 REGION_GROUPS: dict[str, list[str]] = {
-    "EAC": [
+    "STG": [
         "L G_temp_sup-G_T_transv",
         "L G_temp_sup-Plan_polar",
         "L G_temp_sup-Lateral",

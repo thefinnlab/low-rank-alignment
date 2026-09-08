@@ -170,6 +170,50 @@ rrr:
 		fi
 	done
 
+## Sweep fold-safe target-PCA dimensionalities for ordinary internal RRR.
+## RRR_MODE: cross_subject or cross_model_layer
+## Example: make target-dimensionality DATASET=podcast MODELS="gpt2 glove"
+target-dimensionality:
+	@set -eu
+	mkdir -p logs
+	mode="$(RRR_MODE)"
+	[ "$$mode" != "internal" ] || mode="cross_subject"
+	case "$$mode" in
+		cross_subject|cross_model_layer) ;;
+		*) echo "RRR_MODE '$$mode' is unsupported for target-dimensionality RRR" >&2; exit 2 ;;
+	esac
+	case "$(DATASET)" in
+		podcast) config_root="configs/rrr" ;;
+		cars-2) config_root="configs/brain_treebank/cars_2/rrr" ;;
+		megamind) config_root="configs/brain_treebank/megamind/rrr" ;;
+		fmri)
+			case "$$mode" in
+				cross_subject) config_root="configs/cross_dataset/fmri/within" ;;
+				cross_model_layer) config_root="configs/fmri/within_fmri_cross_model_layer" ;;
+			esac
+			;;
+		*) echo "Unsupported target-dimensionality DATASET '$(DATASET)'" >&2; exit 2 ;;
+	esac
+	models="$(MODELS)"
+	[ -n "$$models" ] || { echo "MODELS must contain at least one model" >&2; exit 2; }
+	for model in $$models; do
+		if [ "$(DATASET)" = "fmri" ]; then
+			config="$$config_root/$$model.yml"
+		else
+			config="$$config_root/$$model/$$mode.yml"
+		fi
+		[ -f "$$config" ] || { echo "Missing target-dimensionality config: $$config" >&2; exit 2; }
+	done
+	for model in $$models; do
+		if [ "$(DATASET)" = "fmri" ]; then
+			config="$$config_root/$$model.yml"
+		else
+			config="$$config_root/$$model/$$mode.yml"
+		fi
+		echo "Running target-dimensionality RRR for $(DATASET) / $$model / $$mode: $$config"
+		$(call launch,target-dimensionality-$(DATASET)-$$mode,scripts/run_target_dimensionality_rrr.py)
+	done
+
 ## Run directed cross-condition comparisons once per selected model layer.
 ## Valid pairs: DATASET=podcast CROSS_MODE=region, or
 ##              DATASET=brain-treebank CROSS_MODE=stimulus
@@ -281,6 +325,6 @@ final-results:
 		done
 	fi
 
-.PHONY: significance significance-missing missing-significance rrr cross-condition final-results
+.PHONY: significance significance-missing missing-significance rrr target-dimensionality cross-condition final-results
 
 missing-significance: significance-missing
