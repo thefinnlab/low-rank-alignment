@@ -38,7 +38,9 @@ The Makefile has three individual analysis targets: `significance`, `rrr`, and
 `cross-condition`. They share `DATASET`, `MODELS`, `CMD`, and `OVERRIDES` controls;
 RRR additionally uses `RRR_MODE` (and `SOURCE_DATASET` for cross-dataset transfer),
 while cross-condition uses `CROSS_MODE=region|stimulus`. Slurm submission is the
-default, and `CMD="uv run python"` runs the same jobs locally. The default model set
+default; cross-condition submits one job per configured model layer (and one layerless
+job for GloVe), as does iEEG leave-one-subject-out RRR. `CMD="uv run python"` runs
+the same jobs locally. The default model set
 is GPT-2, GPT-2 XL, Llama 3 8B, GPT-J 6B, RoBERTa Large, randomly initialized
 GPT-2, and GloVe 300D. fMRI supports this complete set and supports its internal,
 cross-model-layer, and cross-dataset RRR configurations; cross-condition remains

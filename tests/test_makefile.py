@@ -109,6 +109,29 @@ def test_fmri_rrr_rejects_an_ieeg_only_mode(tmp_path: Path):
     assert submissions == []
 
 
+def test_leave_one_subject_out_submits_one_job_per_model_layer(tmp_path: Path):
+    result, submissions = _run_make(
+        tmp_path,
+        "rrr",
+        "DATASET=podcast",
+        "RRR_MODE=leave_one_subject_out",
+        "MODELS=gpt2 glove",
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert len(submissions) == 6
+    assert all(
+        "configs/rrr/gpt2/leave_one_subject_out.yml" in submission
+        for submission in submissions[:5]
+    )
+    assert [
+        submission.rsplit("--ieeg.encoding.per_model_config.layer=", 1)[-1]
+        for submission in submissions[:5]
+    ] == ["0", "3", "6", "9", "12"]
+    assert "configs/rrr/glove/leave_one_subject_out.yml" in submissions[-1]
+    assert "--ieeg.encoding.per_model_config.layer=" not in submissions[-1]
+
+
 def test_cross_dataset_rrr_requires_and_uses_source_dataset(tmp_path: Path):
     missing, submissions = _run_make(
         tmp_path, "rrr", "DATASET=fmri", "RRR_MODE=cross_dataset", "MODELS=gpt2"
@@ -138,8 +161,17 @@ def test_cross_condition_resolves_region_and_stimulus_configs(tmp_path: Path):
         "MODELS=gpt2 glove",
     )
     assert region.returncode == 0, region.stderr
-    assert "configs/cross_condition/region/gpt2.yml" in region_submissions[0]
-    assert "configs/cross_condition/region/glove.yml" in region_submissions[1]
+    assert len(region_submissions) == 6
+    assert all(
+        "configs/cross_condition/region/gpt2.yml" in submission
+        for submission in region_submissions[:5]
+    )
+    assert [
+        submission.rsplit("--per_model_config.layer=", 1)[-1]
+        for submission in region_submissions[:5]
+    ] == ["0", "3", "6", "9", "12"]
+    assert "configs/cross_condition/region/glove.yml" in region_submissions[-1]
+    assert "--per_model_config.layer=" not in region_submissions[-1]
 
     stimulus, stimulus_submissions = _run_make(
         tmp_path,
@@ -149,7 +181,16 @@ def test_cross_condition_resolves_region_and_stimulus_configs(tmp_path: Path):
         "MODELS=roberta-large",
     )
     assert stimulus.returncode == 0, stimulus.stderr
-    assert "configs/cross_condition/stimulus/roberta-large.yml" in stimulus_submissions[-1]
+    assert len(stimulus_submissions) == 11
+    stimulus_submissions = stimulus_submissions[-5:]
+    assert all(
+        "configs/cross_condition/stimulus/roberta-large.yml" in submission
+        for submission in stimulus_submissions
+    )
+    assert [
+        submission.rsplit("--per_model_config.layer=", 1)[-1]
+        for submission in stimulus_submissions
+    ] == ["0", "6", "12", "18", "24"]
 
 
 def test_makefile_validates_every_config_before_submission(tmp_path: Path):

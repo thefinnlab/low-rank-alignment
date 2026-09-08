@@ -109,7 +109,8 @@ Alpha selection always runs because it is part of fitting the ridge readouts, bu
 its selected-alpha arrays are not saved by default. Set `log_alphas: true` to retain
 them in the metric payloads; leave it false to keep only the resulting scores.
 
-The Makefile runs either comparison family for any selected models:
+The Makefile runs either comparison family for any selected models. It submits one
+job per configured model layer; GloVe, which has no layer, is submitted once:
 
 ```bash
 make cross-condition DATASET=podcast CROSS_MODE=region

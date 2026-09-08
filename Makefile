@@ -22,9 +22,9 @@ export PYTHONPATH := $(CURDIR)
 define launch
 if [ "$(CMD)" = "sbatch" ]; then \
 	$(SBATCH) --job-name="$(1)-$$model-$(USR)-$(DT)" submit.sh \
-		$(2) --config "$$config" $(OVERRIDES); \
+		$(2) --config "$$config" $(OVERRIDES) $(3); \
 else \
-	$(CMD) $(2) --config "$$config" $(OVERRIDES); \
+	$(CMD) $(2) --config "$$config" $(OVERRIDES) $(3); \
 fi
 endef
 
@@ -96,7 +96,8 @@ significance-missing:
 		fi
 	done
 
-## Run one RRR mode once per selected model.
+## Run one RRR mode once per selected model. Leave-one-subject-out runs once per
+## selected model layer.
 ## iEEG RRR_MODE: cross_subject, cross_model_layer, leave_one_subject_out,
 ##                temporal_windows, cross_temporal_windows, or cross_dataset
 ## fMRI RRR_MODE: cross_subject (within), cross_model_layer, or cross_dataset
@@ -140,6 +141,10 @@ rrr:
 			config="$$config_root/$$model/$$mode.yml"
 		fi
 		[ -f "$$config" ] || { echo "Missing RRR config: $$config" >&2; exit 2; }
+		if [ "$$mode" = "leave_one_subject_out" ]; then
+			layers="$$(uv run python -c 'import sys, yaml; payload = yaml.safe_load(open(sys.argv[1])) or {}; layer = payload.get("ieeg", {}).get("encoding", {}).get("per_model_config", {}).get("layer"); print("none" if layer is None else " ".join(map(str, layer if isinstance(layer, list) else [layer])))' "$$config")"
+			[ -n "$$layers" ] || { echo "Leave-one-subject-out config has no model layers: $$config" >&2; exit 2; }
+		fi
 	done
 	for model in $$models; do
 		if [ "$(DATASET)" = "fmri" ] || [ "$$mode" = "cross_dataset" ]; then
@@ -147,11 +152,25 @@ rrr:
 		else
 			config="$$config_root/$$model/$$mode.yml"
 		fi
-		echo "Running $$mode RRR for $(DATASET) / $$model: $$config"
-		$(call launch,rrr-$(DATASET)-$$mode,scripts/run_rrr.py)
+		if [ "$$mode" = "leave_one_subject_out" ]; then
+			layers="$$(uv run python -c 'import sys, yaml; payload = yaml.safe_load(open(sys.argv[1])) or {}; layer = payload.get("ieeg", {}).get("encoding", {}).get("per_model_config", {}).get("layer"); print("none" if layer is None else " ".join(map(str, layer if isinstance(layer, list) else [layer])))' "$$config")"
+			for layer in $$layers; do
+				layer_override=""
+				layer_label="none"
+				if [ "$$layer" != "none" ]; then
+					layer_override="--ieeg.encoding.per_model_config.layer=$$layer"
+					layer_label="$$layer"
+				fi
+				echo "Running $$mode RRR for $(DATASET) / $$model / layer $$layer_label: $$config"
+				$(call launch,rrr-$(DATASET)-$$mode-layer-$$layer_label,scripts/run_rrr.py,$$layer_override)
+			done
+		else
+			echo "Running $$mode RRR for $(DATASET) / $$model: $$config"
+			$(call launch,rrr-$(DATASET)-$$mode,scripts/run_rrr.py)
+		fi
 	done
 
-## Run directed cross-condition comparisons once per selected model.
+## Run directed cross-condition comparisons once per selected model layer.
 ## Valid pairs: DATASET=podcast CROSS_MODE=region, or
 ##              DATASET=brain-treebank CROSS_MODE=stimulus
 ## Example: make cross-condition DATASET=podcast CROSS_MODE=region
@@ -168,11 +187,27 @@ cross-condition:
 	for model in $(MODELS); do
 		config="$$config_root/$$model.yml"
 		[ -f "$$config" ] || { echo "Missing cross-condition config: $$config" >&2; exit 2; }
+		layers="$$(uv run python -c 'import sys, yaml; payload = yaml.safe_load(open(sys.argv[1])) or {}; layer = payload.get("per_model_config", {}).get("layer"); print("none" if layer is None else " ".join(map(str, layer if isinstance(layer, list) else [layer])))' "$$config")"
+		[ -n "$$layers" ] || { echo "Cross-condition config has no model layers: $$config" >&2; exit 2; }
 	done
 	for model in $(MODELS); do
 		config="$$config_root/$$model.yml"
-		echo "Running $(CROSS_MODE) comparison for $(DATASET) / $$model: $$config"
-		$(call launch,cross-condition-$(CROSS_MODE),scripts/run_cross_condition_rrr.py)
+		layers="$$(uv run python -c 'import sys, yaml; payload = yaml.safe_load(open(sys.argv[1])) or {}; layer = payload.get("per_model_config", {}).get("layer"); print("none" if layer is None else " ".join(map(str, layer if isinstance(layer, list) else [layer])))' "$$config")"
+		for layer in $$layers; do
+			layer_override=""
+			layer_label="none"
+			if [ "$$layer" != "none" ]; then
+				layer_override="--per_model_config.layer=$$layer"
+				layer_label="$$layer"
+			fi
+			echo "Running $(CROSS_MODE) comparison for $(DATASET) / $$model / layer $$layer_label: $$config"
+			if [ "$(CMD)" = "sbatch" ]; then
+				$(SBATCH) --job-name="cross-condition-$(CROSS_MODE)-$$model-layer-$$layer_label-$(USR)-$(DT)" submit.sh \
+					scripts/run_cross_condition_rrr.py --config "$$config" $(OVERRIDES) $$layer_override
+			else
+				$(CMD) scripts/run_cross_condition_rrr.py --config "$$config" $(OVERRIDES) $$layer_override
+			fi
+		done
 	done
 
 ## Submit the complete final-results RRR matrix after checking significance.
