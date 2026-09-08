@@ -96,8 +96,14 @@ def test_artifact_target_dimension_selects_distinct_variants(tmp_path):
 
 def test_run_config_derives_inner_ranks_and_compiles_sweep(tmp_path, monkeypatch):
     seen = []
+    progress = []
 
     monkeypatch.setattr(client, "_inspect_ieeg_dimensions", lambda config: (5, 3, 2))
+    monkeypatch.setattr(
+        client,
+        "tqdm",
+        lambda iterable, **kwargs: progress.append(kwargs) or iterable,
+    )
 
     def fake_run(config, target_pca_dim=None):
         seen.append((target_pca_dim, list(config.rank_grid), config.compute_sig_nonsig))
@@ -122,6 +128,10 @@ def test_run_config_derives_inner_ranks_and_compiles_sweep(tmp_path, monkeypatch
     ))
 
     assert seen == [(1, [1], False), (3, [1, 2], False)]
+    assert progress == [
+        {"desc": "Model layers", "unit": "layer"},
+        {"desc": "Target PCA dimensions", "unit": "dimension"},
+    ]
     assert len(artifacts) == 2
     owner = artifacts[-1]
     combined = owner.load_sweep_results()

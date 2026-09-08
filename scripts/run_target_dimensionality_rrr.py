@@ -9,6 +9,7 @@ from typing import ClassVar
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+from tqdm import tqdm
 
 from scripts.run_rrr import Artifact as RRRArtifact
 from scripts.run_rrr import Config as RRRClientConfig
@@ -250,11 +251,13 @@ def _run_expanded(config: Config, selected):
         expanded = expand_per_model_layer_configs(selected)
 
     all_artifacts = []
-    for layer_config in expanded:
+    for layer_config in tqdm(expanded, desc="Model layers", unit="layer"):
         original_targets, cap, embedding_dim = inspect(layer_config)
         dims = _target_dims(config, cap)
         artifacts = []
-        for target_dim in dims:
+        for target_dim in tqdm(
+            dims, desc="Target PCA dimensions", unit="dimension"
+        ):
             current = deepcopy(layer_config)
             current.rank_grid = _power_grid(min(target_dim, embedding_dim))
             if config.modality == "ieeg":
