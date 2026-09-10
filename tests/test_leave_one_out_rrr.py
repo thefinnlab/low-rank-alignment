@@ -95,6 +95,7 @@ def test_loso_fits_train_factors_and_evaluates_only_held_out_subject(monkeypatch
     factor_fits = []
     transfers = []
     evaluations = []
+    releases = []
     monkeypatch.setattr(leave_one_out, "_build_rrr_decomposition_inputs", build_inputs)
     monkeypatch.setattr(
         leave_one_out,
@@ -110,6 +111,11 @@ def test_loso_fits_train_factors_and_evaluates_only_held_out_subject(monkeypatch
         leave_one_out,
         "_run_rrr_for_unit",
         lambda **kwargs: evaluations.append(kwargs),
+    )
+    monkeypatch.setattr(
+        leave_one_out,
+        "_release_phase_memory",
+        lambda: releases.append(None),
     )
     significance = SimpleNamespace(
         encoding_results={1: {"test_idxs": [[1]]}, 2: {"test_idxs": [[1]]}},
@@ -137,6 +143,7 @@ def test_loso_fits_train_factors_and_evaluates_only_held_out_subject(monkeypatch
     assert len(evaluations) == 1
     assert evaluations[0]["unit"].loso_phase == "baseline"
     assert evaluations[0]["orthogonal_only"] is True
+    assert len(releases) == 2
     assert [(item[0].loso_phase, item[1]) for item in units] == [
         ("transfer", 1), ("baseline", 1)
     ]

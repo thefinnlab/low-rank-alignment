@@ -869,8 +869,12 @@ def _build_results(
         figure = plot_rrr_rank_results(
             summary, grid_df=df, title=title_base, primary_label=primary_label,
         )
-        artifact.save_plot(unit=unit, name="rank_analysis", figure=figure,
-                           overwrite=True)
+        try:
+            artifact.save_plot(unit=unit, name="rank_analysis", figure=figure,
+                               overwrite=True)
+        finally:
+            import matplotlib.pyplot as plt
+            plt.close(figure)
     if plot and sig_mask_flat is not None:
         for split in ("sig", "nonsig"):
             figure = plot_rrr_rank_results(
@@ -879,8 +883,12 @@ def _build_results(
                 title=f"{title_base} ({split} targets)",
                 primary_label=primary_label,
             )
-            artifact.save_plot(unit=unit, name=f"rank_analysis_{split}",
-                               figure=figure, overwrite=True)
+            try:
+                artifact.save_plot(unit=unit, name=f"rank_analysis_{split}",
+                                   figure=figure, overwrite=True)
+            finally:
+                import matplotlib.pyplot as plt
+                plt.close(figure)
     return summary
 
 

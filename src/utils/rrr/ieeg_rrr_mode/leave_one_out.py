@@ -1,5 +1,6 @@
 """Shared leave-one-out orchestration for iEEG RRR modes."""
 
+import gc
 import time
 from dataclasses import dataclass, replace
 
@@ -16,6 +17,18 @@ from .common import (_build_results, _build_rrr_decomposition_inputs,
                      _load_existing_grid, _merge_grid_rows,
                      _reference_encoding_results, _run_common_subspace_fold_k,
                      _run_rrr_for_unit)
+
+
+def _release_phase_memory() -> None:
+    """Return completed leave-one-out phase allocations before the next build."""
+    gc.collect()
+    try:
+        import torch
+
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+    except ImportError:
+        pass
 
 
 def _run_leave_one_out_transfer_for_unit(
@@ -270,6 +283,11 @@ def run_leave_one_out(
                         folds_to_fit=train_folds_to_build,
                         refresh=config.refresh,
                     )
+                    # Only the saved A matrices are needed by the held-out phases.
+                    # Keeping these fold baselines alive can retain several copies
+                    # of the entire non-held-out response matrix.
+                    del results_train, X_raw, per_fold_baselines_train
+                    _release_phase_memory()
             else:
                 print("  Leave-one-out training A matrices complete; skipping setup.")
         else:
@@ -382,6 +400,12 @@ def run_leave_one_out(
         units.append((partition.baseline_unit, n_folds))
         if config.run_pca_baseline:
             units.append((replace(partition.baseline_unit, method="pca"), n_folds))
+        # Python loop bodies do not introduce a scope. Release this partition's
+        # fold baselines before the next partition starts building its training
+        # cohort, rather than briefly holding both partitions at once.
+        del results_held, X_raw_held, per_fold_baselines_held
+        del sig_mask_held, held_manifest
+        _release_phase_memory()
     return units
 
 
