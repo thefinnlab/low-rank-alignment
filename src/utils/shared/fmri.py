@@ -293,16 +293,22 @@ def build_fmri_stimulus(
     ndelays: int = 4,
     basis: np.ndarray | None = None,
 ) -> PreparedFMRI:
-    """Build a story-z-scored FIR design, optionally in a projected space."""
+    """Build a story-z-scored FIR design, optionally in a projected space.
+
+    Projection follows story-wise standardization so that bases fitted in the
+    full model's standardized coordinates are applied in those same coordinates.
+    In particular, a square orthonormal basis preserves the full FIR design up
+    to an orthogonal change of coordinates.
+    """
     stimulus_parts = []
     pre_fir_parts = []
     story_slices = {}
     cursor = 0
     for story in stories:
-        values = aligned.stories[story]
+        values = _zscore_columns(aligned.stories[story]).astype(np.float32)
         if basis is not None:
             values = np.asarray(values @ basis, dtype=np.float32)
-        pre_fir = _zscore_columns(values).astype(np.float32)
+        pre_fir = values
         delayed = make_delayed(pre_fir, ndelays).astype(np.float32)
         pre_fir_parts.append(pre_fir)
         stimulus_parts.append(delayed)

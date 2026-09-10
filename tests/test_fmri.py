@@ -211,7 +211,7 @@ def test_prepare_zero_pads_delays_at_each_story_boundary(monkeypatch):
     np.testing.assert_array_equal(prepared.stimulus[[0, 3]], 0)
 
 
-def test_cached_tr_alignment_projects_like_legacy_linear_resampling(monkeypatch):
+def test_cached_tr_alignment_standardizes_before_projection(monkeypatch):
     frame = pd.DataFrame(
         {
             "word_idx": np.arange(12),
@@ -238,16 +238,40 @@ def test_cached_tr_alignment_projects_like_legacy_linear_resampling(monkeypatch)
 
     aligned = fmri.align_fmri_stimuli("unused", ["story"], embeddings, trim=0)
     cached = fmri.build_fmri_stimulus(aligned, ["story"], ndelays=2, basis=basis)
-    legacy = fmri.prepare_fmri_data(
-        "unused",
-        ["story"],
-        {"story": embeddings["story"] @ basis},
-        trim=0,
-        ndelays=2,
+    standardized = fmri._zscore_columns(aligned.stories["story"]).astype(np.float32)
+    expected_pre_fir = np.asarray(standardized @ basis, dtype=np.float32)
+
+    np.testing.assert_allclose(cached.pre_fir_stimulus, expected_pre_fir)
+    np.testing.assert_allclose(
+        cached.stimulus,
+        fmri.make_delayed(expected_pre_fir, ndelays=2),
     )
 
-    np.testing.assert_allclose(cached.pre_fir_stimulus, legacy.pre_fir_stimulus)
-    np.testing.assert_allclose(cached.stimulus, legacy.stimulus)
+
+def test_full_rank_orthonormal_projection_preserves_fmri_design():
+    rng = np.random.default_rng(4)
+    first = rng.normal(size=(19, 5)) * np.array([1.0, 3.0, 0.2, 7.0, 2.0])
+    second = rng.normal(size=(23, 5)) * np.array([4.0, 0.5, 8.0, 1.5, 0.1])
+    basis, _ = np.linalg.qr(rng.normal(size=(5, 5)))
+    aligned = fmri.AlignedFMRIStimuli(stories={"first": first, "second": second})
+
+    full = fmri.build_fmri_stimulus(
+        aligned, ["first", "second"], ndelays=3
+    )
+    projected = fmri.build_fmri_stimulus(
+        aligned, ["first", "second"], ndelays=3, basis=basis
+    )
+
+    np.testing.assert_allclose(
+        projected.pre_fir_stimulus,
+        full.pre_fir_stimulus @ basis,
+        rtol=1e-5,
+        atol=1e-6,
+    )
+    expected_fir = np.hstack(
+        [full.stimulus[:, start : start + 5] @ basis for start in range(0, 15, 5)]
+    )
+    np.testing.assert_allclose(projected.stimulus, expected_fir, rtol=1e-5, atol=1e-6)
 
 
 def test_load_responses_reads_selected_voxels_in_subject_order(tmp_path):
@@ -570,8 +594,11 @@ def test_cross_dataset_completed_resume_skips_embeddings_and_responses(
             AssertionError("completed resume should not load embeddings")
         ),
     )
-    target = IEEGArtifact.from_fmri_config(config).begin(
-        config=config, upstreams=[sig.identity_record(), source.identity_record()]
+    target = IEEGArtifact.from_fmri_config(config)
+    target.begin(
+        config=config,
+        upstreams=[sig.identity_record(), source.identity_record()],
+        variant_extras=target.variant_extras,
     )
     target.save_field("full_metrics", {
         "corr_per_target": np.array([0.25]), "r2_per_target": np.array([0.1]),
@@ -581,7 +608,6 @@ def test_cross_dataset_completed_resume_skips_embeddings_and_responses(
         "corr_per_target": np.array([0.2]), "r2_per_target": np.array([0.05]),
         "best_alphas": np.array([1.0]),
     })
-
     result = runner.run_fmri(config)
 
     results = result.load_field("mean_results")
