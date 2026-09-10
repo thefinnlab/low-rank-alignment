@@ -18,7 +18,7 @@ SIGNIFICANCE_CHECK ?= python -m scripts.utilities.check_final_significance
 
 export PYTHONPATH := $(CURDIR)
 
-# CMD=sbatch is the default. Use CMD="uv run python" for a local run.
+# CMD=sbatch is the default. Use CMD="python" for a local run.
 define launch
 if [ "$(CMD)" = "sbatch" ]; then \
 	$(SBATCH) --job-name="$(1)-$$model-$(USR)-$(DT)" submit.sh \
@@ -148,7 +148,7 @@ rrr:
 			layers="$$(python -c 'import sys, yaml; payload = yaml.safe_load(open(sys.argv[1])) or {}; layer = payload.get("ieeg", {}).get("encoding", {}).get("per_model_config", {}).get("layer"); print("none" if layer is None else " ".join(map(str, layer if isinstance(layer, list) else [layer])))' "$$config")"
 			[ -n "$$layers" ] || { echo "Leave-one-subject-out config has no model layers: $$config" >&2; exit 2; }
 		elif [ "$$per_layer" = true ]; then
-			layers="$$(uv run python -c 'import sys, yaml; payload = yaml.safe_load(open(sys.argv[1])) or {}; layer = payload.get("fmri", {}).get("layer"); print("none" if layer is None else " ".join(map(str, layer if isinstance(layer, list) else [layer])))' "$$config")"
+			layers="$$(python -c 'import sys, yaml; payload = yaml.safe_load(open(sys.argv[1])) or {}; layer = payload.get("fmri", {}).get("layer"); print("none" if layer is None else " ".join(map(str, layer if isinstance(layer, list) else [layer])))' "$$config")"
 			[ -n "$$layers" ] || { echo "fMRI cross-model-layer config has no model layers: $$config" >&2; exit 2; }
 		fi
 	done
@@ -171,12 +171,12 @@ rrr:
 				$(call launch,rrr-$(DATASET)-$$mode-layer-$$layer_label,scripts/run_rrr.py,$$layer_override)
 			done
 		elif [ "$$per_layer" = true ]; then
-			layers="$$(uv run python -c 'import sys, yaml; payload = yaml.safe_load(open(sys.argv[1])) or {}; layer = payload.get("fmri", {}).get("layer"); print("none" if layer is None else " ".join(map(str, layer if isinstance(layer, list) else [layer])))' "$$config")"
+			layers="$$(python -c 'import sys, yaml; payload = yaml.safe_load(open(sys.argv[1])) or {}; layer = payload.get("fmri", {}).get("layer"); print("none" if layer is None else " ".join(map(str, layer if isinstance(layer, list) else [layer])))' "$$config")"
 			for layer in $$layers; do
 				layer_override=""
 				layer_label="none"
 				if [ "$$layer" != "none" ]; then
-					layer_override="--fmri.layer=$$layer"
+					layer_override="--fmri.layer=[$$layer]"
 					layer_label="$$layer"
 				fi
 				echo "Running cross_model_layer RRR for $(DATASET) / $$model / layer $$layer_label: $$config"
@@ -249,12 +249,12 @@ cross-condition:
 	for model in $(MODELS); do
 		config="$$config_root/$$model.yml"
 		[ -f "$$config" ] || { echo "Missing cross-condition config: $$config" >&2; exit 2; }
-		layers="$$(uv run python -c 'import sys, yaml; payload = yaml.safe_load(open(sys.argv[1])) or {}; layer = payload.get("per_model_config", {}).get("layer"); print("none" if layer is None else " ".join(map(str, layer if isinstance(layer, list) else [layer])))' "$$config")"
+		layers="$$(python -c 'import sys, yaml; payload = yaml.safe_load(open(sys.argv[1])) or {}; layer = payload.get("per_model_config", {}).get("layer"); print("none" if layer is None else " ".join(map(str, layer if isinstance(layer, list) else [layer])))' "$$config")"
 		[ -n "$$layers" ] || { echo "Cross-condition config has no model layers: $$config" >&2; exit 2; }
 	done
 	for model in $(MODELS); do
 		config="$$config_root/$$model.yml"
-		layers="$$(uv run python -c 'import sys, yaml; payload = yaml.safe_load(open(sys.argv[1])) or {}; layer = payload.get("per_model_config", {}).get("layer"); print("none" if layer is None else " ".join(map(str, layer if isinstance(layer, list) else [layer])))' "$$config")"
+		layers="$$(python -c 'import sys, yaml; payload = yaml.safe_load(open(sys.argv[1])) or {}; layer = payload.get("per_model_config", {}).get("layer"); print("none" if layer is None else " ".join(map(str, layer if isinstance(layer, list) else [layer])))' "$$config")"
 		for layer in $$layers; do
 			layer_override=""
 			layer_label="none"
@@ -274,7 +274,7 @@ cross-condition:
 
 ## Submit the complete final-results RRR matrix after checking significance.
 ## Cross-dataset jobs sourced from fMRI wait for every internal fMRI job.
-## Use CMD="uv run python" to execute the same matrix sequentially and locally.
+## Use CMD="python" to execute the same matrix sequentially and locally.
 final-results:
 	@set -eu
 	mkdir -p logs
