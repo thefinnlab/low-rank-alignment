@@ -132,6 +132,32 @@ def test_leave_one_subject_out_submits_one_job_per_model_layer(tmp_path: Path):
     assert "--ieeg.encoding.per_model_config.layer=" not in submissions[-1]
 
 
+def test_fmri_cross_model_layer_per_layer_submits_one_job_per_layer(tmp_path: Path):
+    result, submissions = _run_make(
+        tmp_path,
+        "rrr",
+        "DATASET=fmri",
+        "RRR_MODE=cross_model_layer_per_layer",
+        "MODELS=gpt2 glove",
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert len(submissions) == 6
+    assert all(
+        "configs/fmri/within_fmri_cross_model_layer/gpt2.yml" in submission
+        for submission in submissions[:5]
+    )
+    assert [
+        submission.rsplit("--fmri.layer=", 1)[-1]
+        for submission in submissions[:5]
+    ] == ["0", "3", "6", "9", "12"]
+    assert (
+        "configs/fmri/within_fmri_cross_model_layer/glove.yml"
+        in submissions[-1]
+    )
+    assert "--fmri.layer=" not in submissions[-1]
+
+
 def test_cross_dataset_rrr_requires_and_uses_source_dataset(tmp_path: Path):
     missing, submissions = _run_make(
         tmp_path, "rrr", "DATASET=fmri", "RRR_MODE=cross_dataset", "MODELS=gpt2"
