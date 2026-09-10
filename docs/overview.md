@@ -148,6 +148,9 @@ squared singular-value energy from the SVD of the full ridge model's training
 predictions and is available only for within-fMRI FIR aggregation. It is the default
 for internal fMRI FIR fitting and for loading an fMRI source into cross-dataset RRR;
 unspecified EEG aggregation continues to compute with the extrinsic method.
+fMRI input bases are applied after each story is standardized in the original
+embedding coordinates and before FIR expansion. A full-rank orthonormal basis thus
+preserves the full-model design up to an orthogonal rotation.
 RRR modes that evaluate directly fitted or fold-matched raw input factors report both
 the original projected-ridge metrics and a companion `*_orth` family fitted after a
 reduced QR decomposition. PCA and aggregated cross-dataset bases are already
