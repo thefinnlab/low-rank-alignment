@@ -41,7 +41,11 @@ The Makefile has four individual analysis targets: `significance`, `rrr`,
 cross-condition uses `CROSS_MODE=region|stimulus`. Target-dimensionality accepts
 the ordinary internal `cross_subject` and `cross_model_layer` configurations and
 submits one job per selected model; the script expands configured model layers and
-PCA dimensions within each job. Slurm submission is the default; cross-condition
+PCA dimensions within each job. For fMRI RRR,
+`RRR_MODE=cross_model_layer_per_layer` reuses the cross-model-layer configs but
+submits each configured model layer as a separate process or Slurm job, providing
+a hard memory-release boundary between layers; the ordinary `cross_model_layer`
+mode continues to submit one job per model. Slurm submission is the default; cross-condition
 submits one job per configured model layer (and one layerless job for GloVe), as does
 iEEG leave-one-subject-out RRR. `CMD="uv run python"` runs the same jobs locally. The
 default model set
