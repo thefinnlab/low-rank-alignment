@@ -142,7 +142,7 @@ rrr:
 		fi
 		[ -f "$$config" ] || { echo "Missing RRR config: $$config" >&2; exit 2; }
 		if [ "$$mode" = "leave_one_subject_out" ]; then
-			layers="$$(uv run python -c 'import sys, yaml; payload = yaml.safe_load(open(sys.argv[1])) or {}; layer = payload.get("ieeg", {}).get("encoding", {}).get("per_model_config", {}).get("layer"); print("none" if layer is None else " ".join(map(str, layer if isinstance(layer, list) else [layer])))' "$$config")"
+			layers="$$(python -c 'import sys, yaml; payload = yaml.safe_load(open(sys.argv[1])) or {}; layer = payload.get("ieeg", {}).get("encoding", {}).get("per_model_config", {}).get("layer"); print("none" if layer is None else " ".join(map(str, layer if isinstance(layer, list) else [layer])))' "$$config")"
 			[ -n "$$layers" ] || { echo "Leave-one-subject-out config has no model layers: $$config" >&2; exit 2; }
 		fi
 	done
@@ -153,12 +153,12 @@ rrr:
 			config="$$config_root/$$model/$$mode.yml"
 		fi
 		if [ "$$mode" = "leave_one_subject_out" ]; then
-			layers="$$(uv run python -c 'import sys, yaml; payload = yaml.safe_load(open(sys.argv[1])) or {}; layer = payload.get("ieeg", {}).get("encoding", {}).get("per_model_config", {}).get("layer"); print("none" if layer is None else " ".join(map(str, layer if isinstance(layer, list) else [layer])))' "$$config")"
+			layers="$$(python -c 'import sys, yaml; payload = yaml.safe_load(open(sys.argv[1])) or {}; layer = payload.get("ieeg", {}).get("encoding", {}).get("per_model_config", {}).get("layer"); print("none" if layer is None else " ".join(map(str, layer if isinstance(layer, list) else [layer])))' "$$config")"
 			for layer in $$layers; do
 				layer_override=""
 				layer_label="none"
 				if [ "$$layer" != "none" ]; then
-					layer_override="--ieeg.encoding.per_model_config.layer=$$layer"
+					layer_override="--ieeg.encoding.per_model_config.layer=[$$layer]"
 					layer_label="$$layer"
 				fi
 				echo "Running $$mode RRR for $(DATASET) / $$model / layer $$layer_label: $$config"
