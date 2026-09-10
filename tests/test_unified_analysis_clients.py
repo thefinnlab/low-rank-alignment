@@ -87,6 +87,24 @@ def test_rrr_internal_mode_and_generic_source_translation():
     assert fmri.subspace_aggregation is None
 
 
+def test_rrr_generic_source_preserves_rereference_selector():
+    selected = RRRClientConfig(
+        mode="cross_dataset",
+        significance_selection={
+            "mode": "within-layer",
+            "reference_artifact": {"dataset": "podcast"},
+        },
+        rrr_source={
+            "dataset": "brain-treebank-cars-2",
+            "mode": "internal",
+            "rereference": "laplacian",
+        },
+        ieeg={"encoding": {}},
+    ).selected_config()
+
+    assert selected.ieeg_rrr_source["rereference"] == "laplacian"
+
+
 def test_rrr_fmri_source_defaults_to_prediction_weighted():
     selected = RRRClientConfig(
         mode="cross_dataset",

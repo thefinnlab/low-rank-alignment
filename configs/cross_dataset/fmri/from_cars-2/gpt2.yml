@@ -93,6 +93,7 @@ subspace_aggregation: extrinsic
 rrr_source:
   mode: internal
   dataset: brain-treebank-cars-2
+  rereference: laplacian
   offset: 0
   model: gpt2
   layer: '{layer}'

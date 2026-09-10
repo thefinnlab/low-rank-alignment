@@ -195,25 +195,38 @@ class Artifact(ArtifactStore):
     def __init__(self, *, mode="internal", dataset="podcast", offset=0,
                  model="gpt2-xl", layer=24, variant=None,
                  significance_selection=None, subspace_aggregation=None,
-                 results_root="results"):
+                 rereference=None, results_root="results"):
         if variant is not None and (
-            significance_selection is not None or subspace_aggregation is not None
+            significance_selection is not None
+            or subspace_aggregation is not None
+            or rereference is not None
         ):
             raise ValueError(
-                "RRR Artifact variant, significance_selection, and "
-                "subspace_aggregation are mutually exclusive"
+                "RRR Artifact variant is mutually exclusive with "
+                "significance_selection, subspace_aggregation, and rereference"
             )
-        if significance_selection is not None or subspace_aggregation is not None:
+        if (
+            significance_selection is not None
+            or subspace_aggregation is not None
+            or rereference is not None
+        ):
+            extras = (
+                {"rereference": rereference}
+                if rereference not in (None, "common_average")
+                else None
+            )
             variant = readable_variant(
                 {
                     "significance_selection": significance_selection,
                     "subspace_aggregation": subspace_aggregation,
-                }
+                },
+                extras=extras,
             )
         self._init_store(mode=mode, dataset=dataset, offset=offset, model=model,
                          layer=layer, variant=variant, results_root=results_root)
         self.requested_significance_selection = significance_selection
         self.requested_subspace_aggregation = subspace_aggregation
+        self.requested_rereference = rereference
 
     def _manifest(self):
         manifest = super()._manifest()
@@ -239,6 +252,18 @@ class Artifact(ArtifactStore):
                 raise ArtifactError(
                     "Selected RRR Artifact subspace_aggregation does not match "
                     "the requested method"
+                )
+        if self.requested_rereference is not None:
+            saved = (
+                manifest.get("configuration", {})
+                .get("encoding", {})
+                .get("per_dataset_config", {})
+                .get("rereference", "common_average")
+            )
+            if saved != self.requested_rereference:
+                raise ArtifactError(
+                    "Selected RRR Artifact rereference does not match the "
+                    "requested mode"
                 )
         return manifest
 

@@ -113,3 +113,5 @@ downstream significance, RRR, comparison, or language-analysis encoding configur
 Laplacian significance Artifacts use the `rereference-laplacian` variant. RRR Artifacts
 also include `rereference-laplacian` in their readable variant path; an RRR significance
 selection must therefore reference the corresponding Laplacian significance variant.
+When that RRR Artifact is a dependency, its `rrr_source` block must additionally set
+`rereference: laplacian`.

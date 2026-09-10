@@ -205,6 +205,51 @@ def test_rrr_artifact_loads_variant_from_significance_selection(tmp_path):
     assert loaded.variant == readable_variant({"significance_selection": selection})
 
 
+def test_rrr_artifact_loads_laplacian_variant_from_source_parameters(tmp_path):
+    selection = {
+        "mode": "within-layer",
+        "reference_artifact": {
+            "mode": "sig_lags",
+            "dataset": "brain-treebank-cars-2",
+            "offset": 0,
+            "model": "gpt2",
+            "layer": 12,
+            "variant": "rereference-laplacian",
+        },
+    }
+    config = {
+        "encoding": {
+            "per_dataset_config": {
+                "movie": "cars-2",
+                "rereference": "laplacian",
+            },
+        },
+        "significance_selection": selection,
+    }
+    producer = RRRArtifact(
+        dataset="brain-treebank-cars-2",
+        model="gpt2",
+        layer=12,
+        results_root=tmp_path,
+    ).begin(
+        config=config,
+        variant_extras={"rereference": "laplacian"},
+    )
+    producer.save_field("effective_config", config)
+
+    loaded = RRRArtifact(
+        dataset="brain-treebank-cars-2",
+        model="gpt2",
+        layer=12,
+        significance_selection=selection,
+        rereference="laplacian",
+        results_root=tmp_path,
+    ).load_artifacts(["effective_config"])
+
+    assert loaded.variant.startswith("rereference-laplacian/")
+    assert loaded.effective_config == config
+
+
 def test_subspace_aggregation_is_a_distinct_readable_variant(tmp_path):
     selection = {
         "mode": "within-layer",
@@ -256,7 +301,7 @@ def test_subspace_aggregation_is_a_distinct_readable_variant(tmp_path):
     )
 
 
-def test_source_aggregation_propagates_into_downstream_variant():
+def test_source_variant_properties_propagate_into_downstream_variant():
     base_source = {
         "script": "run_rrr",
         "mode": "internal",
@@ -307,10 +352,23 @@ def test_source_aggregation_propagates_into_downstream_variant():
             }
         ],
     )
+    laplacian = readable_variant(
+        target_config,
+        [{
+            **base_source,
+            "variant": (
+                "rereference-laplacian/aggregation-extrinsic/"
+                "significance-within-layer-source"
+            ),
+        }],
+        {"rereference": "laplacian"},
+    )
 
     assert "source-aggregation-extrinsic" in extrinsic
     assert "source-aggregation-factor_weighted" in factor
     assert "source-aggregation-prediction_weighted" in prediction
+    assert "source-rereference-laplacian" in laplacian
+    assert "/rereference-laplacian/" in f"/{laplacian}/"
     assert len({extrinsic, factor, prediction}) == 3
 
 
