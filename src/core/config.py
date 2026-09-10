@@ -962,7 +962,7 @@ class FMRISignificanceConfig:
 
 @dataclass
 class FMRICrossDatasetRRRConfig:
-    """Evaluate saved iEEG RRR/PCA input spaces on fMRI responses."""
+    """Configuration for internal, cross-dataset, and LOSO fMRI RRR."""
 
     fmri: FMRIDataConfig = field(default_factory=FMRIDataConfig)
     ridge: FMRIRidgeConfig = field(default_factory=FMRIRidgeConfig)
@@ -982,7 +982,6 @@ class FMRICrossDatasetRRRConfig:
     rrr_low_rank_svd_seed: int = 0
     rrr_save_b_matrix: bool = False
     pca_svd_device: str = "auto"
-    prefetch_rank_designs: bool = False
     rank_grid: list[int] = field(
         default_factory=lambda: [1, 2, 4, 8, 16, 32, 64, 128]
     )
@@ -994,16 +993,21 @@ class FMRICrossDatasetRRRConfig:
         is_glove = self.model_dir == "glove" or self.model_dir.startswith("glove-")
         if is_glove and self.layer is not None:
             raise ValueError("fMRI GloVe configurations require layer=null")
-        if self.source_mode not in {"cross_dataset", "within_fmri"}:
+        if self.source_mode not in {
+            "cross_dataset", "within_fmri", "leave_one_subject_out"
+        }:
             raise ValueError(
-                "source_mode must be 'cross_dataset' or 'within_fmri', "
+                "source_mode must be 'cross_dataset', 'within_fmri', or "
+                "'leave_one_subject_out', "
                 f"got {self.source_mode!r}"
             )
-        if self.subspace_aggregation is None and self.source_mode == "within_fmri":
+        if self.subspace_aggregation is None and self.source_mode in {
+            "within_fmri", "leave_one_subject_out"
+        }:
             self.subspace_aggregation = "prediction_weighted"
         allowed_aggregation = (
             FMRI_FIR_SUBSPACE_AGGREGATION_METHODS
-            if self.source_mode == "within_fmri"
+            if self.source_mode in {"within_fmri", "leave_one_subject_out"}
             else SUBSPACE_AGGREGATION_METHODS
         )
         if (
@@ -1025,6 +1029,10 @@ class FMRICrossDatasetRRRConfig:
             raise ValueError("pca_svd_device must be one of ['auto', 'cpu', 'cuda']")
         if self.source_mode == "cross_dataset" and not self.ieeg_rrr_source:
             raise ValueError("ieeg_rrr_source is required")
+        if self.source_mode == "leave_one_subject_out" and len(self.fmri.subjects) < 2:
+            raise ValueError(
+                "fMRI leave_one_subject_out requires at least two subjects"
+            )
 
     def __post_init__(self):
         self.validate()

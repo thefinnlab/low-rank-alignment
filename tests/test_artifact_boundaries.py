@@ -12,6 +12,7 @@ COVERED = [
     Path("src/utils/rrr/inputs.py"),
     Path("src/utils/rrr/analysis.py"),
 ]
+COVERED.extend(sorted(Path("src/utils/rrr/fmri_rrr_mode").glob("*.py")))
 
 
 def test_covered_analysis_has_no_legacy_result_storage_seams():

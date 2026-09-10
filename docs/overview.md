@@ -46,13 +46,13 @@ PCA dimensions within each job. For fMRI RRR,
 submits each configured model layer as a separate process or Slurm job, providing
 a hard memory-release boundary between layers; the ordinary `cross_model_layer`
 mode continues to submit one job per model. Slurm submission is the default; cross-condition
-submits one job per configured model layer (and one layerless job for GloVe), as does
-iEEG leave-one-subject-out RRR. `CMD="uv run python"` runs the same jobs locally. The
+submits one job per configured model layer (and one layerless job for GloVe), as do
+iEEG and fMRI leave-one-subject-out RRR. `CMD="uv run python"` runs the same jobs locally. The
 default model set
 is GPT-2, GPT-2 XL, Llama 3 8B, GPT-J 6B, RoBERTa Large, randomly initialized
 GPT-2, and GloVe 300D. fMRI supports this complete set and supports its internal,
-cross-model-layer, and cross-dataset RRR configurations; cross-condition remains
-iEEG-only.
+cross-model-layer, leave-one-subject-out, and cross-dataset RRR configurations;
+cross-condition remains iEEG-only.
 The `final-results` target checks that every significance Artifact in the configured
 cross-model/layer union is complete, submits internal RRR for podcast, Cars 2, and
 fMRI, leave-one-subject-out RRR for both iEEG datasets, and both cross-condition
@@ -85,9 +85,11 @@ HDF5 container while keeping plots as separately browsable PNG files.
   result helpers, including the standalone cross-condition mechanics.
   `src/utils/rrr/cross_condition_items/` keeps each condition-specific item provider
   in its own module: `stimulus.py` provides Brain Treebank movie items and `region.py`
-  provides podcast atlas-region items. iEEG RRR mode implementations are organized under
-  `src/utils/rrr/ieeg_rrr_mode/`, with `rrr_ieeg.py` retained as the compatibility
-  facade.
+  provides podcast atlas-region items. Mode implementations are organized under
+  `src/utils/rrr/ieeg_rrr_mode/` and `src/utils/rrr/fmri_rrr_mode/`, with
+  `rrr_ieeg.py` and `rrr_fmri.py` retained as compatibility facades. The fMRI package
+  separates shared loading, fitting, evaluation, and Artifact helpers from its
+  internal, cross-dataset, and leave-one-subject-out modes.
 - `src/utils/subspace_comparison/` contains saved-space metrics and directed comparison
   orchestration.
 - `src/utils/language_interpret/` contains decoding, reconstruction, and task registry
@@ -169,6 +171,14 @@ baseline. For the held-out subject it evaluates ridge models only after reduced-
 orthonormalization of the transferred A matrix, plus the matching within-subject RRR
 baseline (and its optional PCA baseline). Partitions are validated to have disjoint
 `(subject, electrode)` target identities before fitting.
+The fMRI `leave_one_subject_out` mode uses the shared training stories and fixed test
+story for every partition. It fits FIR RRR factors on the selected voxels from all
+non-held-out subjects without evaluating that cohort, aggregates delay blocks with
+the configured fMRI method, and evaluates reduced-QR transferred factors with fresh
+ridge models on the held-out subject. Each held-out subject also receives a matching
+within-subject RRR baseline and, by default, a pre-FIR PCA baseline. One held-out
+full-embedding ridge ceiling is shared by both evaluation phases. Response loading is
+phase-local, and completed partitions resume from their saved Artifact fields.
 
 ## Tests
 

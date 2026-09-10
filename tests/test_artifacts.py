@@ -473,6 +473,18 @@ def test_rrr_manifest_resume_is_selector_complete(tmp_path):
     assert plan["ranks_by_fold"] == {0: [2]}
 
 
+def test_removed_rank_prefetch_setting_does_not_break_manifest_resume(tmp_path):
+    artifact = RRRArtifact(results_root=tmp_path).begin(config={"rank_grid": [1]})
+    manifest_path = artifact._manifest_path()
+    manifest = json.loads(manifest_path.read_text())
+    manifest["configuration"]["prefetch_rank_designs"] = False
+    manifest_path.write_text(json.dumps(manifest))
+
+    resumed = RRRArtifact(results_root=tmp_path).begin(config={"rank_grid": [1]})
+
+    assert resumed.variant == artifact.variant
+
+
 def test_atomic_manifest_contains_codec_and_size(tmp_path):
     artifact = SignificanceArtifact(results_root=tmp_path).begin(config={"x": 1})
     artifact.save_field("effective_config", {"x": 1})
