@@ -87,6 +87,44 @@ def test_rrr_internal_mode_and_generic_source_translation():
     assert fmri.subspace_aggregation is None
 
 
+def test_rrr_fmri_leave_one_subject_out_translation():
+    selected = RRRClientConfig(
+        dataset="deep-fmri",
+        mode="leave_one_subject_out",
+        ieeg=None,
+        significance_selection={
+            "mode": "within-layer",
+            "reference_artifact": {"dataset": "deep-fmri"},
+        },
+        fmri={"data": {"subjects": ["UTS01", "UTS02"]}},
+    ).selected_config()
+
+    assert isinstance(selected, FMRICrossDatasetRRRConfig)
+    assert selected.source_mode == "leave_one_subject_out"
+    assert selected.subspace_aggregation == "prediction_weighted"
+
+    artifact = RRRArtifact.from_fmri_config(selected)
+    assert artifact.identity["mode"] == "leave_one_subject_out"
+    assert artifact.variant_extras == {
+        "loso_contract": "orthogonal-held-out-fmri-v1"
+    }
+
+
+def test_rrr_fmri_rejects_removed_rank_design_prefetch_option():
+    config = RRRClientConfig(
+        dataset="deep-fmri",
+        mode="internal",
+        ieeg=None,
+        fmri={
+            "data": {"subjects": ["UTS01"]},
+            "prefetch_rank_designs": True,
+        },
+    )
+
+    with pytest.raises(ValueError, match="prefetch_rank_designs"):
+        config.selected_config()
+
+
 def test_rrr_generic_source_preserves_rereference_selector():
     selected = RRRClientConfig(
         mode="cross_dataset",

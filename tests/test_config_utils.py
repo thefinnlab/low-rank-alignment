@@ -546,7 +546,6 @@ class TestApplyOverrides:
         assert fmri.rrr_low_rank_svd_seed == 0
         assert fmri.rrr_save_b_matrix is False
         assert fmri.pca_svd_device == "auto"
-        assert fmri.prefetch_rank_designs is False
         assert RRRConfig(subspace_aggregation="factor_weighted").subspace_aggregation == (
             "factor_weighted"
         )
@@ -570,6 +569,16 @@ class TestApplyOverrides:
     def test_within_fmri_does_not_require_cross_dataset_source(self):
         config = FMRICrossDatasetRRRConfig(source_mode="within_fmri")
         assert config.source_mode == "within_fmri"
+
+    def test_fmri_loso_requires_multiple_subjects(self):
+        with pytest.raises(ValueError, match="at least two subjects"):
+            FMRICrossDatasetRRRConfig(source_mode="leave_one_subject_out")
+
+        config = FMRICrossDatasetRRRConfig(
+            source_mode="leave_one_subject_out",
+            fmri=FMRIDataConfig(subjects=["UTS01", "UTS02"]),
+        )
+        assert config.subspace_aggregation == "prediction_weighted"
 
 
 # ---------------------------------------------------------------------------

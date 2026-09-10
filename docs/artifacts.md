@@ -88,6 +88,13 @@ factors when configured. `refresh: false` reuses those checkpoints;
 RRR stores per-fold result tables separately from mean results. Unit-scoped metadata
 and named diagnostics use the same method/subject/rank/fold selectors as factors and
 metrics. fMRI source factors may additionally identify a delay and basis role.
+Leave-one-subject-out fields additionally use `held_out_subject` and `loso_phase`.
+For fMRI, `train_subjects` owns the non-held-out rank bases, while `transfer` and
+`baseline` own evaluation metrics and summaries; PCA uses `method: pca` with the
+`baseline` phase. The held-out full-embedding ceiling is stored once with only its
+`held_out_subject` selector and is shared by both phase summaries. Unlike fMRI
+internal rank bases, fMRI LOSO factors are partition-scoped and are not implicit
+cross-dataset sources.
 
 Target-dimensionality RRR reuses the RRR field and selector contract under its own
 script identity. Each fold-safe target-PCA dimension is a readable

@@ -101,7 +101,7 @@ significance-missing:
 ## iEEG RRR_MODE: cross_subject, cross_model_layer, leave_one_subject_out,
 ##                temporal_windows, cross_temporal_windows, or cross_dataset
 ## fMRI RRR_MODE: cross_subject (within), cross_model_layer,
-##                cross_model_layer_per_layer, or cross_dataset
+##                cross_model_layer_per_layer, leave_one_subject_out, or cross_dataset
 ## cross_dataset also requires SOURCE_DATASET.
 ## Example: make rrr DATASET=fmri RRR_MODE=cross_model_layer_per_layer MODELS="gpt2 gpt2-xl"
 rrr:
@@ -119,6 +119,7 @@ rrr:
 				cross_subject) config_root="configs/cross_dataset/fmri/within" ;;
 				cross_model_layer) config_root="configs/fmri/within_fmri_cross_model_layer" ;;
 				cross_model_layer_per_layer) config_root="configs/fmri/within_fmri_cross_model_layer"; per_layer=true ;;
+				leave_one_subject_out) config_root="configs/fmri/leave_one_subject_out"; per_layer=true ;;
 				cross_dataset)
 					[ -n "$(SOURCE_DATASET)" ] || { echo "SOURCE_DATASET is required for cross_dataset RRR" >&2; exit 2; }
 					config_root="configs/cross_dataset/fmri/from_$(SOURCE_DATASET)"
@@ -144,12 +145,12 @@ rrr:
 			config="$$config_root/$$model/$$mode.yml"
 		fi
 		[ -f "$$config" ] || { echo "Missing RRR config: $$config" >&2; exit 2; }
-		if [ "$$mode" = "leave_one_subject_out" ]; then
+		if [ "$$mode" = "leave_one_subject_out" ] && [ "$(DATASET)" != "fmri" ]; then
 			layers="$$(uv run python -c 'import sys, yaml; payload = yaml.safe_load(open(sys.argv[1])) or {}; layer = payload.get("ieeg", {}).get("encoding", {}).get("per_model_config", {}).get("layer"); print("none" if layer is None else " ".join(map(str, layer if isinstance(layer, list) else [layer])))' "$$config")"
 			[ -n "$$layers" ] || { echo "Leave-one-subject-out config has no model layers: $$config" >&2; exit 2; }
 		elif [ "$$per_layer" = true ]; then
 			layers="$$(uv run python -c 'import sys, yaml; payload = yaml.safe_load(open(sys.argv[1])) or {}; layer = payload.get("fmri", {}).get("layer"); print("none" if layer is None else " ".join(map(str, layer if isinstance(layer, list) else [layer])))' "$$config")"
-			[ -n "$$layers" ] || { echo "fMRI cross-model-layer config has no model layers: $$config" >&2; exit 2; }
+			[ -n "$$layers" ] || { echo "fMRI per-layer config has no model layers: $$config" >&2; exit 2; }
 		fi
 	done
 	for model in $$models; do
@@ -158,7 +159,7 @@ rrr:
 		else
 			config="$$config_root/$$model/$$mode.yml"
 		fi
-		if [ "$$mode" = "leave_one_subject_out" ]; then
+		if [ "$$mode" = "leave_one_subject_out" ] && [ "$(DATASET)" != "fmri" ]; then
 			layers="$$(uv run python -c 'import sys, yaml; payload = yaml.safe_load(open(sys.argv[1])) or {}; layer = payload.get("ieeg", {}).get("encoding", {}).get("per_model_config", {}).get("layer"); print("none" if layer is None else " ".join(map(str, layer if isinstance(layer, list) else [layer])))' "$$config")"
 			for layer in $$layers; do
 				layer_override=""
@@ -172,6 +173,8 @@ rrr:
 			done
 		elif [ "$$per_layer" = true ]; then
 			layers="$$(uv run python -c 'import sys, yaml; payload = yaml.safe_load(open(sys.argv[1])) or {}; layer = payload.get("fmri", {}).get("layer"); print("none" if layer is None else " ".join(map(str, layer if isinstance(layer, list) else [layer])))' "$$config")"
+			job_mode="$$mode"
+			[ "$$mode" != "cross_model_layer_per_layer" ] || job_mode="cross_model_layer"
 			for layer in $$layers; do
 				layer_override=""
 				layer_label="none"
@@ -179,8 +182,8 @@ rrr:
 					layer_override="--fmri.layer=$$layer"
 					layer_label="$$layer"
 				fi
-				echo "Running cross_model_layer RRR for $(DATASET) / $$model / layer $$layer_label: $$config"
-				$(call launch,rrr-$(DATASET)-cross_model_layer-layer-$$layer_label,scripts/run_rrr.py,$$layer_override)
+				echo "Running $$job_mode RRR for $(DATASET) / $$model / layer $$layer_label: $$config"
+				$(call launch,rrr-$(DATASET)-$$job_mode-layer-$$layer_label,scripts/run_rrr.py,$$layer_override)
 			done
 		else
 			echo "Running $$mode RRR for $(DATASET) / $$model: $$config"

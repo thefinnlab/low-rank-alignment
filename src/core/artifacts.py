@@ -20,7 +20,7 @@ from typing import Any, ClassVar
 
 SCHEMA_VERSION = 2
 COMPACT_SCHEMA_VERSION = 3
-_OPERATIONAL_KEYS = {"refresh", "plot", "results_root"}
+_OPERATIONAL_KEYS = {"refresh", "plot", "results_root", "prefetch_rank_designs"}
 
 
 class ArtifactError(RuntimeError):
@@ -285,7 +285,10 @@ class ArtifactStore:
             stored_upstreams = manifest.get("upstreams")
             if stored_upstreams is None:
                 stored_upstreams = []
-            if (manifest.get("configuration") != expected_config
+            stored_config = normalized_config(
+                manifest.get("configuration", {}), drop_paths=False
+            )
+            if (stored_config != expected_config
                     or stored_upstreams != expected_upstreams):
                 raise ArtifactAmbiguityError(
                     f"Readable variant {selected!r} already represents a different "

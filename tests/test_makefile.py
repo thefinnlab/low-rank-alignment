@@ -95,7 +95,7 @@ def test_rrr_resolves_dataset_and_mode(tmp_path: Path):
     assert "configs/brain_treebank/cars_2/rrr/gpt2-xl/temporal_windows.yml" in submissions[1]
 
 
-def test_fmri_rrr_rejects_an_ieeg_only_mode(tmp_path: Path):
+def test_fmri_leave_one_subject_out_submits_one_job_per_model_layer(tmp_path: Path):
     result, submissions = _run_make(
         tmp_path,
         "rrr",
@@ -104,9 +104,16 @@ def test_fmri_rrr_rejects_an_ieeg_only_mode(tmp_path: Path):
         "MODELS=gpt2",
     )
 
-    assert result.returncode != 0
-    assert "unsupported for fmri" in result.stderr
-    assert submissions == []
+    assert result.returncode == 0, result.stderr
+    assert len(submissions) == 5
+    assert all(
+        "configs/fmri/leave_one_subject_out/gpt2.yml" in submission
+        for submission in submissions
+    )
+    assert [
+        submission.rsplit("--fmri.layer=", 1)[-1]
+        for submission in submissions
+    ] == ["0", "3", "6", "9", "12"]
 
 
 def test_leave_one_subject_out_submits_one_job_per_model_layer(tmp_path: Path):
@@ -387,6 +394,7 @@ def test_final_rrr_configs_use_one_equivalent_significance_union():
             / "leave_one_subject_out.yml",
             REPO_ROOT / "configs/fmri/within_fmri_cross_model_layer"
             / f"{model}.yml",
+            REPO_ROOT / "configs/fmri/leave_one_subject_out" / f"{model}.yml",
         ])
         for target in ("podcast", "cars-2"):
             path = (

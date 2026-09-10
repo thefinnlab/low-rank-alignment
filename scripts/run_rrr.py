@@ -83,7 +83,11 @@ class Config:
             raise ValueError(f"dataset={self.dataset!r} requires a {self.modality} block")
         if inactive not in (None, {}):
             raise ValueError("Only the dataset-selected modality block may be configured")
-        shared = {ScriptMode.INTERNAL, ScriptMode.CROSS_DATASET}
+        shared = {
+            ScriptMode.INTERNAL,
+            ScriptMode.CROSS_DATASET,
+            ScriptMode.LEAVE_ONE_SUBJECT_OUT,
+        }
         if self.modality == "fmri" and self.mode not in shared:
             raise ValueError(f"RRR mode {self.mode.value!r} is unsupported for fMRI")
         if self.mode in {
@@ -118,9 +122,11 @@ class Config:
             "subspace_aggregation": aggregation,
         })
         if self.modality == "fmri":
-            payload["source_mode"] = (
-                "within_fmri" if self.mode == ScriptMode.INTERNAL else "cross_dataset"
-            )
+            payload["source_mode"] = {
+                ScriptMode.INTERNAL: "within_fmri",
+                ScriptMode.CROSS_DATASET: "cross_dataset",
+                ScriptMode.LEAVE_ONE_SUBJECT_OUT: "leave_one_subject_out",
+            }[self.mode]
             if self.rrr_source:
                 if _is_fmri(self.rrr_source.get("dataset")):
                     raise ValueError("fMRI cross-dataset RRR requires an iEEG rrr_source")
@@ -291,9 +297,13 @@ class Artifact(ArtifactStore):
     @classmethod
     def from_fmri_config(cls, config):
         mode = "internal" if config.source_mode == "within_fmri" else config.source_mode
-        return cls(mode=mode, dataset="deep-fmri", offset=0,
-                   model=normalize_model(config.model_dir), layer=config.layer,
-                   results_root=config.results_root)
+        artifact = cls(mode=mode, dataset="deep-fmri", offset=0,
+                       model=normalize_model(config.model_dir), layer=config.layer,
+                       results_root=config.results_root)
+        artifact.variant_extras = {}
+        if config.source_mode == "leave_one_subject_out":
+            artifact.variant_extras["loso_contract"] = "orthogonal-held-out-fmri-v1"
+        return artifact
 
     @staticmethod
     def _selector(unit=None, **extra):
