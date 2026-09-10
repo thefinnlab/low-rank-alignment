@@ -38,16 +38,19 @@ one variant exists.
 
 Brain Treebank Laplacian analyses are separated from legacy common-average results.
 Significance uses the `rereference-laplacian` variant, and RRR includes the same
-rereference label alongside its other readable variant components. Dependency blocks
-must select the matching Laplacian variant.
+rereference label alongside its other readable variant components. RRR dependency
+blocks select it with `rereference: laplacian` in addition to selecting the matching
+Laplacian significance variant. A cross-dataset result carries the source label as
+`source-rereference-laplacian`, keeping common-average and Laplacian transfers distinct.
 
 RRR consumers may pass `significance_selection` directly to the `Artifact`
 constructor in place of `variant`, together with `subspace_aggregation` when selecting
-an explicitly named aggregation result. The Artifact computes the same readable variant,
-selects it, and verifies both requested values against its manifest. Explicit
-`variant` and derived selection arguments are mutually exclusive. Cross-dataset
-RRR source blocks use this form so the source factors are constrained to the intended
-significant-target set rather than relying on single-variant discovery.
+an explicitly named aggregation result and `rereference` for a Brain Treebank source.
+The Artifact computes the same readable variant, selects it, and verifies the requested
+values against its manifest. Explicit `variant` and derived selection arguments are
+mutually exclusive. Cross-dataset RRR source blocks use this form so the source factors
+are constrained to the intended significant-target set rather than relying on
+single-variant discovery.
 
 ## Contract
 

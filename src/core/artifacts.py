@@ -96,17 +96,18 @@ def readable_variant(config: Any, upstreams: list[dict] | None = None,
                 f"layer-{'none' if source.get('layer') is None else int(source['layer'])}",
             ))
             source_variant = str(source.get("variant") or "")
-            source_aggregation = next(
-                (
-                    component
-                    for component in source_variant.split("/")
-                    if component.startswith("aggregation-")
-                ),
-                None,
-            )
-            if source_aggregation is not None:
-                parts.append(f"source-{source_aggregation}")
-    elif extras:
+            for prefix in ("rereference-", "aggregation-"):
+                source_component = next(
+                    (
+                        component
+                        for component in source_variant.split("/")
+                        if component.startswith(prefix)
+                    ),
+                    None,
+                )
+                if source_component is not None:
+                    parts.append(f"source-{source_component}")
+    if extras:
         parts.extend(
             f"{key}-{value}" for key, value in sorted(_primitive(extras).items())
         )

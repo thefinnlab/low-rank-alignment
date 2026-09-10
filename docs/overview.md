@@ -128,7 +128,9 @@ Selected ridge alphas are optional output: iEEG RRR uses `ieeg.log_alphas`, fMRI
 RRR uses `fmri.ridge.log_alphas`, and the standalone cross-condition runner uses its
 top-level `log_alphas`; all default to false while alpha selection itself still runs.
 Cross-dataset RRR source identities include their own significance selection, which
-deterministically resolves and validates the saved source variant.
+deterministically resolves and validates the saved source variant. Brain Treebank
+sources additionally declare `rrr_source.rereference`, so Laplacian source variants
+are selected and remain distinct in downstream result identities.
 Source and target selections must use the same selection mode, reference model/layer,
 and, for cross-model-layer selection, the same model/layer union over their respective
 datasets.

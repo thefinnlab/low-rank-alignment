@@ -92,6 +92,7 @@ subspace_aggregation: extrinsic
 rrr_source:
   mode: internal
   dataset: brain-treebank-cars-2
+  rereference: laplacian
   offset: 0
   model: glove-300
   layer: null
