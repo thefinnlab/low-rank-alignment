@@ -68,6 +68,7 @@ def run_cross_dataset(setup):
         fitted = fit_whole_stimulus_ieeg_bases(
             source,
             requested_ranks,
+            standardized_input_coordinates=True,
             standardized_rrr_coordinates=True,
         )
         bases = {

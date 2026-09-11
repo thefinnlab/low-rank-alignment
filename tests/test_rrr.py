@@ -194,7 +194,12 @@ class TestCrossDatasetRankBasisLoading:
         )
 
         standardized = ieeg_source_bases._fit_bases(
-            X, Y, enc, [1, 3], standardized_rrr_coordinates=True
+            X,
+            Y,
+            enc,
+            [1, 3],
+            standardized_input_coordinates=True,
+            standardized_rrr_coordinates=True,
         )
         scale = X.std(axis=0)
         expected, _ = np.linalg.qr(scale[:, None] * bases["rrr"][3])
@@ -203,8 +208,56 @@ class TestCrossDatasetRankBasisLoading:
             expected @ expected.T,
             atol=1e-5,
         )
+        X_standardized = (X - X.mean(axis=0)) / X.std(axis=0)
+        expected_pca = ieeg_source_bases.fit_pca_input_basis(
+            X_standardized, max_rank=3
+        )
+        np.testing.assert_allclose(
+            standardized["pca"][3] @ standardized["pca"][3].T,
+            expected_pca @ expected_pca.T,
+            atol=1e-5,
+        )
 
-    def test_fmri_source_uses_fold_safe_target_embedding_scalers(self):
+        standardized_pca_only = ieeg_source_bases._fit_bases(
+            X,
+            Y,
+            enc,
+            [3],
+            standardized_input_coordinates=True,
+            standardized_rrr_coordinates=False,
+        )
+        np.testing.assert_allclose(
+            standardized_pca_only["rrr"][3] @ standardized_pca_only["rrr"][3].T,
+            bases["rrr"][3] @ bases["rrr"][3].T,
+            atol=1e-5,
+        )
+        np.testing.assert_allclose(
+            standardized_pca_only["pca"][3]
+            @ standardized_pca_only["pca"][3].T,
+            expected_pca @ expected_pca.T,
+            atol=1e-5,
+        )
+
+        standardized_rrr_only = ieeg_source_bases._fit_bases(
+            X,
+            Y,
+            enc,
+            [3],
+            standardized_input_coordinates=False,
+            standardized_rrr_coordinates=True,
+        )
+        np.testing.assert_allclose(
+            standardized_rrr_only["rrr"][3] @ standardized_rrr_only["rrr"][3].T,
+            standardized["rrr"][3] @ standardized["rrr"][3].T,
+            atol=1e-5,
+        )
+        np.testing.assert_allclose(
+            standardized_rrr_only["pca"][3] @ standardized_rrr_only["pca"][3].T,
+            bases["pca"][3] @ bases["pca"][3].T,
+            atol=1e-5,
+        )
+
+    def test_cross_dataset_uses_fold_safe_target_embedding_scalers(self):
         from src.utils.rrr.ieeg_rrr_mode.cross_dataset import (
             _fold_standardized_target_embeddings,
         )
@@ -536,6 +589,7 @@ class TestRunRRRForUnit:
 
     def test_pca_baseline_saves_fold_a_factors(self, tmp_path, small_data):
         from run_rrr import _run_rrr_for_unit
+        from src.utils.rrr.evaluation import fit_pca_input_basis
 
         X, Y = small_data
         n = X.shape[0]
@@ -555,6 +609,14 @@ class TestRunRRRForUnit:
         n_train = n - len(test_idxs[0])
         assert A_pca.shape[0] == X.shape[1]
         assert A_pca.shape[1] <= min(n_train, X.shape[1])
+        train_idx = np.setdiff1d(np.arange(n), test_idxs[0])
+        X_train = X[train_idx]
+        scale = X_train.std(axis=0)
+        X_train = (X_train - X_train.mean(axis=0)) / scale
+        expected = fit_pca_input_basis(X_train) / scale[:, None]
+        np.testing.assert_allclose(
+            A_pca @ A_pca.T, expected @ expected.T, atol=1e-5
+        )
         assert not (tmp_path / "pca" / "fold_0" / "B.npy").exists()
 
     def test_cross_dataset_subspace_writes_nr_metrics_without_factors(

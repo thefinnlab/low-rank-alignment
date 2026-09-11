@@ -4,6 +4,7 @@ import numpy as np
 
 from scripts.run_rrr import Artifact, UnitSelector
 from src.core.config import RRRConfig
+from src.utils.rrr.evaluation import standardize_embedding_train_test
 from src.utils.rrr.significance import validate_cross_dataset_significance_alignment
 
 from .common import _build_rrr_decomposition_inputs, _reference_encoding_results
@@ -21,11 +22,10 @@ def _fold_standardized_target_embeddings(X_raw, per_fold_baselines):
         if baseline is None:
             designs.append(X_raw)
             continue
-        train = X_raw[baseline["train_idx"]]
-        mean = train.mean(axis=0, dtype=np.float64).astype(np.float32)[None, :]
-        scale = train.std(axis=0, dtype=np.float64).astype(np.float32)[None, :]
-        scale[scale == 0] = 1.0
-        designs.append(((X_raw - mean) / scale).astype(np.float32))
+        _, design = standardize_embedding_train_test(
+            X_raw[baseline["train_idx"]], X_raw
+        )
+        designs.append(design)
     return designs
 
 
@@ -103,7 +103,12 @@ def run_cross_dataset(
     if config.ieeg_rrr_source:
         from src.utils.rrr.ieeg_source_bases import fit_whole_stimulus_ieeg_bases
         print(f"Fitting whole-stimulus source bases from {source.identity_record()}")
-        source_bases = fit_whole_stimulus_ieeg_bases(source, config.rank_grid)
+        source_bases = fit_whole_stimulus_ieeg_bases(
+            source,
+            config.rank_grid,
+            standardized_input_coordinates=True,
+            standardized_rrr_coordinates=True,
+        )
         A_rrr_by_rank = source_bases["rrr"]
         A_pca_by_rank = source_bases["pca"] if config.run_pca_baseline else None
     else:
@@ -135,11 +140,7 @@ def run_cross_dataset(
     if results is None:
         return
     X_raw, per_fold_baselines, test_idxs, sig_mask_flat, target_manifest = results
-    X_transfer = (
-        _fold_standardized_target_embeddings(X_raw, per_fold_baselines)
-        if config.fmri_rrr_source
-        else X_raw
-    )
+    X_transfer = _fold_standardized_target_embeddings(X_raw, per_fold_baselines)
     artifact.save_target_manifest(
         unit=unit, target_manifest=target_manifest, overwrite=config.refresh
     )

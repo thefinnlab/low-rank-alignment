@@ -8,7 +8,10 @@ import pandas as pd
 from src.core.config import RRRConfig
 from src.core.registry import get_dataset_adapter, resolve_dataset_context
 from src.utils.rrr.core import canonical_qr, fit_dense_rrr
-from src.utils.rrr.evaluation import fit_pca_input_basis
+from src.utils.rrr.evaluation import (
+    fit_pca_input_basis,
+    standardize_embedding_train_test,
+)
 from src.utils.rrr.inputs import _get_decomposition_inputs
 from src.utils.rrr.significance import load_significance_selection
 from src.utils.shared.config import dict_to_dataclass
@@ -16,12 +19,20 @@ from src.utils.shared.embeddings import load_embeddings
 from src.utils.shared.encoding import fit_encoding_baseline
 
 
-def _fit_bases(X, Y, enc, ranks, *, standardized_rrr_coordinates=False):
+def _fit_bases(
+    X,
+    Y,
+    enc,
+    ranks,
+    *,
+    standardized_input_coordinates=False,
+    standardized_rrr_coordinates=False,
+):
     """Fit rank-specific orthonormal RRR/PCA bases from complete source arrays.
 
-    By default the upstream ridge absorbs its input scaler. fMRI targets instead
-    request coefficients in standardized input coordinates so the resulting RRR
-    factor matches their target-side normalized embeddings.
+    ``standardized_input_coordinates`` controls the embeddings used to fit PCA.
+    Independently, ``standardized_rrr_coordinates`` controls whether the upstream
+    ridge scaler is retained in the returned RRR factor's coordinate system.
     """
     requested = sorted(set(map(int, ranks)))
     max_rank = max(requested)
@@ -30,6 +41,12 @@ def _fit_bases(X, Y, enc, ranks, *, standardized_rrr_coordinates=False):
         raise ValueError(
             f"Requested source rank {max_rank} exceeds whole-stimulus iEEG rank {available}"
         )
+
+    X_standardized = None
+    if standardized_input_coordinates or standardized_rrr_coordinates:
+        X_standardized, _ = standardize_embedding_train_test(X)
+    X_rrr = X_standardized if standardized_rrr_coordinates else X
+    X_pca = X_standardized if standardized_input_coordinates else X
 
     baseline = fit_encoding_baseline(
         X,
@@ -50,7 +67,7 @@ def _fit_bases(X, Y, enc, ranks, *, standardized_rrr_coordinates=False):
         absorb_input_scaler=not standardized_rrr_coordinates,
     )
     fitted = fit_dense_rrr(
-        X,
+        X_rrr,
         baseline["Y_train"],
         k=max_rank,
         selected_idx=np.arange(X.shape[1]),
@@ -58,7 +75,7 @@ def _fit_bases(X, Y, enc, ranks, *, standardized_rrr_coordinates=False):
         precomputed_beta_full=baseline["beta_full_input_coordinates"],
         return_b=False,
     )["A_dense"]
-    pca = fit_pca_input_basis(X, max_rank=max_rank)
+    pca = fit_pca_input_basis(X_pca, max_rank=max_rank)
     return {
         "rrr": {rank: canonical_qr(fitted[:, :rank])[0] for rank in requested},
         "pca": {rank: pca[:, :rank] for rank in requested},
@@ -69,6 +86,7 @@ def fit_whole_stimulus_ieeg_bases(
     source,
     ranks: list[int],
     *,
+    standardized_input_coordinates: bool = False,
     standardized_rrr_coordinates: bool = False,
 ) -> dict[str, dict[int, np.ndarray]]:
     """Refit whole-stimulus RRR and PCA bases from an iEEG source Artifact config."""
@@ -125,6 +143,7 @@ def fit_whole_stimulus_ieeg_bases(
         np.asarray(prepared.targets),
         enc,
         ranks,
+        standardized_input_coordinates=standardized_input_coordinates,
         standardized_rrr_coordinates=standardized_rrr_coordinates,
     )
 

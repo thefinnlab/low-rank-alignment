@@ -29,9 +29,11 @@ from src.utils.rrr.results import (
     make_sig_split_df,
 )
 from src.utils.rrr.evaluation import (
+    embedding_standardization_stats,
     evaluate_input_space,
     evaluate_projected_input_space,
     fit_pca_input_basis,
+    standardize_embedding_train_test,
 )
 from src.utils.shared.alpha_grids import resolve_ridge_alphas
 from src.utils.rrr.inputs import _get_decomposition_inputs
@@ -1283,8 +1285,9 @@ def _run_pca_for_unit(
         X_fold = _X_for_fold(X_raw, fold_f)
         train_idx = baseline["train_idx"]
         test_idx = baseline["test_idx"]
-        X_train = X_fold[train_idx]
-        X_test = X_fold[test_idx]
+        X_train_raw = X_fold[train_idx]
+        X_test_raw = X_fold[test_idx]
+        X_train, _ = standardize_embedding_train_test(X_train_raw)
         Y_train = baseline["Y_train"]
         Y_test = baseline["Y_test"]
         Y_hat_full = baseline["Y_hat_full_test"]
@@ -1298,8 +1301,10 @@ def _run_pca_for_unit(
         )
         full_r2 = float(to_numpy(r2_score(Y_test, Y_hat_full)).mean())
 
-        # Compute PCA on training data only (proper CV)
-        A_full = fit_pca_input_basis(X_train)
+        # Compute PCA on fold-standardized training data only (proper CV).
+        A_standardized = fit_pca_input_basis(X_train)
+        _, input_scale = embedding_standardization_stats(X_train_raw)
+        A_full = (A_standardized / input_scale.T).astype(np.float32)
         artifact.save_factors(unit=unit, fold=fold_f, input_factors=A_full,
                               overwrite=refresh)
         max_components = A_full.shape[1]
@@ -1319,8 +1324,8 @@ def _run_pca_for_unit(
             common = _run_common_subspace_fold_k(
                 A_full,
                 k,
-                X_train,
-                X_test,
+                X_train_raw,
+                X_test_raw,
                 Y_train,
                 Y_test,
                 sig_mask_flat,

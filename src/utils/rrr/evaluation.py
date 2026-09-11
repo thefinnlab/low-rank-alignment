@@ -38,6 +38,33 @@ def fit_pca_input_basis(X_train: np.ndarray, max_rank: int | None = None) -> np.
     return vh.T.astype(np.float32)
 
 
+def standardize_embedding_train_test(
+    X_train: np.ndarray,
+    X_test: np.ndarray | None = None,
+) -> tuple[np.ndarray, np.ndarray | None]:
+    """Z-score embeddings using training-row statistics only."""
+    X_train = np.asarray(X_train)
+    mean, scale = embedding_standardization_stats(X_train)
+    standardized_train = ((X_train - mean) / scale).astype(np.float32)
+    standardized_test = (
+        None
+        if X_test is None
+        else ((np.asarray(X_test) - mean) / scale).astype(np.float32)
+    )
+    return standardized_train, standardized_test
+
+
+def embedding_standardization_stats(
+    X_train: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Return row-shaped mean and safe population scale for embedding columns."""
+    X_train = np.asarray(X_train)
+    mean = X_train.mean(axis=0, dtype=np.float64).astype(np.float32)[None, :]
+    scale = X_train.std(axis=0, dtype=np.float64).astype(np.float32)[None, :]
+    scale[scale == 0] = 1.0
+    return mean, scale
+
+
 def evaluate_input_space(
     X_train: np.ndarray,
     X_test: np.ndarray,
