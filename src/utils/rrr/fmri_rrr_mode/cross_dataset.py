@@ -65,7 +65,11 @@ def run_cross_dataset(setup):
     bases = {}
     if pending:
         requested_ranks = sorted({rank for _, rank in pending})
-        fitted = fit_whole_stimulus_ieeg_bases(source, requested_ranks)
+        fitted = fit_whole_stimulus_ieeg_bases(
+            source,
+            requested_ranks,
+            standardized_rrr_coordinates=True,
+        )
         bases = {
             method: {
                 rank: fitted[method][rank]

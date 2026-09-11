@@ -252,8 +252,13 @@ def fit_encoding_baseline(
     alpha_policy: dict | None = None,
     alpha_cache_dir: str | None = None,
     alpha_context: dict | None = None,
+    absorb_input_scaler: bool = True,
 ) -> dict:
-    """Fit the standardized-target full ridge baseline used by RRR workflows."""
+    """Fit the standardized-target full ridge baseline used by RRR workflows.
+
+    When ``absorb_input_scaler`` is false, coefficients remain in standardized
+    input coordinates while predictions retain the same fitted-model semantics.
+    """
     from sklearn.preprocessing import StandardScaler
     from src.utils.shared.alpha_grids import resolve_ridge_alphas, save_alpha_diagnostics
     from src.utils.shared.regression import solve_regression
@@ -278,6 +283,7 @@ def fit_encoding_baseline(
         ridge_cv_folds=ridge_cv_folds, solver_params=ridge_solver_params,
         y_in_cpu=ridge_y_in_cpu, force_cpu=ridge_force_cpu,
         return_alphas=True,
+        absorb_scaler=absorb_input_scaler,
     )
     if alpha_cache_dir is not None:
         save_alpha_diagnostics(
@@ -285,20 +291,39 @@ def fit_encoding_baseline(
             context=context, policy=alpha_policy,
         )
     W, b = to_numpy(W), to_numpy(b)
-    return {
+    if absorb_input_scaler:
+        prediction_X_train = X_train
+        prediction_X_test = X_test
+        input_coordinates = "raw"
+    else:
+        input_scaler = StandardScaler().fit(X_train)
+        prediction_X_train = input_scaler.transform(X_train).astype(np.float32)
+        prediction_X_test = (
+            None
+            if X_test is None
+            else input_scaler.transform(X_test).astype(np.float32)
+        )
+        input_coordinates = "standardized"
+    result = {
         "Y_train": Y_train,
         "Y_test": Y_test,
-        "Y_hat_full_train": (X_train @ W + b).astype(np.float32),
+        "Y_hat_full_train": (prediction_X_train @ W + b).astype(np.float32),
         "Y_hat_full_test": (
-            None if X_test is None else (X_test @ W + b).astype(np.float32)
+            None
+            if prediction_X_test is None
+            else (prediction_X_test @ W + b).astype(np.float32)
         ),
-        "beta_full_raw": W.astype(np.float32),
+        "beta_full_input_coordinates": W.astype(np.float32),
+        "input_coordinates": input_coordinates,
         "ridge_intercept": b.astype(np.float32),
         "target_mean": y_scaler.mean_.astype(np.float32),
         "target_scale": y_scaler.scale_.astype(np.float32),
         "alpha_grid": np.asarray(resolved_alphas),
         "best_alphas": np.asarray(best_alphas),
     }
+    if absorb_input_scaler:
+        result["beta_full_raw"] = result["beta_full_input_coordinates"]
+    return result
 
 
 def build_per_fold_baselines(

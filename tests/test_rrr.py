@@ -165,11 +165,17 @@ class TestCrossDatasetRankBasisLoading:
         X = rng.standard_normal((20, 5)).astype(np.float32)
         Y = rng.standard_normal((20, 4)).astype(np.float32)
         beta = rng.standard_normal((5, 4)).astype(np.float32)
-        monkeypatch.setattr(ieeg_source_bases, "fit_encoding_baseline", lambda *a, **k: {
-            "Y_train": Y,
-            "Y_hat_full_train": X @ beta,
-            "beta_full_raw": beta,
-        })
+        def fake_baseline(*args, **kwargs):
+            absorb = kwargs.get("absorb_input_scaler", True)
+            coefficient = beta if absorb else X.std(axis=0)[:, None] * beta
+            return {
+                "Y_train": Y,
+                "Y_hat_full_train": X @ beta,
+                "beta_full_input_coordinates": coefficient,
+                "beta_full_raw": beta,
+            }
+
+        monkeypatch.setattr(ieeg_source_bases, "fit_encoding_baseline", fake_baseline)
         enc = SimpleNamespace(
             ridge_alphas=None, ridge_cv_folds=2, ridge_solver_params=None,
             ridge_y_in_cpu=None, ridge_force_cpu=None, alpha_grid={},
@@ -186,6 +192,41 @@ class TestCrossDatasetRankBasisLoading:
         np.testing.assert_allclose(
             bases["pca"][3].T @ bases["pca"][3], np.eye(3), atol=1e-5
         )
+
+        standardized = ieeg_source_bases._fit_bases(
+            X, Y, enc, [1, 3], standardized_rrr_coordinates=True
+        )
+        scale = X.std(axis=0)
+        expected, _ = np.linalg.qr(scale[:, None] * bases["rrr"][3])
+        np.testing.assert_allclose(
+            standardized["rrr"][3] @ standardized["rrr"][3].T,
+            expected @ expected.T,
+            atol=1e-5,
+        )
+
+    def test_fmri_source_uses_fold_safe_target_embedding_scalers(self):
+        from src.utils.rrr.ieeg_rrr_mode.cross_dataset import (
+            _fold_standardized_target_embeddings,
+        )
+
+        X = np.array(
+            [[1.0, 10.0], [3.0, 14.0], [5.0, 18.0], [9.0, 30.0]],
+            dtype=np.float32,
+        )
+        baselines = [
+            {"train_idx": np.array([0, 1, 2]), "test_idx": np.array([3])},
+            {"train_idx": np.array([1, 2, 3]), "test_idx": np.array([0])},
+            None,
+        ]
+
+        designs = _fold_standardized_target_embeddings(X, baselines)
+
+        for design, baseline in zip(designs[:2], baselines[:2]):
+            train = design[baseline["train_idx"]]
+            np.testing.assert_allclose(train.mean(axis=0), 0.0, atol=1e-6)
+            np.testing.assert_allclose(train.std(axis=0), 1.0, atol=1e-6)
+        assert not np.allclose(designs[0], designs[1])
+        np.testing.assert_array_equal(designs[2], X)
 
     def test_cross_temporal_loader_preserves_fold_specific_factors(
         self, tmp_path, rng

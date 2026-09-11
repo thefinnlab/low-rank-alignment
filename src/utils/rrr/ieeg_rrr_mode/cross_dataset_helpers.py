@@ -9,8 +9,8 @@ from scripts.run_rrr import Artifact, UnitSelector
 from src.core.config import RRRConfig
 from src.utils.subspace_comparison.metrics import aggregate_subspace_basis
 
-from .common import (_build_results, _load_existing_grid, _merge_grid_rows,
-                     _run_subspace_rank_loop_for_fold)
+from .common import (_X_for_fold, _build_results, _load_existing_grid,
+                     _merge_grid_rows, _run_subspace_rank_loop_for_fold)
 
 
 def _load_cross_dataset_A_by_rank(
@@ -54,6 +54,12 @@ def _run_cross_dataset_subspace_for_unit(
     evaluate_orthonormalized: bool = False,
 ) -> pd.DataFrame:
     """Evaluate rank-specific source subspaces on target dataset folds."""
+    target_ambient_dim = _X_for_fold(X_raw, 0).shape[1]
+    if any(
+        _X_for_fold(X_raw, fold).shape[1] != target_ambient_dim
+        for fold in range(len(test_idxs))
+    ):
+        raise ValueError("All fold-specific target designs must share feature width")
     for rank, A_value in A_by_rank.items():
         matrices = A_value.values() if isinstance(A_value, dict) else [A_value]
         for A_rank in matrices:
@@ -61,10 +67,11 @@ def _run_cross_dataset_subspace_for_unit(
                 raise ValueError(
                     f"Expected 2D A matrix for rank {rank}, got {A_rank.shape}"
                 )
-            if A_rank.shape[0] != X_raw.shape[1]:
+            if A_rank.shape[0] != target_ambient_dim:
                 raise ValueError(
                     "Cross-dataset source A ambient dimension does not match target "
-                    f"embeddings: {A_rank.shape[0]} vs {X_raw.shape[1]} for rank {rank}"
+                    f"embeddings: {A_rank.shape[0]} vs {target_ambient_dim} "
+                    f"for rank {rank}"
                 )
             if A_rank.shape[1] < rank:
                 raise ValueError(
@@ -142,7 +149,7 @@ def _run_cross_dataset_subspace_for_unit(
                         if isinstance(A_by_rank[int(rank)], dict)
                         else A_by_rank[int(rank)]),
                 ranks_to_run=[int(rank)],
-                X_raw=X_raw,
+                X_raw=_X_for_fold(X_raw, fold_f),
                 baseline=per_fold_baselines[fold_f],
                 sig_mask_flat=sig_mask_flat,
                 fold_f=fold_f,

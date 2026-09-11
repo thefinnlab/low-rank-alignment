@@ -148,6 +148,11 @@ squared singular-value energy from the SVD of the full ridge model's training
 predictions and is available only for within-fMRI FIR aggregation. It is the default
 for internal fMRI FIR fitting and for loading an fMRI source into cross-dataset RRR;
 unspecified EEG aggregation continues to compute with the extrinsic method.
+Cross-dataset RRR evaluation uses the target modality's normalization convention:
+an fMRI target applies its per-story normalization and receives an iEEG RRR basis
+converted to standardized embedding coordinates, while an iEEG target applies
+training-fold embedding statistics before a transferred fMRI basis. Native iEEG
+artifact factors retain their existing scaler-absorbed storage representation.
 fMRI input bases are applied after each story is standardized in the original
 embedding coordinates and before FIR expansion. A full-rank orthonormal basis thus
 preserves the full-model design up to an orthogonal rotation.

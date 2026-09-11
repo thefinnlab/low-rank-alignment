@@ -154,6 +154,62 @@ class TestSolveRegressionReturnAlphas:
         _, _, best_alphas = result
         assert best_alphas.shape == (3,)
 
+    def test_optional_scaler_absorption_preserves_predictions(self):
+        from sklearn.preprocessing import StandardScaler
+
+        rng = np.random.default_rng(9)
+        H = torch.as_tensor(rng.standard_normal((50, 4)), dtype=torch.float32)
+        Y = torch.as_tensor(rng.standard_normal((50, 3)), dtype=torch.float32)
+        W_raw, b_raw = solve_regression(
+            H, Y, "ridge", "cpu", standardize=True, absorb_scaler=True
+        )
+        W_std, b_std = solve_regression(
+            H, Y, "ridge", "cpu", standardize=True, absorb_scaler=False
+        )
+        H_std = torch.as_tensor(
+            StandardScaler().fit_transform(H.numpy()), dtype=torch.float32
+        )
+
+        np.testing.assert_allclose(
+            (H @ W_raw + b_raw).numpy(),
+            (H_std @ W_std + b_std).numpy(),
+            rtol=1e-5,
+            atol=1e-5,
+        )
+
+    def test_encoding_baseline_passes_through_unabsorbed_coordinates(self):
+        from src.utils.shared.encoding import fit_encoding_baseline
+
+        rng = np.random.default_rng(10)
+        X = rng.standard_normal((50, 4)).astype(np.float32)
+        Y = rng.standard_normal((50, 3)).astype(np.float32)
+        common = {
+            "alphas": np.array([1.0]),
+            "ridge_cv_folds": 2,
+            "ridge_force_cpu": True,
+        }
+        raw = fit_encoding_baseline(X, Y, **common)
+        standardized = fit_encoding_baseline(
+            X, Y, absorb_input_scaler=False, **common
+        )
+
+        assert raw["input_coordinates"] == "raw"
+        assert standardized["input_coordinates"] == "standardized"
+        assert "beta_full_raw" in raw
+        assert "beta_full_raw" not in standardized
+        np.testing.assert_allclose(
+            raw["Y_hat_full_train"],
+            standardized["Y_hat_full_train"],
+            rtol=1e-5,
+            atol=1e-5,
+        )
+        np.testing.assert_allclose(
+            standardized["beta_full_input_coordinates"],
+            X.std(axis=0)[:, None] * raw["beta_full_raw"],
+            rtol=1e-5,
+            atol=1e-5,
+        )
+
     def test_ols_ignores_return_alphas(self):
         rng = np.random.default_rng(7)
         H = torch.as_tensor(rng.standard_normal((50, 4)), dtype=torch.float32)

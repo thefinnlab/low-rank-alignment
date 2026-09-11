@@ -1,5 +1,7 @@
 """Cross-dataset iEEG RRR mode."""
 
+import numpy as np
+
 from scripts.run_rrr import Artifact, UnitSelector
 from src.core.config import RRRConfig
 from src.utils.rrr.significance import validate_cross_dataset_significance_alignment
@@ -9,6 +11,22 @@ from .cross_dataset_helpers import (
     _load_cross_dataset_A_by_rank,
     _run_cross_dataset_subspace_for_unit,
 )
+
+
+def _fold_standardized_target_embeddings(X_raw, per_fold_baselines):
+    """Standardize target embeddings with each outer fold's training rows only."""
+    X_raw = np.asarray(X_raw)
+    designs = []
+    for baseline in per_fold_baselines:
+        if baseline is None:
+            designs.append(X_raw)
+            continue
+        train = X_raw[baseline["train_idx"]]
+        mean = train.mean(axis=0, dtype=np.float64).astype(np.float32)[None, :]
+        scale = train.std(axis=0, dtype=np.float64).astype(np.float32)[None, :]
+        scale[scale == 0] = 1.0
+        designs.append(((X_raw - mean) / scale).astype(np.float32))
+    return designs
 
 
 def run_cross_dataset(
@@ -117,6 +135,11 @@ def run_cross_dataset(
     if results is None:
         return
     X_raw, per_fold_baselines, test_idxs, sig_mask_flat, target_manifest = results
+    X_transfer = (
+        _fold_standardized_target_embeddings(X_raw, per_fold_baselines)
+        if config.fmri_rrr_source
+        else X_raw
+    )
     artifact.save_target_manifest(
         unit=unit, target_manifest=target_manifest, overwrite=config.refresh
     )
@@ -126,7 +149,7 @@ def run_cross_dataset(
         artifact=artifact,
         unit=unit,
         A_by_rank=A_rrr_by_rank,
-        X_raw=X_raw,
+        X_raw=X_transfer,
         test_idxs=test_idxs,
         per_fold_baselines=per_fold_baselines,
         config=config,
@@ -146,7 +169,7 @@ def run_cross_dataset(
             artifact=artifact,
             unit=pca_unit,
             A_by_rank=A_pca_by_rank,
-            X_raw=X_raw,
+            X_raw=X_transfer,
             test_idxs=test_idxs,
             per_fold_baselines=per_fold_baselines,
             config=config,

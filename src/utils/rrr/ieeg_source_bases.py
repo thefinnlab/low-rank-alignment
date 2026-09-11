@@ -16,8 +16,13 @@ from src.utils.shared.embeddings import load_embeddings
 from src.utils.shared.encoding import fit_encoding_baseline
 
 
-def _fit_bases(X, Y, enc, ranks):
-    """Fit rank-specific orthonormal RRR/PCA bases from complete source arrays."""
+def _fit_bases(X, Y, enc, ranks, *, standardized_rrr_coordinates=False):
+    """Fit rank-specific orthonormal RRR/PCA bases from complete source arrays.
+
+    By default the upstream ridge absorbs its input scaler. fMRI targets instead
+    request coefficients in standardized input coordinates so the resulting RRR
+    factor matches their target-side normalized embeddings.
+    """
     requested = sorted(set(map(int, ranks)))
     max_rank = max(requested)
     available = min(X.shape[1], Y.shape[1], X.shape[0])
@@ -42,6 +47,7 @@ def _fit_bases(X, Y, enc, ranks):
             "per_model_config": enc.per_model_config,
             "offset": enc.offset,
         },
+        absorb_input_scaler=not standardized_rrr_coordinates,
     )
     fitted = fit_dense_rrr(
         X,
@@ -49,7 +55,7 @@ def _fit_bases(X, Y, enc, ranks):
         k=max_rank,
         selected_idx=np.arange(X.shape[1]),
         precomputed_Y_hat_ols=baseline["Y_hat_full_train"],
-        precomputed_beta_full=baseline["beta_full_raw"],
+        precomputed_beta_full=baseline["beta_full_input_coordinates"],
         return_b=False,
     )["A_dense"]
     pca = fit_pca_input_basis(X, max_rank=max_rank)
@@ -59,7 +65,12 @@ def _fit_bases(X, Y, enc, ranks):
     }
 
 
-def fit_whole_stimulus_ieeg_bases(source, ranks: list[int]) -> dict[str, dict[int, np.ndarray]]:
+def fit_whole_stimulus_ieeg_bases(
+    source,
+    ranks: list[int],
+    *,
+    standardized_rrr_coordinates: bool = False,
+) -> dict[str, dict[int, np.ndarray]]:
     """Refit whole-stimulus RRR and PCA bases from an iEEG source Artifact config."""
     saved = source.load_field("effective_config")
     config = dict_to_dataclass(saved, RRRConfig)
@@ -111,7 +122,10 @@ def fit_whole_stimulus_ieeg_bases(source, ranks: list[int]) -> dict[str, dict[in
         raise ValueError("The iEEG source has no significant electrodes")
     return _fit_bases(
         np.asarray(next(iter(prepared.embeddings.values()))),
-        np.asarray(prepared.targets), enc, ranks,
+        np.asarray(prepared.targets),
+        enc,
+        ranks,
+        standardized_rrr_coordinates=standardized_rrr_coordinates,
     )
 
 
