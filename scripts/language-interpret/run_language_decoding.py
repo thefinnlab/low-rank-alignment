@@ -129,6 +129,8 @@ def _materialize_method(source, method, root, selectors):
             path = destination / f"fold_{int(selector['fold'])}"
             path.mkdir(parents=True, exist_ok=True)
             np.save(path / "A.npy", value)
+            scaler = source.load_field("input_scalers", selector=selector)
+            np.savez(path / "input_scaler.npz", **scaler)
     else:
         _, value = max(entries, key=lambda item: int(item[0].get("rank", 0)))
         path = destination / "fold_0"

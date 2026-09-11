@@ -463,8 +463,13 @@ def test_cross_dataset_significance_alignment_accepts_matching_cross_layer_union
 def test_rrr_manifest_resume_is_selector_complete(tmp_path):
     artifact = RRRArtifact(results_root=tmp_path).begin(config={"rank_grid": [1, 2]})
     unit = UnitSelector(method="rrr", region="superior-temporal")
-    artifact.save_factors(unit=unit, fold=0, input_factors=np.eye(2),
-                          target_factors=np.eye(2))
+    artifact.save_factors(
+        unit=unit, fold=0, input_factors=np.eye(2), target_factors=np.eye(2),
+        input_scaler={
+            "mean": np.zeros(2), "scale": np.ones(2),
+            "coordinates": "standardized-v1",
+        },
+    )
     artifact.save_rank_metrics(unit=unit, rank=1, fold=0,
                                metrics={"nr_corr": 0.2})
     plan = artifact.resume_plan(unit=unit, ranks=[1, 2], folds=[0],

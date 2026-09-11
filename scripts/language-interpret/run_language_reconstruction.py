@@ -101,6 +101,9 @@ def _materialize_method(source, method, destination, selectors):
         path = destination / f"fold_{int(selector['fold'])}"
         path.mkdir(parents=True, exist_ok=True)
         np.save(path / "A.npy", value)
+        if "fold" in selector:
+            scaler = source.load_field("input_scalers", selector=selector)
+            np.savez(path / "input_scaler.npz", **scaler)
 
 
 def _materialize_significance(source, root, subjects):

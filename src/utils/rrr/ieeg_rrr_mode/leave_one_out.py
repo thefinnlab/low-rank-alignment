@@ -11,6 +11,7 @@ from tqdm import tqdm
 from scripts.run_rrr import UnitSelector
 from scripts.run_rrr import Artifact
 from src.core.config import RRRConfig
+from src.utils.rrr.evaluation import standardize_embeddings_with_baseline
 
 from .common import (_build_results, _build_rrr_decomposition_inputs,
                      _fit_rrr_input_factors_for_unit,
@@ -84,6 +85,10 @@ def _run_leave_one_out_transfer_for_unit(
             "input_factors", selector=artifact._selector(train_unit, fold=fold_f)
         ):
             raise ValueError(f"Missing leave-one-out training factors for fold {fold_f}")
+        if not artifact.has_field(
+            "input_scalers", selector=artifact._selector(train_unit, fold=fold_f)
+        ):
+            raise ValueError(f"Missing leave-one-out input scaler for fold {fold_f}")
     total_to_run = sum(len(ranks) for ranks in ranks_by_fold.values())
     if completed_pairs:
         print(f"  Reusing {len(completed_pairs)} completed transfer fold/rank pair(s)")
@@ -121,8 +126,8 @@ def _run_leave_one_out_transfer_for_unit(
         baseline = per_fold_baselines[fold_f]
         train_idx = baseline["train_idx"]
         test_idx = baseline["test_idx"]
-        X_train = X_raw[train_idx]
-        X_test = X_raw[test_idx]
+        X_train = standardize_embeddings_with_baseline(X_raw[train_idx], baseline)
+        X_test = standardize_embeddings_with_baseline(X_raw[test_idx], baseline)
         Y_train = baseline["Y_train"]
         Y_test = baseline["Y_test"]
 
@@ -255,6 +260,10 @@ def run_leave_one_out(
                 for fold in range(n_folds)
                 if config.refresh or not artifact.has_field(
                     "input_factors",
+                    selector=artifact._selector(partition.train_unit, fold=fold),
+                )
+                or not artifact.has_field(
+                    "input_scalers",
                     selector=artifact._selector(partition.train_unit, fold=fold),
                 )
             }

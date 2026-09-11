@@ -512,16 +512,49 @@ def _load_raw_factor(space: ComparisonSpace, rank: int, fold: int | None):
             return np.asarray(np.load(root / f"fold_{fold}" / "A.npy"), dtype=np.float32)
         matrices = [np.load(path) for path in sorted(root.glob("fold_*/A.npy"))]
         return aggregate_subspace_basis(matrices, rank=rank, method="extrinsic")
-    factors = space.artifact.load_input_factors(space.kind, rank)
+    entries = space.artifact.load_collection(
+        "input_factors", {"method": space.kind}
+    )
+    factors = []
+    for selector_items, value in entries.items():
+        selector = dict(selector_items)
+        if "rank" in selector and int(selector["rank"]) != int(rank):
+            continue
+        if "rank" not in selector and "fold" not in selector:
+            continue
+        factor = np.asarray(value)
+        if "rank" not in selector:
+            factor = factor[:, : int(rank)]
+        factors.append((selector, factor))
     if not factors:
         raise FileNotFoundError(f"No {space.kind} factors in {space.label}")
     if fold is not None:
-        if fold >= len(factors):
+        by_fold = {
+            int(selector["fold"]): factor
+            for selector, factor in factors if "fold" in selector
+        }
+        if fold not in by_fold:
             raise IndexError(f"{space.label} has no factor for fold {fold}")
-        return np.asarray(factors[fold], dtype=np.float32)
+        return np.asarray(by_fold[fold], dtype=np.float32)
     if len(factors) == 1:
-        return np.asarray(factors[0], dtype=np.float32)
-    return aggregate_subspace_basis(factors, rank=rank, method="extrinsic")
+        return np.asarray(factors[0][1], dtype=np.float32)
+    return aggregate_subspace_basis(
+        [factor for _, factor in factors], rank=rank, method="extrinsic"
+    )
+
+
+def standardize_evaluation_values(
+    space: ComparisonSpace, values: np.ndarray, train_idx: np.ndarray
+) -> np.ndarray:
+    """Put evaluation embeddings in an iEEG factor's standardized coordinates."""
+    values = np.asarray(values, dtype=np.float32)
+    if space.artifact is None or space.artifact.dataset == "deep-fmri":
+        return values
+    train = values[np.asarray(train_idx, dtype=int)]
+    mean = train.mean(axis=0, dtype=np.float64)
+    scale = train.std(axis=0, dtype=np.float64)
+    scale[scale == 0] = 1.0
+    return ((values - mean) / scale).astype(np.float32)
 
 
 def factor_for(

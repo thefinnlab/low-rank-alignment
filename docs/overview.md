@@ -152,21 +152,24 @@ unspecified EEG aggregation continues to compute with the extrinsic method.
 Cross-dataset RRR evaluation uses the target modality's normalization convention:
 an fMRI target applies its per-story normalization and receives iEEG RRR/PCA bases
 in standardized embedding coordinates, while an iEEG target applies training-fold
-embedding statistics before any transferred RRR/PCA basis. Native iEEG
-artifact factors retain their existing scaler-absorbed storage representation.
+embedding statistics before any transferred RRR/PCA basis. Native iEEG artifact
+factors use standardized embedding coordinates and retain the corresponding fold
+scaler as a separate Artifact field.
 fMRI input bases are applied after each story is standardized in the original
 embedding coordinates and before FIR expansion. A full-rank orthonormal basis thus
 preserves the full-model design up to an orthogonal rotation.
-Internal iEEG PCA likewise fits each basis on embeddings standardized with that
-fold's training statistics. Its saved factor is converted back to the native iEEG
-raw-coordinate convention, making raw-input projection equivalent up to the constant
-offset handled by the downstream ridge intercept.
-RRR modes that evaluate directly fitted or fold-matched raw input factors report both
+Internal iEEG RRR and PCA fit and save their factors in embeddings standardized with
+that fold's training statistics. Each fold factor is paired with its saved input mean
+and scale. Direct rank evaluation and language workflows standardize inputs before
+projection; consumers operating on raw embeddings convert the factor with the saved
+scale. Consequently, reduced QR at the complete embedding rank is an orthogonal
+rotation of the same standardized design used by the full ridge model and reproduces
+that model's ceiling.
+RRR modes that evaluate directly fitted or fold-matched input factors report both
 the original projected-ridge metrics and a companion `*_orth` family fitted after a
-reduced QR decomposition. PCA is evaluated with the scores of its orthonormal basis
-in standardized coordinates, even when its equivalent native iEEG factor is stored in
-raw coordinates; aggregated cross-dataset bases are also orthonormal. These cases do
-not run the companion fit.
+reduced QR decomposition. PCA and aggregated cross-dataset bases are evaluated in
+standardized coordinates and are already orthonormal, so these cases do not run the
+companion fit.
 Automatically generated ridge-alpha grids use 25 log-spaced values, including
 cached boundary-refined grids; explicitly configured alpha lists are used unchanged.
 Word-aligned iEEG analyses default to the shared GloVe-covered vocabulary through

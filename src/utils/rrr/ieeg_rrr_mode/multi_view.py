@@ -112,8 +112,16 @@ def run_multi_view(
         source = sources[view.name]
         rank = int(view.rank)
         factor_items = source.load_collection("input_factors", {"method": "rrr"})
-        fold_factors = {int(dict(key)["fold"]): value for key, value in factor_items.items()
-                        if "fold" in dict(key)}
+        fold_factors = {}
+        for key, value in factor_items.items():
+            selector = dict(key)
+            if "fold" not in selector:
+                continue
+            factor = np.asarray(value)
+            if source.dataset != "deep-fmri":
+                scaler = source.load_field("input_scalers", selector=selector)
+                factor = factor / np.asarray(scaler["scale"])[:, np.newaxis]
+            fold_factors[int(selector["fold"])] = factor
         if source.dataset == artifact.dataset:
             if len(fold_factors) != len(test_idxs):
                 raise ValueError(f"View {view.name} does not provide all target folds")

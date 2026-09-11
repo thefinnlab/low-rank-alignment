@@ -116,6 +116,7 @@ def test_numerical_rrr_writes_and_resumes_only_through_artifact(tmp_path, monkey
     _run_rrr_for_unit(artifact, unit, x, test_idxs, baselines, config)
 
     assert artifact.has_field("input_factors", selector=artifact._selector(unit, fold=0))
+    assert artifact.has_field("input_scalers", selector=artifact._selector(unit, fold=0))
     assert artifact.has_field("target_factors", selector=artifact._selector(unit, fold=0))
     assert set(artifact.load_summary(unit=unit)["rank"]) == {1, 2}
     rank_metrics = artifact.load_rank_metrics(unit=unit, rank=2, fold=0)
@@ -144,6 +145,41 @@ def test_numerical_rrr_writes_and_resumes_only_through_artifact(tmp_path, monkey
         lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("unexpected refit")),
     )
     _run_rrr_for_unit(artifact, unit, x, test_idxs, baselines, config)
+
+
+def test_full_rank_qr_matches_standardized_full_ridge(tmp_path):
+    rng = np.random.default_rng(23)
+    n_features = 6
+    x = rng.standard_normal((90, n_features)).astype(np.float32)
+    x *= np.geomspace(0.05, 20.0, n_features).astype(np.float32)
+    weights = rng.standard_normal((n_features, 8)).astype(np.float32)
+    y = x @ weights + 0.2 * rng.standard_normal((90, 8)).astype(np.float32)
+    test_idxs = [np.arange(60, 90)]
+    alphas = np.array([0.01, 0.1, 1.0, 10.0])
+    baselines = build_per_fold_baselines(x, y, test_idxs, alphas=alphas)
+    config = RRRConfig(
+        rank_grid=[n_features], encoding=RRRConfig().encoding,
+        plot=False,
+    )
+    config.encoding.ridge_alphas = alphas.tolist()
+    artifact = Artifact(results_root=tmp_path).begin(config=config)
+    unit = UnitSelector(method="rrr")
+
+    _run_rrr_for_unit(artifact, unit, x, test_idxs, baselines, config)
+
+    metrics = artifact.load_rank_metrics(
+        unit=unit, rank=n_features, fold=0
+    )
+    np.testing.assert_allclose(metrics["nr_orth_corr"], metrics["full_corr"],
+                               rtol=2e-4, atol=2e-4)
+    np.testing.assert_allclose(metrics["nr_orth_r2"], metrics["full_r2"],
+                               rtol=2e-4, atol=2e-4)
+    scaler = artifact.load_factors(unit=unit, fold=0)["input_scaler"]
+    assert scaler["coordinates"] == "standardized-v1"
+    np.testing.assert_allclose(
+        scaler["mean"], x[:60].mean(axis=0, dtype=np.float64),
+        rtol=1e-6, atol=1e-6,
+    )
 
 
 def test_raw_only_rank_metrics_resume_from_saved_factors_without_rrr_refit(

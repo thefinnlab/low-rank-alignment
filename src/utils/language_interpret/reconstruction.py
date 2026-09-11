@@ -87,6 +87,22 @@ def _load_factors(unit_dir: Path, embedding_dim: int) -> dict[int, np.ndarray]:
     return factors
 
 
+def _load_input_scalers(unit_dir: Path) -> dict[int, dict[str, np.ndarray]]:
+    """Load the fold-specific preprocessing paired with saved input factors."""
+    scalers = {}
+    for factor_path in _factor_paths(unit_dir):
+        fold = int(factor_path.parent.name.removeprefix("fold_"))
+        path = factor_path.parent / "input_scaler.npz"
+        if not path.exists():
+            continue
+        with np.load(path, allow_pickle=False) as payload:
+            scalers[fold] = {
+                "mean": np.asarray(payload["mean"]),
+                "scale": np.asarray(payload["scale"]),
+            }
+    return scalers
+
+
 def orthonormal_factor(factor: np.ndarray, rank: int) -> np.ndarray:
     """Return a deterministic orthonormal basis for the leading factor span."""
     block = np.asarray(factor, dtype=np.float64)[:, : int(rank)]
@@ -624,6 +640,8 @@ def run_language_reconstruction(config: LanguageReconstructionConfig) -> Path:
         raise FileNotFoundError(f"Matching PCA unit was not found at {pca_unit}")
     rrr_factors = _load_factors(rrr_unit, embeddings.shape[1])
     pca_factors = _load_factors(pca_unit, embeddings.shape[1])
+    rrr_scalers = _load_input_scalers(rrr_unit)
+    pca_scalers = _load_input_scalers(pca_unit)
 
     if config.mode == LanguageDecodingMode.WITHIN_DATASET:
         test_idxs, selection, fold_root = _load_within_folds_and_selection(
@@ -760,9 +778,23 @@ def run_language_reconstruction(config: LanguageReconstructionConfig) -> Path:
             for target_view in config.target_views:
                 print(f"    [{target_view}]")
                 for fold, (train_idx, test_idx) in enumerate(folds):
+                    if config.mode == LanguageDecodingMode.WITHIN_DATASET:
+                        scalers = rrr_scalers if subspace == "rrr" else pca_scalers
+                        if fold in scalers:
+                            scaler = scalers[fold]
+                            X_fold = ((X - scaler["mean"]) / scaler["scale"]).astype(
+                                np.float32
+                            )
+                        else:
+                            X_fold = X
+                    else:
+                        mean = X[np.asarray(train_idx)].mean(axis=0, dtype=np.float64)
+                        scale = X[np.asarray(train_idx)].std(axis=0, dtype=np.float64)
+                        scale[scale == 0] = 1.0
+                        X_fold = ((X - mean) / scale).astype(np.float32)
                     for rank in map(int, config.rank_grid):
                         factor = prepared[subspace][(target_view, fold, rank)]
-                        target = np.asarray(X @ factor, dtype=np.float32)
+                        target = np.asarray(X_fold @ factor, dtype=np.float32)
                         rows.append(
                             _run_fit(
                                 output_dir=output_dir,

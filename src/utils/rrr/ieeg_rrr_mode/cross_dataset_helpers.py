@@ -193,6 +193,12 @@ def _load_cross_temporal_A_by_fold(source, kind, source_window, ranks, n_folds):
                     f"Source Artifact has no {kind} factors for temporal window "
                     f"{source_window!r}, fold {fold}"
                 )
+            if not source.has_field("input_scalers", selector=selector):
+                raise ValueError(
+                    f"Source {kind} factors for temporal window {source_window!r}, "
+                    f"fold {fold} use the legacy raw-coordinate contract; rerun "
+                    "the source RRR analysis first"
+                )
             matrix = source.load_field("input_factors", selector=selector)
             if matrix.ndim != 2 or matrix.shape[1] < rank:
                 raise ValueError(

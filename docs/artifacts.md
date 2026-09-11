@@ -132,6 +132,12 @@ Significance exposes complete subject-keyed `target_significance` tables with
 metric, target-manifest, and mean-result fields. `load_input_factors()` always
 returns a list: one matrix per iEEG fold or a one-element fMRI rank-basis set.
 `load_mean_results()` preserves additional modality-specific metric columns.
+Current iEEG fold factors use the `standardized-v1` coordinate contract and each
+`input_factors` entry has a matching `input_scalers` entry containing the training-fold
+mean and scale. Consumers must either standardize embeddings with that state before
+applying the factor or explicitly convert the factor to the algebraically equivalent
+raw-input representation. Resume checks require this paired scaler, so legacy
+raw-coordinate factor entries are recomputed rather than reused by current iEEG runs.
 
 ## Language interpretation
 

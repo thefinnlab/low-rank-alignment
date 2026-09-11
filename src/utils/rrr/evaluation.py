@@ -65,6 +65,22 @@ def embedding_standardization_stats(
     return mean, scale
 
 
+def standardize_embeddings_with_baseline(
+    X: np.ndarray, baseline: dict
+) -> np.ndarray:
+    """Apply the input scaler stored by a fold's full encoding baseline."""
+    if baseline.get("input_coordinates") != "standardized":
+        raise ValueError(
+            "RRR factors require a full baseline in standardized input coordinates"
+        )
+    try:
+        mean = np.asarray(baseline["input_mean"], dtype=np.float32)
+        scale = np.asarray(baseline["input_scale"], dtype=np.float32)
+    except KeyError as exc:
+        raise ValueError("Full baseline is missing its input scaler") from exc
+    return ((np.asarray(X, dtype=np.float32) - mean) / scale).astype(np.float32)
+
+
 def evaluate_input_space(
     X_train: np.ndarray,
     X_test: np.ndarray,

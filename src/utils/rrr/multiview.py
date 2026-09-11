@@ -90,9 +90,16 @@ def load_view_bases(config, resolved, target_key, selection, test_idxs):
         run = resolved[view.name]
         rank = int(view.rank)
         entries = run.artifact.load_collection("input_factors", {"method": "rrr"})
-        fold_values = {int(dict(selector)["fold"]): np.asarray(value)[:, :rank]
-                       for selector, value in entries.items()
-                       if "fold" in dict(selector)}
+        fold_values = {}
+        for selector, value in entries.items():
+            mapping = dict(selector)
+            if "fold" not in mapping:
+                continue
+            factor = np.asarray(value)[:, :rank]
+            if run.artifact.dataset != "deep-fmri":
+                scaler = run.artifact.load_field("input_scalers", selector=mapping)
+                factor = factor / np.asarray(scaler["scale"])[:, np.newaxis]
+            fold_values[int(mapping["fold"])] = factor
         if run.dataset_key == target_key:
             if set(fold_values) != set(range(len(test_idxs))):
                 raise ValueError(f"View {view.name} does not provide every target fold")

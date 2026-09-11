@@ -36,6 +36,7 @@ from src.utils.subspace_comparison.directed import (
     fold_indices,
     load_evaluation_data,
     project_subspace,
+    standardize_evaluation_values,
     score_ordered_pair,
     shared_ranks,
     summarize_fold_metrics,
@@ -451,8 +452,14 @@ def _run_comparisons(config, spaces, jobs, evaluation, artifacts) -> pd.DataFram
                         f"factor has {target_factor.shape[0]} rows"
                     )
                 return score_ordered_pair(
-                    project_subspace(source_values, source_factor, device="cuda"),
-                    project_subspace(target_values, target_factor, device="cuda"),
+                    project_subspace(
+                        standardize_evaluation_values(source, source_values, train_idx),
+                        source_factor, device="cuda",
+                    ),
+                    project_subspace(
+                        standardize_evaluation_values(target, target_values, train_idx),
+                        target_factor, device="cuda",
+                    ),
                     train_idx,
                     test_idx,
                     ridge_alphas=config.ridge_alphas,

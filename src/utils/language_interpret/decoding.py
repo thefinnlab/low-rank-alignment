@@ -990,6 +990,16 @@ def _prepare_single_view_subspaces(
         int(path.parent.name.removeprefix("fold_")): np.load(path)
         for path in factor_paths
     }
+    scalers_by_fold = {}
+    for path in factor_paths:
+        fold = int(path.parent.name.removeprefix("fold_"))
+        scaler_path = path.parent / "input_scaler.npz"
+        if scaler_path.exists():
+            with np.load(scaler_path, allow_pickle=False) as payload:
+                scalers_by_fold[fold] = {
+                    "mean": np.asarray(payload["mean"]),
+                    "scale": np.asarray(payload["scale"]),
+                }
     if config.mode == LanguageDecodingMode.WITHIN_DATASET:
         expected_folds = set(range(len(folds)))
         if set(matrices_by_fold) != expected_folds:
@@ -1011,6 +1021,20 @@ def _prepare_single_view_subspaces(
 
     prepared = {}
     for fold, (train_idx, test_idx) in enumerate(folds):
+        if mean_factors is None:
+            if fold in scalers_by_fold:
+                scaler = scalers_by_fold[fold]
+                X_fold = ((X - scaler["mean"]) / scaler["scale"]).astype(
+                    np.float32
+                )
+            else:
+                # Compatibility for explicitly supplied legacy path-based factors.
+                X_fold = X
+        else:
+            mean = X[np.asarray(train_idx)].mean(axis=0, dtype=np.float64)
+            scale = X[np.asarray(train_idx)].std(axis=0, dtype=np.float64)
+            scale[scale == 0] = 1.0
+            X_fold = ((X - mean) / scale).astype(np.float32)
         for rank in config.rank_grid:
             A = (
                 matrices_by_fold[fold][:, :rank]
@@ -1022,7 +1046,9 @@ def _prepare_single_view_subspaces(
                     f"Fold {fold} {subspace.upper()} A has insufficient width for "
                     f"rank {rank}"
                 )
-            prepared[(fold, int(rank))] = (np.asarray(X @ A), np.asarray(A))
+            prepared[(fold, int(rank))] = (
+                np.asarray(X_fold @ A), np.asarray(A)
+            )
     return prepared
 
 

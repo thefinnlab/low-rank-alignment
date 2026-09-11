@@ -298,6 +298,10 @@ class TestCrossDatasetRankBasisLoading:
                 unit=UnitSelector(method="rrr", temporal_window="pre"),
                 fold=fold,
                 input_factors=matrix,
+                input_scaler={
+                    "mean": np.zeros(6), "scale": np.ones(6),
+                    "coordinates": "standardized-v1",
+                },
             )
 
         loaded = _load_cross_temporal_A_by_fold(

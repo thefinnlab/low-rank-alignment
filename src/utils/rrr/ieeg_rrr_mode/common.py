@@ -29,11 +29,10 @@ from src.utils.rrr.results import (
     make_sig_split_df,
 )
 from src.utils.rrr.evaluation import (
-    embedding_standardization_stats,
     evaluate_input_space,
     evaluate_projected_input_space,
     fit_pca_input_basis,
-    standardize_embedding_train_test,
+    standardize_embeddings_with_baseline,
 )
 from src.utils.shared.alpha_grids import resolve_ridge_alphas
 from src.utils.rrr.inputs import _get_decomposition_inputs
@@ -169,6 +168,15 @@ def _folds_to_build_from_ranks(ranks_by_fold: dict[int, list[int]]) -> set[int]:
 def _X_for_fold(X_raw, fold_f: int) -> np.ndarray:
     """Return one fold's design from a shared matrix or per-fold matrix list."""
     return np.asarray(X_raw[fold_f] if isinstance(X_raw, list) else X_raw)
+
+
+def _input_scaler_payload(baseline: dict) -> dict:
+    """Return the persisted scaler for a standardized-coordinate factor."""
+    return {
+        "mean": np.asarray(baseline["input_mean"], dtype=np.float32),
+        "scale": np.asarray(baseline["input_scale"], dtype=np.float32),
+        "coordinates": "standardized-v1",
+    }
 
 
 def _scalar_from_metric(metrics: dict, key: str) -> "float | None":
@@ -917,7 +925,9 @@ def _fit_rrr_input_factors_for_unit(
     for fold_f in sorted(folds_to_fit):
         baseline = per_fold_baselines[fold_f]
         X_fold = _X_for_fold(X_raw, fold_f)
-        X_train = X_fold[baseline["train_idx"]]
+        X_train = standardize_embeddings_with_baseline(
+            X_fold[baseline["train_idx"]], baseline
+        )
         Y_train = baseline["Y_train"]
         max_k = min(X_train.shape[1], Y_train.shape[1])
         rrr_result = fit_dense_rrr(
@@ -926,7 +936,7 @@ def _fit_rrr_input_factors_for_unit(
             k=max_k,
             selected_idx=selected_idx,
             precomputed_Y_hat_ols=baseline["Y_hat_full_train"],
-            precomputed_beta_full=baseline["beta_full_raw"],
+            precomputed_beta_full=baseline["beta_full_input_coordinates"],
             return_b=False,
         )
         artifact.save_factors(
@@ -934,7 +944,8 @@ def _fit_rrr_input_factors_for_unit(
             fold=fold_f,
             input_factors=rrr_result["A_dense"],
             target_factors=None,
-            overwrite=refresh,
+            input_scaler=_input_scaler_payload(baseline),
+            overwrite=True,
         )
 
 
@@ -1064,14 +1075,17 @@ def _run_rrr_for_unit(
         baseline = per_fold_baselines[fold_f]
         train_idx = baseline["train_idx"]
         X_fold = _X_for_fold(X_raw, fold_f)
-        X_train = X_fold[train_idx]
+        X_train = standardize_embeddings_with_baseline(X_fold[train_idx], baseline)
         Y_train = baseline["Y_train"]
         Y_hat_ols_train = baseline["Y_hat_full_train"]
 
         # Fit or load RRR once per fold; truncate to each k below.
         max_k = min(X_train.shape[1], Y_train.shape[1])
         factor_selector = artifact._selector(unit, fold=int(fold_f))
-        required_factors_exist = artifact.has_field("input_factors", selector=factor_selector)
+        required_factors_exist = (
+            artifact.has_field("input_factors", selector=factor_selector)
+            and artifact.has_field("input_scalers", selector=factor_selector)
+        )
         if config.save_b_matrices:
             required_factors_exist &= artifact.has_field("target_factors", selector=factor_selector)
         if not config.refresh and required_factors_exist:
@@ -1089,7 +1103,7 @@ def _run_rrr_for_unit(
                     k=max_k,
                     selected_idx=selected_idx,
                     precomputed_Y_hat_ols=Y_hat_ols_train,
-                    precomputed_beta_full=baseline["beta_full_raw"],
+                    precomputed_beta_full=baseline["beta_full_input_coordinates"],
                     return_b=config.save_b_matrices,
                 )
                 A_full = rrr_result["A_dense"]
@@ -1098,6 +1112,7 @@ def _run_rrr_for_unit(
                 )
                 artifact.save_factors(unit=unit, fold=fold_f,
                                       input_factors=A_full, target_factors=B_full,
+                                      input_scaler=_input_scaler_payload(baseline),
                                       overwrite=True)
             else:
                 print("  Loaded existing fold factors")
@@ -1108,13 +1123,15 @@ def _run_rrr_for_unit(
                 k=max_k,
                 selected_idx=selected_idx,
                 precomputed_Y_hat_ols=Y_hat_ols_train,
-                precomputed_beta_full=baseline["beta_full_raw"],
+                precomputed_beta_full=baseline["beta_full_input_coordinates"],
                 return_b=config.save_b_matrices,
             )
             A_full = rrr_result["A_dense"]
             B_full = rrr_result["B_dense"] if config.save_b_matrices else None
             artifact.save_factors(unit=unit, fold=fold_f, input_factors=A_full,
-                                  target_factors=B_full, overwrite=config.refresh)
+                                  target_factors=B_full,
+                                  input_scaler=_input_scaler_payload(baseline),
+                                  overwrite=True)
 
         all_rows.extend(
             _run_subspace_rank_loop_for_fold(
@@ -1123,7 +1140,7 @@ def _run_rrr_for_unit(
                 A_full=A_full,
                 B_full=None if orthogonal_only else B_full,
                 ranks_to_run=ranks_to_run,
-                X_raw=X_fold,
+                X_raw=standardize_embeddings_with_baseline(X_fold, baseline),
                 baseline=baseline,
                 sig_mask_flat=sig_mask_flat,
                 fold_f=fold_f,
@@ -1287,7 +1304,8 @@ def _run_pca_for_unit(
         test_idx = baseline["test_idx"]
         X_train_raw = X_fold[train_idx]
         X_test_raw = X_fold[test_idx]
-        X_train, _ = standardize_embedding_train_test(X_train_raw)
+        X_train = standardize_embeddings_with_baseline(X_train_raw, baseline)
+        X_test = standardize_embeddings_with_baseline(X_test_raw, baseline)
         Y_train = baseline["Y_train"]
         Y_test = baseline["Y_test"]
         Y_hat_full = baseline["Y_hat_full_test"]
@@ -1303,10 +1321,11 @@ def _run_pca_for_unit(
 
         # Compute PCA on fold-standardized training data only (proper CV).
         A_standardized = fit_pca_input_basis(X_train)
-        _, input_scale = embedding_standardization_stats(X_train_raw)
-        A_full = (A_standardized / input_scale.T).astype(np.float32)
-        artifact.save_factors(unit=unit, fold=fold_f, input_factors=A_full,
-                              overwrite=refresh)
+        A_full = A_standardized
+        artifact.save_factors(
+            unit=unit, fold=fold_f, input_factors=A_full,
+            input_scaler=_input_scaler_payload(baseline), overwrite=True,
+        )
         max_components = A_full.shape[1]
 
         valid_ranks = [k for k in ranks_to_run if k <= max_components]
@@ -1324,8 +1343,8 @@ def _run_pca_for_unit(
             common = _run_common_subspace_fold_k(
                 A_full,
                 k,
-                X_train_raw,
-                X_test_raw,
+                X_train,
+                X_test,
                 Y_train,
                 Y_test,
                 sig_mask_flat,
@@ -1661,7 +1680,8 @@ def run_ieeg(config: RRRConfig, target_pca_dim: int | None = None):
         units = run_cross_subject(**branch_kwargs)
 
     required = {field: [] for field in (
-        "target_manifest", "input_factors", "full_metrics", "rank_metrics", "mean_results"
+        "target_manifest", "input_factors", "input_scalers", "full_metrics",
+        "rank_metrics", "mean_results"
     )}
     if config.save_b_matrices:
         required["target_factors"] = []
@@ -1675,6 +1695,7 @@ def run_ieeg(config: RRRConfig, target_pca_dim: int | None = None):
             fold_selector = artifact._selector(unit, fold=fold)
             if require_factors:
                 required["input_factors"].append(fold_selector)
+                required["input_scalers"].append(fold_selector)
             if require_full:
                 required["full_metrics"].append(fold_selector)
             if require_factors and config.save_b_matrices and unit.method == "rrr":

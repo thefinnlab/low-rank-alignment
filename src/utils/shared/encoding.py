@@ -295,6 +295,8 @@ def fit_encoding_baseline(
         prediction_X_train = X_train
         prediction_X_test = X_test
         input_coordinates = "raw"
+        input_mean = None
+        input_scale = None
     else:
         input_scaler = StandardScaler().fit(X_train)
         prediction_X_train = input_scaler.transform(X_train).astype(np.float32)
@@ -304,6 +306,8 @@ def fit_encoding_baseline(
             else input_scaler.transform(X_test).astype(np.float32)
         )
         input_coordinates = "standardized"
+        input_mean = input_scaler.mean_.astype(np.float32)
+        input_scale = input_scaler.scale_.astype(np.float32)
     result = {
         "Y_train": Y_train,
         "Y_test": Y_test,
@@ -321,6 +325,9 @@ def fit_encoding_baseline(
         "alpha_grid": np.asarray(resolved_alphas),
         "best_alphas": np.asarray(best_alphas),
     }
+    if input_mean is not None:
+        result["input_mean"] = input_mean
+        result["input_scale"] = input_scale
     if absorb_input_scaler:
         result["beta_full_raw"] = result["beta_full_input_coordinates"]
     return result
@@ -343,9 +350,9 @@ def build_per_fold_baselines(
 ) -> list:
     """Train a fresh ridge encoding model per fold and pre-compute baselines.
 
-    For each fold, fits a StandardScaler on Y_train, then trains a ridge model
-    via solve_regression (which absorbs the X-scaler into W, b). Returns the
-    dict structure consumed by RRR evaluation.
+    For each fold, fits StandardScalers on X_train and Y_train, then trains a ridge
+    model whose coefficients remain in standardized-X coordinates. Returns the dict
+    structure consumed by RRR evaluation, including the fold input scaler.
 
     Args:
         X_raw: (n_words, n_embed) raw embedding matrix.
@@ -371,7 +378,8 @@ def build_per_fold_baselines(
             Y_test:          (n_test, n_targets) scaled neural responses
             Y_hat_full_train:(n_train, n_targets) baseline model predictions on train
             Y_hat_full_test: (n_test, n_targets) baseline model predictions on test
-            beta_full_raw:   (n_embed, n_targets) coefficients mapping raw X → scaled Y
+            beta_full_input_coordinates: standardized-X ridge coefficients
+            input_mean/input_scale: training-fold embedding scaler state
     """
     n_words = X_raw.shape[0]
     baselines = []
@@ -411,6 +419,7 @@ def build_per_fold_baselines(
             alpha_policy=alpha_policy,
             alpha_cache_dir=fold_cache_dir,
             alpha_context=fold_context,
+            absorb_input_scaler=False,
         )
         baselines.append(
             {

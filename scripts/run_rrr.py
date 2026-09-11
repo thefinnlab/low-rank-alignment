@@ -192,6 +192,7 @@ class Artifact(ArtifactStore):
     FIELD_CONTRACT = {
         "effective_config": True, "upstream_identities": True,
         "target_manifest": True, "input_factors": False,
+        "input_scalers": False,
         "target_factors": False, "full_metrics": True,
         "rank_metrics": True, "fold_results": False, "mean_results": True,
         "metadata": False, "unit_metadata": False, "diagnostics": False,
@@ -313,12 +314,16 @@ class Artifact(ArtifactStore):
 
     def save_factors(self, *, unit=None, fold=None, method=None, rank=None,
                      input_factors=None, factors=None, target_factors=None,
-                     delay=None, basis=None, overwrite=False):
+                     input_scaler=None, delay=None, basis=None, overwrite=False):
         value = input_factors if input_factors is not None else factors
         selector = self._selector(
             unit, fold=fold, method=method, rank=rank, delay=delay, basis=basis
         )
         self.save_field("input_factors", value, selector=selector, overwrite=overwrite)
+        if input_scaler is not None:
+            self.save_field(
+                "input_scalers", input_scaler, selector=selector, overwrite=overwrite
+            )
         if target_factors is not None:
             self.save_field("target_factors", target_factors, selector=selector,
                             overwrite=overwrite)
@@ -354,6 +359,10 @@ class Artifact(ArtifactStore):
     def load_factors(self, *, unit, fold):
         selector = self._selector(unit, fold=int(fold))
         result = {"input_factors": self.load_field("input_factors", selector=selector)}
+        if self.has_field("input_scalers", selector=selector):
+            result["input_scaler"] = self.load_field(
+                "input_scalers", selector=selector
+            )
         if self.has_field("target_factors", selector=selector):
             result["target_factors"] = self.load_field("target_factors", selector=selector)
         return result
@@ -420,6 +429,11 @@ class Artifact(ArtifactStore):
             factor_selector = self._selector(unit, fold=int(fold))
             factors = (not require_input_factors or
                        self.has_field("input_factors", selector=factor_selector))
+            if (
+                factors and require_input_factors and self.dataset != "deep-fmri"
+                and self.mode != "multi_view"
+            ):
+                factors = self.has_field("input_scalers", selector=factor_selector)
             targets = (not require_target_factors or
                        self.has_field("target_factors", selector=factor_selector))
             for rank in ranks:

@@ -374,9 +374,9 @@ def fit_dense_rrr(
         precomputed_Y_hat_ols: Optional (n_train, n_targets) array of OLS predictions
             on the training set from a saved encoding model. When provided together
             with precomputed_beta_full, the ridge_model path is skipped entirely.
-        precomputed_beta_full: Optional (n_dirs, n_targets) array of unscaled
-            coefficients in the input feature space. Rows are indexed by direction;
-            selected_idx is applied to slice the relevant subset.
+        precomputed_beta_full: Optional (n_dirs, n_targets) coefficient array in
+            the same input coordinates as ``X_proj_train``. Rows are indexed by
+            direction; selected_idx is applied to slice the relevant subset.
         svd_on_cpu: If True, run the SVD on CPU in float64 for improved numerical
             robustness. The resulting singular vectors are converted back to the
             coefficient tensor's device and dtype before constructing the factors.
