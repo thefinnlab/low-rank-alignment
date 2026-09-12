@@ -33,6 +33,9 @@ embeddings predict iEEG and fMRI responses. The supported executable surface is
   fits and circular-shift null samples. A companion
   refit utility parses that comparison's console report and recomputes all-lag
   correlations for only the union of selected electrodes, without permutation tests.
+  `check_rrr_results.py` checks the complete internal, leave-one-subject-out, and
+  directed cross-dataset matrix for podcast, Cars 2, and fMRI, reporting artifacts
+  that are absent or not marked complete by the standard manifest contract.
 
 The Makefile has four individual analysis targets: `significance`, `rrr`,
 `target-dimensionality`, and `cross-condition`. They share `DATASET`, `MODELS`,
