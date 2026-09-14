@@ -200,6 +200,7 @@ ieeg:
       - 32
     per_dataset_config:
       movie: cars-2
+      rereference: laplacian
     shared_word_selection: true
     num_folds: 5
   run_pca_baseline: true
