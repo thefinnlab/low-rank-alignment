@@ -5,7 +5,7 @@ import pytest
 from scripts.run_language_decoding import Artifact
 from src.core.config import LanguageDecodingConfig
 from src.utils.language_interpret.decoding import (
-    _run_task_decoding, compute_prediction_agreement,
+    _pool_speaker_labels, _run_task_decoding, compute_prediction_agreement,
 )
 from src.utils.language_interpret.output import DecodingOutput, fit_selector
 
@@ -59,6 +59,21 @@ def test_direct_h5_fits_match_file_sink_and_resume(tmp_path, monkeypatch):
         folds=[(args["train_idx"], args["test_idx"])], task_targets=targets, config=config,
     )
     np.testing.assert_allclose(agreement.prediction_correlation, 1)
+
+
+def test_speaker_class_mapping_round_trips_through_artifact(tmp_path):
+    artifact = Artifact(results_root=tmp_path, variant="test").begin(config={})
+    writer = DecodingOutput(tmp_path / "unused", artifact)
+    target = np.array([0., 1., 0., 2.])
+    _, mapping = _pool_speaker_labels(
+        target, [(np.array([0, 1]), np.array([2, 3]))]
+    )
+    selector = {"task": "native_speaker"}
+    writer.save("speaker_class_mapping", mapping, selector)
+    assert artifact.load_field("speaker_class_mapping", selector=selector) == mapping
+    artifact.load_artifacts(["speaker_class_mapping"])
+    assert artifact.speaker_class_mapping
+    assert (artifact._variant_dir() / "artifact.h5").is_file()
 
 
 def test_incomplete_h5_fit_is_not_cached(tmp_path):

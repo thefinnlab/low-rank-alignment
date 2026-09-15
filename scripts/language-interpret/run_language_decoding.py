@@ -37,6 +37,7 @@ class Artifact(ArtifactStore):
         "grid_results": True, "summary": True, "iu_alignment": False,
         "prediction_agreement": False, "prediction_agreement_summary": False,
         "target_diagnostics": False, "channel_metrics": False,
+        "speaker_class_mapping": False,
         "plots": False,
     }
 
