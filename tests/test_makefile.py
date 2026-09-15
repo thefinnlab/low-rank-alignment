@@ -99,7 +99,6 @@ def test_rrr_resolves_full_fit_configs(tmp_path: Path):
     cases = (
         ("podcast", "configs/rrr/gpt2/full_fit.yml"),
         ("cars-2", "configs/brain_treebank/cars_2/rrr/gpt2/full_fit.yml"),
-        ("fmri", "configs/fmri/full_fit/gpt2.yml"),
     )
     for index, (dataset, expected) in enumerate(cases):
         case_path = tmp_path / str(index)
@@ -115,6 +114,19 @@ def test_rrr_resolves_full_fit_configs(tmp_path: Path):
         assert result.returncode == 0, result.stderr
         assert len(submissions) == 1
         assert expected in submissions[0]
+
+    fmri_path = tmp_path / "fmri"
+    fmri_path.mkdir()
+    result, submissions = _run_make(
+        fmri_path,
+        "rrr",
+        "DATASET=fmri",
+        "RRR_MODE=full_fit",
+        "MODELS=gpt2",
+    )
+    assert result.returncode == 2
+    assert not submissions
+    assert "unsupported for fmri" in result.stderr
 
 
 def test_fmri_leave_one_subject_out_submits_one_job_per_model_layer(tmp_path: Path):
@@ -471,11 +483,3 @@ def test_full_fit_configs_cover_primary_models_and_significance_union():
             payload = yaml.safe_load(path.read_text())
             assert payload["mode"] == "full_fit"
             assert payload["significance_selection"]["mode"] == "cross-model-layer"
-
-    fmri_root = REPO_ROOT / "configs/fmri/full_fit"
-    assert {path.stem for path in fmri_root.glob("*.yml")} == expected_models
-    for path in fmri_root.glob("*.yml"):
-        payload = yaml.safe_load(path.read_text())
-        assert payload["mode"] == "full_fit"
-        assert payload["significance_selection"]["mode"] == "cross-model-layer"
-        assert payload["subspace_aggregation"] == "prediction_weighted"

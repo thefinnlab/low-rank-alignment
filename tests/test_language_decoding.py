@@ -324,6 +324,20 @@ def test_fmri_modes_require_fmri_rrr_source(mode):
         )
 
 
+@pytest.mark.parametrize("mode", ["fmri_word", "fmri_tr_pre_fir"])
+def test_fmri_modes_require_internal_rrr_artifacts(mode, tmp_path):
+    config = LanguageDecodingConfig(
+        mode=mode,
+        rrr_source={"mode": "full_fit", "dataset": "deep-fmri"},
+        results_root=str(tmp_path),
+        rank_grid=[2],
+        tasks=["concreteness"],
+    )
+
+    with pytest.raises(ValueError, match="normal internal RRR source Artifact"):
+        run_config(config)
+
+
 def test_fmri_word_targets_preserve_raw_values_and_missing_rows(tmp_path):
     frames = {}
     for story, words in {"one": ["a", "b", "c"], "two": ["d", "e"]}.items():

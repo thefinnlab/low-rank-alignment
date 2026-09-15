@@ -98,7 +98,7 @@ significance_selection:
     model: glove-300
     layer: null
     variant: rereference-laplacian
-subspace_aggregation: extrinsic
+subspace_aggregation: prediction_weighted
 rrr_source:
   mode: internal
   dataset: deep-fmri

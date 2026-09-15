@@ -453,11 +453,23 @@ def _run_comparisons(config, spaces, jobs, evaluation, artifacts) -> pd.DataFram
                     )
                 return score_ordered_pair(
                     project_subspace(
-                        standardize_evaluation_values(source, source_values, train_idx),
+                        standardize_evaluation_values(
+                            source,
+                            source_values,
+                            train_idx,
+                            fold=fold,
+                            evaluation_dataset=config.evaluation_dataset,
+                        ),
                         source_factor, device="cuda",
                     ),
                     project_subspace(
-                        standardize_evaluation_values(target, target_values, train_idx),
+                        standardize_evaluation_values(
+                            target,
+                            target_values,
+                            train_idx,
+                            fold=fold,
+                            evaluation_dataset=config.evaluation_dataset,
+                        ),
                         target_factor, device="cuda",
                     ),
                     train_idx,

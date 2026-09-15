@@ -101,6 +101,11 @@ def _source_artifact(config) -> RRRArtifact:
     if not config.rrr_source:
         raise ValueError("The executable language-decoding client requires rrr_source")
     kwargs = dict(config.rrr_source)
+    if config.mode in {
+        LanguageDecodingMode.FMRI_WORD,
+        LanguageDecodingMode.FMRI_TR_PRE_FIR,
+    } and kwargs.get("mode", "internal") != "internal":
+        raise ValueError("fMRI decoding requires a normal internal RRR source Artifact")
     kwargs.setdefault("results_root", config.results_root)
     source = RRRArtifact(**kwargs)
     if source.variant is None:

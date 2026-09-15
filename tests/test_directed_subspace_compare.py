@@ -21,6 +21,7 @@ from src.utils.subspace_comparison.directed import (
     load_ieeg_heldout_ids,
     score_ordered_pair,
     shared_ranks,
+    standardize_evaluation_values,
 )
 from scripts.rrr.compare_subspaces import (
     Artifact as ComparisonArtifact,
@@ -210,6 +211,64 @@ def test_factor_for_uses_fold_factor_within_and_extrinsic_mean_across(tmp_path):
     np.testing.assert_allclose(weighted, np.eye(3, 2))
     np.testing.assert_allclose(cross_span @ cross_span.T, np.diag([1.0, 1.0, 0.0]))
     assert factor_for(cross, 2, 0, "podcast", "weighted") is None
+
+
+def test_fold_matched_values_use_saved_input_scaler(tmp_path):
+    space = _space(tmp_path, "within")
+
+    class FakeArtifact:
+        dataset = "podcast"
+
+        def load_field(self, field, selector):
+            assert field == "input_scalers"
+            assert selector == {"method": "rrr", "fold": 1}
+            return {
+                "mean": np.array([10.0, -2.0]),
+                "scale": np.array([2.0, 4.0]),
+                "coordinates": "standardized-v1",
+            }
+
+    space.artifact = FakeArtifact()
+    values = np.array([[8.0, 2.0], [12.0, 6.0], [100.0, 100.0]])
+
+    standardized = standardize_evaluation_values(
+        space,
+        values,
+        np.array([0, 1]),
+        fold=1,
+        evaluation_dataset="podcast",
+    )
+
+    np.testing.assert_allclose(
+        standardized,
+        np.array([[-1.0, 1.0], [1.0, 2.0], [45.0, 25.5]], dtype=np.float32),
+    )
+
+
+def test_cross_dataset_values_keep_evaluation_fold_standardization(tmp_path):
+    space = _space(tmp_path, "cross", dataset="cars-2")
+
+    class FakeArtifact:
+        dataset = "brain-treebank-cars-2"
+
+        def load_field(self, *_args, **_kwargs):
+            raise AssertionError("cross-dataset aggregation has no single saved scaler")
+
+    space.artifact = FakeArtifact()
+    values = np.array([[1.0, 2.0], [3.0, 6.0], [9.0, 20.0]])
+
+    standardized = standardize_evaluation_values(
+        space,
+        values,
+        np.array([0, 1]),
+        fold=0,
+        evaluation_dataset="podcast",
+    )
+
+    np.testing.assert_allclose(
+        standardized,
+        np.array([[-1.0, -1.0], [1.0, 1.0], [7.0, 8.0]], dtype=np.float32),
+    )
 
 
 def test_score_ordered_pair_recovers_rotated_scaled_space():

@@ -224,8 +224,9 @@ the combined morphology string, and `aspect` are intentionally not decoding targ
 - Expanded prosody beyond word timing and pauses (F0/intensity, rate, lengthening,
   pitch reset, prominence, ToBI, and repair/false-start targets) is not yet implemented.
 - Brain Treebank artifacts can be loaded by the language decoder with dataset-specific
-  task manifests. The retained fMRI decoder trains on training-story words, tunes with
-  leave-one-session-out inner folds, and evaluates only on `wheretheressmoke`.
+  task manifests. The retained fMRI decoder loads factors from a normal internal fMRI
+  RRR Artifact, trains on training-story words, tunes with leave-one-session-out inner
+  folds, and evaluates only on `wheretheressmoke`.
 
 ## Resource staging
 

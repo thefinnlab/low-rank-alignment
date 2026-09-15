@@ -90,7 +90,7 @@ significance_selection:
     offset: 0
     model: glove-300
     layer: null
-subspace_aggregation: extrinsic
+subspace_aggregation: prediction_weighted
 rrr_source:
   mode: internal
   dataset: deep-fmri

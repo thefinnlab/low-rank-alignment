@@ -11,7 +11,7 @@ embeddings predict iEEG and fMRI responses. The supported executable surface is
 - `scripts/run_rrr.py` dispatches reduced-rank regression by dataset while exposing
   one Config and Artifact contract. Its `full_fit` mode fits a single reusable
   factor set on every selected row and significant target, without a held-out rank
-  evaluation, for both iEEG and fMRI.
+  evaluation, for iEEG sources.
 - `scripts/run_cross_condition_rrr.py` runs standalone directed transfer between
   provider-generated X/Y items with no significance filtering and orthogonalized RRR
   input spaces. Its selectable providers compare Brain Treebank movies within subject
@@ -146,11 +146,10 @@ words and significant electrodes and saves its RRR factor plus the whole-dataset
 embedding scaler. Its optional PCA factor is fit and saved from the same standardized
 rows. Cross-dataset RRR consumes this saved factor when the selected source is a
 `full_fit` Artifact, while retaining the previous on-demand whole-stimulus refit for
-older source modes. fMRI `full_fit` combines all configured training and shared-test
-stories, applies the ordinary per-story standardization and FIR expansion, and saves
-rank-specific RRR and PCA bases without evaluating them. fMRI sources expose saved
-whole-training-stimulus rank bases; aggregation remains only where the fMRI FIR RRR
-factor is combined across delay blocks, using the configured equal-subspace
+older source modes. Normal internal fMRI RRR saves whole-training-stimulus,
+rank-specific RRR and PCA bases alongside its held-out evaluation. Aggregation remains
+only where the fMRI FIR RRR factor is combined across delay blocks, using the
+configured equal-subspace
 `extrinsic` method, raw-coefficient `factor_weighted` method, or normalized
 prediction-energy `prediction_weighted` method. The prediction-weighted option uses
 squared singular-value energy from the SVD of the full ridge model's training
@@ -158,8 +157,8 @@ predictions and is available only for within-fMRI FIR aggregation. It is the def
 for internal fMRI FIR fitting and for loading an fMRI source into cross-dataset RRR;
 unspecified EEG aggregation continues to compute with the extrinsic method.
 Checked-in `full_fit` configs cover every layer of the seven primary models for
-Podcast, Cars 2, and fMRI. They retain the final cross-model/layer significance union
-and can be launched with `make rrr DATASET=<podcast|cars-2|fmri> RRR_MODE=full_fit`.
+Podcast and Cars 2. They retain the final cross-model/layer significance union
+and can be launched with `make rrr DATASET=<podcast|cars-2> RRR_MODE=full_fit`.
 Cross-dataset RRR evaluation uses the target modality's normalization convention:
 an fMRI target applies its per-story normalization and receives iEEG RRR/PCA bases
 in standardized embedding coordinates, while an iEEG target applies training-fold
@@ -171,15 +170,15 @@ embedding coordinates and before FIR expansion. A full-rank orthonormal basis th
 preserves the full-model design up to an orthogonal rotation.
 Internal iEEG RRR and PCA fit and save their factors in embeddings standardized with
 that fold's training statistics. Each fold factor is paired with its saved input mean
-and scale. Direct rank evaluation and language workflows standardize inputs before
-projection; consumers operating on raw embeddings convert the factor with the saved
-scale. Consequently, reduced QR at the complete embedding rank is an orthogonal
-rotation of the same standardized design used by the full ridge model and reproduces
-that model's ceiling.
-Cross-dataset language decoding and reconstruction consume a single `full_fit`
-factor directly rather than computing a Grassmann mean across source folds. Target
-iEEG embeddings continue to use target-fold training statistics, while fMRI word and
-TR inputs are standardized within each local story before projection.
+and scale. Direct rank evaluation, fold-matched subspace comparison, and language
+workflows standardize inputs before projection; consumers operating on raw embeddings
+convert the factor with the saved scale. Consequently, reduced QR at the complete
+embedding rank is an orthogonal rotation of the same standardized design used by the
+full ridge model and reproduces that model's ceiling.
+Cross-dataset iEEG language decoding and reconstruction consume a single `full_fit`
+factor directly rather than computing a Grassmann mean across source folds. fMRI
+language decoding consumes the rank factors from a normal internal fMRI RRR Artifact;
+its word and TR inputs are standardized within each local story before projection.
 RRR modes that evaluate directly fitted or fold-matched input factors report both
 the original projected-ridge metrics and a companion `*_orth` family fitted after a
 reduced QR decomposition. PCA and aggregated cross-dataset bases are evaluated in

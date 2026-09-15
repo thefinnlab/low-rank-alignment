@@ -571,18 +571,17 @@ class TestApplyOverrides:
         config = FMRICrossDatasetRRRConfig(source_mode="within_fmri")
         assert config.source_mode == "within_fmri"
 
-    def test_full_fit_is_available_for_both_modalities(self):
+    def test_full_fit_is_available_only_for_ieeg(self):
         ieeg = RRRClientConfig(mode=ScriptMode.FULL_FIT).selected_config()
         assert ieeg.mode == ScriptMode.FULL_FIT
 
-        fmri = RRRClientConfig(
-            dataset="deep-fmri",
-            mode=ScriptMode.FULL_FIT,
-            ieeg=None,
-            fmri={},
-        ).selected_config()
-        assert fmri.source_mode == "full_fit"
-        assert fmri.subspace_aggregation == "prediction_weighted"
+        with pytest.raises(ValueError, match="unsupported for fMRI"):
+            RRRClientConfig(
+                dataset="deep-fmri",
+                mode=ScriptMode.FULL_FIT,
+                ieeg=None,
+                fmri={},
+            ).selected_config()
 
     def test_fmri_loso_requires_multiple_subjects(self):
         with pytest.raises(ValueError, match="at least two subjects"):

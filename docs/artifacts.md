@@ -54,10 +54,9 @@ single-variant discovery.
 
 The `full_fit` RRR mode is a factor-only producer. An iEEG variant stores one
 `method: rrr` factor and whole-dataset `input_scalers` entry, plus the matching PCA
-pair when `run_pca_baseline` is enabled. An fMRI variant stores one factor per
-`method` and `rank`; those factors use dynamic per-story normalization and therefore
-do not have one fixed input scaler. Full-fit Artifacts deliberately do not publish
-held-out rank metrics.
+pair when `run_pca_baseline` is enabled. Full-fit Artifacts deliberately do not
+publish held-out rank metrics. fMRI uses normal internal RRR Artifacts, which save
+rank-specific factors alongside held-out metrics.
 
 ## Contract
 
@@ -162,7 +161,7 @@ and plots. Its `fmri_word` and `fmri_tr_pre_fir` modes take their story split,
 embeddings, and rank factors from a deep-fMRI RRR Artifact. The former decodes raw
 word-aligned features from locally story-standardized pooled-word embeddings; the
 latter uses the source timing and trimming to decode Lanczos-aligned current-TR targets from
-projected pre-FIR inputs.
+projected pre-FIR inputs. Both modes require a normal internal fMRI RRR Artifact.
 Categorical TR targets also expose per-channel metrics, availability diagnostics,
 smoothed-channel ridge weights, and dominant-label classifier weights.
 Reconstruction exposes corresponding provenance,

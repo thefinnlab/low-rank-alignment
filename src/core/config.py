@@ -990,20 +990,20 @@ class FMRICrossDatasetRRRConfig:
         if is_glove and self.layer is not None:
             raise ValueError("fMRI GloVe configurations require layer=null")
         if self.source_mode not in {
-            "cross_dataset", "within_fmri", "leave_one_subject_out", "full_fit"
+            "cross_dataset", "within_fmri", "leave_one_subject_out"
         }:
             raise ValueError(
                 "source_mode must be 'cross_dataset', 'within_fmri', "
-                "'leave_one_subject_out', or 'full_fit', "
+                "or 'leave_one_subject_out', "
                 f"got {self.source_mode!r}"
             )
         if self.subspace_aggregation is None and self.source_mode in {
-            "within_fmri", "leave_one_subject_out", "full_fit"
+            "within_fmri", "leave_one_subject_out"
         }:
             self.subspace_aggregation = "prediction_weighted"
         allowed_aggregation = (
             FMRI_FIR_SUBSPACE_AGGREGATION_METHODS
-            if self.source_mode in {"within_fmri", "leave_one_subject_out", "full_fit"}
+            if self.source_mode in {"within_fmri", "leave_one_subject_out"}
             else SUBSPACE_AGGREGATION_METHODS
         )
         if (

@@ -87,7 +87,6 @@ class Config:
             ScriptMode.INTERNAL,
             ScriptMode.CROSS_DATASET,
             ScriptMode.LEAVE_ONE_SUBJECT_OUT,
-            ScriptMode.FULL_FIT,
         }
         if self.modality == "fmri" and self.mode not in shared:
             raise ValueError(f"RRR mode {self.mode.value!r} is unsupported for fMRI")
@@ -127,7 +126,6 @@ class Config:
                 ScriptMode.INTERNAL: "within_fmri",
                 ScriptMode.CROSS_DATASET: "cross_dataset",
                 ScriptMode.LEAVE_ONE_SUBJECT_OUT: "leave_one_subject_out",
-                ScriptMode.FULL_FIT: "full_fit",
             }[self.mode]
             if self.rrr_source:
                 if _is_fmri(self.rrr_source.get("dataset")):
