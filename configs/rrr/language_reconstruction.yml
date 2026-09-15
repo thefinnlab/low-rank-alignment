@@ -27,7 +27,6 @@ rrr_source:
       layer: 24
 rrr_selectors: {}
 mode: within_dataset
-source_name: podcast_gpt2-xl-batch_layer24
 subspace_aggregation: extrinsic
 
 rank_grid: [1, 2, 4, 8, 16, 32]

@@ -27,6 +27,7 @@ class ScriptMode(str, Enum):
     TEMPORAL_WINDOWS = "temporal_windows"
     CROSS_TEMPORAL_WINDOWS = "cross_temporal_windows"
     INTERNAL = "internal"
+    FULL_FIT = "full_fit"
 
 
 class LanguageDecodingMode(str, Enum):
@@ -494,12 +495,7 @@ class LanguageReconstructionConfig:
     rrr_selectors: dict = field(default_factory=dict)
     results_root: str = "results"
     variant_name: str | None = None
-    # Deprecated compatibility input; executable clients require rrr_source.
-    rrr_run_path: str | None = None
     mode: LanguageDecodingMode = LanguageDecodingMode.WITHIN_DATASET
-    source_name: str | None = None
-    fold_results_dir: str | None = None
-    output_dir: str | None = None
     subspace_aggregation: str = "extrinsic"
     rank_grid: list[int] = field(default_factory=lambda: [1, 2, 4, 8, 16, 32])
     tasks: list[str] = field(default_factory=lambda: [
@@ -532,7 +528,7 @@ class LanguageReconstructionConfig:
             raise ValueError(
                 f"Language reconstruction does not support mode={self.mode.value}"
             )
-        if not self.rrr_source and not self.rrr_run_path:
+        if not self.rrr_source:
             raise ValueError("LanguageReconstructionConfig.rrr_source is required")
         if not self.rank_grid or any(int(rank) < 1 for rank in self.rank_grid):
             raise ValueError("rank_grid must contain positive integers")
@@ -994,20 +990,20 @@ class FMRICrossDatasetRRRConfig:
         if is_glove and self.layer is not None:
             raise ValueError("fMRI GloVe configurations require layer=null")
         if self.source_mode not in {
-            "cross_dataset", "within_fmri", "leave_one_subject_out"
+            "cross_dataset", "within_fmri", "leave_one_subject_out", "full_fit"
         }:
             raise ValueError(
-                "source_mode must be 'cross_dataset', 'within_fmri', or "
-                "'leave_one_subject_out', "
+                "source_mode must be 'cross_dataset', 'within_fmri', "
+                "'leave_one_subject_out', or 'full_fit', "
                 f"got {self.source_mode!r}"
             )
         if self.subspace_aggregation is None and self.source_mode in {
-            "within_fmri", "leave_one_subject_out"
+            "within_fmri", "leave_one_subject_out", "full_fit"
         }:
             self.subspace_aggregation = "prediction_weighted"
         allowed_aggregation = (
             FMRI_FIR_SUBSPACE_AGGREGATION_METHODS
-            if self.source_mode in {"within_fmri", "leave_one_subject_out"}
+            if self.source_mode in {"within_fmri", "leave_one_subject_out", "full_fit"}
             else SUBSPACE_AGGREGATION_METHODS
         )
         if (

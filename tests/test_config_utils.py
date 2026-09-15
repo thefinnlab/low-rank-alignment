@@ -30,6 +30,7 @@ from src.utils.shared.config import (
     expand_fmri_layer_configs,
     save_effective_config,
 )
+from scripts.run_rrr import Config as RRRClientConfig
 
 # ---------------------------------------------------------------------------
 # parse_override_args
@@ -569,6 +570,19 @@ class TestApplyOverrides:
     def test_within_fmri_does_not_require_cross_dataset_source(self):
         config = FMRICrossDatasetRRRConfig(source_mode="within_fmri")
         assert config.source_mode == "within_fmri"
+
+    def test_full_fit_is_available_for_both_modalities(self):
+        ieeg = RRRClientConfig(mode=ScriptMode.FULL_FIT).selected_config()
+        assert ieeg.mode == ScriptMode.FULL_FIT
+
+        fmri = RRRClientConfig(
+            dataset="deep-fmri",
+            mode=ScriptMode.FULL_FIT,
+            ieeg=None,
+            fmri={},
+        ).selected_config()
+        assert fmri.source_mode == "full_fit"
+        assert fmri.subspace_aggregation == "prediction_weighted"
 
     def test_fmri_loso_requires_multiple_subjects(self):
         with pytest.raises(ValueError, match="at least two subjects"):

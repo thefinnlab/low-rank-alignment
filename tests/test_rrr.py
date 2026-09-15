@@ -13,7 +13,7 @@ from src.utils.rrr.core import (
     save_rrr_factors,
     save_rrr_result,
 )
-from src.utils.rrr.rrr_ieeg import _load_cross_dataset_A_by_rank
+from src.utils.rrr.rrr_ieeg import load_cross_dataset_A_by_rank
 from src.core.config import RRRTemporalWindowConfig
 
 # ---------------------------------------------------------------------------
@@ -318,7 +318,7 @@ class TestCrossDatasetRankBasisLoading:
         source.save_field("input_factors", expected,
                           selector={"method": "rrr", "rank": 4})
 
-        loaded = _load_cross_dataset_A_by_rank(
+        loaded = load_cross_dataset_A_by_rank(
             source, "rrr", [4], source_format="rank_bases"
         )
 
@@ -328,7 +328,7 @@ class TestCrossDatasetRankBasisLoading:
         from scripts.run_rrr import Artifact
         source = Artifact(results_root=tmp_path).begin(config={"source": 1})
         with pytest.raises(ValueError, match="no rrr factors"):
-            _load_cross_dataset_A_by_rank(
+            load_cross_dataset_A_by_rank(
                 source, "rrr", [4], source_format="rank_bases"
             )
 

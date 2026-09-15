@@ -1,5 +1,6 @@
 import numpy as np
 import pandas as pd
+from types import SimpleNamespace
 
 from scripts.run_rrr import Artifact, UnitSelector
 from src.utils.rrr.rrr_ieeg import _run_rrr_for_unit
@@ -7,6 +8,63 @@ from src.utils.rrr.ieeg_rrr_mode.common import _run_common_subspace_fold_k
 from src.core.config import RRRConfig
 from src.utils.shared.encoding import build_per_fold_baselines
 from src.utils.plotting.encoding import plot_rrr_rank_results
+
+
+def test_ieeg_full_fit_saves_one_factor_scaler_pair_per_method(
+    tmp_path, monkeypatch
+):
+    from src.utils.rrr.ieeg_rrr_mode.full_fit import run_full_fit
+
+    artifact = Artifact(mode="full_fit", results_root=tmp_path).begin(config={})
+    artifact.save_field("effective_config", {})
+    artifact.save_field("upstream_identities", [])
+    X = np.arange(24, dtype=np.float32).reshape(6, 4)
+    Y = np.arange(18, dtype=np.float32).reshape(6, 3)
+    manifest = pd.DataFrame({"target_id": ["a", "b", "c"]})
+    prepared = SimpleNamespace(
+        embeddings={"embedding": X}, targets=Y, target_manifest=manifest
+    )
+    monkeypatch.setattr(
+        "src.utils.rrr.ieeg_rrr_mode.full_fit._get_decomposition_inputs",
+        lambda *args, **kwargs: prepared,
+    )
+    monkeypatch.setattr(
+        "src.utils.rrr.ieeg_rrr_mode.full_fit._reference_encoding_results",
+        lambda *args: {},
+    )
+    scaler = {
+        "mean": np.zeros((1, 4), dtype=np.float32),
+        "scale": np.ones((1, 4), dtype=np.float32),
+        "coordinates": "standardized-v1",
+    }
+    monkeypatch.setattr(
+        "src.utils.rrr.ieeg_rrr_mode.full_fit.fit_full_dataset_ieeg_factors",
+        lambda *args, **kwargs: {
+            "rrr": np.ones((4, 2), dtype=np.float32),
+            "pca": np.eye(4, 2, dtype=np.float32),
+            "target": None,
+            "input_scaler": scaler,
+        },
+    )
+    config = SimpleNamespace(
+        run_pca_baseline=True,
+        save_b_matrices=False,
+        refresh=False,
+        rank_grid=[1, 2],
+    )
+    significance = SimpleNamespace(detailed_significance=pd.DataFrame())
+
+    run_full_fit(
+        config, SimpleNamespace(), artifact, significance, [1], {1: ["E1"]},
+        X, pd.DataFrame(),
+    )
+
+    assert artifact.complete
+    for method in ("rrr", "pca"):
+        selector = {"method": method}
+        assert artifact.has_field("input_factors", selector=selector)
+        loaded = artifact.load_field("input_scalers", selector=selector)
+        assert loaded["coordinates"] == "standardized-v1"
 
 
 def test_common_rank_evaluation_uses_raw_and_reduced_qr_designs(

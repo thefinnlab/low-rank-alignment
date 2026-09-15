@@ -74,6 +74,10 @@ def run_fmri(
         )
 
         return run_leave_one_subject_out(setup)
+    if config.source_mode == "full_fit":
+        from src.utils.rrr.fmri_rrr_mode.full_fit import run_full_fit
+
+        return run_full_fit(setup)
     raise ValueError(f"Unsupported fMRI source_mode {config.source_mode!r}")
 
 

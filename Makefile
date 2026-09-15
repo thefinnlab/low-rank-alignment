@@ -99,9 +99,10 @@ significance-missing:
 ## Run one RRR mode once per selected model. Leave-one-subject-out and fMRI
 ## cross_model_layer_per_layer run once per selected model layer.
 ## iEEG RRR_MODE: cross_subject, cross_model_layer, leave_one_subject_out,
-##                temporal_windows, cross_temporal_windows, or cross_dataset
+##                temporal_windows, cross_temporal_windows, full_fit, or cross_dataset
 ## fMRI RRR_MODE: cross_subject (within), cross_model_layer,
-##                cross_model_layer_per_layer, leave_one_subject_out, or cross_dataset
+##                cross_model_layer_per_layer, leave_one_subject_out, full_fit,
+##                or cross_dataset
 ## cross_dataset also requires SOURCE_DATASET.
 ## Example: make rrr DATASET=fmri RRR_MODE=cross_model_layer_per_layer MODELS="gpt2 gpt2-xl"
 rrr:
@@ -120,6 +121,7 @@ rrr:
 				cross_model_layer) config_root="configs/fmri/within_fmri_cross_model_layer" ;;
 				cross_model_layer_per_layer) config_root="configs/fmri/within_fmri_cross_model_layer"; per_layer=true ;;
 				leave_one_subject_out) config_root="configs/fmri/leave_one_subject_out"; per_layer=true ;;
+				full_fit) config_root="configs/fmri/full_fit" ;;
 				cross_dataset)
 					[ -n "$(SOURCE_DATASET)" ] || { echo "SOURCE_DATASET is required for cross_dataset RRR" >&2; exit 2; }
 					config_root="configs/cross_dataset/fmri/from_$(SOURCE_DATASET)"

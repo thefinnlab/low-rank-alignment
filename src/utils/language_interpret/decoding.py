@@ -58,11 +58,14 @@ def resolve_subspace_unit_dir(run_path: str, kind: str = "subspace") -> Path:
     """Resolve a configured run root or direct saved-subspace unit directory."""
     root = Path(run_path).expanduser().resolve()
     candidates = [root, root / kind]
-    valid = [path for path in candidates if list(path.glob("fold_*/A.npy"))]
+    valid = [
+        path for path in candidates
+        if list(path.glob("fold_*/A.npy")) or list(path.glob("rank_*/A.npy"))
+    ]
     if len(valid) != 1:
         raise FileNotFoundError(
             f"Expected exactly one {kind.upper()} unit at {root} or {root / kind} with "
-            f"fold_*/A.npy; found {valid}"
+            f"fold_*/A.npy or rank_*/A.npy; found {valid}"
         )
     return valid[0]
 
@@ -986,6 +989,35 @@ def _prepare_single_view_subspaces(
     config: LanguageDecodingConfig,
 ) -> dict[tuple[int, int], tuple[np.ndarray, np.ndarray]]:
     """Prepare projected embeddings and ambient factors for one embedding space."""
+    ranked_paths = [path for path in factor_paths if path.parent.name.startswith("rank_")]
+    if ranked_paths:
+        if len(ranked_paths) != len(factor_paths):
+            raise ValueError("Cannot mix fold-specific and rank-specific factors")
+        if config.mode == LanguageDecodingMode.WITHIN_DATASET:
+            raise ValueError("Within-dataset decoding requires fold-specific factors")
+        matrices_by_rank = {
+            int(path.parent.name.removeprefix("rank_")): np.load(path)
+            for path in ranked_paths
+        }
+        missing = sorted(set(map(int, config.rank_grid)) - set(matrices_by_rank))
+        if missing:
+            raise ValueError(f"{subspace.upper()} factors are missing ranks {missing}")
+        prepared = {}
+        for fold, (train_idx, _) in enumerate(folds):
+            mean = X[np.asarray(train_idx)].mean(axis=0, dtype=np.float64)
+            scale = X[np.asarray(train_idx)].std(axis=0, dtype=np.float64)
+            scale[scale == 0] = 1.0
+            X_fold = ((X - mean) / scale).astype(np.float32)
+            for rank in map(int, config.rank_grid):
+                factor = np.asarray(matrices_by_rank[rank])
+                if factor.shape != (X.shape[1], rank):
+                    raise ValueError(
+                        f"Rank {rank} {subspace.upper()} factor has shape "
+                        f"{factor.shape}; expected {(X.shape[1], rank)}"
+                    )
+                prepared[(fold, rank)] = (X_fold @ factor, factor)
+        return prepared
+
     matrices_by_fold = {
         int(path.parent.name.removeprefix("fold_")): np.load(path)
         for path in factor_paths
@@ -1010,14 +1042,22 @@ def _prepare_single_view_subspaces(
         mean_factors = None
     else:
         source_matrices = list(matrices_by_fold.values())
-        mean_factors = {
-            rank: aggregate_subspace_basis(
-                source_matrices,
-                rank=int(rank),
-                method=config.subspace_aggregation,
-            )
-            for rank in config.rank_grid
-        }
+        mean_factors = {}
+        for rank in config.rank_grid:
+            if len(source_matrices) == 1:
+                factor = np.asarray(source_matrices[0])[:, : int(rank)]
+                if factor.shape[1] != int(rank):
+                    raise ValueError(
+                        f"{subspace.upper()} factor has insufficient width for "
+                        f"rank {rank}"
+                    )
+                mean_factors[int(rank)] = factor
+            else:
+                mean_factors[int(rank)] = aggregate_subspace_basis(
+                    source_matrices,
+                    rank=int(rank),
+                    method=config.subspace_aggregation,
+                )
 
     prepared = {}
     for fold, (train_idx, test_idx) in enumerate(folds):
@@ -1160,9 +1200,12 @@ def run_language_decoding(config: LanguageDecodingConfig) -> Path:
         if config.pca_run_path
         else None
     )
-    rrr_factor_paths = sorted(rrr_unit_dir.glob("fold_*/A.npy"))
+    rrr_factor_paths = sorted(rrr_unit_dir.glob("fold_*/A.npy")) or sorted(
+        rrr_unit_dir.glob("rank_*/A.npy")
+    )
     pca_factor_paths = (
-        sorted(pca_unit_dir.glob("fold_*/A.npy"))
+        (sorted(pca_unit_dir.glob("fold_*/A.npy")) or
+         sorted(pca_unit_dir.glob("rank_*/A.npy")))
         if pca_unit_dir is not None
         else []
     )

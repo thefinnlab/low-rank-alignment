@@ -12,7 +12,7 @@ from src.utils.rrr.ieeg_rrr_mode.cross_dataset import (
     run_cross_dataset as _run_cross_dataset_rrr,
 )
 from src.utils.rrr.ieeg_rrr_mode.cross_dataset_helpers import (
-    _load_cross_dataset_A_by_rank,
+    load_cross_dataset_A_by_rank,
     _load_cross_temporal_A_by_fold,
     _run_cross_dataset_subspace_for_unit,
 )

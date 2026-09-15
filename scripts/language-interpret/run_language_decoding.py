@@ -132,10 +132,20 @@ def _materialize_method(source, method, root, selectors):
             scaler = source.load_field("input_scalers", selector=selector)
             np.savez(path / "input_scaler.npz", **scaler)
     else:
-        _, value = max(entries, key=lambda item: int(item[0].get("rank", 0)))
-        path = destination / "fold_0"
-        path.mkdir(parents=True, exist_ok=True)
-        np.save(path / "A.npy", value)
+        ranked = [(selector, value) for selector, value in entries if "rank" in selector]
+        materialized = ranked or [max(
+            entries, key=lambda item: int(item[0].get("rank", 0))
+        )]
+        for selector, value in materialized:
+            directory = (
+                f"rank_{int(selector['rank'])}" if "rank" in selector else "fold_0"
+            )
+            path = destination / directory
+            path.mkdir(parents=True, exist_ok=True)
+            np.save(path / "A.npy", value)
+            if source.has_field("input_scalers", selector=selector):
+                scaler = source.load_field("input_scalers", selector=selector)
+                np.savez(path / "input_scaler.npz", **scaler)
     return destination
 
 

@@ -87,6 +87,7 @@ class Config:
             ScriptMode.INTERNAL,
             ScriptMode.CROSS_DATASET,
             ScriptMode.LEAVE_ONE_SUBJECT_OUT,
+            ScriptMode.FULL_FIT,
         }
         if self.modality == "fmri" and self.mode not in shared:
             raise ValueError(f"RRR mode {self.mode.value!r} is unsupported for fMRI")
@@ -126,6 +127,7 @@ class Config:
                 ScriptMode.INTERNAL: "within_fmri",
                 ScriptMode.CROSS_DATASET: "cross_dataset",
                 ScriptMode.LEAVE_ONE_SUBJECT_OUT: "leave_one_subject_out",
+                ScriptMode.FULL_FIT: "full_fit",
             }[self.mode]
             if self.rrr_source:
                 if _is_fmri(self.rrr_source.get("dataset")):
@@ -231,6 +233,13 @@ class Artifact(ArtifactStore):
             )
         self._init_store(mode=mode, dataset=dataset, offset=offset, model=model,
                          layer=layer, variant=variant, results_root=results_root)
+        if mode == "full_fit":
+            self.FIELD_CONTRACT = {
+                **type(self).FIELD_CONTRACT,
+                "full_metrics": False,
+                "rank_metrics": False,
+                "mean_results": False,
+            }
         self.requested_significance_selection = significance_selection
         self.requested_subspace_aggregation = subspace_aggregation
         self.requested_rereference = rereference

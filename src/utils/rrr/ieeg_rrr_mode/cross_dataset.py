@@ -9,7 +9,7 @@ from src.utils.rrr.significance import validate_cross_dataset_significance_align
 
 from .common import _build_rrr_decomposition_inputs, _reference_encoding_results
 from .cross_dataset_helpers import (
-    _load_cross_dataset_A_by_rank,
+    load_cross_dataset_A_by_rank,
     _run_cross_dataset_subspace_for_unit,
 )
 
@@ -42,7 +42,7 @@ def run_cross_dataset(
     shared_selection_metadata=None,
 ):
     """Evaluate target models using whole-stimulus source input bases."""
-    if config.ieeg_rrr_source:
+    if config.ieeg_rrr_source and source.identity["mode"] != "full_fit":
         source_kwargs = dict(config.ieeg_rrr_source)
         source_kwargs.setdefault("results_root", config.results_root)
         source = Artifact(**source_kwargs)
@@ -113,13 +113,14 @@ def run_cross_dataset(
         A_pca_by_rank = source_bases["pca"] if config.run_pca_baseline else None
     else:
         print(f"Loading source RRR subspaces from {source.identity_record()}")
-        A_rrr_by_rank = _load_cross_dataset_A_by_rank(
-            source, kind="rrr", ranks=config.rank_grid, source_format="rank_bases"
+        A_rrr_by_rank = load_cross_dataset_A_by_rank(
+            source, kind="rrr", ranks=config.rank_grid, source_format="rank_bases",
+            orthonormalize=bool(config.ieeg_rrr_source),
         )
         A_pca_by_rank = None
         if config.run_pca_baseline:
             print(f"Loading source PCA subspaces from {source.identity_record()}")
-            A_pca_by_rank = _load_cross_dataset_A_by_rank(
+            A_pca_by_rank = load_cross_dataset_A_by_rank(
                 source, kind="pca", ranks=config.rank_grid,
                 source_format="rank_bases",
             )
@@ -185,6 +186,6 @@ def run_cross_dataset(
 
 __all__ = [
     "run_cross_dataset",
-    "_load_cross_dataset_A_by_rank",
+    "load_cross_dataset_A_by_rank",
     "_run_cross_dataset_subspace_for_unit",
 ]

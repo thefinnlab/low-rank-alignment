@@ -1660,6 +1660,12 @@ def run_ieeg(config: RRRConfig, target_pca_dim: int | None = None):
     if target_pca_dim is not None:
         branch_kwargs["target_pca_dim"] = int(target_pca_dim)
 
+    if config.mode == ScriptMode.FULL_FIT:
+        from .full_fit import run_full_fit
+
+        artifact = run_full_fit(**branch_kwargs)
+        print("\nDone.")
+        return artifact
     if config.mode == ScriptMode.PER_SUBJECT:
         from .per_subject import run_per_subject
         units = run_per_subject(**branch_kwargs)

@@ -538,13 +538,17 @@ def run_fmri_word_decoding(
         # of every training story.
         X_train = np.vstack([
             np.asarray(
-                np.load(embedding_paths[story], mmap_mode="r") @ factor,
+                _story_zscore(np.load(embedding_paths[story], mmap_mode="r"))
+                @ factor,
                 dtype=np.float32,
             )
             for story in train_stories
         ])
         X_test = np.asarray(
-            np.load(embedding_paths[test_stories[0]], mmap_mode="r") @ factor,
+            _story_zscore(
+                np.load(embedding_paths[test_stories[0]], mmap_mode="r")
+            )
+            @ factor,
             dtype=np.float32,
         )
         for task in config.tasks:
@@ -613,7 +617,7 @@ def run_fmri_word_decoding(
         "train_stories": train_stories,
         "test_story": test_stories[0],
         "analysis_unit": "word",
-        "input_representation": "pooled_word_embeddings_projected_to_saved_basis",
+        "input_representation": "pooled_word_embeddings_story_zscored_then_projected",
         "target_representation": "raw_word_aligned_feature",
         "continuous_decoder": "primal_ridge_cv_neg_mean_squared_error",
     }, indent=2))

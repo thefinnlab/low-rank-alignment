@@ -88,11 +88,15 @@ class: they remain missing and are excluded by the decoder's finite-target mask.
 ## Task-to-subspace reconstruction
 
 `scripts/language-interpret/run_language_reconstruction.py` uses any configured subset of the same
-task registry as predictors of a saved RRR subspace and its automatically resolved PCA
-sibling. Unlike language decoding, missing task values are retained: continuous values
+task registry as predictors of the RRR and PCA factors in one selected RRR Artifact.
+Unlike language decoding, missing task values are retained: continuous values
 receive fold-local median imputation plus missingness indicators, while categorical
 missingness is an explicit level. Requested tasks with no values in the selected dataset
 fail during preflight rather than silently changing the predictor set.
+
+The executable resolves the RRR and significance inputs as Artifacts and writes
+reconstruction fields directly to its output Artifact; reconstruction has no direct
+result-directory loading or saving interface.
 
 A fold-local multi-output ridge model jointly predicts every coordinate at each
 configured rank. Both raw weighted factors and QR-orthonormalized spans are evaluated.

@@ -825,6 +825,41 @@ def test_run_subspace_decoding_loads_paths_and_validates_fold_set(
         )
 
 
+def test_cross_dataset_single_full_fit_factor_is_applied_without_aggregation(
+    tmp_path, monkeypatch
+):
+    unit = tmp_path / "rrr"
+    fold = unit / "fold_0"
+    fold.mkdir(parents=True)
+    factor = np.array([[2.0], [0.5]], dtype=np.float32)
+    np.save(fold / "A.npy", factor)
+    X = np.array([[1.0, 3.0], [3.0, 7.0], [5.0, 11.0]], dtype=np.float32)
+    folds = [(np.array([0, 1]), np.array([2]))]
+    config = LanguageDecodingConfig(
+        rrr_run_path="unused",
+        mode="cross_dataset",
+        rank_grid=[1],
+        tasks=["surprisal"],
+    )
+    monkeypatch.setattr(
+        "src.utils.language_interpret.decoding.aggregate_subspace_basis",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("a single full-fit factor must not be aggregated")
+        ),
+    )
+
+    prepared = _prepare_single_view_subspaces(
+        subspace="rrr", factor_paths=[fold / "A.npy"], folds=folds, X=X,
+        config=config,
+    )
+
+    local_mean = X[folds[0][0]].mean(axis=0)
+    local_scale = X[folds[0][0]].std(axis=0)
+    expected = ((X - local_mean) / local_scale) @ factor
+    np.testing.assert_allclose(prepared[(0, 1)][0], expected)
+    np.testing.assert_array_equal(prepared[(0, 1)][1], factor)
+
+
 def test_compose_multiview_factor_preserves_separate_raw_blocks():
     view_a = np.array([[1.0, 0.0], [0.0, 1.0]])
     view_b = np.array([[2.0], [3.0], [4.0]])

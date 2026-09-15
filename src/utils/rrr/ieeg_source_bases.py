@@ -9,6 +9,7 @@ from src.core.config import RRRConfig
 from src.core.registry import get_dataset_adapter, resolve_dataset_context
 from src.utils.rrr.core import canonical_qr, fit_dense_rrr
 from src.utils.rrr.evaluation import (
+    embedding_standardization_stats,
     fit_pca_input_basis,
     standardize_embedding_train_test,
 )
@@ -82,6 +83,59 @@ def _fit_bases(
     }
 
 
+def fit_full_dataset_ieeg_factors(X, Y, enc, ranks, *, return_b=False):
+    """Fit unaggregated RRR/PCA factors and one scaler on all source rows."""
+    requested = sorted(set(map(int, ranks)))
+    max_rank = max(requested)
+    available = min(X.shape[1], Y.shape[1], X.shape[0])
+    if max_rank > available:
+        raise ValueError(
+            f"Requested source rank {max_rank} exceeds whole-stimulus iEEG rank "
+            f"{available}"
+        )
+    mean, scale = embedding_standardization_stats(X)
+    X_standardized = ((np.asarray(X) - mean) / scale).astype(np.float32)
+    baseline = fit_encoding_baseline(
+        X,
+        Y,
+        alphas=(None if enc.ridge_alphas is None else np.asarray(enc.ridge_alphas)),
+        ridge_cv_folds=enc.ridge_cv_folds,
+        ridge_solver_params=enc.ridge_solver_params,
+        ridge_y_in_cpu=enc.ridge_y_in_cpu,
+        ridge_force_cpu=enc.ridge_force_cpu,
+        alpha_policy=enc.alpha_grid,
+        alpha_context={
+            "script": "run_rrr",
+            "role": "full_fit",
+            "model": enc.model,
+            "per_model_config": enc.per_model_config,
+            "offset": enc.offset,
+        },
+        absorb_input_scaler=False,
+    )
+    fitted = fit_dense_rrr(
+        X_standardized,
+        baseline["Y_train"],
+        k=max_rank,
+        selected_idx=np.arange(X.shape[1]),
+        precomputed_Y_hat_ols=baseline["Y_hat_full_train"],
+        precomputed_beta_full=baseline["beta_full_input_coordinates"],
+        return_b=return_b,
+    )
+    return {
+        "rrr": np.asarray(fitted["A_dense"], dtype=np.float32),
+        "pca": fit_pca_input_basis(X_standardized, max_rank=max_rank),
+        "target": (
+            np.asarray(fitted["B_dense"], dtype=np.float32) if return_b else None
+        ),
+        "input_scaler": {
+            "mean": mean.astype(np.float32),
+            "scale": scale.astype(np.float32),
+            "coordinates": "standardized-v1",
+        },
+    }
+
+
 def fit_whole_stimulus_ieeg_bases(
     source,
     ranks: list[int],
@@ -148,4 +202,4 @@ def fit_whole_stimulus_ieeg_bases(
     )
 
 
-__all__ = ["fit_whole_stimulus_ieeg_bases"]
+__all__ = ["fit_full_dataset_ieeg_factors", "fit_whole_stimulus_ieeg_bases"]

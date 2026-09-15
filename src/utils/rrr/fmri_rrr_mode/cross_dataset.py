@@ -16,6 +16,9 @@ from .common import (
 
 def run_cross_dataset(setup):
     """Fit fMRI ridge models in input spaces learned from an iEEG source."""
+    from src.utils.rrr.ieeg_rrr_mode.cross_dataset_helpers import (
+        load_cross_dataset_A_by_rank,
+    )
     from src.utils.rrr.ieeg_source_bases import fit_whole_stimulus_ieeg_bases
 
     config, artifact, source = setup.config, setup.artifact, setup.source
@@ -65,12 +68,24 @@ def run_cross_dataset(setup):
     bases = {}
     if pending:
         requested_ranks = sorted({rank for _, rank in pending})
-        fitted = fit_whole_stimulus_ieeg_bases(
-            source,
-            requested_ranks,
-            standardized_input_coordinates=True,
-            standardized_rrr_coordinates=True,
-        )
+        if source.identity["mode"] == "full_fit":
+            fitted = {
+                method: load_cross_dataset_A_by_rank(
+                    source,
+                    method,
+                    requested_ranks,
+                    source_format="rank_bases",
+                    orthonormalize=method == "rrr",
+                )
+                for method in methods
+            }
+        else:
+            fitted = fit_whole_stimulus_ieeg_bases(
+                source,
+                requested_ranks,
+                standardized_input_coordinates=True,
+                standardized_rrr_coordinates=True,
+            )
         bases = {
             method: {
                 rank: fitted[method][rank]

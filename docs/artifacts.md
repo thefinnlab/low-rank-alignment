@@ -52,6 +52,13 @@ mutually exclusive. Cross-dataset RRR source blocks use this form so the source 
 are constrained to the intended significant-target set rather than relying on
 single-variant discovery.
 
+The `full_fit` RRR mode is a factor-only producer. An iEEG variant stores one
+`method: rrr` factor and whole-dataset `input_scalers` entry, plus the matching PCA
+pair when `run_pca_baseline` is enabled. An fMRI variant stores one factor per
+`method` and `rank`; those factors use dynamic per-story normalization and therefore
+do not have one fixed input scaler. Full-fit Artifacts deliberately do not publish
+held-out rank metrics.
+
 ## Contract
 
 Producer classes declare required and optional fields. Fields may be scalar or
@@ -153,14 +160,16 @@ selection, run metadata, per-task/fold fit metrics, decoder weights, held-out
 predictions, the complete grid and summary, optional prediction agreement tables,
 and plots. Its `fmri_word` and `fmri_tr_pre_fir` modes take their story split,
 embeddings, and rank factors from a deep-fMRI RRR Artifact. The former decodes raw
-word-aligned features from projected pooled-word embeddings; the latter uses the
-source timing and trimming to decode Lanczos-aligned current-TR targets from
+word-aligned features from locally story-standardized pooled-word embeddings; the
+latter uses the source timing and trimming to decode Lanczos-aligned current-TR targets from
 projected pre-FIR inputs.
 Categorical TR targets also expose per-channel metrics, availability diagnostics,
 smoothed-channel ridge weights, and dominant-label classifier weights.
 Reconstruction exposes corresponding provenance,
 per-fit metrics, optional fitted models, fold and summary tables, RRR/PCA contrasts,
 predictor contrasts, and plots.
+In `cross_dataset` language modes, a single full-fit factor is applied directly;
+fold-factor aggregation remains only as compatibility behavior for older sources.
 
 The importable downstream facades are `scripts.run_language_decoding.Artifact` and
 `scripts.run_language_reconstruction.Artifact`; the existing executable files under

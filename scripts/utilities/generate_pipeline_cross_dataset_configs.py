@@ -66,7 +66,10 @@ def _ieeg_encoding(target: str, model_dir: str, layers: list[int]) -> dict:
             {
                 "data_root": "data/brain-treebank",
                 "dataset": "brain_treebank",
-                "per_dataset_config": {"movie": "cars-2"},
+                "per_dataset_config": {
+                    "movie": "cars-2",
+                    "rereference": "laplacian",
+                },
                 "subjects": [3, 7, 10],
                 "shared_word_selection": True,
                 "num_folds": 5,

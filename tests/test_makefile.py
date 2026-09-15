@@ -95,6 +95,28 @@ def test_rrr_resolves_dataset_and_mode(tmp_path: Path):
     assert "configs/brain_treebank/cars_2/rrr/gpt2-xl/temporal_windows.yml" in submissions[1]
 
 
+def test_rrr_resolves_full_fit_configs(tmp_path: Path):
+    cases = (
+        ("podcast", "configs/rrr/gpt2/full_fit.yml"),
+        ("cars-2", "configs/brain_treebank/cars_2/rrr/gpt2/full_fit.yml"),
+        ("fmri", "configs/fmri/full_fit/gpt2.yml"),
+    )
+    for index, (dataset, expected) in enumerate(cases):
+        case_path = tmp_path / str(index)
+        case_path.mkdir()
+        result, submissions = _run_make(
+            case_path,
+            "rrr",
+            f"DATASET={dataset}",
+            "RRR_MODE=full_fit",
+            "MODELS=gpt2",
+        )
+
+        assert result.returncode == 0, result.stderr
+        assert len(submissions) == 1
+        assert expected in submissions[0]
+
+
 def test_fmri_leave_one_subject_out_submits_one_job_per_model_layer(tmp_path: Path):
     result, submissions = _run_make(
         tmp_path,
@@ -428,3 +450,32 @@ def test_final_rrr_configs_use_one_equivalent_significance_union():
         text = path.read_text()
         assert "random-gpt2-xl" not in text
         assert signature(yaml.safe_load(text)["significance_selection"]) == expected
+
+
+def test_full_fit_configs_cover_primary_models_and_significance_union():
+    expected_models = {
+        "gpt2", "gpt2-xl", "gpt-j-6b", "roberta-large", "llama3-8b",
+        "random-gpt2", "glove",
+    }
+    roots = (
+        REPO_ROOT / "configs/rrr",
+        REPO_ROOT / "configs/brain_treebank/cars_2/rrr",
+    )
+
+    for root in roots:
+        assert {
+            path.parent.name for path in root.glob("*/full_fit.yml")
+        } == expected_models
+        paths = (root / model / "full_fit.yml" for model in expected_models)
+        for path in paths:
+            payload = yaml.safe_load(path.read_text())
+            assert payload["mode"] == "full_fit"
+            assert payload["significance_selection"]["mode"] == "cross-model-layer"
+
+    fmri_root = REPO_ROOT / "configs/fmri/full_fit"
+    assert {path.stem for path in fmri_root.glob("*.yml")} == expected_models
+    for path in fmri_root.glob("*.yml"):
+        payload = yaml.safe_load(path.read_text())
+        assert payload["mode"] == "full_fit"
+        assert payload["significance_selection"]["mode"] == "cross-model-layer"
+        assert payload["subspace_aggregation"] == "prediction_weighted"

@@ -1,10 +1,95 @@
 import numpy as np
 import pandas as pd
 import h5py
+from contextlib import nullcontext
 from types import SimpleNamespace
 
 from src.utils.shared import fmri
 from src.utils.significance import fmri as fmri_significance
+
+
+def test_fmri_full_fit_saves_rank_bases_without_evaluation(tmp_path, monkeypatch):
+    from scripts.run_rrr import Artifact
+    from src.utils.rrr.fmri_rrr_mode.full_fit import run_full_fit
+    from src.utils.rrr.fmri_rrr_mode.common import FinalRidgeFit, FMRIStimulusData
+
+    artifact = Artifact(
+        mode="full_fit", dataset="deep-fmri", results_root=tmp_path
+    ).begin(config={})
+    artifact.save_field("effective_config", {})
+    artifact.save_field("upstream_identities", [])
+    full = fmri.PreparedFMRI(
+        stimulus=np.ones((6, 4), dtype=np.float32),
+        pre_fir_stimulus=np.ones((6, 2), dtype=np.float32),
+        responses=None,
+        story_slices={"train": slice(0, 3), "test": slice(3, 6)},
+    )
+    data = FMRIStimulusData(
+        aligned=object(), train=full, test=full, cv=[], ambient_dim=2
+    )
+    monkeypatch.setattr(
+        "src.utils.rrr.fmri_rrr_mode.full_fit.load_stimulus_data",
+        lambda *args: data,
+    )
+    monkeypatch.setattr(
+        "src.utils.rrr.fmri_rrr_mode.full_fit.build_fmri_stimulus",
+        lambda *args, **kwargs: full,
+    )
+    monkeypatch.setattr(
+        "src.utils.rrr.fmri_rrr_mode.full_fit.load_fmri_responses",
+        lambda *args: np.ones((6, 3), dtype=np.float32),
+    )
+    ridge = FinalRidgeFit(
+        test_prediction=None,
+        train_prediction=np.ones((6, 3), dtype=np.float32),
+        coefficients=np.ones((4, 3), dtype=np.float32),
+        best_alphas=np.ones(3),
+        alpha_grid=np.ones(1),
+    )
+    monkeypatch.setattr(
+        "src.utils.rrr.fmri_rrr_mode.full_fit._fit_final_ridge",
+        lambda *args, **kwargs: ridge,
+    )
+    factors = {
+        "full_fir": np.ones((4, 1), dtype=np.float32),
+        "target": None,
+        "delay_blocks": [np.ones((2, 1), dtype=np.float32)] * 2,
+        "prediction_singular_values": np.ones(1, dtype=np.float32),
+        "pca_full": np.ones((2, 1), dtype=np.float32),
+    }
+    monkeypatch.setattr(
+        "src.utils.rrr.fmri_rrr_mode.full_fit._fit_within_fmri_bases",
+        lambda *args: (
+            {"rrr": {1: np.ones((2, 1))}, "pca": {1: np.ones((2, 1))}},
+            factors,
+        ),
+    )
+    config = SimpleNamespace(
+        rank_grid=[1],
+        refresh=False,
+        rrr_save_b_matrix=False,
+        fmri=SimpleNamespace(ndelays=2, subjects=["S1"], fmri_repo_root="unused"),
+    )
+    setup = SimpleNamespace(
+        config=config,
+        artifact=artifact,
+        train_stories=["train"],
+        test_stories=["test"],
+        groups={1: ["train"]},
+        masks={"S1": np.ones(3, dtype=bool)},
+        target_manifest=pd.DataFrame({"target_id": [0, 1, 2]}),
+        timed=lambda label: nullcontext(),
+        base_metadata=lambda **kwargs: {},
+    )
+
+    run_full_fit(setup)
+
+    assert artifact.complete
+    for method in ("rrr", "pca"):
+        assert artifact.has_field(
+            "input_factors", selector={"method": method, "rank": 1}
+        )
+    assert not artifact.load_collection("rank_metrics")
 
 
 def test_resolve_fmri_stories_uses_sessions_and_shared_test(tmp_path):
