@@ -115,6 +115,8 @@ def readable_variant(config: Any, upstreams: list[dict] | None = None,
     aggregation = normalized.get("subspace_aggregation")
     if aggregation is not None:
         parts.append(f"aggregation-{aggregation}")
+    if "label_offset" in normalized and normalized.get("mode") != "fmri_tr_pre_fir":
+        parts.append(f"label-offset-{int(normalized['label_offset'])}")
 
     selection = normalized.get("significance_selection")
     if isinstance(selection, dict) and selection.get("reference_artifact"):

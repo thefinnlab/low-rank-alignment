@@ -191,6 +191,33 @@ rrr:
 		fi
 	done
 
+## Decode target-dataset language labels from internal or directed source bases.
+## Each selected model is one job; all of that model's configured layers run in it.
+## Leave SOURCE_DATASET empty for internal decoding, or set it to another dataset.
+language-decoding:
+	@set -eu
+	mkdir -p logs
+	case "$(DATASET)" in podcast|cars-2|fmri) ;; *) echo "Unsupported language-decoding DATASET '$(DATASET)'" >&2; exit 2 ;; esac
+	if [ -n "$(SOURCE_DATASET)" ]; then
+		[ "$(SOURCE_DATASET)" != "$(DATASET)" ] || { echo "Leave SOURCE_DATASET empty for internal decoding" >&2; exit 2; }
+		case "$(SOURCE_DATASET)" in podcast|cars-2|fmri) ;; *) echo "Unsupported language-decoding SOURCE_DATASET '$(SOURCE_DATASET)'" >&2; exit 2 ;; esac
+		config="configs/language_decoding/cross_dataset/$(DATASET)/from_$(SOURCE_DATASET).yml"
+		label="language-decoding-$(SOURCE_DATASET)-to-$(DATASET)"
+	else
+		config="configs/language_decoding/internal/$(DATASET).yml"
+		label="language-decoding-$(DATASET)"
+	fi
+	[ -f "$$config" ] || { echo "Missing language-decoding config: $$config" >&2; exit 2; }
+	[ -n "$(strip $(MODELS))" ] || { echo "MODELS must contain at least one model" >&2; exit 2; }
+	for model in $(MODELS); do
+		echo "Running $$label / $$model: $$config"
+		if [ "$(CMD)" = "sbatch" ]; then
+			$(SBATCH) --job-name="$$label-$$model-$(USR)-$(DT)" submit.sh scripts/run_language_decoding_batch.py --config "$$config" --model "$$model" $(OVERRIDES)
+		else
+			$(CMD) scripts/run_language_decoding_batch.py --config "$$config" --model "$$model" $(OVERRIDES)
+		fi
+	done
+
 ## Sweep fold-safe target-PCA dimensionalities for ordinary internal RRR.
 ## RRR_MODE: cross_subject or cross_model_layer
 ## Example: make target-dimensionality DATASET=podcast MODELS="gpt2 glove"

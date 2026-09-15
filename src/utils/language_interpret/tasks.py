@@ -14,6 +14,16 @@ import pandas as pd
 TaskKind = Literal["continuous", "categorical"]
 
 
+def offset_word_labels(values: np.ndarray, offset: int) -> np.ndarray:
+    """Return labels at t + offset, padding transcript boundaries with NaN."""
+    values = np.asarray(values, dtype=float)
+    shifted = np.full(values.shape, np.nan, dtype=float)
+    indices = np.arange(len(values)) + offset
+    valid = (indices >= 0) & (indices < len(values))
+    shifted[valid] = values[indices[valid]]
+    return shifted
+
+
 @dataclass(frozen=True)
 class TaskSpec:
     """Metadata and target getter for one decoding task."""
@@ -245,9 +255,16 @@ def _register_artifact_task(
 # Generated continuous targets. These include native controls, standardized timing and
 # structure, lexical norms, sensorimotor dimensions/composites, associations, WordNet
 # counts, and deterministic dependency-tree measures.
+@register_language_task("speaking_rate", "Speaking rate (words/second)", "continuous")
+def _speaking_rate_word_target(context: PodcastTaskContext) -> np.ndarray:
+    raise ValueError("speaking_rate is only available in fmri_tr_pre_fir mode")
+
+
 _CONTINUOUS_TASKS = {
     "native_surprisal": "Native surprisal",
     "native_entropy": "Native entropy",
+    "native_pitch": "Native pitch",
+    "native_intensity_rms": "Native intensity (RMS)",
     "surprisal": "Standardized surprisal",
     "standardized_entropy": "Standardized entropy",
     "entropy": "Legacy/native entropy",
@@ -322,6 +339,7 @@ def self_entropy_target(context: PodcastTaskContext) -> np.ndarray:
 
 _CATEGORICAL_TASKS = {
     "speaker_identity": ("Speaker identity", None),
+    "native_speaker": ("Native speaker identity", None),
     "native_part_of_speech": ("Native part of speech", None),
     "part_of_speech": ("Standardized UD part of speech", None),
     "fine_part_of_speech": ("Fine-grained part of speech", None),

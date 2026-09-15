@@ -69,6 +69,26 @@ def test_significance_uses_shared_dataset_and_models(tmp_path: Path):
     assert all("scripts/run_significance.py" in item for item in submissions)
 
 
+def test_language_decoding_submits_one_job_per_model_for_directed_pair(tmp_path: Path):
+    result, submissions = _run_make(
+        tmp_path,
+        "language-decoding",
+        "DATASET=fmri",
+        "SOURCE_DATASET=podcast",
+        "MODELS=gpt2 gpt2-xl",
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert len(submissions) == 2
+    assert all(
+        "scripts/run_language_decoding_batch.py" in submission
+        and "configs/language_decoding/cross_dataset/fmri/from_podcast.yml" in submission
+        for submission in submissions
+    )
+    assert submissions[0].endswith("--model gpt2")
+    assert submissions[1].endswith("--model gpt2-xl")
+
+
 def test_fmri_significance_supports_glove(tmp_path: Path):
     result, submissions = _run_make(
         tmp_path, "significance", "DATASET=fmri", "MODELS=gpt2 glove"

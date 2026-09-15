@@ -1,0 +1,8 @@
+target_dataset: podcast
+label_offsets: [-1, 0, 1]
+source_dataset: fmri
+device: auto
+refresh: false
+tasks: [speaker_identity, surprisal, standardized_entropy, word_zipf_frequency, word_length, content_word, part_of_speech, sentence_position, sentence_onset, sentence_end, word_duration, pre_word_pause, post_word_pause, concreteness, valence, arousal, dependency_depth, dependency_length, iu_position, iu_onset, iu_end, iu_length, age_of_acquisition, word_prevalence, semantic_diversity, sensorimotor_strength, association_entropy, sense_count, is_named_entity, coreference_newness, word_in_previous_5, prior_word_count, distance_from_previous_occurrence]
+task_data:
+  language_features: processed_data/language_features/podcast/podcast/tokens.tsv

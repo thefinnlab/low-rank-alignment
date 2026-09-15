@@ -413,6 +413,9 @@ class LanguageDecodingConfig:
 
     encoding: EncodingConfig = field(default_factory=EncodingConfig)
     rrr_source: dict | None = None
+    # For cross-dataset decoding onto fMRI, this internal fMRI artifact supplies
+    # the target story/data configuration while rrr_source supplies the basis.
+    fmri_target_artifact: dict | None = None
     rrr_selectors: dict = field(default_factory=dict)
     results_root: str = "results"
     variant_name: str | None = None
@@ -420,6 +423,8 @@ class LanguageDecodingConfig:
     rrr_run_path: str | None = None
     pca_run_path: str | None = None
     mode: LanguageDecodingMode = LanguageDecodingMode.WITHIN_DATASET
+    # Decode label at transcript word t + label_offset from embedding at t.
+    label_offset: int = 0
     source_name: str | None = None
     fold_results_dir: str | None = None
     output_dir: str | None = None
@@ -460,6 +465,10 @@ class LanguageDecodingConfig:
     def validate(self):
         if isinstance(self.mode, str):
             self.mode = LanguageDecodingMode(self.mode)
+        if isinstance(self.label_offset, bool) or not isinstance(self.label_offset, int):
+            raise ValueError("label_offset must be an integer")
+        if self.mode == LanguageDecodingMode.FMRI_TR_PRE_FIR and self.label_offset != 0:
+            raise ValueError("label_offset is only supported for word decoding")
         _validate_subspace_aggregation(self.subspace_aggregation)
         if self.device not in {"auto", "cuda", "cpu"}:
             raise ValueError("device must be one of ['auto', 'cpu', 'cuda']")
@@ -480,9 +489,12 @@ class LanguageDecodingConfig:
             LanguageDecodingMode.FMRI_TR_PRE_FIR,
         }:
             source_dataset = str((self.rrr_source or {}).get("dataset", ""))
-            if source_dataset not in {"fmri", "deep_fmri", "deep-fmri"}:
+            target_dataset = str((self.fmri_target_artifact or {}).get("dataset", ""))
+            fmri_names = {"fmri", "deep_fmri", "deep-fmri"}
+            if source_dataset not in fmri_names and target_dataset not in fmri_names:
                 raise ValueError(
-                    f"mode={self.mode.value} requires a deep-fmri rrr_source"
+                    f"mode={self.mode.value} requires a deep-fmri rrr_source or "
+                    "fmri_target_artifact"
                 )
 
 

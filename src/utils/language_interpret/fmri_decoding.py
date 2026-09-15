@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
@@ -24,7 +23,8 @@ from src.utils.language_interpret.decoding import (
     plot_language_decoding,
     summarize_language_decoding,
 )
-from src.utils.language_interpret.tasks import get_language_task
+from src.utils.language_interpret.tasks import get_language_task, offset_word_labels
+from src.utils.language_interpret.output import DecodingOutput, fit_selector
 from src.utils.shared.correlation import fisher_z_mean_sem
 from src.utils.shared.constants import RIDGE_ALPHAS
 from src.utils.shared.fmri import (
@@ -131,6 +131,31 @@ def build_tr_targets(
     result = {}
     for task in tasks:
         spec = get_language_task(task)
+        if task == "speaking_rate":
+            filtered = {}
+            standardized = {}
+            availability = {}
+            for story in stories:
+                centers = np.asarray(sequences[story].tr_times, dtype=float)
+                intervals = np.diff(centers)
+                if len(intervals) == 0 or not np.all(intervals > 0) or not np.allclose(intervals, intervals[0]):
+                    raise ValueError("Speaking rate requires a regular increasing TR grid")
+                duration = float(intervals[0])
+                # TR times are acquisition-interval centers. Count actual word
+                # onsets, not the midpoint timestamps used for interpolation.
+                edges = np.r_[centers - duration / 2, centers[-1] + duration / 2]
+                onsets = pd.to_numeric(frames[story]["start"], errors="coerce").to_numpy(float)
+                if not np.isfinite(onsets).all():
+                    raise ValueError(f"Speaking rate requires finite word onsets in {story}")
+                # All bins are left-inclusive/right-exclusive, including the last.
+                counts, _ = np.histogram(onsets[(onsets >= edges[0]) & (onsets < edges[-1])], bins=edges)
+                stop = -int(trim) if trim else None
+                values = (counts / duration)[5 + int(trim):stop, None].astype(np.float32)
+                filtered[story] = values
+                standardized[story] = _story_zscore(values)
+                availability[story] = np.ones(len(values), dtype=np.float32)
+            result[task] = TRTarget(standardized, filtered, availability, np.array([], dtype=str))
+            continue
         tables = {}
         for story in stories:
             table = _task_table(story, task, task_data, model_dir)
@@ -209,10 +234,13 @@ def build_word_targets(
     tasks: list[str],
     task_data: dict,
     model_dir: str,
+    label_offset: int = 0,
 ) -> dict[str, WordTarget]:
     """Load word-aligned targets while preserving task-specific missing rows."""
     result = {}
     for task in tasks:
+        if task == "speaking_rate":
+            raise ValueError("speaking_rate is only available in fmri_tr_pre_fir mode")
         spec = get_language_task(task)
         tables = {}
         for story in stories:
@@ -243,8 +271,9 @@ def build_word_targets(
                 available = labels != ""
                 values = np.full(len(labels), np.nan, dtype=float)
                 values[available] = [class_index[label] for label in labels[available]]
+            values = offset_word_labels(values, label_offset)
             values_by_story[story] = values
-            availability_by_story[story] = available
+            availability_by_story[story] = np.isfinite(values)
         result[task] = WordTarget(
             values=values_by_story,
             availability=availability_by_story,
@@ -456,6 +485,7 @@ def run_fmri_word_decoding(
     source_config: dict,
     factors: dict[tuple[str, int], np.ndarray],
     output_dir: Path,
+    artifact=None,
 ) -> Path:
     """Decode held-out fMRI transcript words from projected word embeddings."""
     if config.mode != LanguageDecodingMode.FMRI_WORD:
@@ -498,33 +528,22 @@ def run_fmri_word_decoding(
         tasks=config.tasks,
         task_data=config.task_data,
         model_dir=source_config["model_dir"],
+        label_offset=config.label_offset,
     )
 
     output_dir.mkdir(parents=True, exist_ok=True)
-    _word_sample_selection(stories, train_stories, frames).to_csv(
-        output_dir / "sample_selection.csv", index=False
-    )
+    writer = DecodingOutput(output_dir, artifact, config.refresh)
+    writer.save("sample_selection", _word_sample_selection(stories, train_stories, frames))
     for task, target in targets.items():
-        target_dir = output_dir / "target_diagnostics" / task
-        target_dir.mkdir(parents=True, exist_ok=True)
-        np.savez_compressed(
-            target_dir / "availability.npz",
-            **{
-                story: values.astype(np.uint8)
-                for story, values in target.availability.items()
-            },
-        )
-        np.savez_compressed(
-            target_dir / "targets.npz",
-            **{story: values for story, values in target.values.items()},
-        )
-        (target_dir / "metadata.json").write_text(json.dumps({
-            "task": task,
-            "kind": get_language_task(task).kind,
-            "classes": target.classes.tolist(),
-            "normalization": "none",
+        writer.save("target_diagnostics", {
+            story: values.astype(np.uint8) for story, values in target.availability.items()
+        }, {"task": task, "name": "availability"})
+        writer.save("target_diagnostics", target.values, {"task": task, "name": "targets"})
+        writer.save("target_diagnostics", {
+            "task": task, "kind": get_language_task(task).kind,
+            "classes": target.classes.tolist(), "normalization": "none",
             "missing_values": "drop_per_task",
-        }, indent=2))
+        }, {"task": task, "name": "metadata"})
 
     rows = []
     for (method, rank), factor in sorted(factors.items()):
@@ -586,33 +605,21 @@ def run_fmri_word_decoding(
                 ),
                 **_decoder_metrics(spec.kind, y_test[test_valid], prediction),
             }
-            artifact_dir = (
-                output_dir / "tasks" / task / method / f"k{rank}" / "fold_0"
-            )
-            artifact_dir.mkdir(parents=True, exist_ok=True)
-            np.savez(
-                artifact_dir / "weights.npz", **_weight_payload(pipeline, factor)
-            )
-            np.savez_compressed(
-                artifact_dir / "heldout_predictions.npz",
-                y_true=np.asarray(y_test[test_valid]),
-                y_pred=prediction,
-                row_index=np.flatnonzero(test_valid),
-                block_id=np.repeat(test_stories[0], int(test_valid.sum())),
-                classes=target.classes,
-            )
-            (artifact_dir / "metrics.json").write_text(
-                json.dumps(metrics, indent=2, allow_nan=True)
-            )
+            writer.save_fit(metrics, _weight_payload(pipeline, factor), {
+                "y_true": np.asarray(y_test[test_valid]), "y_pred": prediction,
+                "row_index": np.flatnonzero(test_valid),
+                "block_id": np.repeat(test_stories[0], int(test_valid.sum())),
+                "classes": target.classes,
+            })
             rows.append(metrics)
     embedding_cache.cleanup()
 
     results = pd.DataFrame(rows)
-    results.to_csv(output_dir / "grid_results.csv", index=False)
+    writer.save("grid_results", results)
     summary = summarize_language_decoding(results)
-    summary.to_csv(output_dir / "summary.csv", index=False)
+    writer.save("summary", summary)
     plot_language_decoding(summary, output_dir / "rank_analysis.png")
-    (output_dir / "run_metadata.json").write_text(json.dumps({
+    metadata = {
         "mode": config.mode.value,
         "train_stories": train_stories,
         "test_story": test_stories[0],
@@ -620,7 +627,14 @@ def run_fmri_word_decoding(
         "input_representation": "pooled_word_embeddings_story_zscored_then_projected",
         "target_representation": "raw_word_aligned_feature",
         "continuous_decoder": "primal_ridge_cv_neg_mean_squared_error",
-    }, indent=2))
+    }
+    if artifact is not None:
+        upstreams = artifact.load_field("upstream_identities")
+        metadata["rrr_source"] = upstreams[0]
+        if len(upstreams) > 1:
+            metadata["fmri_target_artifact"] = upstreams[1]
+    writer.save("run_metadata", metadata)
+    writer.save_plot(output_dir / "rank_analysis.png")
     return output_dir
 
 
@@ -629,12 +643,13 @@ def run_fmri_decoding(
     source_config: dict,
     factors: dict[tuple[str, int], np.ndarray],
     output_dir: Path,
+    artifact=None,
 ) -> Path:
     """Dispatch one primary fMRI language-decoding mode."""
     if config.mode == LanguageDecodingMode.FMRI_WORD:
-        return run_fmri_word_decoding(config, source_config, factors, output_dir)
+        return run_fmri_word_decoding(config, source_config, factors, output_dir, artifact)
     if config.mode == LanguageDecodingMode.FMRI_TR_PRE_FIR:
-        return run_fmri_tr_decoding(config, source_config, factors, output_dir)
+        return run_fmri_tr_decoding(config, source_config, factors, output_dir, artifact)
     raise ValueError(f"Unsupported fMRI language-decoding mode: {config.mode}")
 
 
@@ -643,6 +658,7 @@ def run_fmri_tr_decoding(
     source_config: dict,
     factors: dict[tuple[str, int], np.ndarray],
     output_dir: Path,
+    artifact=None,
 ) -> Path:
     """Run one held-out-story fMRI TR decoding sweep into a staging directory."""
     if config.mode != LanguageDecodingMode.FMRI_TR_PRE_FIR:
@@ -688,36 +704,21 @@ def run_fmri_tr_decoding(
                 )
 
     output_dir.mkdir(parents=True, exist_ok=True)
+    writer = DecodingOutput(output_dir, artifact, config.refresh)
     selection = _sample_selection(stories, train_stories, sequences, int(fmri["trim"]))
-    selection.to_csv(output_dir / "sample_selection.csv", index=False)
+    writer.save("sample_selection", selection)
     rows = []
     for task, target in targets.items():
-        target_dir = output_dir / "target_diagnostics" / task
-        target_dir.mkdir(parents=True, exist_ok=True)
-        np.savez_compressed(
-            target_dir / "availability.npz",
-            **{story: values for story, values in target.availability.items()},
-        )
-        np.savez_compressed(
-            target_dir / "targets.npz",
-            **{
-                **{
-                    f"filtered__{story}": values
-                    for story, values in target.filtered.items()
-                },
-                **{
-                    f"standardized__{story}": values
-                    for story, values in target.standardized.items()
-                },
-            },
-        )
-        (target_dir / "metadata.json").write_text(json.dumps({
-            "task": task,
-            "kind": get_language_task(task).kind,
-            "classes": target.classes.tolist(),
-            "normalization": "per_story_zscore",
+        writer.save("target_diagnostics", target.availability, {"task": task, "name": "availability"})
+        writer.save("target_diagnostics", {
+            **{f"filtered__{story}": values for story, values in target.filtered.items()},
+            **{f"standardized__{story}": values for story, values in target.standardized.items()},
+        }, {"task": task, "name": "targets"})
+        writer.save("target_diagnostics", {
+            "task": task, "kind": get_language_task(task).kind,
+            "classes": target.classes.tolist(), "normalization": "per_story_zscore",
             "missing_fill": "within_story_finite_mean_or_class_prevalence",
-        }, indent=2))
+        }, {"task": task, "name": "metadata"})
 
     for (method, rank), factor in sorted(factors.items()):
         try:
@@ -744,17 +745,14 @@ def run_fmri_tr_decoding(
             target = targets[task]
             y_train = _stack(train_stories, target.standardized)
             y_test = _stack(test_stories, target.standardized)
-            artifact_dir = output_dir / "tasks" / task / method / f"k{rank}" / "fold_0"
-            artifact_dir.mkdir(parents=True, exist_ok=True)
+            selector = fit_selector(task, method, rank, 0)
             if spec.kind == "continuous":
                 pipeline = _fit_fmri_continuous_decoder(
                     X_train, y_train[:, 0], config, cv
                 )
                 prediction = np.asarray(to_numpy(pipeline.predict(X_test)))
                 metrics = _decoder_metrics("continuous", y_test[:, 0], prediction)
-                np.savez(artifact_dir / "weights.npz", **_weight_payload(
-                    pipeline, ambient_factor
-                ))
+                weights = _weight_payload(pipeline, ambient_factor)
                 prediction_payload = {
                     "y_true": y_test[:, 0],
                     "y_pred": prediction,
@@ -837,15 +835,13 @@ def run_fmri_tr_decoding(
                     ],
                     "classifier_available": classifier_available,
                 }
-                channel_metrics.to_csv(artifact_dir / "channel_metrics.csv", index=False)
+                writer.save("channel_metrics", channel_metrics, selector)
                 ridge_weights = _weight_payload(ridge, ambient_factor)
                 ridge_weights["target_channels"] = np.flatnonzero(train_variable)
-                np.savez(artifact_dir / "weights.npz", **ridge_weights)
+                weights = ridge_weights
                 if classifier is not None:
-                    np.savez(
-                        artifact_dir / "classifier_weights.npz",
-                        **_weight_payload(classifier, ambient_factor),
-                    )
+                    writer.save("decoder_weights", _weight_payload(classifier, ambient_factor),
+                                {**selector, "name": "dominant_label_classifier"})
                 prediction_payload = {
                     "y_true": y_test,
                     "y_pred": prediction,
@@ -870,20 +866,15 @@ def run_fmri_tr_decoding(
                 "primary_metric": "correlation",
                 **metrics,
             }
-            np.savez_compressed(
-                artifact_dir / "heldout_predictions.npz", **prediction_payload
-            )
-            (artifact_dir / "metrics.json").write_text(
-                json.dumps(full_metrics, indent=2, allow_nan=True)
-            )
+            writer.save_fit(full_metrics, weights, prediction_payload)
             rows.append(full_metrics)
 
     results = pd.DataFrame(rows)
-    results.to_csv(output_dir / "grid_results.csv", index=False)
+    writer.save("grid_results", results)
     summary = summarize_language_decoding(results)
-    summary.to_csv(output_dir / "summary.csv", index=False)
+    writer.save("summary", summary)
     plot_language_decoding(summary, output_dir / "rank_analysis.png")
-    (output_dir / "run_metadata.json").write_text(json.dumps({
+    metadata = {
         "mode": config.mode.value,
         "train_stories": train_stories,
         "test_story": test_stories[0],
@@ -895,5 +886,12 @@ def run_fmri_tr_decoding(
             "tr_aligned_trimmed_projected_story_zscored_pre_fir"
         ),
         "continuous_decoder": "primal_ridge_cv_neg_mean_squared_error",
-    }, indent=2))
+    }
+    if artifact is not None:
+        upstreams = artifact.load_field("upstream_identities")
+        metadata["rrr_source"] = upstreams[0]
+        if len(upstreams) > 1:
+            metadata["fmri_target_artifact"] = upstreams[1]
+    writer.save("run_metadata", metadata)
+    writer.save_plot(output_dir / "rank_analysis.png")
     return output_dir

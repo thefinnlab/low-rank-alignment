@@ -5,6 +5,11 @@ Significance and RRR use unified modality-neutral contracts; language decoding,
 language reconstruction, and subspace comparison define result-specific contracts.
 Consumers use generic artifact identity blocks rather than result paths.
 
+Language decoding uses the same compact `artifact.h5` storage as RRR for non-plot
+fields. Its runners save fits, predictions, summaries, and target diagnostics
+directly through the Artifact client; PNG plots remain separate. Existing
+file-backed decoding artifacts remain readable through their manifests.
+
 The canonical identity is:
 
 ```text
@@ -70,7 +75,7 @@ instance.
 
 Writes publish payloads and then update the manifest, with the physical codec and
 uncompressed size recorded for every selector entry. `run_rrr` and
-`run_cross_condition_rrr` store all non-plot payloads in one compressed
+`run_cross_condition_rrr`, and `run_language_decoding` store all non-plot payloads in one compressed
 `artifact.h5` container per variant; their plots remain ordinary PNG files in the
 existing selector-based subdirectories. The Artifact API still exposes each field
 and selector independently. Other producers use individual files: tables are CSV,

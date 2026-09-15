@@ -28,6 +28,20 @@ embeddings predict iEEG and fMRI responses. The supported executable surface is
 - `scripts/language-interpret/` contains language decoding and reconstruction.
   Language decoding includes word-aligned and TR-aligned pre-FIR modes for fMRI,
   all published through the same Artifact client.
+  Decoders write result fields directly into a compressed HDF5 Artifact container,
+  with plots retained as separate PNGs.
+  TR/pre-FIR decoding also supports speaking rate: word onsets per acquisition
+  interval divided by its duration, including silent intervals.
+  `scripts/run_language_decoding_batch.py` drives checked-in internal and all six
+  directed Podcast/Cars 2/fMRI manifests, running all configured layers in one job
+  per model. Directed decoding applies the source dataset's saved internal basis to
+  the target transcript; iEEG sources use their single `full_fit` basis.
+  For directed decoding into fMRI, `fmri_target_artifact` supplies the target data
+  configuration, while `rrr_source` supplies the transferred RRR/PCA bases.
+  Its optional `--layer` filter supports small exploratory runs, and output-root
+  overrides leave upstream RRR lookups at their separately configured roots.
+  Word decoding sweeps label offsets -1/0/+1 using the same upstream basis; TR
+  decoding stays at label offset 0.
 - `scripts/utilities/` contains data preparation, embedding generation, language-feature
   generation, plotting, atlas-reporting entrypoints, and a read-only iEEG utility for
   comparing max-lag correlation with electrode-specific or subject-wide shared-max
@@ -35,12 +49,15 @@ embeddings predict iEEG and fMRI responses. The supported executable surface is
   fits and circular-shift null samples. A companion
   refit utility parses that comparison's console report and recomputes all-lag
   correlations for only the union of selected electrodes, without permutation tests.
+  `generate_recurrence_features.py` updates existing word-recurrence labels across
+  datasets without rerunning unrelated annotation providers.
   `check_rrr_results.py` checks the complete internal, leave-one-subject-out, and
   directed cross-dataset matrix for podcast, Cars 2, and fMRI, reporting artifacts
   that are absent or not marked complete by the standard manifest contract.
 
-The Makefile has four individual analysis targets: `significance`, `rrr`,
-`target-dimensionality`, and `cross-condition`. They share `DATASET`, `MODELS`,
+The Makefile has five individual analysis targets: `significance`, `rrr`,
+`target-dimensionality`, `cross-condition`, and `language-decoding`. They share
+`DATASET`, `MODELS`,
 `CMD`, and `OVERRIDES` controls; RRR and target-dimensionality additionally use
 `RRR_MODE`, while RRR uses `SOURCE_DATASET` for cross-dataset transfer and
 cross-condition uses `CROSS_MODE=region|stimulus`. Target-dimensionality accepts
@@ -73,11 +90,14 @@ identity, variants, selector fields, resume behavior, and legacy migration are
 described in [artifacts.md](artifacts.md). Language decoding and reconstruction load
 RRR/PCA factors through RRR Artifact identities and publish task-level results through
 their own Artifacts.
-RRR and cross-condition RRR variants compact their non-plot fields into one compressed
+RRR, cross-condition RRR, and language-decoding variants compact their non-plot fields into one compressed
 HDF5 container while keeping plots as separately browsable PNG files.
 
 ## Source layout
 
+- `notebooks/plots.py` provides interactive RRR/PCA comparisons, including each
+  electrode/voxel's performance relative to its best tested rank within RRR or PCA, summarized
+  across targets as a mean with ±1 SD after averaging evaluation folds.
 - `src/core/config.py` defines the modality implementation dataclasses; the two
   public facade scripts define the strict client Configs.
 - `src/core/registry.py` defines embedding and dataset adapter registries.

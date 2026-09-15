@@ -1,0 +1,31 @@
+target_dataset: fmri
+label_offsets: [-1, 0, 1]
+tr_tasks: [speaking_rate]
+device: auto
+refresh: false
+tasks: &fmri_tasks
+  - word_in_previous_5
+  - prior_word_count
+  - distance_from_previous_occurrence
+  - iu_end
+  - surprisal
+  - standardized_entropy
+  - iu_onset
+  - iu_position
+  - sentence_position
+  - part_of_speech
+  - concreteness
+  - content_word
+  - sentence_onset
+  - sentence_end
+  - word_zipf_frequency
+  - word_length
+  - word_duration
+  - pre_word_pause
+  - post_word_pause
+  - dependency_depth
+  - dependency_length
+  - valence
+  - arousal
+task_data:
+  language_features: processed_data/language_features/fmri

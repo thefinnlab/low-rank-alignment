@@ -37,6 +37,7 @@ from src.utils.shared.ieeg import (
     selection_after_offset,
 )
 from src.utils.shared.embeddings import load_embeddings
+from src.utils.language_interpret.output import DecodingOutput
 from src.utils.shared.config import load_config, save_effective_config
 from src.utils.language_interpret.tasks import PodcastTaskContext, get_language_task
 from src.utils.rrr.multiview import (
@@ -377,16 +378,14 @@ def _run_one_fit(
     A: np.ndarray | None,
     subspace: str,
     block_ids: np.ndarray | None = None,
+    writer: DecodingOutput | None = None,
 ) -> dict:
-    cached = _load_cached_fit(
+    cached = writer.cached_fit(task_name, subspace, rank, fold) if writer and writer.artifact else _load_cached_fit(
         output_dir, task_name, fold, rank, subspace, config.refresh
     )
     if cached is not None:
         return cached
 
-    artifact_dir = _artifact_dir(output_dir, task_name, fold, rank, subspace)
-    metrics_path = artifact_dir / "metrics.json"
-    weights_path = artifact_dir / "weights.npz"
     task_train, task_test = _fit_indices(
         task_name, y, train_idx, test_idx, fold
     )
@@ -403,18 +402,13 @@ def _run_one_fit(
         "n_test": int(len(task_test)),
         **_decoder_metrics(task_kind, y[task_test], prediction),
     }
-    artifact_dir.mkdir(parents=True, exist_ok=True)
-    np.savez(weights_path, **_weight_payload(pipeline, A))
-    np.savez_compressed(
-        artifact_dir / "heldout_predictions.npz",
-        y_true=np.asarray(y[task_test]),
-        y_pred=np.asarray(prediction),
-        row_index=np.asarray(task_test, dtype=int),
-        block_id=np.asarray(
-            task_test if block_ids is None else block_ids[task_test], dtype=str
-        ),
+    (writer or DecodingOutput(output_dir)).save_fit(
+        metrics, _weight_payload(pipeline, A), {
+            "y_true": np.asarray(y[task_test]), "y_pred": np.asarray(prediction),
+            "row_index": np.asarray(task_test, dtype=int),
+            "block_id": np.asarray(task_test if block_ids is None else block_ids[task_test], dtype=str),
+        },
     )
-    metrics_path.write_text(json.dumps(metrics, indent=2, allow_nan=True))
     return metrics
 
 
@@ -431,6 +425,7 @@ def _run_task_decoding(
     A: np.ndarray | None,
     subspace: str,
     block_ids: np.ndarray | None = None,
+    writer: DecodingOutput | None = None,
 ) -> list[dict]:
     """Fit one design, batching continuous targets with identical valid rows."""
     results: dict[str, dict] = {}
@@ -454,10 +449,11 @@ def _run_task_decoding(
                 subspace,
             )
             results[task_name] = _run_one_fit(
-                *fit_args, *(() if block_ids is None else (block_ids,))
+                *fit_args, *(() if block_ids is None else (block_ids,)),
+                **({"writer": writer} if writer is not None else {})
             )
             continue
-        cached = _load_cached_fit(
+        cached = writer.cached_fit(task_name, subspace, rank, fold) if writer and writer.artifact else _load_cached_fit(
             output_dir, task_name, fold, rank, subspace, config.refresh
         )
         if cached is not None:
@@ -489,7 +485,8 @@ def _run_task_decoding(
                 subspace,
             )
             results[task_name] = _run_one_fit(
-                *fit_args, *(() if block_ids is None else (block_ids,))
+                *fit_args, *(() if block_ids is None else (block_ids,)),
+                **({"writer": writer} if writer is not None else {})
             )
             continue
         targets = np.column_stack(
@@ -514,25 +511,13 @@ def _run_task_decoding(
                     "continuous", y[task_test], predictions[:, target_index]
                 ),
             }
-            artifact_dir = _artifact_dir(
-                output_dir, task_name, fold, rank, subspace
-            )
-            artifact_dir.mkdir(parents=True, exist_ok=True)
-            np.savez(
-                artifact_dir / "weights.npz",
-                **_weight_payload(pipeline, A, target_index=target_index),
-            )
-            np.savez_compressed(
-                artifact_dir / "heldout_predictions.npz",
-                y_true=np.asarray(y[task_test]),
-                y_pred=np.asarray(predictions[:, target_index]),
-                row_index=np.asarray(task_test, dtype=int),
-                block_id=np.asarray(
-                    task_test if block_ids is None else block_ids[task_test], dtype=str
-                ),
-            )
-            (artifact_dir / "metrics.json").write_text(
-                json.dumps(metrics, indent=2, allow_nan=True)
+            (writer or DecodingOutput(output_dir)).save_fit(
+                metrics, _weight_payload(pipeline, A, target_index=target_index), {
+                    "y_true": np.asarray(y[task_test]),
+                    "y_pred": np.asarray(predictions[:, target_index]),
+                    "row_index": np.asarray(task_test, dtype=int),
+                    "block_id": np.asarray(task_test if block_ids is None else block_ids[task_test], dtype=str),
+                },
             )
             results[task_name] = metrics
 
@@ -603,15 +588,18 @@ def _saved_decision_scores(
     fold: int,
     design: np.ndarray,
     test_idx: np.ndarray,
+    writer: DecodingOutput | None = None,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Reconstruct held-out continuous/logit scores from a saved decoder artifact."""
-    path = _artifact_dir(output_dir, task, fold, rank, subspace) / "weights.npz"
-    if not path.exists():
-        raise FileNotFoundError(f"Missing saved decoder weights: {path}")
-    with np.load(path, allow_pickle=False) as payload:
-        weights = np.asarray(payload["reduced_weights"], dtype=float)
-        intercept = np.asarray(payload["intercept"], dtype=float).reshape(-1)
-        classes = np.asarray(payload["classes"])
+    if writer and writer.artifact:
+        payload = writer.weights(task, subspace, rank, fold)
+    else:
+        path = _artifact_dir(output_dir, task, fold, rank, subspace) / "weights.npz"
+        with np.load(path, allow_pickle=False) as saved:
+            payload = dict(saved)
+    weights = np.asarray(payload["reduced_weights"], dtype=float)
+    intercept = np.asarray(payload["intercept"], dtype=float).reshape(-1)
+    classes = np.asarray(payload["classes"])
     if weights.ndim == 1:
         weights = weights[:, None]
     scores = np.asarray(design[test_idx], dtype=float) @ weights + intercept
@@ -651,6 +639,7 @@ def compute_prediction_agreement(
     folds: list[tuple[np.ndarray, np.ndarray]],
     task_targets: dict[str, np.ndarray],
     config: LanguageDecodingConfig,
+    writer: DecodingOutput | None = None,
 ) -> pd.DataFrame:
     """Compare fold-held-out RRR/PCA decoder outputs at each task and rank."""
     rows = []
@@ -668,10 +657,10 @@ def compute_prediction_agreement(
                     fold,
                 )
                 rrr_scores, rrr_classes = _saved_decision_scores(
-                    output_dir, task, "rrr", rank, fold, rrr_design, task_test
+                    output_dir, task, "rrr", rank, fold, rrr_design, task_test, writer
                 )
                 pca_scores, pca_classes = _saved_decision_scores(
-                    output_dir, task, "pca", rank, fold, pca_design, task_test
+                    output_dir, task, "pca", rank, fold, pca_design, task_test, writer
                 )
                 if not np.array_equal(rrr_classes, pca_classes):
                     raise ValueError(
@@ -1101,6 +1090,7 @@ def _run_subspace_decoding(
     task_targets: dict[str, np.ndarray],
     config: LanguageDecodingConfig,
     block_ids: np.ndarray | None = None,
+    writer: DecodingOutput | None = None,
 ) -> list[dict]:
     """Run one shared task/rank/fold sweep over prepared subspace inputs."""
     rows = []
@@ -1127,12 +1117,13 @@ def _run_subspace_decoding(
                     A=ambient_factor,
                     subspace=subspace,
                     block_ids=block_ids,
+                    **({"writer": writer} if writer is not None else {}),
                 )
             )
     return rows
 
 
-def run_language_decoding(config: LanguageDecodingConfig) -> Path:
+def run_language_decoding(config: LanguageDecodingConfig, artifact=None) -> Path:
     """Run the configured task/rank sweep and return its output directory."""
     effective_device = _configure_decoder_backend(config.device)
     print(
@@ -1232,14 +1223,19 @@ def run_language_decoding(config: LanguageDecodingConfig) -> Path:
         Path(target_root) / "language_decoding" / config.mode.value / source_identity
     )
     output_dir.mkdir(parents=True, exist_ok=True)
-    save_effective_config(config, output_dir)
-    validate_aggregation_cache(
-        output_dir, config.subspace_aggregation, refresh=config.refresh
-    )
+    writer = DecodingOutput(output_dir, artifact, config.refresh)
+    if artifact is None:
+        save_effective_config(config, output_dir)
+    if artifact is None:
+        validate_aggregation_cache(
+            output_dir, config.subspace_aggregation, refresh=config.refresh
+        )
 
     context = PodcastTaskContext(word_df, enc.data_root, config.task_data)
+    from src.utils.language_interpret.tasks import offset_word_labels
     task_targets = {
-        name: np.asarray(get_language_task(name).getter(context)) for name in config.tasks
+        name: offset_word_labels(get_language_task(name).getter(context), config.label_offset)
+        for name in config.tasks
     }
     for name, target in task_targets.items():
         if target.shape != (len(word_df),):
@@ -1319,13 +1315,10 @@ def run_language_decoding(config: LanguageDecodingConfig) -> Path:
         X = full_designs
 
     if "iu_alignment" in context._cache:
-        context.iu_alignment()[2].to_csv(output_dir / "iu_alignment.csv", index=False)
-    pd.DataFrame(
-        {
-            "analysis_row": np.arange(len(selection)),
-            "transcript_word_idx": selection,
-        }
-    ).to_csv(output_dir / "word_selection.csv", index=False)
+        writer.save("iu_alignment", context.iu_alignment()[2])
+    word_selection = pd.DataFrame({"analysis_row": np.arange(len(selection)), "transcript_word_idx": selection})
+    writer.save("word_selection", word_selection)
+    writer.save("sample_selection", word_selection)
     metadata = {
         "config": asdict(config),
         "subspace_unit_dirs": {
@@ -1375,9 +1368,11 @@ def run_language_decoding(config: LanguageDecodingConfig) -> Path:
         "requested_device": config.device,
         "effective_continuous_device": effective_device,
     }
-    (output_dir / "run_metadata.json").write_text(
-        json.dumps(metadata, indent=2, default=str)
-    )
+    if artifact is not None:
+        for key in ("subspace_unit_dirs", "rrr_unit_dir", "pca_unit_dir", "fold_results_dir", "output_dir", "multiview_source_config"):
+            metadata.pop(key, None)
+        metadata["rrr_source"] = artifact.load_field("upstream_identities")[0]
+    writer.save("run_metadata", metadata)
 
     rows = []
     print("\n[Full embeddings]")
@@ -1402,6 +1397,7 @@ def run_language_decoding(config: LanguageDecodingConfig) -> Path:
                 A=full_projection,
                 subspace="full",
                 block_ids=block_ids,
+                writer=writer,
             )
         )
 
@@ -1432,6 +1428,7 @@ def run_language_decoding(config: LanguageDecodingConfig) -> Path:
         task_targets=task_targets,
         config=config,
         block_ids=block_ids,
+        writer=writer,
     ))
     pca_prepared = None
     if pca_factor_paths:
@@ -1462,12 +1459,13 @@ def run_language_decoding(config: LanguageDecodingConfig) -> Path:
             task_targets=task_targets,
             config=config,
             block_ids=block_ids,
+            writer=writer,
         ))
 
     results = pd.DataFrame(rows)
-    results.to_csv(output_dir / "grid_results.csv", index=False)
+    writer.save("grid_results", results)
     summary = summarize_language_decoding(results)
-    summary.to_csv(output_dir / "summary.csv", index=False)
+    writer.save("summary", summary)
     agreement_summary = None
     if pca_prepared is not None:
         agreement = compute_prediction_agreement(
@@ -1477,15 +1475,15 @@ def run_language_decoding(config: LanguageDecodingConfig) -> Path:
             folds=folds,
             task_targets=task_targets,
             config=config,
+            writer=writer,
         )
-        agreement.to_csv(output_dir / "prediction_agreement.csv", index=False)
+        writer.save("prediction_agreement", agreement)
         agreement_summary = summarize_prediction_agreement(agreement)
-        agreement_summary.to_csv(
-            output_dir / "prediction_agreement_summary.csv", index=False
-        )
+        writer.save("prediction_agreement_summary", agreement_summary)
     plot_language_decoding(
         summary,
         output_dir / "rank_analysis.png",
         agreement=agreement_summary,
     )
+    writer.save_plot(output_dir / "rank_analysis.png")
     return output_dir

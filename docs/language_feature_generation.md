@@ -77,13 +77,23 @@ For punctuation or contractions that yield multiple parser words per canonical w
 word-level label comes from the syntactic head component and the full crosswalk remains in
 `provider_tokens.tsv`.
 
-## Podcast decoding-task inventory
+## Decoding-task inventory
 
-All artifact-backed targets below are complete. Native labels preserve the Podcast
-source annotations, while standardized labels come from the shared generation pipeline
-(notably Stanza UD). Raw Lancaster dimensions remain separate from the aggregate
-sensorimotor strength and exclusivity composites. Categorical missing values are not a
-class: they remain missing and are excluded by the decoder's finite-target mask.
+Word decoding supports `label_offset`: embedding at word t decodes the label at
+t + offset, independently of neural `encoding.offset`. Labels are shifted on the
+full canonical transcript before row selection; out-of-range labels remain missing.
+fMRI shifts reset per story. Checked-in batch manifests sweep `label_offsets:
+[-1, 0, 1]` for word modes only, in the same per-model job. TR/pre-FIR remains at
+zero. To run only one offset, pass `OVERRIDES="--label_offset=1"` to Make.
+Artifact configuration variants distinguish label offsets while retaining the same
+upstream basis and fold selection.
+
+Except where a dataset-specific status is noted, the artifact-backed targets below are
+complete for Podcast. Native labels preserve source annotations, while standardized
+labels come from the shared generation pipeline (notably Stanza UD). Raw Lancaster
+dimensions remain separate from the aggregate sensorimotor strength and exclusivity
+composites. Categorical missing values are not a class: they remain missing and are
+excluded by the decoder's finite-target mask.
 
 ## Task-to-subspace reconstruction
 
@@ -112,6 +122,7 @@ complete interface.
 | Task name | Kind | Measurement | Source | Status |
 |---|---|---|---|---|
 | `speaker_identity` | categorical | Anonymous within-episode speaker cluster | pyannote Community-1 | Complete |
+| `native_speaker` | categorical | Dataset-provided speaker identity | Dataset-native annotation | Cars 2 complete |
 | `native_part_of_speech` | categorical | Source POS tag | Podcast native | Complete |
 | `native_surprisal` | continuous | Source LM surprisal | Podcast native | Complete |
 | `native_entropy` | continuous | Source LM entropy | Podcast native | Complete |
@@ -324,3 +335,21 @@ The first milestone implements the framework and high-feasibility native, lexica
 WordNet, and UD families. SRL, coreference, discourse, narrative, contextual LM, and
 expanded prosody remain later providers because they require further model and labeling
 decisions.
+# Focused recurrence updates
+
+Run `uv run python scripts/utilities/generate_recurrence_features.py` with repeated
+`--config` arguments for the language-feature dataset configs. This preserves other
+labels and uses the existing disfluency provider's surface-word recurrence rules,
+resetting history per stimulus. Decoding manifests include `word_in_previous_5`,
+`prior_word_count`, and `distance_from_previous_occurrence` (missing on first
+occurrence). Pause durations and word duration are included for all three datasets;
+IU end is included where aligned IUs exist (Podcast and fMRI), and native pitch/RMS
+intensity are included for Cars 2.
+
+fMRI decoding manifests additionally use `tr_tasks: [speaking_rate]`, excluded
+when the batch launcher is switched to a single-word mode. This target is computed
+directly from transcript word starts on the acquisition grid, not stored per word
+or Lanczos-interpolated. Each centered TR interval is left-inclusive/right-exclusive;
+its word count is divided by the full TR duration, including silence. Raw words/sec
+are retained in the target audit trace; decoding uses the existing per-story
+standardization and TR trimming, with no FIR delay expansion of the target.
