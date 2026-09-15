@@ -1,4 +1,5 @@
 target_dataset: fmri
+num_folds: 5
 # fMRI targets use fmri_tr_pre_fir mode in the batch runner.
 label_offsets: [0]
 tr_tasks: [speaking_rate]
