@@ -347,6 +347,30 @@ def _load_cached_fit(
     return metrics
 
 
+def _pool_speaker_labels(
+    target: np.ndarray, folds: list[tuple[np.ndarray, np.ndarray]]
+) -> tuple[np.ndarray, dict]:
+    """Retain speakers present in every outer train/test partition; pool others."""
+    present = np.isfinite(target)
+    labels = set(target[present])
+    retained = labels.copy()
+    for train_idx, test_idx in folds:
+        for indices in (train_idx, test_idx):
+            values = target[indices]
+            retained.intersection_update(values[np.isfinite(values)])
+    pooled = sorted(labels - retained)
+    result = target.copy()
+    other = float(max(labels) + 1) if pooled else None
+    if pooled:
+        result[present & ~np.isin(target, list(retained))] = other
+    return result, {
+        "retained_class_ids": sorted(retained),
+        "pooled_class_ids": pooled,
+        "other_class_id": other,
+        "other_class_label": "other",
+    }
+
+
 def _fit_indices(
     task_name: str,
     y: np.ndarray,
@@ -1273,6 +1297,11 @@ def run_language_decoding(config: LanguageDecodingConfig, artifact=None) -> Path
                 np.arange(len(selection))
             )
         )
+
+    for name in ("speaker_identity", "native_speaker"):
+        if name in task_targets:
+            task_targets[name], mapping = _pool_speaker_labels(task_targets[name], folds)
+            writer.save("speaker_class_mapping", mapping, {"task": name})
 
     if multiview_config is not None:
         if config.mode == LanguageDecodingMode.WITHIN_DATASET:

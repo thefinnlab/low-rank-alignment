@@ -193,7 +193,10 @@ def run_config(config: LanguageDecodingConfig) -> Artifact:
     if target is not None:
         upstreams.append(target.identity_record())
     artifact = Artifact.from_config(config, source=source, target=target).begin(
-        config=config, upstreams=upstreams, refresh=config.refresh
+        config=config, upstreams=upstreams, refresh=config.refresh,
+        variant_extras=({"speaker-labels": "outer-fold-shared-other"}
+                        if {"speaker_identity", "native_speaker"} & set(config.tasks)
+                        else None),
     )
     if artifact.complete and not config.refresh:
         return artifact

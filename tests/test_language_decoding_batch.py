@@ -64,7 +64,7 @@ def test_label_offsets_have_distinct_artifact_variants():
 
 
 @pytest.mark.parametrize("mode,offsets", [
-    ("fmri_word", [-1, 0, 1]), ("fmri_tr_pre_fir", [0]),
+    ("fmri_word", [0]), ("fmri_tr_pre_fir", [0]),
 ])
 def test_word_mode_override_excludes_tr_only_tasks(monkeypatch, mode, offsets):
     import sys

@@ -1,5 +1,6 @@
 target_dataset: fmri
-label_offsets: [-1, 0, 1]
+# fMRI targets use fmri_tr_pre_fir mode in the batch runner.
+label_offsets: [0]
 tr_tasks: [speaking_rate]
 source_dataset: cars-2
 device: auto

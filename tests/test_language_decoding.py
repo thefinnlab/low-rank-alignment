@@ -13,6 +13,7 @@ from src.utils.language_interpret.decoding import (
     _configure_decoder_backend,
     _decoder_metrics,
     _fit_decoder,
+    _pool_speaker_labels,
     _matched_score_correlation,
     _run_subspace_decoding,
     _run_task_decoding,
@@ -36,6 +37,37 @@ from src.utils.language_interpret.fmri_decoding import (
     build_tr_targets,
 )
 from src.utils.shared.fmri import AlignedFMRIStimuli
+
+
+def test_speaker_labels_pool_speakers_missing_from_outer_partitions():
+    target = np.array([0, 1, 2, np.nan, 0, 1, 3, np.nan])
+    folds = [(np.arange(4, 8), np.arange(4)),
+             (np.arange(4), np.arange(4, 8))]
+    mapped, metadata = _pool_speaker_labels(target, folds)
+    np.testing.assert_equal(mapped, [0, 1, 4, np.nan, 0, 1, 4, np.nan])
+    assert metadata["retained_class_ids"] == [0, 1]
+    assert metadata["pooled_class_ids"] == [2, 3]
+    assert metadata["other_class_id"] == 4
+    np.testing.assert_equal(target, [0, 1, 2, np.nan, 0, 1, 3, np.nan])
+
+
+def test_speaker_labels_require_presence_in_training_as_well_as_test():
+    target = np.array([0., 1., 0., 1.])
+    mapped, metadata = _pool_speaker_labels(
+        target, [(np.array([0, 2]), np.array([1, 3])),
+                 (np.arange(4), np.arange(4))]
+    )
+    np.testing.assert_equal(mapped, [2, 2, 2, 2])
+    assert metadata["retained_class_ids"] == []
+
+
+def test_speaker_labels_do_not_add_other_when_all_speakers_are_shared():
+    target = np.array([0., 1., 0., 1., np.nan])
+    mapped, metadata = _pool_speaker_labels(
+        target, [(np.array([0, 1]), np.array([2, 3, 4]))]
+    )
+    np.testing.assert_equal(mapped, target)
+    assert metadata["other_class_id"] is None
 
 
 def _task_context(tmp_path):

@@ -36,7 +36,6 @@ tasks:
   - association_entropy
   - sense_count
   - is_named_entity
-  - coreference_newness
 
 task_data:
   language_features: processed_data/language_features/podcast/podcast/tokens.tsv

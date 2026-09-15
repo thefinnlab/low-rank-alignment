@@ -41,7 +41,11 @@ embeddings predict iEEG and fMRI responses. The supported executable surface is
   Its optional `--layer` filter supports small exploratory runs, and output-root
   overrides leave upstream RRR lookups at their separately configured roots.
   Word decoding sweeps label offsets -1/0/+1 using the same upstream basis; TR
-  decoding stays at label offset 0.
+  decoding stays at label offset 0. Checked-in manifests use TR/pre-FIR mode
+  whenever fMRI is the target, for both internal and directed cross-dataset decoding.
+  Word-aligned speaker decoding retains individual speakers only when present in
+  every outer fold's training and test sets; remaining speakers share an `other`
+  class. Speaker runs use a separate Artifact variant and save the class mapping.
 - `scripts/utilities/` contains data preparation, embedding generation, language-feature
   generation, plotting, atlas-reporting entrypoints, and a read-only iEEG utility for
   comparing max-lag correlation with electrode-specific or subject-wide shared-max
