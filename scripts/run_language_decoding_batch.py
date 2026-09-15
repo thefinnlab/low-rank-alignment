@@ -87,14 +87,17 @@ def _source_request(public, selected) -> dict:
     return request
 
 
-def _target_encoding(public, selected) -> EncodingConfig:
+def _target_encoding(public, selected, num_folds: int) -> EncodingConfig:
     if public.modality == "ieeg":
-        return deepcopy(selected.encoding)
+        encoding = deepcopy(selected.encoding)
+        encoding.num_folds = num_folds
+        return encoding
     model = selected.model_dir
     return EncodingConfig(
         dataset="deep-fmri",
         model="glove" if model.startswith("glove") else "transformer",
         offset=0,
+        num_folds=num_folds,
         per_model_config={
             "model_dir": model,
             "layer": selected.layer,
@@ -105,6 +108,7 @@ def _target_encoding(public, selected) -> EncodingConfig:
 
 def build_configs(manifest_path: str, model: str) -> list[LanguageDecodingConfig]:
     payload = yaml.safe_load(Path(manifest_path).read_text()) or {}
+    num_folds = int(payload.get("num_folds", 5))
     target = str(payload["target_dataset"])
     source = str(payload.get("source_dataset", target))
     cross = source != target
@@ -125,7 +129,7 @@ def build_configs(manifest_path: str, model: str) -> list[LanguageDecodingConfig
         source_item = source_by_layer[layer]
         target_is_fmri = target in FMRI_DATASETS
         kwargs = {
-            "encoding": _target_encoding(target_public, target_item),
+            "encoding": _target_encoding(target_public, target_item, num_folds),
             "rrr_source": _source_request(source_public, source_item),
             "mode": "fmri_tr_pre_fir" if target_is_fmri else (
                 "cross_dataset" if cross else "within_dataset"

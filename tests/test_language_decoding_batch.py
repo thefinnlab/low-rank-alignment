@@ -25,6 +25,7 @@ _SPEC.loader.exec_module(batch)
 def test_all_language_decoding_manifests_expand_per_model(manifest, model, layers):
     configs = batch.build_configs(manifest, model)
     assert [item.encoding.per_model_config.get("layer") for item in configs] == layers
+    assert all(item.encoding.num_folds == 5 for item in configs)
     assert all("self_surprisal" not in item.tasks for item in configs)
     assert all("self_entropy" not in item.tasks for item in configs)
     assert all("surprisal" in item.tasks for item in configs)
