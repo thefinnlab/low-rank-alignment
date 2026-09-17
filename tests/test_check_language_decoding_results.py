@@ -10,14 +10,15 @@ from scripts.utilities.check_language_decoding_results import (
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
-def test_expected_matrix_covers_every_direction_layer_and_offset(tmp_path):
+def test_expected_matrix_covers_internal_and_every_direction_layer_and_offset(tmp_path):
     expected = expected_artifacts(
         REPO_ROOT, tmp_path, models=["gpt2"], datasets=["podcast", "cars-2", "fmri"]
     )
 
-    # Four word-aligned directions have 5 layers * 3 offsets, while the two
-    # directions targeting fMRI have 5 layers * 1 offset.
-    assert len(expected) == 70
+    # Four word-aligned directions and two word-aligned internal datasets have
+    # 5 layers * 3 offsets; the two directions and one internal run targeting
+    # fMRI have 5 layers * 1 offset.
+    assert len(expected) == 105
     assert {(item.source_dataset, item.target_dataset) for item in expected} == {
         ("podcast", "cars-2"),
         ("podcast", "fmri"),
@@ -25,6 +26,9 @@ def test_expected_matrix_covers_every_direction_layer_and_offset(tmp_path):
         ("cars-2", "fmri"),
         ("fmri", "podcast"),
         ("fmri", "cars-2"),
+        ("podcast", "podcast"),
+        ("cars-2", "cars-2"),
+        ("fmri", "fmri"),
     }
     assert {item.layer for item in expected} == {0, 3, 6, 9, 12}
     assert {item.label_offset for item in expected} == {-1, 0, 1}
@@ -54,3 +58,29 @@ def test_find_failures_distinguishes_missing_and_incomplete(tmp_path):
     failures = find_failures([complete, incomplete, missing])
 
     assert [failure.status for failure in failures] == ["INCOMPLETE", "MISSING"]
+
+
+def test_internal_offsets_share_one_model_layer_job(tmp_path):
+    expected = expected_artifacts(
+        REPO_ROOT, tmp_path, models=["glove"], datasets=["podcast"]
+    )
+
+    assert len(expected) == 3
+    assert {
+        (
+            item.config_path,
+            item.source_dataset,
+            item.target_dataset,
+            item.model,
+            item.layer,
+        )
+        for item in expected
+    } == {
+        (
+            REPO_ROOT / "configs/language_decoding/internal/podcast.yml",
+            "podcast",
+            "podcast",
+            "glove",
+            None,
+        )
+    }

@@ -57,6 +57,14 @@ def _fake_significance_check(tmp_path: Path, rows: list[tuple[str, str, str]]) -
     return executable
 
 
+def _fake_decoding_check(tmp_path: Path, rows: list[tuple[str, ...]]) -> Path:
+    executable = tmp_path / "check-decoding"
+    output = "".join("\t".join(row) + "\n" for row in rows)
+    executable.write_text(f"#!/bin/sh\nprintf %s '{output}'\n")
+    executable.chmod(0o755)
+    return executable
+
+
 def test_significance_uses_shared_dataset_and_models(tmp_path: Path):
     result, submissions = _run_make(
         tmp_path, "significance", "DATASET=podcast", "MODELS=gpt2 glove"
@@ -87,6 +95,40 @@ def test_language_decoding_submits_one_job_per_model_for_directed_pair(tmp_path:
     )
     assert submissions[0].endswith("--model gpt2")
     assert submissions[1].endswith("--model gpt2-xl")
+
+
+def test_language_decoding_missing_submits_per_layer_with_refresh_false(
+    tmp_path: Path,
+):
+    check = _fake_decoding_check(tmp_path, [
+        (
+            "configs/language_decoding/internal/podcast.yml",
+            "podcast",
+            "podcast",
+            "gpt2",
+            "3",
+        ),
+        (
+            "configs/language_decoding/cross_dataset/fmri/from_podcast.yml",
+            "podcast",
+            "fmri",
+            "glove",
+            "none",
+        ),
+    ])
+    result, submissions = _run_make(
+        tmp_path,
+        "language-decoding-missing",
+        f"LANGUAGE_DECODING_CHECK={check}",
+        "MODELS=gpt2 glove",
+        "OVERRIDES=--refresh=true",
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert len(submissions) == 2
+    assert "--model gpt2 --layer 3" in submissions[0]
+    assert "--model glove --layer" not in submissions[1]
+    assert all(item.endswith("--refresh=true --refresh=false") for item in submissions)
 
 
 def test_fmri_significance_supports_glove(tmp_path: Path):

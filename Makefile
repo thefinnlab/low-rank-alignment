@@ -17,6 +17,7 @@ OVERRIDES ?=
 LAYER ?=
 PER_LAYER ?= false
 SIGNIFICANCE_CHECK ?= python -m scripts.utilities.check_final_significance
+LANGUAGE_DECODING_CHECK ?= uv run python -m scripts.utilities.check_language_decoding_results
 
 export PYTHONPATH := $(CURDIR)
 
@@ -233,6 +234,33 @@ language-decoding:
 		done
 	done
 
+## Submit one job per model/layer with any missing or incomplete internal or
+## directed language-decoding Artifact. Every submitted run uses refresh=false.
+language-decoding-missing:
+	@set -eu
+	mkdir -p logs
+	missing="$$($(LANGUAGE_DECODING_CHECK) --results-root results --models $(MODELS) --missing)"
+	if [ -z "$$missing" ]; then
+		echo "All required language-decoding Artifacts are complete."
+		exit 0
+	fi
+	printf '%s\n' "$$missing" | while IFS="$$(printf '\t')" read -r config source target model layer; do
+		layer_arg=""
+		layer_label="none"
+		if [ "$$layer" != "none" ]; then layer_arg="--layer $$layer"; layer_label="$$layer"; fi
+		if [ "$$source" = "$$target" ]; then
+			label="language-decoding-$$target"
+		else
+			label="language-decoding-$$source-to-$$target"
+		fi
+		echo "Submitting missing $$label / $$model / layer $$layer_label: $$config"
+		if [ "$(CMD)" = "sbatch" ]; then
+			$(SBATCH) --job-name="$$label-$$model-layer-$$layer_label-$(USR)-$(DT)" submit.sh scripts/run_language_decoding_batch.py --config "$$config" --model "$$model" $$layer_arg $(OVERRIDES) --refresh=false
+		else
+			$(CMD) scripts/run_language_decoding_batch.py --config "$$config" --model "$$model" $$layer_arg $(OVERRIDES) --refresh=false
+		fi
+	done
+
 ## Sweep fold-safe target-PCA dimensionalities for ordinary internal RRR.
 ## RRR_MODE: cross_subject or cross_model_layer
 ## Example: make target-dimensionality DATASET=podcast MODELS="gpt2 glove"
@@ -388,6 +416,7 @@ final-results:
 		done
 	fi
 
-.PHONY: significance significance-missing missing-significance rrr target-dimensionality cross-condition final-results
+.PHONY: significance significance-missing missing-significance rrr target-dimensionality cross-condition final-results language-decoding language-decoding-missing missing-language-decoding
 
 missing-significance: significance-missing
+missing-language-decoding: language-decoding-missing

@@ -62,7 +62,10 @@ embeddings predict iEEG and fMRI responses. The supported executable surface is
   directed cross-dataset matrix for podcast, Cars 2, and fMRI, reporting artifacts
   that are absent or not marked complete by the standard manifest contract.
   `check_language_decoding_results.py` similarly checks every configured model,
-  layer, label offset, and directed Podcast/Cars 2/fMRI decoding pair.
+  layer, and label offset for both internal decoding and all directed
+  Podcast/Cars 2/fMRI decoding pairs. The `language-decoding-missing` Make target
+  submits each missing or incomplete model/layer as a separate job with refresh
+  disabled.
 
 The Makefile has five individual analysis targets: `significance`, `rrr`,
 `target-dimensionality`, `cross-condition`, and `language-decoding`. They share
@@ -106,7 +109,42 @@ HDF5 container while keeping plots as separately browsable PNG files.
 
 - `notebooks/plots.py` provides interactive RRR/PCA comparisons, including each
   electrode/voxel's performance relative to its best tested rank within RRR or PCA, summarized
-  across targets as a mean with ±1 SD after averaging evaluation folds.
+  across targets as a mean with ±1 SD after averaging evaluation folds. Its normalized
+  convergence plots compare RRR and PCA across model layers by interpolating monotonic
+  curves over zero-based relative rank on a symmetric-log axis and weighting each model
+  layer equally. The leave-one-subject-out view applies the same comparison to the RRR
+  baseline, transferred RRR, and PCA baseline after averaging subjects within each model
+  layer and rank. Directed cross-dataset panels compare within-dataset RRR/PCA with their
+  transferred counterparts after averaging folds within each model layer, retaining only
+  model layers with all four curves for that direction; each directed dataset pair also
+  has a paired model-layer distribution of normalized-curve AUCs. All AUC summaries
+  integrate normalized monotonic performance over normalized log rank from rank 1 to the
+  curve's maximum rank, independently of the symmetric-log display scale. It also
+  provides a reusable paired-distribution plot combining violins, adjacent-pair
+  lines, distribution-colored points, and box plots. Its language-decoding view
+  discovers currently saved internal and directed cross-dataset summaries,
+  filters them by target dataset, model/layer, source space, and label offset,
+  and tabulates selectable continuous and categorical metrics for RRR, PCA, and
+  their raw and epsilon-stabilized relative differences at each available
+  rank, clamping RRR and PCA scores independently to zero for the relative
+  calculation while retaining their raw displayed values. A companion table
+  aggregates every saved dataset, model/layer, source
+  space, offset, and target across ranks with positive RRR performance, retains
+  results where RRR beats PCA at two or more ranks, and orders them by mean
+  signed relative RRR-minus-PCA difference. Selecting a row in this summary
+  reactively plots its relative difference across retained positive-RRR ranks,
+  distinguishing ranks where RRR does and does not beat PCA. A reusable
+  averaged-summary view groups curves by normalized model depth, model family,
+  internal versus cross-dataset condition, or causal versus bidirectional
+  architecture, excluding random GPT-2 and layerless GloVe. It can either
+  average member-relative curves or average clamped RRR/PCA scores before
+  computing relative difference. Selected summaries show translucent member
+  curves behind the mean and report incomplete per-rank member coverage. A
+  transfer-consistency view integrates each clamped relative curve over
+  normalized log-rank, matches each directed cross-dataset result to either its
+  source- or target-internal result by model, layer, task, and label offset, and
+  ranks directed dataset pairs by Pearson correlation. Offsets are selectable;
+  selecting a pair displays its AUC scatter, fitted line, and identity line.
 - `src/core/config.py` defines the modality implementation dataclasses; the two
   public facade scripts define the strict client Configs.
 - `src/core/registry.py` defines embedding and dataset adapter registries.
