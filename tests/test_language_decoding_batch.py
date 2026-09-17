@@ -45,6 +45,20 @@ def test_directed_fmri_uses_ieeg_basis_and_internal_fmri_data_source():
     assert config.fmri_target_artifact["results_root"] == "results"
 
 
+def test_brain_treebank_source_uses_canonical_cars_identity():
+    [config, *_] = batch.build_configs(
+        "configs/language_decoding/cross_dataset/fmri/from_cars-2.yml", "llama3-8b"
+    )
+    assert config.rrr_source["dataset"] == "brain-treebank-cars-2"
+
+
+def test_glove_source_uses_canonical_dimensioned_model_identity():
+    [config, *_] = batch.build_configs(
+        "configs/language_decoding/internal/podcast.yml", "glove"
+    )
+    assert config.rrr_source["model"] == "glove-300"
+
+
 def test_cars_uses_native_speaker_and_omits_unavailable_iu_targets():
     [config, *_] = batch.build_configs(
         "configs/language_decoding/internal/cars-2.yml", "gpt2"

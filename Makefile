@@ -14,6 +14,8 @@ SOURCE_DATASET ?=
 CMD ?= sbatch
 SBATCH ?= sbatch
 OVERRIDES ?=
+LAYER ?=
+PER_LAYER ?= false
 SIGNIFICANCE_CHECK ?= python -m scripts.utilities.check_final_significance
 
 export PYTHONPATH := $(CURDIR)
@@ -192,7 +194,7 @@ rrr:
 	done
 
 ## Decode target-dataset language labels from internal or directed source bases.
-## Each selected model is one job; all of that model's configured layers run in it.
+## Each selected model is one job by default; PER_LAYER=true submits one job per layer.
 ## Leave SOURCE_DATASET empty for internal decoding, or set it to another dataset.
 language-decoding:
 	@set -eu
@@ -209,13 +211,26 @@ language-decoding:
 	fi
 	[ -f "$$config" ] || { echo "Missing language-decoding config: $$config" >&2; exit 2; }
 	[ -n "$(strip $(MODELS))" ] || { echo "MODELS must contain at least one model" >&2; exit 2; }
+	case "$(PER_LAYER)" in true|false) ;; *) echo "PER_LAYER must be true or false" >&2; exit 2 ;; esac
+	[ "$(PER_LAYER)" != "true" ] || [ -z "$(LAYER)" ] || { echo "PER_LAYER=true and LAYER cannot be used together" >&2; exit 2; }
 	for model in $(MODELS); do
-		echo "Running $$label / $$model: $$config"
-		if [ "$(CMD)" = "sbatch" ]; then
-			$(SBATCH) --job-name="$$label-$$model-$(USR)-$(DT)" submit.sh scripts/run_language_decoding_batch.py --config "$$config" --model "$$model" $(OVERRIDES)
-		else
-			$(CMD) scripts/run_language_decoding_batch.py --config "$$config" --model "$$model" $(OVERRIDES)
+		layers="none"
+		if [ "$(PER_LAYER)" = "true" ]; then
+			layers="$$(uv run python -c 'import sys; from scripts.run_language_decoding_batch import build_configs; print(" ".join("none" if c.encoding.per_model_config.get("layer") is None else str(c.encoding.per_model_config.get("layer")) for c in build_configs(sys.argv[1], sys.argv[2])))' "$$config" "$$model")"
+		elif [ -n "$(LAYER)" ]; then
+			layers="$(LAYER)"
 		fi
+		for layer in $$layers; do
+			layer_arg=""
+			layer_label="none"
+			if [ "$$layer" != "none" ]; then layer_arg="--layer $$layer"; layer_label="$$layer"; fi
+			echo "Running $$label / $$model / layer $$layer_label: $$config"
+			if [ "$(CMD)" = "sbatch" ]; then
+				$(SBATCH) --job-name="$$label-$$model-layer-$$layer_label-$(USR)-$(DT)" submit.sh scripts/run_language_decoding_batch.py --config "$$config" --model "$$model" $$layer_arg $(OVERRIDES)
+			else
+				$(CMD) scripts/run_language_decoding_batch.py --config "$$config" --model "$$model" $$layer_arg $(OVERRIDES)
+			fi
+		done
 	done
 
 ## Sweep fold-safe target-PCA dimensionalities for ordinary internal RRR.

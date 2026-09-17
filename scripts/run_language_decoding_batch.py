@@ -16,6 +16,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from scripts.run_language_decoding import run_config
 from scripts.run_rrr import Config as RRRClientConfig
+from src.core.artifacts import normalize_dataset, normalize_model
 from src.core.config import EncodingConfig, LanguageDecodingConfig
 from src.utils.shared.config import (
     apply_overrides,
@@ -69,11 +70,19 @@ def _model(config) -> str:
 
 def _source_request(public, selected) -> dict:
     layer = _layer(selected)
+    dataset = "deep-fmri" if public.modality == "fmri" else public.dataset
+    model = _model(selected)
+    if public.modality == "ieeg":
+        stimulus = selected.encoding.per_dataset_config.get("movie")
+        dataset = normalize_dataset(dataset, stimulus)
+        model = normalize_model(
+            model, glove_dim=selected.encoding.per_model_config.get("dim")
+        )
     request = {
         "mode": "internal" if public.mode.value == "internal" else public.mode.value,
-        "dataset": "deep-fmri" if public.modality == "fmri" else public.dataset,
+        "dataset": dataset,
         "offset": 0 if public.modality == "fmri" else selected.encoding.offset,
-        "model": _model(selected),
+        "model": model,
         "layer": layer,
         "significance_selection": asdict(selected.significance_selection),
         "results_root": public.results_root,
