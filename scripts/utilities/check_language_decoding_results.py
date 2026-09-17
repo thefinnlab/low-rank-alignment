@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""Report missing or incomplete directed cross-dataset decoding artifacts."""
+"""Report missing or incomplete internal and directed decoding artifacts."""
 
 from __future__ import annotations
 
@@ -57,6 +57,14 @@ class Failure:
 
 
 def _manifest_path(repo_root: Path, source: str, target: str) -> Path:
+    if source == target:
+        return (
+            repo_root
+            / "configs"
+            / "language_decoding"
+            / "internal"
+            / f"{target}.yml"
+        )
     return (
         repo_root
         / "configs"
@@ -102,8 +110,6 @@ def expected_artifacts(
     expected = []
     for target in datasets:
         for source in datasets:
-            if source == target:
-                continue
             path = _manifest_path(repo_root, source, target)
             if not path.is_file():
                 raise FileNotFoundError(f"Missing language-decoding config: {path}")
@@ -192,6 +198,14 @@ def main() -> None:
     parser.add_argument(
         "--datasets", nargs="+", choices=DATASETS, default=list(DATASETS)
     )
+    parser.add_argument(
+        "--missing",
+        action="store_true",
+        help=(
+            "Print one tab-separated config/source/target/model/layer row per "
+            "missing or incomplete job, deduplicating label offsets"
+        ),
+    )
     args = parser.parse_args()
 
     try:
@@ -205,15 +219,33 @@ def main() -> None:
         raise SystemExit(str(error)) from error
 
     failures = find_failures(expected)
+    if args.missing:
+        jobs = {
+            (
+                str(failure.expected.config_path),
+                failure.expected.source_dataset,
+                failure.expected.target_dataset,
+                failure.expected.model,
+                (
+                    "none"
+                    if failure.expected.layer is None
+                    else str(failure.expected.layer)
+                ),
+            )
+            for failure in failures
+        }
+        for job in sorted(jobs):
+            print("\t".join(job))
+        return
     for failure in failures:
         print(f"{failure.status}\t{failure.expected.label}\t{failure.detail}")
     if failures:
         raise SystemExit(
-            f"Found {len(failures)} missing or incomplete cross-dataset decoding "
+            f"Found {len(failures)} missing or incomplete language-decoding "
             f"artifacts out of {len(expected)} expected."
         )
     print(
-        f"All {len(expected)} expected cross-dataset decoding artifacts are complete."
+        f"All {len(expected)} expected language-decoding artifacts are complete."
     )
 
 
