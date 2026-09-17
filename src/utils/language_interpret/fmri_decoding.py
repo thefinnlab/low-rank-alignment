@@ -509,6 +509,10 @@ def run_fmri_word_decoding(
             [story],
             source_config["layer"],
             source_config.get("pooling", "mean"),
+            fmri_repo_root=fmri["fmri_repo_root"],
+            glove_data_root=fmri.get("glove_data_root", "data"),
+            limit_to_glove=bool(fmri.get("limit_to_glove", False)),
+            glove_dim=int(fmri.get("glove_dim", 300)),
         )[story]
         if len(embedding) != len(frames[story]):
             raise ValueError(f"Embedding/transcript alignment failed for {story}")
@@ -677,6 +681,10 @@ def run_fmri_tr_decoding(
         stories,
         source_config["layer"],
         source_config.get("pooling", "mean"),
+        fmri_repo_root=fmri["fmri_repo_root"],
+        glove_data_root=fmri.get("glove_data_root", "data"),
+        limit_to_glove=bool(fmri.get("limit_to_glove", False)),
+        glove_dim=int(fmri.get("glove_dim", 300)),
     )
     frames, sequences = load_story_word_data(fmri["fmri_repo_root"], stories)
     for story in stories:
