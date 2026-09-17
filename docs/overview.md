@@ -61,6 +61,8 @@ embeddings predict iEEG and fMRI responses. The supported executable surface is
   `check_rrr_results.py` checks the complete internal, leave-one-subject-out, and
   directed cross-dataset matrix for podcast, Cars 2, and fMRI, reporting artifacts
   that are absent or not marked complete by the standard manifest contract.
+  `check_language_decoding_results.py` similarly checks every configured model,
+  layer, label offset, and directed Podcast/Cars 2/fMRI decoding pair.
 
 The Makefile has five individual analysis targets: `significance`, `rrr`,
 `target-dimensionality`, `cross-condition`, and `language-decoding`. They share
