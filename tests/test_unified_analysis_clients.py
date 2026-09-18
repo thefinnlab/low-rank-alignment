@@ -85,6 +85,11 @@ def test_rrr_internal_mode_and_generic_source_translation():
     assert fmri.source_mode == "cross_dataset"
     assert fmri.ieeg_rrr_source["dataset"] == "podcast"
     assert fmri.subspace_aggregation is None
+    artifact = RRRArtifact.from_fmri_config(fmri)
+    assert artifact.variant_extras == {
+        "input_scaling": "pooled-training-stories-v1",
+        "transfer_scaling": "source-then-target-reduced-pre-fir-v1",
+    }
 
 
 def test_rrr_fmri_leave_one_subject_out_translation():
@@ -106,6 +111,7 @@ def test_rrr_fmri_leave_one_subject_out_translation():
     artifact = RRRArtifact.from_fmri_config(selected)
     assert artifact.identity["mode"] == "leave_one_subject_out"
     assert artifact.variant_extras == {
+        "input_scaling": "pooled-training-stories-v1",
         "loso_contract": "orthogonal-held-out-fmri-v1"
     }
 

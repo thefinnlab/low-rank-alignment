@@ -30,9 +30,7 @@ def run_full_fit(
         "input_factors": [
             artifact._selector(method=method) for method in methods
         ],
-        "input_scalers": [
-            artifact._selector(method=method) for method in methods
-        ],
+        "input_scalers": [{}],
     }
     if config.save_b_matrices:
         required["target_factors"] = [artifact._selector(method="rrr")]
@@ -62,11 +60,15 @@ def run_full_fit(
     artifact.save_field(
         "target_manifest", prepared.target_manifest, overwrite=config.refresh
     )
+    # Both RRR and PCA are fit from the same standardized full embedding matrix.
+    # Persist that transformation once, independently of method and requested rank.
+    artifact.save_field(
+        "input_scalers", factors["input_scaler"], overwrite=config.refresh
+    )
     for method in methods:
         artifact.save_factors(
             method=method,
             input_factors=factors[method],
-            input_scaler=factors["input_scaler"],
             target_factors=(factors["target"] if method == "rrr" else None),
             overwrite=config.refresh,
         )

@@ -64,6 +64,11 @@ def test_fmri_loso_partitions_targets_writes_phases_and_resumes(tmp_path, monkey
         ),
         cv=[],
         ambient_dim=3,
+        input_scaler={
+            "mean": np.zeros(3, dtype=np.float32),
+            "scale": np.ones(3, dtype=np.float32),
+            "coordinates": "standardized-v1",
+        },
     )
     monkeypatch.setattr(loso, "load_stimulus_data", lambda *args, **kwargs: data)
 

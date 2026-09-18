@@ -292,22 +292,31 @@ def build_fmri_stimulus(
     *,
     ndelays: int = 4,
     basis: np.ndarray | None = None,
+    input_scaler: dict | None = None,
+    projected_scaler: dict | None = None,
 ) -> PreparedFMRI:
-    """Build a story-z-scored FIR design, optionally in a projected space.
+    """Build an FIR design, optionally in explicitly standardized coordinates.
 
-    Projection follows story-wise standardization so that bases fitted in the
-    full model's standardized coordinates are applied in those same coordinates.
-    In particular, a square orthonormal basis preserves the full FIR design up
-    to an orthogonal change of coordinates.
+    With no scaler, the compatibility behavior z-scores each story independently.
+    RRR and decoding callers pass a scaler fitted on source training stories so
+    that projection occurs in the factor's saved coordinate system.  An optional
+    projected scaler is applied before FIR expansion.
     """
     stimulus_parts = []
     pre_fir_parts = []
     story_slices = {}
     cursor = 0
     for story in stories:
-        values = _zscore_columns(aligned.stories[story]).astype(np.float32)
+        values = np.asarray(aligned.stories[story], dtype=np.float32)
+        values = (
+            _zscore_columns(values).astype(np.float32)
+            if input_scaler is None
+            else apply_embedding_scaler(values, input_scaler)
+        )
         if basis is not None:
             values = np.asarray(values @ basis, dtype=np.float32)
+        if projected_scaler is not None:
+            values = apply_embedding_scaler(values, projected_scaler)
         pre_fir = values
         delayed = make_delayed(pre_fir, ndelays).astype(np.float32)
         pre_fir_parts.append(pre_fir)
@@ -320,6 +329,72 @@ def build_fmri_stimulus(
         responses=None,
         story_slices=story_slices,
     )
+
+
+def fit_pooled_embedding_scaler(
+    aligned: AlignedFMRIStimuli,
+    stories: list[str],
+    *,
+    input_scaler: dict | None = None,
+    basis: np.ndarray | None = None,
+) -> dict:
+    """Fit population moments over every row of the selected stories."""
+    if not stories:
+        raise ValueError("Cannot fit an embedding scaler without stories")
+
+    def transformed_story(story):
+        values = np.asarray(aligned.stories[story], dtype=np.float64)
+        if input_scaler is not None:
+            values = apply_embedding_scaler(values, input_scaler).astype(np.float64)
+        if basis is not None:
+            values = values @ np.asarray(basis, dtype=np.float64)
+        return values
+
+    # Use two passes instead of E[X^2] - E[X]^2. The latter can lose precision
+    # when a feature's mean is large relative to its variance.
+    count = 0
+    total = None
+    for story in stories:
+        values = transformed_story(story)
+        if total is None:
+            total = np.zeros(values.shape[1], dtype=np.float64)
+        total += values.sum(axis=0, dtype=np.float64)
+        count += len(values)
+    if count == 0:
+        raise ValueError("Cannot fit an embedding scaler on zero rows")
+    mean = total / count
+    squared_deviation_sum = np.zeros_like(mean)
+    for story in stories:
+        deviations = transformed_story(story) - mean
+        squared_deviation_sum += np.square(deviations).sum(
+            axis=0, dtype=np.float64
+        )
+    variance = squared_deviation_sum / count
+    scale = np.sqrt(variance)
+    scale[scale == 0] = 1.0
+    return {
+        "mean": mean.astype(np.float32),
+        "scale": scale.astype(np.float32),
+        "coordinates": "standardized-v1",
+    }
+
+
+def apply_embedding_scaler(values: np.ndarray, scaler: dict) -> np.ndarray:
+    """Apply a persisted embedding scaler and validate its coordinate contract."""
+    coordinates = scaler.get("coordinates", "standardized-v1")
+    if coordinates != "standardized-v1":
+        raise ValueError(f"Unsupported embedding scaler coordinates: {coordinates!r}")
+    mean = np.asarray(scaler["mean"], dtype=np.float32).reshape(1, -1)
+    scale = np.asarray(scaler["scale"], dtype=np.float32).reshape(1, -1)
+    values = np.asarray(values, dtype=np.float32)
+    if mean.shape[1] != values.shape[1] or scale.shape != mean.shape:
+        raise ValueError(
+            "Embedding scaler width does not match values: "
+            f"mean={mean.shape}, scale={scale.shape}, values={values.shape}"
+        )
+    if not np.isfinite(mean).all() or not np.isfinite(scale).all() or np.any(scale <= 0):
+        raise ValueError("Embedding scaler contains invalid mean or scale values")
+    return ((values - mean) / scale).astype(np.float32)
 
 
 def _read_response_columns(

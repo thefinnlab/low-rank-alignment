@@ -274,6 +274,42 @@ def test_full_rank_orthonormal_projection_preserves_fmri_design():
     np.testing.assert_allclose(projected.stimulus, expected_fir, rtol=1e-5, atol=1e-6)
 
 
+def test_pooled_embedding_scaler_weights_training_rows_and_excludes_test_story():
+    aligned = fmri.AlignedFMRIStimuli(stories={
+        "short": np.array([[0.0, 2.0], [2.0, 2.0]], dtype=np.float32),
+        "long": np.array(
+            [[4.0, 2.0], [6.0, 2.0], [8.0, 2.0], [10.0, 2.0]],
+            dtype=np.float32,
+        ),
+        "test": np.full((20, 2), 1000.0, dtype=np.float32),
+    })
+
+    scaler = fmri.fit_pooled_embedding_scaler(aligned, ["short", "long"])
+    pooled = np.vstack([aligned.stories["short"], aligned.stories["long"]])
+
+    np.testing.assert_allclose(scaler["mean"], pooled.mean(axis=0))
+    np.testing.assert_allclose(scaler["scale"][0], pooled[:, 0].std())
+    assert scaler["scale"][1] == 1.0
+    transformed = np.vstack([
+        fmri.apply_embedding_scaler(aligned.stories[name], scaler)
+        for name in ("short", "long")
+    ])
+    np.testing.assert_allclose(transformed.mean(axis=0), 0.0, atol=1e-6)
+    np.testing.assert_allclose(transformed[:, 0].std(), 1.0, atol=1e-6)
+
+
+def test_pooled_embedding_scaler_preserves_small_variance_around_large_mean():
+    values = 1e10 + np.array(
+        [[-3.0, 2.0], [-1.0, -2.0], [1.0, 2.0], [3.0, -2.0]],
+        dtype=np.float64,
+    )
+    aligned = fmri.AlignedFMRIStimuli(stories={"train": values})
+
+    scaler = fmri.fit_pooled_embedding_scaler(aligned, ["train"])
+
+    np.testing.assert_allclose(scaler["scale"], values.std(axis=0), rtol=1e-6)
+
+
 def test_load_responses_reads_selected_voxels_in_subject_order(tmp_path):
     root = tmp_path
     stories = ["first", "second"]

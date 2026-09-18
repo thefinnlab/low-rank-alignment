@@ -58,8 +58,8 @@ are constrained to the intended significant-target set rather than relying on
 single-variant discovery.
 
 The `full_fit` RRR mode is a factor-only producer. An iEEG variant stores one
-`method: rrr` factor and whole-dataset `input_scalers` entry, plus the matching PCA
-pair when `run_pca_baseline` is enabled. Full-fit Artifacts deliberately do not
+artifact-level whole-dataset `input_scalers` entry plus a `method: rrr` factor and,
+when enabled, a `method: pca` factor. Full-fit Artifacts deliberately do not
 publish held-out rank metrics. fMRI uses normal internal RRR Artifacts, which save
 rank-specific factors alongside held-out metrics.
 
@@ -143,12 +143,15 @@ Significance exposes complete subject-keyed `target_significance` tables with
 metric, target-manifest, and mean-result fields. `load_input_factors()` always
 returns a list: one matrix per iEEG fold or a one-element fMRI rank-basis set.
 `load_mean_results()` preserves additional modality-specific metric columns.
-Current iEEG fold factors use the `standardized-v1` coordinate contract and each
-`input_factors` entry has a matching `input_scalers` entry containing the training-fold
-mean and scale. Consumers must either standardize embeddings with that state before
-applying the factor or explicitly convert the factor to the algebraically equivalent
-raw-input representation. Resume checks require this paired scaler, so legacy
-raw-coordinate factor entries are recomputed rather than reused by current iEEG runs.
+Transferable iEEG and fMRI factors use the `standardized-v1` coordinate contract.
+Whole-dataset iEEG `full_fit` and fMRI artifacts store one artifact-level
+`input_scalers` entry because RRR and PCA both branch from the same standardized full
+embedding matrix; the scaler is independent of method and rank. Fold-fitted iEEG
+factors retain fold-local scaler entries because their source training rows differ.
+Consumers resolve the applicable scaler before applying a factor or explicitly convert
+the factor to the algebraically equivalent raw-input representation. Resume checks
+require that scaler; corrected fMRI and transfer workflows also use versioned scaling
+variants so legacy results are not reused.
 
 ## Language interpretation
 
@@ -164,16 +167,18 @@ selection, run metadata, per-task/fold fit metrics, decoder weights, held-out
 predictions, the complete grid and summary, optional prediction agreement tables,
 and plots. Its `fmri_word` and `fmri_tr_pre_fir` modes take their story split,
 embeddings, and rank factors from a deep-fMRI RRR Artifact. The former decodes raw
-word-aligned features from locally story-standardized pooled-word embeddings; the
-latter uses the source timing and trimming to decode Lanczos-aligned current-TR targets from
-projected pre-FIR inputs. Both modes require a normal internal fMRI RRR Artifact.
+word-aligned features after applying the saved source scaler; the latter uses the source
+timing and trimming to decode Lanczos-aligned current-TR targets from source-standardized,
+projected pre-FIR inputs. Both modes require a normal internal fMRI RRR Artifact and fit
+downstream reduced-space scaling on training data.
 Categorical TR targets also expose per-channel metrics, availability diagnostics,
 smoothed-channel ridge weights, and dominant-label classifier weights.
 Reconstruction exposes corresponding provenance,
 per-fit metrics, optional fitted models, fold and summary tables, RRR/PCA contrasts,
 predictor contrasts, and plots.
-In `cross_dataset` language modes, a single full-fit factor is applied directly;
-fold-factor aggregation remains only as compatibility behavior for older sources.
+In `cross_dataset` language modes, a single full-fit factor/scaler pair is applied
+directly. Legacy fold-factor aggregation is rejected because differently standardized
+source folds do not define one transferable ambient coordinate system.
 
 The importable downstream facades are `scripts.run_language_decoding.Artifact` and
 `scripts.run_language_reconstruction.Artifact`; the existing executable files under

@@ -257,29 +257,25 @@ class TestCrossDatasetRankBasisLoading:
             atol=1e-5,
         )
 
-    def test_cross_dataset_uses_fold_safe_target_embedding_scalers(self):
-        from src.utils.rrr.ieeg_rrr_mode.cross_dataset import (
-            _fold_standardized_target_embeddings,
+    def test_cross_dataset_loads_the_source_factor_scaler(self, tmp_path):
+        from scripts.run_rrr import Artifact
+        from src.utils.rrr.ieeg_rrr_mode.cross_dataset_helpers import (
+            load_cross_dataset_scaler,
         )
 
-        X = np.array(
-            [[1.0, 10.0], [3.0, 14.0], [5.0, 18.0], [9.0, 30.0]],
-            dtype=np.float32,
-        )
-        baselines = [
-            {"train_idx": np.array([0, 1, 2]), "test_idx": np.array([3])},
-            {"train_idx": np.array([1, 2, 3]), "test_idx": np.array([0])},
-            None,
-        ]
+        source = Artifact(mode="full_fit", results_root=tmp_path).begin(config={})
+        scaler = {
+            "mean": np.array([1.0, 10.0], dtype=np.float32),
+            "scale": np.array([2.0, 7.0], dtype=np.float32),
+            "coordinates": "standardized-v1",
+        }
+        source.save_factors(method="rrr", input_factors=np.eye(2))
+        source.save_field("input_scalers", scaler)
 
-        designs = _fold_standardized_target_embeddings(X, baselines)
+        loaded = load_cross_dataset_scaler(source, "rrr", rank=1)
 
-        for design, baseline in zip(designs[:2], baselines[:2]):
-            train = design[baseline["train_idx"]]
-            np.testing.assert_allclose(train.mean(axis=0), 0.0, atol=1e-6)
-            np.testing.assert_allclose(train.std(axis=0), 1.0, atol=1e-6)
-        assert not np.allclose(designs[0], designs[1])
-        np.testing.assert_array_equal(designs[2], X)
+        np.testing.assert_array_equal(loaded["mean"], scaler["mean"])
+        np.testing.assert_array_equal(loaded["scale"], scaler["scale"])
 
     def test_cross_temporal_loader_preserves_fold_specific_factors(
         self, tmp_path, rng

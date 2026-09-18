@@ -421,3 +421,10 @@ final-results:
 
 missing-significance: significance-missing
 missing-language-decoding: language-decoding-missing
+
+## Rebuild scaler-sensitive source artifacts, then all RRR/decoding consumers.
+## Jobs are linked with Slurm afterok dependencies and this command waits for all.
+regenerate-transfer-results:
+	uv run python -m scripts.utilities.run_transfer_regeneration --models $(MODELS)
+
+.PHONY: regenerate-transfer-results

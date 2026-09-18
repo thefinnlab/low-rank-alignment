@@ -18,8 +18,8 @@ def run_cross_dataset(setup):
     """Fit fMRI ridge models in input spaces learned from an iEEG source."""
     from src.utils.rrr.ieeg_rrr_mode.cross_dataset_helpers import (
         load_cross_dataset_A_by_rank,
+        load_cross_dataset_scaler,
     )
-    from src.utils.rrr.ieeg_source_bases import fit_whole_stimulus_ieeg_bases
 
     config, artifact, source = setup.config, setup.artifact, setup.source
     ranks = list(map(int, config.rank_grid))
@@ -66,26 +66,29 @@ def run_cross_dataset(setup):
         print("Reusing cached full-embedding ridge metrics", flush=True)
 
     bases = {}
+    source_scaler = None
     if pending:
         requested_ranks = sorted({rank for _, rank in pending})
-        if source.identity["mode"] == "full_fit":
-            fitted = {
-                method: load_cross_dataset_A_by_rank(
-                    source,
-                    method,
-                    requested_ranks,
-                    source_format="rank_bases",
-                    orthonormalize=method == "rrr",
-                )
-                for method in methods
-            }
-        else:
-            fitted = fit_whole_stimulus_ieeg_bases(
-                source,
-                requested_ranks,
-                standardized_input_coordinates=True,
-                standardized_rrr_coordinates=True,
+        if source.identity["mode"] != "full_fit":
+            raise ValueError(
+                "Corrected iEEG-to-fMRI transfer requires a full_fit source "
+                "with one saved whole-dataset scaler"
             )
+        fitted = {
+            method: load_cross_dataset_A_by_rank(
+                source,
+                method,
+                requested_ranks,
+                source_format="rank_bases",
+                orthonormalize=method == "rrr",
+            )
+            for method in methods
+        }
+        # RRR and PCA are alternate bases of the same source-standardized
+        # embedding matrix, so they deliberately share one ambient scaler.
+        source_scaler = load_cross_dataset_scaler(
+            source, "rrr", requested_ranks[0]
+        )
         bases = {
             method: {
                 rank: fitted[method][rank]
@@ -104,6 +107,8 @@ def run_cross_dataset(setup):
         train_stories=setup.train_stories,
         test_stories=setup.test_stories,
         jobs=jobs,
+        input_scaler=source_scaler,
+        standardize_reduced=True,
     )
     frame = make_summary(
         artifact,
@@ -120,7 +125,8 @@ def run_cross_dataset(setup):
             "source_artifact": source.identity_record(),
             "source_mode": "cross_dataset",
             "pca_available": "pca" in methods,
-            "pca_training_representation": "source_fold_factors",
+            "pca_training_representation": "source_full_fit_standardized_coordinates",
+            "transfer_scaling": "source_then_target_reduced_pre_fir",
             "ceiling": "fresh_full_embedding_ridge",
         }
     )

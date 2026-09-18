@@ -20,6 +20,7 @@ from src.utils.shared.fmri import (
     PreparedFMRI,
     align_fmri_stimuli,
     build_fmri_stimulus,
+    fit_pooled_embedding_scaler,
     columnwise_correlation,
     load_fmri_responses,
     load_story_embeddings,
@@ -56,6 +57,7 @@ class FMRIStimulusData:
     test: PreparedFMRI
     cv: list[tuple[np.ndarray, np.ndarray]]
     ambient_dim: int
+    input_scaler: dict
 
 
 @dataclass
@@ -92,6 +94,7 @@ class FMRIRunSetup:
             "rrr_save_b_matrix": config.rrr_save_b_matrix,
             "pca_svd_device": config.pca_svd_device,
             "target_scaling": "stored_preprocessed_responses",
+            "input_scaling": "pooled_training_story_standardization",
             "subjects": config.fmri.subjects,
             "sessions": config.fmri.sessions,
             "train_stories": self.train_stories,
@@ -435,8 +438,15 @@ def load_stimulus_data(config, train_stories, test_stories, groups):
         aligned = align_fmri_stimuli(
             config.fmri.fmri_repo_root, all_stories, embeddings, trim=config.fmri.trim
         )
-    train = build_fmri_stimulus(aligned, train_stories, ndelays=config.fmri.ndelays)
-    test = build_fmri_stimulus(aligned, test_stories, ndelays=config.fmri.ndelays)
+    input_scaler = fit_pooled_embedding_scaler(aligned, train_stories)
+    train = build_fmri_stimulus(
+        aligned, train_stories, ndelays=config.fmri.ndelays,
+        input_scaler=input_scaler,
+    )
+    test = build_fmri_stimulus(
+        aligned, test_stories, ndelays=config.fmri.ndelays,
+        input_scaler=input_scaler,
+    )
     print(_array_summary("full train design", train.stimulus), flush=True)
     return FMRIStimulusData(
         aligned=aligned,
@@ -444,6 +454,7 @@ def load_stimulus_data(config, train_stories, test_stories, groups):
         test=test,
         cv=session_cv_splits(train.story_slices, groups),
         ambient_dim=ambient_dim,
+        input_scaler=input_scaler,
     )
 
 
@@ -488,17 +499,39 @@ def _subject_summary(values, manifest):
     }
 
 
-def _build_rank_designs(aligned, train_stories, test_stories, basis, ndelays):
-    train = build_fmri_stimulus(aligned, train_stories, ndelays=ndelays, basis=basis)
-    test = build_fmri_stimulus(aligned, test_stories, ndelays=ndelays, basis=basis)
+def _build_rank_designs(
+    aligned, train_stories, test_stories, basis, ndelays, input_scaler,
+    standardize_reduced,
+):
+    # The ambient source scaler is shared across ranks. This second scaler is
+    # intentionally rank-specific: it is fit after projection on the target
+    # training stories and therefore has one statistic per retained coordinate.
+    reduced_scaler = (
+        fit_pooled_embedding_scaler(
+            aligned, train_stories, input_scaler=input_scaler, basis=basis
+        )
+        if standardize_reduced else None
+    )
+    train = build_fmri_stimulus(
+        aligned, train_stories, ndelays=ndelays, basis=basis,
+        input_scaler=input_scaler, projected_scaler=reduced_scaler,
+    )
+    test = build_fmri_stimulus(
+        aligned, test_stories, ndelays=ndelays, basis=basis,
+        input_scaler=input_scaler, projected_scaler=reduced_scaler,
+    )
     return train.stimulus, test.stimulus
 
 
-def _iter_rank_designs(jobs, aligned, train_stories, test_stories, ndelays):
+def _iter_rank_designs(
+    jobs, aligned, train_stories, test_stories, ndelays, input_scaler,
+    standardize_reduced,
+):
     """Build and yield one rank design at a time to bound peak memory."""
     for method, rank, basis in jobs:
         yield method, rank, *_build_rank_designs(
-            aligned, train_stories, test_stories, basis, ndelays
+            aligned, train_stories, test_stories, basis, ndelays, input_scaler,
+            standardize_reduced,
         )
 
 
@@ -607,6 +640,8 @@ def evaluate_rank_jobs(
     jobs,
     unit_by_method=None,
     orthonormalize=False,
+    input_scaler=None,
+    standardize_reduced=False,
 ):
     """Fit rank-reduced ridge models and write each result to the Artifact."""
     if not jobs:
@@ -628,6 +663,8 @@ def evaluate_rank_jobs(
         train_stories,
         test_stories,
         int(config.fmri.ndelays),
+        data.input_scaler if input_scaler is None else input_scaler,
+        standardize_reduced,
     ):
         expected_width = int(config.fmri.ndelays) * rank
         if train_design.shape[1] != expected_width:

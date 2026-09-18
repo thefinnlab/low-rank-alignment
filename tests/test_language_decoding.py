@@ -582,22 +582,28 @@ def test_fmri_categorical_metrics_and_stable_classifier_classes():
     assert all(train.max() < len(rows) for train, _ in remapped)
 
 
-def test_fmri_pre_fir_rank_design_projects_and_story_zscores():
+def test_fmri_pre_fir_rank_design_uses_saved_source_scaler():
     aligned = AlignedFMRIStimuli(stories={
         "train": np.arange(24, dtype=np.float32).reshape(8, 3),
         "test": np.arange(30, 54, dtype=np.float32).reshape(8, 3),
     })
     factor = np.array([[1.0, 0.0], [0.0, 1.0], [0.5, -0.5]], dtype=np.float32)
+    source_scaler = {
+        "mean": aligned.stories["train"].mean(axis=0),
+        "scale": aligned.stories["train"].std(axis=0),
+        "coordinates": "standardized-v1",
+    }
 
     prepared = _prepare_rank_design(
         aligned=aligned, train_stories=["train"], test_stories=["test"],
-        factor=factor, rank=2, ndelays=2,
+        factor=factor, source_scaler=source_scaler, rank=2, ndelays=2,
     )
 
     np.testing.assert_allclose(prepared[2], prepared[0].pre_fir_stimulus)
     np.testing.assert_allclose(prepared[3], prepared[1].pre_fir_stimulus)
     assert prepared[2].shape == (8, 2)
     np.testing.assert_allclose(prepared[2].mean(axis=0), 0, atol=1e-6)
+    assert not np.allclose(prepared[3].mean(axis=0), 0)
     np.testing.assert_array_equal(prepared[4], factor)
 
 
@@ -617,12 +623,20 @@ def test_primary_client_publishes_fmri_results(tmp_path, monkeypatch, mode):
     })
     source.save_field("input_factors", np.eye(2, 1),
                       selector={"method": "rrr", "rank": 1})
+    source.save_field(
+        "input_scalers",
+        {"mean": np.zeros(2), "scale": np.ones(2),
+         "coordinates": "standardized-v1"},
+    )
 
-    def fake_run(config, source_config, factors, output, artifact=None):
+    def fake_run(
+        config, source_config, factors, source_scaler, output, artifact=None
+    ):
         from src.utils.language_interpret.output import DecodingOutput
         assert config.mode.value == mode
         assert source_config["fmri"]["ndelays"] == 2
         np.testing.assert_array_equal(factors[("rrr", 1)], np.eye(2, 1))
+        np.testing.assert_array_equal(source_scaler["scale"], np.ones(2))
         assert artifact is not None
         writer = DecodingOutput(output, artifact)
         writer.save("sample_selection", pd.DataFrame({
@@ -965,6 +979,9 @@ def test_cross_dataset_single_full_fit_factor_is_applied_without_aggregation(
     fold.mkdir(parents=True)
     factor = np.array([[2.0], [0.5]], dtype=np.float32)
     np.save(fold / "A.npy", factor)
+    source_mean = np.array([10.0, -2.0], dtype=np.float32)
+    source_scale = np.array([4.0, 2.0], dtype=np.float32)
+    np.savez(fold / "input_scaler.npz", mean=source_mean, scale=source_scale)
     X = np.array([[1.0, 3.0], [3.0, 7.0], [5.0, 11.0]], dtype=np.float32)
     folds = [(np.array([0, 1]), np.array([2]))]
     config = LanguageDecodingConfig(
@@ -985,9 +1002,7 @@ def test_cross_dataset_single_full_fit_factor_is_applied_without_aggregation(
         config=config,
     )
 
-    local_mean = X[folds[0][0]].mean(axis=0)
-    local_scale = X[folds[0][0]].std(axis=0)
-    expected = ((X - local_mean) / local_scale) @ factor
+    expected = ((X - source_mean) / source_scale) @ factor
     np.testing.assert_allclose(prepared[(0, 1)][0], expected)
     np.testing.assert_array_equal(prepared[(0, 1)][1], factor)
 

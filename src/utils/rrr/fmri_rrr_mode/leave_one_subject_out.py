@@ -134,6 +134,7 @@ def _empty_requirements():
     return {
         "target_manifest": [],
         "input_factors": [],
+        "input_scalers": [{}],
         "full_metrics": [],
         "rank_metrics": [],
         "mean_results": [],
@@ -194,7 +195,9 @@ def _fit_source_bases(setup, data, plan, train_subjects):
         bases, factors = _fit_rrr_bases(
             source_train, source_fit, data.ambient_dim, config
         )
-    save_rrr_factors(artifact, config, plan.units["train"], bases, factors)
+    save_rrr_factors(
+        artifact, config, plan.units["train"], bases, factors,
+    )
     del source_train, source_fit, factors
     release_memory()
     return bases
@@ -248,7 +251,7 @@ def _fit_baseline_bases(setup, data, plan, held_train, held_fit):
             held_train, held_fit, data.ambient_dim, setup.config
         )
     save_rrr_factors(
-        setup.artifact, setup.config, plan.units["baseline"], bases, factors
+        setup.artifact, setup.config, plan.units["baseline"], bases, factors,
     )
     del factors
     return bases
@@ -262,7 +265,7 @@ def _prepare_pca_bases(setup, data, plan, shared_pca):
         shared_pca = _fit_pca_bases(data.train, setup.config)
     bases, full_basis = shared_pca
     save_pca_factors(
-        setup.artifact, setup.config, plan.units["pca"], bases, full_basis
+        setup.artifact, setup.config, plan.units["pca"], bases, full_basis,
     )
     return bases, shared_pca
 
@@ -391,7 +394,7 @@ def _finalize_run(setup, data, partition_rows, required):
             "source_mode": "leave_one_subject_out",
             "pca_available": True,
             "pca_training_representation": (
-                "shared_tr_aligned_trimmed_story_zscored_pre_fir"
+                "shared_tr_aligned_trimmed_pooled_train_standardized_pre_fir"
             ),
             "ceiling": "one_held_out_subject_full_embedding_ridge_shared_by_phases",
             "transfer_basis": "reduced_qr_orthonormalized",
@@ -414,11 +417,20 @@ def run_leave_one_subject_out(setup):
     config, artifact = setup.config, setup.artifact
     ranks = list(map(int, config.rank_grid))
     plans, need_stimulus = _plan_run(artifact, config)
+    need_stimulus = (
+        need_stimulus or config.refresh or not artifact.has_field("input_scalers")
+    )
     data = (
         load_stimulus_data(config, setup.train_stories, setup.test_stories, setup.groups)
         if need_stimulus
         else None
     )
+    if data is not None and (config.refresh or not artifact.has_field("input_scalers")):
+        # All LOSO factors use the same stimulus rows; only neural targets vary by
+        # held-out subject, so one ambient embedding scaler serves every phase/rank.
+        artifact.save_field(
+            "input_scalers", data.input_scaler, overwrite=config.refresh
+        )
     shared_pca = None
     partition_rows = []
     required = _empty_requirements()

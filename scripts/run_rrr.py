@@ -217,17 +217,23 @@ class Artifact(ArtifactStore):
             or subspace_aggregation is not None
             or rereference is not None
         ):
-            extras = (
-                {"rereference": rereference}
-                if rereference not in (None, "common_average")
-                else None
-            )
+            extras = {}
+            if rereference not in (None, "common_average"):
+                extras["rereference"] = rereference
+            if dataset == "deep-fmri":
+                extras["input_scaling"] = "pooled-training-stories-v1"
+            if mode == "cross_dataset":
+                extras["transfer_scaling"] = (
+                    "source-then-target-reduced-pre-fir-v1"
+                    if dataset == "deep-fmri"
+                    else "source-then-target-reduced-v1"
+                )
             variant = readable_variant(
                 {
                     "significance_selection": significance_selection,
                     "subspace_aggregation": subspace_aggregation,
                 },
-                extras=extras,
+                extras=extras or None,
             )
         self._init_store(mode=mode, dataset=dataset, offset=offset, model=model,
                          layer=layer, variant=variant, results_root=results_root)
@@ -300,6 +306,8 @@ class Artifact(ArtifactStore):
             artifact.variant_extras["rereference"] = rereference
         if config.mode == ScriptMode.LEAVE_ONE_SUBJECT_OUT:
             artifact.variant_extras["loso_contract"] = "orthogonal-held-out-v2"
+        if config.mode == ScriptMode.CROSS_DATASET:
+            artifact.variant_extras["transfer_scaling"] = "source-then-target-reduced-v1"
         return artifact
 
     @classmethod
@@ -308,7 +316,13 @@ class Artifact(ArtifactStore):
         artifact = cls(mode=mode, dataset="deep-fmri", offset=0,
                        model=normalize_model(config.model_dir), layer=config.layer,
                        results_root=config.results_root)
-        artifact.variant_extras = {}
+        artifact.variant_extras = {
+            "input_scaling": "pooled-training-stories-v1",
+        }
+        if config.source_mode == "cross_dataset":
+            artifact.variant_extras["transfer_scaling"] = (
+                "source-then-target-reduced-pre-fir-v1"
+            )
         if config.source_mode == "leave_one_subject_out":
             artifact.variant_extras["loso_contract"] = "orthogonal-held-out-fmri-v1"
         return artifact
@@ -334,6 +348,38 @@ class Artifact(ArtifactStore):
         if target_factors is not None:
             self.save_field("target_factors", target_factors, selector=selector,
                             overwrite=overwrite)
+
+    @staticmethod
+    def _input_scaler_selectors(factor_selector):
+        """Resolve legacy factor-local scalers before the shared source scaler."""
+        selector = dict(factor_selector or {})
+        candidates = [selector]
+        if "rank" in selector:
+            # Old rank-producing artifacts sometimes stored one scaler per method.
+            candidates.append({key: value for key, value in selector.items()
+                               if key != "rank"})
+        # Current full-fit/fMRI artifacts store the one ambient scaler globally:
+        # rank and method branch only after this transformation has been applied.
+        candidates.append({})
+        unique = []
+        for candidate in candidates:
+            if candidate not in unique:
+                unique.append(candidate)
+        return unique
+
+    def has_input_scaler(self, factor_selector=None):
+        return any(
+            self.has_field("input_scalers", selector=selector)
+            for selector in self._input_scaler_selectors(factor_selector)
+        )
+
+    def load_input_scaler(self, factor_selector=None):
+        for selector in self._input_scaler_selectors(factor_selector):
+            if self.has_field("input_scalers", selector=selector):
+                return self.load_field("input_scalers", selector=selector)
+        raise KeyError(
+            f"Artifact has no input scaler for factor selector {factor_selector or {}}"
+        )
 
     def load_input_factors(self, method="rrr", rank=None, selectors=None):
         filters = dict(selectors or {})
@@ -366,10 +412,8 @@ class Artifact(ArtifactStore):
     def load_factors(self, *, unit, fold):
         selector = self._selector(unit, fold=int(fold))
         result = {"input_factors": self.load_field("input_factors", selector=selector)}
-        if self.has_field("input_scalers", selector=selector):
-            result["input_scaler"] = self.load_field(
-                "input_scalers", selector=selector
-            )
+        if self.has_input_scaler(selector):
+            result["input_scaler"] = self.load_input_scaler(selector)
         if self.has_field("target_factors", selector=selector):
             result["target_factors"] = self.load_field("target_factors", selector=selector)
         return result
@@ -436,11 +480,8 @@ class Artifact(ArtifactStore):
             factor_selector = self._selector(unit, fold=int(fold))
             factors = (not require_input_factors or
                        self.has_field("input_factors", selector=factor_selector))
-            if (
-                factors and require_input_factors and self.dataset != "deep-fmri"
-                and self.mode != "multi_view"
-            ):
-                factors = self.has_field("input_scalers", selector=factor_selector)
+            if factors and require_input_factors and self.mode != "multi_view":
+                factors = self.has_input_scaler(factor_selector)
             targets = (not require_target_factors or
                        self.has_field("target_factors", selector=factor_selector))
             for rank in ranks:

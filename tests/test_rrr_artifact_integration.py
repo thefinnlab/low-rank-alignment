@@ -60,11 +60,13 @@ def test_ieeg_full_fit_saves_one_factor_scaler_pair_per_method(
     )
 
     assert artifact.complete
+    loaded_scaler = artifact.load_field("input_scalers")
+    assert loaded_scaler["coordinates"] == "standardized-v1"
     for method in ("rrr", "pca"):
         selector = {"method": method}
         assert artifact.has_field("input_factors", selector=selector)
-        loaded = artifact.load_field("input_scalers", selector=selector)
-        assert loaded["coordinates"] == "standardized-v1"
+        assert not artifact.has_field("input_scalers", selector=selector)
+        assert artifact.load_input_scaler(selector) is not None
 
 
 def test_common_rank_evaluation_uses_raw_and_reduced_qr_designs(

@@ -1,32 +1,16 @@
 """Cross-dataset iEEG RRR mode."""
 
-import numpy as np
-
 from scripts.run_rrr import Artifact, UnitSelector
 from src.core.config import RRRConfig
-from src.utils.rrr.evaluation import standardize_embedding_train_test
+from src.utils.shared.fmri import apply_embedding_scaler
 from src.utils.rrr.significance import validate_cross_dataset_significance_alignment
 
 from .common import _build_rrr_decomposition_inputs, _reference_encoding_results
 from .cross_dataset_helpers import (
     load_cross_dataset_A_by_rank,
+    load_cross_dataset_scaler,
     _run_cross_dataset_subspace_for_unit,
 )
-
-
-def _fold_standardized_target_embeddings(X_raw, per_fold_baselines):
-    """Standardize target embeddings with each outer fold's training rows only."""
-    X_raw = np.asarray(X_raw)
-    designs = []
-    for baseline in per_fold_baselines:
-        if baseline is None:
-            designs.append(X_raw)
-            continue
-        _, design = standardize_embedding_train_test(
-            X_raw[baseline["train_idx"]], X_raw
-        )
-        designs.append(design)
-    return designs
 
 
 def run_cross_dataset(
@@ -42,7 +26,7 @@ def run_cross_dataset(
     shared_selection_metadata=None,
 ):
     """Evaluate target models using whole-stimulus source input bases."""
-    if config.ieeg_rrr_source and source.identity["mode"] != "full_fit":
+    if config.ieeg_rrr_source:
         source_kwargs = dict(config.ieeg_rrr_source)
         source_kwargs.setdefault("results_root", config.results_root)
         source = Artifact(**source_kwargs)
@@ -54,6 +38,11 @@ def run_cross_dataset(
         raise ValueError("cross_dataset requires an explicit RRR source Artifact")
     if source.variant is None:
         source._resolve_variant()
+    if config.ieeg_rrr_source and source.identity["mode"] != "full_fit":
+        raise ValueError(
+            "Corrected cross-dataset transfer requires an iEEG full_fit source "
+            "with one saved whole-dataset scaler"
+        )
     validate_cross_dataset_significance_alignment(
         config.significance_selection,
         artifact.identity,
@@ -100,30 +89,19 @@ def run_cross_dataset(
         print("  Cross-dataset RRR/PCA outputs complete; skipping data/regression setup.")
         return
 
-    if config.ieeg_rrr_source:
-        from src.utils.rrr.ieeg_source_bases import fit_whole_stimulus_ieeg_bases
-        print(f"Fitting whole-stimulus source bases from {source.identity_record()}")
-        source_bases = fit_whole_stimulus_ieeg_bases(
-            source,
-            config.rank_grid,
-            standardized_input_coordinates=True,
-            standardized_rrr_coordinates=True,
+    print(f"Loading source RRR subspaces from {source.identity_record()}")
+    A_rrr_by_rank = load_cross_dataset_A_by_rank(
+        source, kind="rrr", ranks=config.rank_grid, source_format="rank_bases",
+        orthonormalize=True,
+    )
+    rrr_scaler = load_cross_dataset_scaler(source, "rrr", config.rank_grid[0])
+    A_pca_by_rank = None
+    if config.run_pca_baseline:
+        print(f"Loading source PCA subspaces from {source.identity_record()}")
+        A_pca_by_rank = load_cross_dataset_A_by_rank(
+            source, kind="pca", ranks=config.rank_grid,
+            source_format="rank_bases",
         )
-        A_rrr_by_rank = source_bases["rrr"]
-        A_pca_by_rank = source_bases["pca"] if config.run_pca_baseline else None
-    else:
-        print(f"Loading source RRR subspaces from {source.identity_record()}")
-        A_rrr_by_rank = load_cross_dataset_A_by_rank(
-            source, kind="rrr", ranks=config.rank_grid, source_format="rank_bases",
-            orthonormalize=bool(config.ieeg_rrr_source),
-        )
-        A_pca_by_rank = None
-        if config.run_pca_baseline:
-            print(f"Loading source PCA subspaces from {source.identity_record()}")
-            A_pca_by_rank = load_cross_dataset_A_by_rank(
-                source, kind="pca", ranks=config.rank_grid,
-                source_format="rank_bases",
-            )
 
     results = _build_rrr_decomposition_inputs(
         subject_ids,
@@ -141,7 +119,7 @@ def run_cross_dataset(
     if results is None:
         return
     X_raw, per_fold_baselines, test_idxs, sig_mask_flat, target_manifest = results
-    X_transfer = _fold_standardized_target_embeddings(X_raw, per_fold_baselines)
+    X_rrr_transfer = apply_embedding_scaler(X_raw, rrr_scaler)
     artifact.save_target_manifest(
         unit=unit, target_manifest=target_manifest, overwrite=config.refresh
     )
@@ -151,7 +129,7 @@ def run_cross_dataset(
         artifact=artifact,
         unit=unit,
         A_by_rank=A_rrr_by_rank,
-        X_raw=X_transfer,
+        X_raw=X_rrr_transfer,
         test_idxs=test_idxs,
         per_fold_baselines=per_fold_baselines,
         config=config,
@@ -159,6 +137,7 @@ def run_cross_dataset(
         sig_mask_flat=sig_mask_flat,
         ranks_by_fold=rrr_resume_plan["ranks_by_fold"],
         completed_pairs=rrr_resume_plan["completed_pairs"],
+        standardize_subspace_inputs=True,
     )
 
     units = [(unit, n_folds, False, True)]
@@ -171,7 +150,8 @@ def run_cross_dataset(
             artifact=artifact,
             unit=pca_unit,
             A_by_rank=A_pca_by_rank,
-            X_raw=X_transfer,
+            # PCA and RRR share the already-built source-standardized design.
+            X_raw=X_rrr_transfer,
             test_idxs=test_idxs,
             per_fold_baselines=per_fold_baselines,
             config=config,
@@ -179,6 +159,7 @@ def run_cross_dataset(
             sig_mask_flat=sig_mask_flat,
             ranks_by_fold=pca_resume_plan["ranks_by_fold"],
             completed_pairs=pca_resume_plan["completed_pairs"],
+            standardize_subspace_inputs=True,
         )
         units.append((pca_unit, n_folds, False, True))
     return units

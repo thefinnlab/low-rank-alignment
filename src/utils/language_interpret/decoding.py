@@ -1014,15 +1014,24 @@ def _prepare_single_view_subspaces(
             int(path.parent.name.removeprefix("rank_")): np.load(path)
             for path in ranked_paths
         }
+        scalers_by_rank = {}
+        for path in ranked_paths:
+            rank = int(path.parent.name.removeprefix("rank_"))
+            scaler_path = path.parent / "input_scaler.npz"
+            if not scaler_path.exists():
+                raise ValueError(
+                    f"Rank {rank} {subspace.upper()} factor is missing its source scaler"
+                )
+            with np.load(scaler_path, allow_pickle=False) as payload:
+                scalers_by_rank[rank] = {
+                    "mean": np.asarray(payload["mean"]),
+                    "scale": np.asarray(payload["scale"]),
+                }
         missing = sorted(set(map(int, config.rank_grid)) - set(matrices_by_rank))
         if missing:
             raise ValueError(f"{subspace.upper()} factors are missing ranks {missing}")
         prepared = {}
-        for fold, (train_idx, _) in enumerate(folds):
-            mean = X[np.asarray(train_idx)].mean(axis=0, dtype=np.float64)
-            scale = X[np.asarray(train_idx)].std(axis=0, dtype=np.float64)
-            scale[scale == 0] = 1.0
-            X_fold = ((X - mean) / scale).astype(np.float32)
+        for fold, _ in enumerate(folds):
             for rank in map(int, config.rank_grid):
                 factor = np.asarray(matrices_by_rank[rank])
                 if factor.shape != (X.shape[1], rank):
@@ -1030,7 +1039,13 @@ def _prepare_single_view_subspaces(
                         f"Rank {rank} {subspace.upper()} factor has shape "
                         f"{factor.shape}; expected {(X.shape[1], rank)}"
                     )
-                prepared[(fold, rank)] = (X_fold @ factor, factor)
+                scaler = scalers_by_rank[rank]
+                # This is the one ambient source transform. The decoder pipeline
+                # later fits its separate k-dimensional scaler on target-train rows.
+                X_source = (
+                    (X - scaler["mean"]) / scaler["scale"]
+                ).astype(np.float32)
+                prepared[(fold, rank)] = (X_source @ factor, factor)
         return prepared
 
     matrices_by_fold = {
@@ -1057,6 +1072,15 @@ def _prepare_single_view_subspaces(
         mean_factors = None
     else:
         source_matrices = list(matrices_by_fold.values())
+        if len(source_matrices) != 1:
+            raise ValueError(
+                "Corrected cross-dataset decoding requires one full-fit source "
+                "factor and scaler; fold-factor aggregation is unsupported"
+            )
+        if set(scalers_by_fold) != set(matrices_by_fold):
+            raise ValueError(
+                f"Cross-dataset {subspace.upper()} factor is missing its source scaler"
+            )
         mean_factors = {}
         for rank in config.rank_grid:
             if len(source_matrices) == 1:
@@ -1086,10 +1110,8 @@ def _prepare_single_view_subspaces(
                 # Compatibility for explicitly supplied legacy path-based factors.
                 X_fold = X
         else:
-            mean = X[np.asarray(train_idx)].mean(axis=0, dtype=np.float64)
-            scale = X[np.asarray(train_idx)].std(axis=0, dtype=np.float64)
-            scale[scale == 0] = 1.0
-            X_fold = ((X - mean) / scale).astype(np.float32)
+            scaler = scalers_by_fold[next(iter(matrices_by_fold))]
+            X_fold = ((X - scaler["mean"]) / scaler["scale"]).astype(np.float32)
         for rank in config.rank_grid:
             A = (
                 matrices_by_fold[fold][:, :rank]

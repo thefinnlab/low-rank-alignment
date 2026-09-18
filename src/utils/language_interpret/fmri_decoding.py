@@ -29,6 +29,7 @@ from src.utils.shared.correlation import fisher_z_mean_sem
 from src.utils.shared.constants import RIDGE_ALPHAS
 from src.utils.shared.fmri import (
     _toolbox_modules,
+    apply_embedding_scaler,
     align_fmri_stimuli,
     build_fmri_stimulus,
     load_story_embeddings,
@@ -460,6 +461,7 @@ def _prepare_rank_design(
     train_stories: list[str],
     test_stories: list[str],
     factor: np.ndarray,
+    source_scaler: dict,
     rank: int,
     ndelays: int,
 ):
@@ -472,10 +474,12 @@ def _prepare_rank_design(
             f"expected {(ambient_dim, int(rank))}"
         )
     train = build_fmri_stimulus(
-        aligned, train_stories, ndelays=int(ndelays), basis=factor
+        aligned, train_stories, ndelays=int(ndelays), basis=factor,
+        input_scaler=source_scaler,
     )
     test = build_fmri_stimulus(
-        aligned, test_stories, ndelays=int(ndelays), basis=factor
+        aligned, test_stories, ndelays=int(ndelays), basis=factor,
+        input_scaler=source_scaler,
     )
     return train, test, train.pre_fir_stimulus, test.pre_fir_stimulus, factor
 
@@ -484,6 +488,7 @@ def run_fmri_word_decoding(
     config: LanguageDecodingConfig,
     source_config: dict,
     factors: dict[tuple[str, int], np.ndarray],
+    source_scaler: dict,
     output_dir: Path,
     artifact=None,
 ) -> Path:
@@ -561,15 +566,18 @@ def run_fmri_word_decoding(
         # of every training story.
         X_train = np.vstack([
             np.asarray(
-                _story_zscore(np.load(embedding_paths[story], mmap_mode="r"))
+                apply_embedding_scaler(
+                    np.load(embedding_paths[story], mmap_mode="r"), source_scaler
+                )
                 @ factor,
                 dtype=np.float32,
             )
             for story in train_stories
         ])
         X_test = np.asarray(
-            _story_zscore(
-                np.load(embedding_paths[test_stories[0]], mmap_mode="r")
+            apply_embedding_scaler(
+                np.load(embedding_paths[test_stories[0]], mmap_mode="r"),
+                source_scaler,
             )
             @ factor,
             dtype=np.float32,
@@ -628,7 +636,7 @@ def run_fmri_word_decoding(
         "train_stories": train_stories,
         "test_story": test_stories[0],
         "analysis_unit": "word",
-        "input_representation": "pooled_word_embeddings_story_zscored_then_projected",
+        "input_representation": "pooled_word_embeddings_source_standardized_then_projected",
         "target_representation": "raw_word_aligned_feature",
         "continuous_decoder": "primal_ridge_cv_neg_mean_squared_error",
     }
@@ -646,14 +654,19 @@ def run_fmri_decoding(
     config: LanguageDecodingConfig,
     source_config: dict,
     factors: dict[tuple[str, int], np.ndarray],
+    source_scaler: dict,
     output_dir: Path,
     artifact=None,
 ) -> Path:
     """Dispatch one primary fMRI language-decoding mode."""
     if config.mode == LanguageDecodingMode.FMRI_WORD:
-        return run_fmri_word_decoding(config, source_config, factors, output_dir, artifact)
+        return run_fmri_word_decoding(
+            config, source_config, factors, source_scaler, output_dir, artifact
+        )
     if config.mode == LanguageDecodingMode.FMRI_TR_PRE_FIR:
-        return run_fmri_tr_decoding(config, source_config, factors, output_dir, artifact)
+        return run_fmri_tr_decoding(
+            config, source_config, factors, source_scaler, output_dir, artifact
+        )
     raise ValueError(f"Unsupported fMRI language-decoding mode: {config.mode}")
 
 
@@ -661,6 +674,7 @@ def run_fmri_tr_decoding(
     config: LanguageDecodingConfig,
     source_config: dict,
     factors: dict[tuple[str, int], np.ndarray],
+    source_scaler: dict,
     output_dir: Path,
     artifact=None,
 ) -> Path:
@@ -741,6 +755,7 @@ def run_fmri_tr_decoding(
                 train_stories=train_stories,
                 test_stories=test_stories,
                 factor=factor,
+                source_scaler=source_scaler,
                 rank=rank,
                 ndelays=int(fmri["ndelays"]),
             )
@@ -891,7 +906,7 @@ def run_fmri_tr_decoding(
         "ndelays": int(fmri["ndelays"]),
         "target_alignment": "lanczos_window_3_current_tr",
         "input_representation": (
-            "tr_aligned_trimmed_projected_story_zscored_pre_fir"
+            "tr_aligned_trimmed_source_standardized_projected_pre_fir"
         ),
         "continuous_decoder": "primal_ridge_cv_neg_mean_squared_error",
     }

@@ -39,7 +39,7 @@ def run_internal(setup, target_pca_dim=None):
         )
         for method in methods
         for rank in ranks
-    )
+    ) or config.refresh or not artifact.has_field("input_scalers")
     need_data = cached_full is None or factors_missing or bool(pending)
     data = train = test = None
     full_fit = None
@@ -50,6 +50,12 @@ def run_internal(setup, target_pca_dim=None):
         train, test = load_subject_responses(
             data, config, config.fmri.subjects, setup.masks
         )
+        if config.refresh or not artifact.has_field("input_scalers"):
+            # RRR and PCA branch from this same standardized ambient design, so
+            # the source scaler belongs to the artifact rather than either rank.
+            artifact.save_field(
+                "input_scalers", data.input_scaler, overwrite=config.refresh
+            )
         if target_pca_dim is not None:
             train.responses, test.responses = fit_transform_target_pca(
                 train.responses,
@@ -140,7 +146,7 @@ def run_internal(setup, target_pca_dim=None):
             "source_artifact": None,
             "source_mode": "within_fmri",
             "pca_available": True,
-            "pca_training_representation": "tr_aligned_trimmed_story_zscored_pre_fir",
+            "pca_training_representation": "tr_aligned_trimmed_pooled_train_standardized_pre_fir",
             "ceiling": "fresh_full_embedding_ridge",
         }
     )
@@ -159,6 +165,7 @@ def run_internal(setup, target_pca_dim=None):
             for method in methods
             for rank in ranks
         ],
+        "input_scalers": [{}],
     }
     artifact.mark_complete(required)
     return artifact

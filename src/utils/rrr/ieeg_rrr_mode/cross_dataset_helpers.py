@@ -57,6 +57,26 @@ def load_cross_dataset_A_by_rank(
     return averaged
 
 
+def load_cross_dataset_scaler(source, kind: str, rank: int | None = None) -> dict:
+    """Load the scaler paired with a transferable source factor."""
+    selector = {"method": kind}
+    if rank is not None:
+        selector["rank"] = int(rank)
+    try:
+        scaler = source.load_input_scaler(selector)
+    except KeyError as error:
+        raise ValueError(
+            f"Source Artifact has no input scaler paired with {kind}"
+            + ("" if rank is None else f" rank {rank}")
+        ) from error
+    if scaler.get("coordinates") != "standardized-v1":
+        raise ValueError(
+            f"Source {kind} scaler has unsupported coordinates "
+            f"{scaler.get('coordinates')!r}"
+        )
+    return scaler
+
+
 def _run_cross_dataset_subspace_for_unit(
     artifact: Artifact,
     unit: UnitSelector,
@@ -70,6 +90,7 @@ def _run_cross_dataset_subspace_for_unit(
     ranks_by_fold: "dict[int, list[int]] | None" = None,
     completed_pairs: "set[tuple[int, int]] | None" = None,
     evaluate_orthonormalized: bool = False,
+    standardize_subspace_inputs: bool | None = None,
 ) -> pd.DataFrame:
     """Evaluate rank-specific source subspaces on target dataset folds."""
     target_ambient_dim = _X_for_fold(X_raw, 0).shape[1]
@@ -173,7 +194,11 @@ def _run_cross_dataset_subspace_for_unit(
                 fold_f=fold_f,
                 alphas=alphas,
                 alpha_policy=config.encoding.alpha_grid,
-                standardize_subspace_inputs=config.standardize_subspace_inputs,
+                standardize_subspace_inputs=(
+                    config.standardize_subspace_inputs
+                    if standardize_subspace_inputs is None
+                    else standardize_subspace_inputs
+                ),
                 ridge_cv_folds=config.encoding.ridge_cv_folds,
                 ridge_solver_params=config.encoding.ridge_solver_params,
                 ridge_y_in_cpu=config.encoding.ridge_y_in_cpu,

@@ -130,6 +130,21 @@ def _factor_entries(source, method, selectors):
     )
 
 
+def _source_scaler(source, selector):
+    try:
+        scaler = source.load_input_scaler(selector)
+    except KeyError as error:
+        raise ValueError(
+            f"Source factor {selector} is missing its input scaler"
+        ) from error
+    if scaler.get("coordinates") != "standardized-v1":
+        raise ValueError(
+            f"Source factor {selector} has unsupported scaler coordinates "
+            f"{scaler.get('coordinates')!r}"
+        )
+    return scaler
+
+
 def _materialize_method(source, method, root, selectors):
     entries = _factor_entries(source, method, selectors)
     if not entries:
@@ -141,7 +156,7 @@ def _materialize_method(source, method, root, selectors):
             path = destination / f"fold_{int(selector['fold'])}"
             path.mkdir(parents=True, exist_ok=True)
             np.save(path / "A.npy", value)
-            scaler = source.load_field("input_scalers", selector=selector)
+            scaler = _source_scaler(source, selector)
             np.savez(path / "input_scaler.npz", **scaler)
     else:
         ranked = [(selector, value) for selector, value in entries if "rank" in selector]
@@ -155,9 +170,8 @@ def _materialize_method(source, method, root, selectors):
             path = destination / directory
             path.mkdir(parents=True, exist_ok=True)
             np.save(path / "A.npy", value)
-            if source.has_field("input_scalers", selector=selector):
-                scaler = source.load_field("input_scalers", selector=selector)
-                np.savez(path / "input_scaler.npz", **scaler)
+            scaler = _source_scaler(source, selector)
+            np.savez(path / "input_scaler.npz", **scaler)
     return destination
 
 
@@ -195,9 +209,12 @@ def run_config(config: LanguageDecodingConfig) -> Artifact:
         upstreams.append(target.identity_record())
     artifact = Artifact.from_config(config, source=source, target=target).begin(
         config=config, upstreams=upstreams, refresh=config.refresh,
-        variant_extras=({"speaker-labels": "outer-fold-shared-other"}
-                        if {"speaker_identity", "native_speaker"} & set(config.tasks)
-                        else None),
+        variant_extras={
+            **({"speaker-labels": "outer-fold-shared-other"}
+               if {"speaker_identity", "native_speaker"} & set(config.tasks)
+               else {}),
+            "input-scaling": "source-then-target-reduced-v1",
+        },
     )
     if artifact.complete and not config.refresh:
         return artifact
@@ -211,6 +228,9 @@ def run_config(config: LanguageDecodingConfig) -> Artifact:
         }:
             source_config = (target or source).load_field("effective_config")
             factors = {}
+            # The source transform precedes the RRR/PCA branch, so one scaler
+            # serves every method and rank loaded below.
+            source_scaler = _source_scaler(source, {})
             selectors = dict(config.rrr_selectors or {})
             for method in ("rrr", "pca"):
                 entries = source.load_collection(
@@ -230,7 +250,7 @@ def run_config(config: LanguageDecodingConfig) -> Artifact:
                             )
                         factors[key] = np.asarray(value)
                     elif "rank" not in mapping:
-                        unranked.append(np.asarray(value))
+                        unranked.append((mapping, np.asarray(value)))
                 if unranked:
                     if len(unranked) != 1 or any(
                         key_method == method for key_method, _ in factors
@@ -238,7 +258,7 @@ def run_config(config: LanguageDecodingConfig) -> Artifact:
                         raise ValueError(
                             f"rrr_selectors do not identify one {method} factor set"
                         )
-                    full = unranked[0]
+                    _, full = unranked[0]
                     for rank in map(int, config.rank_grid):
                         if full.shape[1] >= rank:
                             factors[(method, rank)] = full[:, :rank]
@@ -252,7 +272,8 @@ def run_config(config: LanguageDecodingConfig) -> Artifact:
                 )
             from src.utils.language_interpret.fmri_decoding import run_fmri_decoding
             run_fmri_decoding(
-                config, source_config, factors, root / "output", artifact=artifact
+                config, source_config, factors, source_scaler,
+                root / "output", artifact=artifact
             )
             return artifact.finish()
         rrr = _materialize_method(source, "rrr", root, config.rrr_selectors)
