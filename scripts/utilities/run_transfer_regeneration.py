@@ -48,8 +48,13 @@ def submit(
     if dependencies:
         args.append(f"--dependency=afterok:{':'.join(dependencies)}")
     result = subprocess.run(
-        [*args, "submit.sh", *command], check=True, text=True, capture_output=True
+        [*args, "submit.sh", *command], text=True, capture_output=True
     )
+    if result.returncode != 0:
+        detail = (result.stderr or result.stdout).strip()
+        raise RuntimeError(
+            f"sbatch failed for {label} (exit {result.returncode}): {detail}"
+        )
     job_id = result.stdout.strip().split(";", 1)[0]
     if not job_id:
         raise RuntimeError(f"sbatch returned no job ID for {label}")
