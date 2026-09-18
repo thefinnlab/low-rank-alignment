@@ -16,6 +16,7 @@ SBATCH ?= sbatch
 OVERRIDES ?=
 LAYER ?=
 PER_LAYER ?= false
+LANGUAGE_DECODING_CPUS ?= 1
 SIGNIFICANCE_CHECK ?= python -m scripts.utilities.check_final_significance
 LANGUAGE_DECODING_CHECK ?= uv run python -m scripts.utilities.check_language_decoding_results
 
@@ -227,7 +228,7 @@ language-decoding:
 			if [ "$$layer" != "none" ]; then layer_arg="--layer $$layer"; layer_label="$$layer"; fi
 			echo "Running $$label / $$model / layer $$layer_label: $$config"
 			if [ "$(CMD)" = "sbatch" ]; then
-				$(SBATCH) --job-name="$$label-$$model-layer-$$layer_label-$(USR)-$(DT)" submit.sh scripts/run_language_decoding_batch.py --config "$$config" --model "$$model" $$layer_arg $(OVERRIDES)
+				$(SBATCH) --cpus-per-task=$(LANGUAGE_DECODING_CPUS) --job-name="$$label-$$model-layer-$$layer_label-$(USR)-$(DT)" submit.sh scripts/run_language_decoding_batch.py --config "$$config" --model "$$model" $$layer_arg $(OVERRIDES)
 			else
 				$(CMD) scripts/run_language_decoding_batch.py --config "$$config" --model "$$model" $$layer_arg $(OVERRIDES)
 			fi
@@ -255,7 +256,7 @@ language-decoding-missing:
 		fi
 		echo "Submitting missing $$label / $$model / layer $$layer_label: $$config"
 		if [ "$(CMD)" = "sbatch" ]; then
-			$(SBATCH) --job-name="$$label-$$model-layer-$$layer_label-$(USR)-$(DT)" submit.sh scripts/run_language_decoding_batch.py --config "$$config" --model "$$model" $$layer_arg $(OVERRIDES) --refresh=false
+			$(SBATCH) --cpus-per-task=$(LANGUAGE_DECODING_CPUS) --job-name="$$label-$$model-layer-$$layer_label-$(USR)-$(DT)" submit.sh scripts/run_language_decoding_batch.py --config "$$config" --model "$$model" $$layer_arg $(OVERRIDES) --refresh=false
 		else
 			$(CMD) scripts/run_language_decoding_batch.py --config "$$config" --model "$$model" $$layer_arg $(OVERRIDES) --refresh=false
 		fi

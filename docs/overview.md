@@ -37,7 +37,9 @@ embeddings predict iEEG and fMRI responses. The supported executable surface is
   per model by default. Pass `--layer` (or `make language-decoding LAYER=<layer>`)
   to isolate one configured layer in its own job, or use
   `make language-decoding PER_LAYER=true` to submit every configured model/layer
-  combination separately. Directed decoding applies the source dataset's saved internal basis to
+  combination separately. `LANGUAGE_DECODING_CPUS=<n>` controls each Slurm
+  job's CPU allocation (default 1); categorical decoder cross-validation uses
+  every CPU available to the process. Directed decoding applies the source dataset's saved internal basis to
   the target transcript; iEEG sources use their single `full_fit` basis.
   For directed decoding into fMRI, `fmri_target_artifact` supplies the target data
   configuration, while `rrr_source` supplies the transferred RRR/PCA bases.

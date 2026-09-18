@@ -84,10 +84,12 @@ def test_language_decoding_submits_one_job_per_model_for_directed_pair(tmp_path:
         "DATASET=fmri",
         "SOURCE_DATASET=podcast",
         "MODELS=gpt2 gpt2-xl",
+        "LANGUAGE_DECODING_CPUS=8",
     )
 
     assert result.returncode == 0, result.stderr
     assert len(submissions) == 2
+    assert all("--cpus-per-task=8" in submission for submission in submissions)
     assert all(
         "scripts/run_language_decoding_batch.py" in submission
         and "configs/language_decoding/cross_dataset/fmri/from_podcast.yml" in submission

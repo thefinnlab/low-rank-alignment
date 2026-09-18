@@ -51,6 +51,16 @@ def test_speaker_labels_pool_speakers_missing_from_outer_partitions():
     np.testing.assert_equal(target, [0, 1, 2, np.nan, 0, 1, 3, np.nan])
 
 
+def test_categorical_decoder_uses_all_available_cpus():
+    config = LanguageDecodingConfig(rrr_run_path="unused", rank_grid=[2])
+    X = np.arange(24, dtype=float).reshape(12, 2)
+    y = np.tile([0, 1], 6)
+
+    pipeline = _fit_decoder(X, y, "categorical", config)
+
+    assert pipeline[-1].n_jobs == -1
+
+
 def test_speaker_labels_require_presence_in_training_as_well_as_test():
     target = np.array([0., 1., 0., 1.])
     mapped, metadata = _pool_speaker_labels(

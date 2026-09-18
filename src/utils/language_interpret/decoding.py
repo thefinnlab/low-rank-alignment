@@ -240,7 +240,9 @@ def _fit_decoder(
             class_weight="balanced",
             solver="lbfgs",
             max_iter=2000,
-            n_jobs=1,
+            # Joblib limits ``-1`` to the CPUs available to this process, so a
+            # Slurm allocation (or local CPU affinity) controls the worker count.
+            n_jobs=-1,
         )
     pipeline = make_pipeline(scaler, model)
     pipeline.fit(X_train, y_train)
