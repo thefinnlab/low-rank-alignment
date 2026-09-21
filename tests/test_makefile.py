@@ -517,6 +517,7 @@ def test_final_rrr_configs_use_one_equivalent_significance_union():
                 / f"{model}.yml"
             )
             payload = yaml.safe_load(path.read_text())
+            assert payload["rrr_source"]["mode"] == "full_fit"
             assert signature(payload["significance_selection"]) == expected
             assert signature(
                 payload["rrr_source"]["significance_selection"]

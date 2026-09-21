@@ -91,7 +91,7 @@ significance_selection:
     layer: null
 subspace_aggregation: extrinsic
 rrr_source:
-  mode: internal
+  mode: full_fit
   dataset: podcast
   offset: 0
   model: roberta-large

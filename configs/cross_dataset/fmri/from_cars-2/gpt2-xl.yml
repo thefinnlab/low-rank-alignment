@@ -92,7 +92,7 @@ significance_selection:
     layer: null
 subspace_aggregation: extrinsic
 rrr_source:
-  mode: internal
+  mode: full_fit
   dataset: brain-treebank-cars-2
   rereference: laplacian
   offset: 0

@@ -230,6 +230,8 @@ unspecified EEG aggregation continues to compute with the extrinsic method.
 Checked-in `full_fit` configs cover every layer of the seven primary models for
 Podcast and Cars 2. They retain the final cross-model/layer significance union
 and can be launched with `make rrr DATASET=<podcast|cars-2> RRR_MODE=full_fit`.
+Directed Podcast/Cars 2 transfers, including those targeting fMRI, select these
+`full_fit` artifacts as their iEEG sources.
 `make regenerate-transfer-results` submits these source fits and the per-layer fMRI
 source fits first, submits all directed cross-dataset RRR and decoding consumers with
 Slurm `afterok` dependencies, regenerates internal decoding, and waits until the whole
