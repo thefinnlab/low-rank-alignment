@@ -150,8 +150,8 @@ embedding matrix; the scaler is independent of method and rank. Fold-fitted iEEG
 factors retain fold-local scaler entries because their source training rows differ.
 Consumers resolve the applicable scaler before applying a factor or explicitly convert
 the factor to the algebraically equivalent raw-input representation. Resume checks
-require that scaler; corrected fMRI and transfer workflows also use versioned scaling
-variants so legacy results are not reused.
+require that scaler; corrected fMRI source workflows also use a versioned input-scaling
+variant so legacy results are not reused.
 
 ## Language interpretation
 
@@ -169,16 +169,19 @@ and plots. Its `fmri_word` and `fmri_tr_pre_fir` modes take their story split,
 embeddings, and rank factors from a deep-fMRI RRR Artifact. The former decodes raw
 word-aligned features after applying the saved source scaler; the latter uses the source
 timing and trimming to decode Lanczos-aligned current-TR targets from source-standardized,
-projected pre-FIR inputs. Both modes require a normal internal fMRI RRR Artifact and fit
-downstream reduced-space scaling on training data.
+projected pre-FIR inputs. Both modes require a normal internal fMRI RRR Artifact.
+Directed fMRI decoding QR-orthonormalizes the source factor and does not fit a target
+reduced-space scaler; internal fMRI decoding retains its training-data scaling.
 Categorical TR targets also expose per-channel metrics, availability diagnostics,
 smoothed-channel ridge weights, and dominant-label classifier weights.
 Reconstruction exposes corresponding provenance,
 per-fit metrics, optional fitted models, fold and summary tables, RRR/PCA contrasts,
 predictor contrasts, and plots.
 In `cross_dataset` language modes, a single full-fit factor/scaler pair is applied
-directly. Legacy fold-factor aggregation is rejected because differently standardized
-source folds do not define one transferable ambient coordinate system.
+directly, the rank-truncated factor is QR-orthonormalized, and the projected vectors
+enter the decoder without target normalization. Legacy fold-factor aggregation is
+rejected because differently standardized source folds do not define one transferable
+ambient coordinate system.
 
 The importable downstream facades are `scripts.run_language_decoding.Artifact` and
 `scripts.run_language_reconstruction.Artifact`; the existing executable files under

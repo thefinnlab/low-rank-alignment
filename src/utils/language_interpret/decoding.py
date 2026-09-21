@@ -40,6 +40,7 @@ from src.utils.shared.embeddings import load_embeddings
 from src.utils.language_interpret.output import DecodingOutput
 from src.utils.shared.config import load_config, save_effective_config
 from src.utils.language_interpret.tasks import PodcastTaskContext, get_language_task
+from src.utils.rrr.core import canonical_qr
 from src.utils.rrr.multiview import (
     load_view_bases,
     load_view_embeddings,
@@ -217,8 +218,8 @@ def _fit_decoder(
     kind: str,
     config: LanguageDecodingConfig,
     cv=None,
+    standardize_inputs: bool = True,
 ):
-    scaler = StandardScaler()
     if kind == "continuous":
         _configure_decoder_backend(config.device)
         model = RidgeCV(
@@ -244,7 +245,11 @@ def _fit_decoder(
             # Slurm allocation (or local CPU affinity) controls the worker count.
             n_jobs=-1,
         )
-    pipeline = make_pipeline(scaler, model)
+    pipeline = (
+        make_pipeline(StandardScaler(), model)
+        if standardize_inputs
+        else make_pipeline(model)
+    )
     pipeline.fit(X_train, y_train)
     return pipeline
 
@@ -273,8 +278,13 @@ def _decoder_metrics(kind: str, y_true, y_pred) -> dict[str, float]:
 def _weight_payload(
     pipeline, A: np.ndarray | None, target_index: int | None = None
 ) -> dict:
-    scaler = pipeline[0]
     estimator = pipeline[-1]
+    if len(pipeline.steps) > 1 and hasattr(pipeline[0], "scale_"):
+        feature_mean = np.asarray(pipeline[0].mean_, dtype=float)
+        feature_scale = np.asarray(pipeline[0].scale_, dtype=float)
+    else:
+        feature_mean = np.zeros(int(pipeline.n_features_in_), dtype=float)
+        feature_scale = np.ones(int(pipeline.n_features_in_), dtype=float)
     coefficient = np.asarray(to_numpy(estimator.coef_), dtype=float)
     intercept = np.atleast_1d(
         np.asarray(to_numpy(estimator.intercept_), dtype=float)
@@ -282,17 +292,17 @@ def _weight_payload(
     if hasattr(estimator, "classes_"):
         if coefficient.ndim == 1:
             coefficient = coefficient[None, :]
-        reduced_weights = (coefficient / scaler.scale_[None, :]).T
+        reduced_weights = (coefficient / feature_scale[None, :]).T
     else:
         if coefficient.ndim == 1:
             coefficient = coefficient[:, None]
-        elif coefficient.shape[0] != len(scaler.scale_):
+        elif coefficient.shape[0] != len(feature_scale):
             coefficient = coefficient.T
-        reduced_weights = coefficient / scaler.scale_[:, None]
+        reduced_weights = coefficient / feature_scale[:, None]
         if target_index is not None:
             reduced_weights = reduced_weights[:, [target_index]]
             intercept = intercept[[target_index]]
-    corrected_intercept = intercept - scaler.mean_ @ reduced_weights
+    corrected_intercept = intercept - feature_mean @ reduced_weights
     embedding_weights = (
         reduced_weights if A is None else np.asarray(A, dtype=float) @ reduced_weights
     )
@@ -300,8 +310,8 @@ def _weight_payload(
         "reduced_weights": reduced_weights.astype(np.float32),
         "embedding_weights": embedding_weights.astype(np.float32),
         "intercept": corrected_intercept.astype(np.float32),
-        "feature_mean": np.asarray(scaler.mean_, dtype=np.float32),
-        "feature_scale": np.asarray(scaler.scale_, dtype=np.float32),
+        "feature_mean": feature_mean.astype(np.float32),
+        "feature_scale": feature_scale.astype(np.float32),
     }
     if hasattr(estimator, "classes_"):
         payload["classes"] = np.asarray(estimator.classes_)
@@ -405,6 +415,7 @@ def _run_one_fit(
     subspace: str,
     block_ids: np.ndarray | None = None,
     writer: DecodingOutput | None = None,
+    standardize_inputs: bool = True,
 ) -> dict:
     cached = writer.cached_fit(task_name, subspace, rank, fold) if writer and writer.artifact else _load_cached_fit(
         output_dir, task_name, fold, rank, subspace, config.refresh
@@ -415,7 +426,10 @@ def _run_one_fit(
     task_train, task_test = _fit_indices(
         task_name, y, train_idx, test_idx, fold
     )
-    pipeline = _fit_decoder(X[task_train], y[task_train], task_kind, config)
+    pipeline = _fit_decoder(
+        X[task_train], y[task_train], task_kind, config,
+        standardize_inputs=standardize_inputs,
+    )
     prediction = to_numpy(pipeline.predict(X[task_test]))
     metrics = {
         "task": task_name,
@@ -452,6 +466,7 @@ def _run_task_decoding(
     subspace: str,
     block_ids: np.ndarray | None = None,
     writer: DecodingOutput | None = None,
+    standardize_inputs: bool = True,
 ) -> list[dict]:
     """Fit one design, batching continuous targets with identical valid rows."""
     results: dict[str, dict] = {}
@@ -475,8 +490,10 @@ def _run_task_decoding(
                 subspace,
             )
             results[task_name] = _run_one_fit(
-                *fit_args, *(() if block_ids is None else (block_ids,)),
-                **({"writer": writer} if writer is not None else {})
+                *fit_args,
+                block_ids=block_ids,
+                writer=writer,
+                standardize_inputs=standardize_inputs,
             )
             continue
         cached = writer.cached_fit(task_name, subspace, rank, fold) if writer and writer.artifact else _load_cached_fit(
@@ -511,14 +528,19 @@ def _run_task_decoding(
                 subspace,
             )
             results[task_name] = _run_one_fit(
-                *fit_args, *(() if block_ids is None else (block_ids,)),
-                **({"writer": writer} if writer is not None else {})
+                *fit_args,
+                block_ids=block_ids,
+                writer=writer,
+                standardize_inputs=standardize_inputs,
             )
             continue
         targets = np.column_stack(
             [task_targets[task_name][task_train] for task_name in task_names]
         )
-        pipeline = _fit_decoder(X[task_train], targets, "continuous", config)
+        pipeline = _fit_decoder(
+            X[task_train], targets, "continuous", config,
+            standardize_inputs=standardize_inputs,
+        )
         predictions = np.asarray(to_numpy(pipeline.predict(X[task_test])))
         if predictions.ndim == 1:
             predictions = predictions[:, None]
@@ -989,6 +1011,7 @@ def _prepare_multiview_subspaces(
             factor = aggregate_subspace_basis(
                 composed, rank=rank, method=config.subspace_aggregation
             )
+            factor = canonical_qr(np.asarray(factor))[0]
             design = _apply_raw_factor(embeddings, view_names, factor, selection)
             for fold in range(len(folds)):
                 prepared[(fold, rank)] = (design, factor)
@@ -1039,9 +1062,10 @@ def _prepare_single_view_subspaces(
                         f"Rank {rank} {subspace.upper()} factor has shape "
                         f"{factor.shape}; expected {(X.shape[1], rank)}"
                     )
+                factor = canonical_qr(factor)[0]
                 scaler = scalers_by_rank[rank]
-                # This is the one ambient source transform. The decoder pipeline
-                # later fits its separate k-dimensional scaler on target-train rows.
+                # Apply only the saved ambient source transform. Cross-dataset
+                # decoders consume the orthonormal projected coordinates directly.
                 X_source = (
                     (X - scaler["mean"]) / scaler["scale"]
                 ).astype(np.float32)
@@ -1097,6 +1121,9 @@ def _prepare_single_view_subspaces(
                     rank=int(rank),
                     method=config.subspace_aggregation,
                 )
+            mean_factors[int(rank)] = canonical_qr(
+                np.asarray(mean_factors[int(rank)])
+            )[0]
 
     prepared = {}
     for fold, (train_idx, test_idx) in enumerate(folds):
@@ -1165,6 +1192,9 @@ def _run_subspace_decoding(
                     A=ambient_factor,
                     subspace=subspace,
                     block_ids=block_ids,
+                    standardize_inputs=(
+                        config.mode != LanguageDecodingMode.CROSS_DATASET
+                    ),
                     **({"writer": writer} if writer is not None else {}),
                 )
             )
@@ -1408,10 +1438,14 @@ def run_language_decoding(config: LanguageDecodingConfig, artifact=None) -> Path
             }
         ),
         "cross_dataset_factor_strategy": (
-            "compose_component_and_final_factors_then_aggregate"
+            "compose_aggregate_then_qr_source_only_unscaled"
             if multiview_config is not None
             and config.mode == LanguageDecodingMode.CROSS_DATASET
-            else None
+            else (
+                "source_standardize_then_qr_project_unscaled"
+                if config.mode == LanguageDecodingMode.CROSS_DATASET
+                else None
+            )
         ),
         "analysis_rows": int(len(selection)),
         "decoder_backends": {

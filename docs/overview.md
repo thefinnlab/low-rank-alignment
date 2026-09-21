@@ -240,16 +240,16 @@ submitted pipeline has completed. Its Slurm requests use 128G/GPU80 for iEEG RRR
 decoding.
 Cross-dataset RRR applies every transferred RRR/PCA basis in its source dataset's
 saved standardized coordinates. It applies the source mean and scale to target
-embeddings, projects through the source basis, and then fits a reduced-space scaler
-using only the target training fold or pooled target training stories. fMRI reduced
-features are scaled before FIR expansion, while full-embedding ceilings retain the
-target dataset's own training-only scaler.
+embeddings, projects through a QR-orthonormalized source basis, and passes those
+reduced vectors directly to ridge without target-dataset normalization. fMRI applies
+the same source-only transform before FIR expansion, while full-embedding ceilings
+retain the target dataset's own training-only scaler.
 Native iEEG factors retain their fold or whole-dataset input scaler. fMRI RRR fits one
 input scaler over all aligned TRs from the pooled training stories, applies it unchanged
 to held-out stories, and saves it once at artifact scope for all RRR/PCA ranks.
-Corrected fMRI source and cross-dataset outputs use versioned scaling variants so they
-cannot silently resume results produced under the former per-story/target-scaling
-contract. fMRI significance remains on its separate per-story normalization workflow.
+Corrected fMRI source outputs use a versioned input-scaling variant so they cannot
+silently resume results produced under the former per-story contract. fMRI
+significance remains on its separate per-story normalization workflow.
 Internal iEEG RRR and PCA fit and save their factors in embeddings standardized with
 that fold's training statistics. Each fold factor is paired with its saved input mean
 and scale. Direct rank evaluation, fold-matched subspace comparison, and language
@@ -260,8 +260,10 @@ full ridge model and reproduces that model's ceiling.
 Cross-dataset iEEG language decoding consumes a single `full_fit` factor and its scaler
 directly rather than computing a Grassmann mean across source folds. fMRI language
 decoding consumes rank factor/scaler pairs from a normal internal fMRI RRR Artifact.
-All decoding modes apply the saved source scaler before projection and fit their
-ordinary decoder scaler only on the target training reduced features.
+All decoding modes apply the saved source scaler before projection. Directed
+cross-dataset decoding uses a QR-orthonormalized source basis and passes its projected
+vectors directly to the decoder without target-dataset normalization; internal
+decoding retains its ordinary training-fold decoder scaler.
 RRR modes that evaluate directly fitted or fold-matched input factors report both
 the original projected-ridge metrics and a companion `*_orth` family fitted after a
 reduced QR decomposition. PCA and aggregated cross-dataset bases are evaluated in

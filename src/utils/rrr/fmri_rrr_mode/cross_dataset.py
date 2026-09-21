@@ -108,7 +108,7 @@ def run_cross_dataset(setup):
         test_stories=setup.test_stories,
         jobs=jobs,
         input_scaler=source_scaler,
-        standardize_reduced=True,
+        standardize_reduced=False,
     )
     frame = make_summary(
         artifact,
@@ -126,7 +126,7 @@ def run_cross_dataset(setup):
             "source_mode": "cross_dataset",
             "pca_available": "pca" in methods,
             "pca_training_representation": "source_full_fit_standardized_coordinates",
-            "transfer_scaling": "source_then_target_reduced_pre_fir",
+            "transfer_scaling": "source_only_pre_fir",
             "ceiling": "fresh_full_embedding_ridge",
         }
     )

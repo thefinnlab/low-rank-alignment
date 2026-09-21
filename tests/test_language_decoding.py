@@ -289,6 +289,24 @@ def test_saved_raw_weights_reproduce_continuous_pipeline_decisions():
     assert metrics["correlation"] > 0.99
 
 
+def test_unscaled_decoder_has_identity_feature_transform():
+    rng = np.random.default_rng(14)
+    X = rng.normal(size=(80, 3)) * np.array([1.0, 5.0, 20.0])
+    y = X @ np.array([1.0, -0.2, 0.05])
+    config = LanguageDecodingConfig(rrr_run_path="unused", rank_grid=[2])
+
+    pipeline = _fit_decoder(
+        X, y, "continuous", config, standardize_inputs=False
+    )
+    payload = _weight_payload(pipeline, None)
+
+    assert len(pipeline.steps) == 1
+    np.testing.assert_array_equal(payload["feature_mean"], np.zeros(3))
+    np.testing.assert_array_equal(payload["feature_scale"], np.ones(3))
+    reconstructed = X @ payload["embedding_weights"] + payload["intercept"]
+    np.testing.assert_allclose(reconstructed[:, 0], pipeline.predict(X), atol=1e-5)
+
+
 def test_saved_raw_weights_reproduce_binary_logistic_decisions():
     rng = np.random.default_rng(8)
     X = rng.normal(size=(120, 4))
@@ -929,7 +947,7 @@ def test_run_subspace_decoding_loads_paths_and_validates_fold_set(
     )
     seen_shapes = []
 
-    def capture_fit(*args):
+    def capture_fit(*args, **kwargs):
         seen_shapes.append((args[4], args[5].shape, args[-1]))
         return {"fold": args[3], "k": args[4], "subspace": args[-1]}
 
@@ -1002,9 +1020,15 @@ def test_cross_dataset_single_full_fit_factor_is_applied_without_aggregation(
         config=config,
     )
 
-    expected = ((X - source_mean) / source_scale) @ factor
+    q = np.linalg.qr(factor, mode="reduced")[0]
+    if q[0, 0] < 0:
+        q *= -1
+    expected = ((X - source_mean) / source_scale) @ q
     np.testing.assert_allclose(prepared[(0, 1)][0], expected)
-    np.testing.assert_array_equal(prepared[(0, 1)][1], factor)
+    np.testing.assert_allclose(prepared[(0, 1)][1], q)
+    np.testing.assert_allclose(
+        prepared[(0, 1)][1].T @ prepared[(0, 1)][1], np.eye(1), atol=1e-6
+    )
 
 
 def test_compose_multiview_factor_preserves_separate_raw_blocks():
@@ -1043,8 +1067,10 @@ def test_cross_multiview_decoding_composes_before_aggregation(tmp_path, monkeypa
     }
     captured = []
 
-    def capture_fit(*args):
-        captured.append((args[5].copy(), args[-2].copy()))
+    def capture_fit(*args, **kwargs):
+        captured.append(
+            (args[5].copy(), args[-2].copy(), kwargs["standardize_inputs"])
+        )
         return {"fold": args[3], "k": args[4], "subspace": args[-1]}
 
     monkeypatch.setattr("src.utils.language_interpret.decoding._run_one_fit", capture_fit)
@@ -1075,6 +1101,7 @@ def test_cross_multiview_decoding_composes_before_aggregation(tmp_path, monkeypa
         config=config,
     )
     assert len(rows) == 2
-    for design, factor in captured:
+    for design, factor, standardize_inputs in captured:
         np.testing.assert_allclose(np.abs(factor), [[1.0], [0.0]], atol=1e-6)
         np.testing.assert_allclose(np.abs(design[:, 0]), [1.0, 3.0], atol=1e-6)
+        assert standardize_inputs is False

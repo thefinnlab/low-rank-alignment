@@ -137,7 +137,7 @@ def run_cross_dataset(
         sig_mask_flat=sig_mask_flat,
         ranks_by_fold=rrr_resume_plan["ranks_by_fold"],
         completed_pairs=rrr_resume_plan["completed_pairs"],
-        standardize_subspace_inputs=True,
+        standardize_subspace_inputs=False,
     )
 
     units = [(unit, n_folds, False, True)]
@@ -159,7 +159,7 @@ def run_cross_dataset(
             sig_mask_flat=sig_mask_flat,
             ranks_by_fold=pca_resume_plan["ranks_by_fold"],
             completed_pairs=pca_resume_plan["completed_pairs"],
-            standardize_subspace_inputs=True,
+            standardize_subspace_inputs=False,
         )
         units.append((pca_unit, n_folds, False, True))
     return units
