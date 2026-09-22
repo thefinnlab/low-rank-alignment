@@ -35,8 +35,6 @@ class LanguageDecodingMode(str, Enum):
 
     WITHIN_DATASET = "within_dataset"
     CROSS_DATASET = "cross_dataset"
-    FMRI_WORD = "fmri_word"
-    FMRI_TR_PRE_FIR = "fmri_tr_pre_fir"
 
 
 SUBSPACE_AGGREGATION_METHODS = {"extrinsic", "factor_weighted"}
@@ -426,6 +424,7 @@ class LanguageDecodingConfig:
     rrr_run_path: str | None = None
     pca_run_path: str | None = None
     mode: LanguageDecodingMode = LanguageDecodingMode.WITHIN_DATASET
+    fmri_tr_pre_fir: bool = False
     # Decode label at transcript word t + label_offset from embedding at t.
     label_offset: int = 0
     source_name: str | None = None
@@ -470,7 +469,9 @@ class LanguageDecodingConfig:
             self.mode = LanguageDecodingMode(self.mode)
         if isinstance(self.label_offset, bool) or not isinstance(self.label_offset, int):
             raise ValueError("label_offset must be an integer")
-        if self.mode == LanguageDecodingMode.FMRI_TR_PRE_FIR and self.label_offset != 0:
+        if not isinstance(self.fmri_tr_pre_fir, bool):
+            raise ValueError("fmri_tr_pre_fir must be a boolean")
+        if self.fmri_tr_pre_fir and self.label_offset != 0:
             raise ValueError("label_offset is only supported for word decoding")
         _validate_subspace_aggregation(self.subspace_aggregation)
         if self.device not in {"auto", "cuda", "cpu"}:
@@ -487,18 +488,21 @@ class LanguageDecodingConfig:
             raise ValueError("tasks must not contain duplicate names")
         if not self.logistic_cs or any(float(value) <= 0 for value in self.logistic_cs):
             raise ValueError("logistic_cs must contain positive values")
-        if self.mode in {
-            LanguageDecodingMode.FMRI_WORD,
-            LanguageDecodingMode.FMRI_TR_PRE_FIR,
-        }:
+        if self.encoding.dataset in {"fmri", "deep_fmri", "deep-fmri"}:
             source_dataset = str((self.rrr_source or {}).get("dataset", ""))
             target_dataset = str((self.fmri_target_artifact or {}).get("dataset", ""))
             fmri_names = {"fmri", "deep_fmri", "deep-fmri"}
             if source_dataset not in fmri_names and target_dataset not in fmri_names:
                 raise ValueError(
-                    f"mode={self.mode.value} requires a deep-fmri rrr_source or "
+                    "fMRI decoding requires a deep-fmri rrr_source or "
                     "fmri_target_artifact"
                 )
+            if self.mode == LanguageDecodingMode.CROSS_DATASET and target_dataset not in fmri_names:
+                raise ValueError("Cross-dataset fMRI decoding requires fmri_target_artifact")
+            if self.mode == LanguageDecodingMode.WITHIN_DATASET and self.fmri_target_artifact is not None:
+                raise ValueError("Within-dataset fMRI decoding cannot use fmri_target_artifact")
+        elif self.fmri_tr_pre_fir:
+            raise ValueError("fmri_tr_pre_fir is only available for fMRI targets")
 
 
 @dataclass

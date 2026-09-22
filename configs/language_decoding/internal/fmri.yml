@@ -1,7 +1,7 @@
 target_dataset: fmri
 num_folds: 5
-# fMRI targets use fmri_tr_pre_fir mode in the batch runner.
-label_offsets: [0]
+# fMRI targets decode words by default; set fmri_tr_pre_fir=true for TR decoding.
+label_offsets: [-1, 0, 1]
 tr_tasks: [speaking_rate]
 device: auto
 refresh: false

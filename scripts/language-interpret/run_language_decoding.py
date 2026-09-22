@@ -18,7 +18,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspa
 from scripts.run_rrr import Artifact as RRRArtifact
 from scripts.run_significance import Artifact as SignificanceArtifact
 from src.core.artifacts import ArtifactStore, normalize_dataset, normalize_model
-from src.core.config import LanguageDecodingConfig, LanguageDecodingMode
+from src.core.config import LanguageDecodingConfig
 from src.core.registry import resolve_dataset_context
 from src.utils.shared.config import expand_per_model_layer_configs, load_config, parse_args
 
@@ -42,16 +42,19 @@ class Artifact(ArtifactStore):
     }
 
     def __init__(self, *, mode="within_dataset", dataset="podcast", offset=0,
-                 model="gpt2-xl", layer=24, variant=None, results_root="results"):
+                 model="gpt2-xl", layer=24, variant=None, results_root="results",
+                 fmri_tr_pre_fir=False):
         self._init_store(mode=mode, dataset=dataset, offset=offset, model=model,
                          layer=layer, variant=variant, results_root=results_root)
+        self.fmri_tr_pre_fir = fmri_tr_pre_fir
+
+    def _leaf(self) -> Path:
+        leaf = super()._leaf()
+        return leaf / "fmri_tr_pre_fir" if self.fmri_tr_pre_fir else leaf
 
     @classmethod
     def from_config(cls, config, source=None, target=None):
-        if config.mode in {
-            LanguageDecodingMode.FMRI_WORD,
-            LanguageDecodingMode.FMRI_TR_PRE_FIR,
-        }:
+        if config.encoding.dataset in {"fmri", "deep_fmri", "deep-fmri"}:
             if source is None:
                 raise ValueError("fMRI decoding Artifact identity requires its RRR source")
             identity = (target or source).identity
@@ -63,6 +66,7 @@ class Artifact(ArtifactStore):
                 layer=identity["layer"],
                 variant=config.variant_name,
                 results_root=config.results_root,
+                fmri_tr_pre_fir=config.fmri_tr_pre_fir,
             )
         enc = config.encoding
         context = resolve_dataset_context(
@@ -105,10 +109,7 @@ def _source_artifact(config) -> RRRArtifact:
     if not config.rrr_source:
         raise ValueError("The executable language-decoding client requires rrr_source")
     kwargs = dict(config.rrr_source)
-    if config.mode in {
-        LanguageDecodingMode.FMRI_WORD,
-        LanguageDecodingMode.FMRI_TR_PRE_FIR,
-    } and (
+    if config.encoding.dataset in {"fmri", "deep_fmri", "deep-fmri"} and (
         not config.fmri_target_artifact
         and kwargs.get("mode", "internal") != "internal"
     ):
@@ -222,10 +223,7 @@ def run_config(config: LanguageDecodingConfig) -> Artifact:
     artifact.save_field("upstream_identities", upstreams, overwrite=True)
     with tempfile.TemporaryDirectory(prefix="language-decoding-") as temporary:
         root = Path(temporary)
-        if config.mode in {
-            LanguageDecodingMode.FMRI_WORD,
-            LanguageDecodingMode.FMRI_TR_PRE_FIR,
-        }:
+        if config.encoding.dataset in {"fmri", "deep_fmri", "deep-fmri"}:
             source_config = (target or source).load_field("effective_config")
             factors = {}
             # The source transform precedes the RRR/PCA branch, so one scaler

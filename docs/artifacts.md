@@ -173,17 +173,21 @@ Language decoding and reconstruction accept one `rrr_source` identity. The selec
 RRR Artifact supplies both `method: rrr` and `method: pca` factors; optional
 `rrr_selectors` narrow unit-scoped factors such as a subject, region, or temporal
 window. The RRR source is recorded as an upstream dependency. Result identities use
-the decoded/reconstructed dataset, offset, embedding model, and layer, with the
-language mode as the Artifact mode.
+the decoded/reconstructed dataset, offset, embedding model, and layer. fMRI
+decoding uses `within_dataset` or `cross_dataset` as the Artifact mode according
+to its source/target relationship. The fMRI-only `fmri_tr_pre_fir` flag selects
+TR decoding instead of the default word decoding, and TR results use an
+additional `fmri_tr_pre_fir` folder beneath the mode/dataset/model/layer path.
 
 Decoding exposes modality-neutral sample selection, backward-compatible word
 selection, run metadata, per-task/fold fit metrics, decoder weights, held-out
 predictions, the complete grid and summary, optional prediction agreement tables,
-and plots. Its `fmri_word` and `fmri_tr_pre_fir` modes take their story split,
-embeddings, and rank factors from a deep-fMRI RRR Artifact. The former decodes raw
-word-aligned features after applying the saved source scaler; the latter uses the source
-timing and trimming to decode Lanczos-aligned current-TR targets from source-standardized,
-projected pre-FIR inputs. Both modes require a normal internal fMRI RRR Artifact.
+and plots. Both fMRI decoding methods take their story split and embeddings
+from a normal internal deep-fMRI RRR Artifact. Internal decoding also uses its
+rank factors; directed decoding uses the selected source dataset's factors.
+Word decoding uses raw word-aligned features after applying the saved source
+scaler. TR decoding uses the fMRI timing and trimming to decode Lanczos-aligned
+current-TR targets from source-standardized, projected pre-FIR inputs.
 Directed fMRI decoding QR-orthonormalizes the source factor and does not fit a target
 reduced-space scaler; internal fMRI decoding retains its training-data scaling.
 Categorical TR targets also expose per-channel metrics, availability diagnostics,

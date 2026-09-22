@@ -15,10 +15,8 @@ def test_expected_matrix_covers_internal_and_every_direction_layer_and_offset(tm
         REPO_ROOT, tmp_path, models=["gpt2"], datasets=["podcast", "cars-2", "fmri"]
     )
 
-    # Four word-aligned directions and two word-aligned internal datasets have
-    # 5 layers * 3 offsets; the two directions and one internal run targeting
-    # fMRI have 5 layers * 1 offset.
-    assert len(expected) == 105
+    # All nine source/target pairs have 5 layers * 3 word-label offsets.
+    assert len(expected) == 135
     assert {(item.source_dataset, item.target_dataset) for item in expected} == {
         ("podcast", "cars-2"),
         ("podcast", "fmri"),

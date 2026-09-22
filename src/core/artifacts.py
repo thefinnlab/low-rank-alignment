@@ -63,6 +63,8 @@ def normalized_config(value: Any, *, drop_paths: bool = True) -> dict:
             for key, child in item.items():
                 if key in _OPERATIONAL_KEYS:
                     continue
+                if key == "fmri_tr_pre_fir" and child is False:
+                    continue
                 if drop_paths and (key.endswith("_root") or key.endswith("_dir") or key.endswith("_path")):
                     continue
                 result[key] = clean(child)
@@ -115,7 +117,7 @@ def readable_variant(config: Any, upstreams: list[dict] | None = None,
     aggregation = normalized.get("subspace_aggregation")
     if aggregation is not None:
         parts.append(f"aggregation-{aggregation}")
-    if "label_offset" in normalized and normalized.get("mode") != "fmri_tr_pre_fir":
+    if "label_offset" in normalized and not normalized.get("fmri_tr_pre_fir", False):
         parts.append(f"label-offset-{int(normalized['label_offset'])}")
 
     selection = normalized.get("significance_selection")

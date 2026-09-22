@@ -30,7 +30,7 @@ def test_all_language_decoding_manifests_expand_per_model(manifest, model, layer
     assert all("self_entropy" not in item.tasks for item in configs)
     assert all("surprisal" in item.tasks for item in configs)
     assert all("standardized_entropy" in item.tasks for item in configs)
-    assert all(("speaking_rate" in item.tasks) == (item.mode.value == "fmri_tr_pre_fir") for item in configs)
+    assert all("speaking_rate" not in item.tasks for item in configs)
 
 
 def test_directed_fmri_uses_ieeg_basis_and_internal_fmri_data_source():
@@ -40,7 +40,8 @@ def test_directed_fmri_uses_ieeg_basis_and_internal_fmri_data_source():
     assert config.rrr_source["dataset"] == "podcast"
     assert config.rrr_source["mode"] == "full_fit"
     assert config.fmri_target_artifact["dataset"] == "deep-fmri"
-    assert config.mode.value == "fmri_tr_pre_fir"
+    assert config.mode.value == "cross_dataset"
+    assert config.fmri_tr_pre_fir is False
     assert config.rrr_source["results_root"] == "results"
     assert config.fmri_target_artifact["results_root"] == "results"
 
@@ -78,10 +79,10 @@ def test_label_offsets_have_distinct_artifact_variants():
     assert all(f"label-offset-{offset}" in variant for offset, variant in zip([-1, 0, 1], variants))
 
 
-@pytest.mark.parametrize("mode,offsets", [
-    ("fmri_word", [0]), ("fmri_tr_pre_fir", [0]),
+@pytest.mark.parametrize("tr_enabled,offsets", [
+    (False, [-1, 0, 1]), (True, [0]),
 ])
-def test_word_mode_override_excludes_tr_only_tasks(monkeypatch, mode, offsets):
+def test_fmri_tr_flag_controls_tr_only_tasks(monkeypatch, tr_enabled, offsets):
     import sys
 
     seen = []
@@ -96,12 +97,14 @@ def test_word_mode_override_excludes_tr_only_tasks(monkeypatch, mode, offsets):
     monkeypatch.setattr(batch, "run_config", run)
     monkeypatch.setattr(sys, "argv", [
         "batch", "--config", "configs/language_decoding/internal/fmri.yml",
-        "--model", "gpt2", "--layer", "12", f"--mode={mode}",
+        "--model", "gpt2", "--layer", "12",
+        f"--fmri_tr_pre_fir={str(tr_enabled).lower()}",
     ])
     batch.main()
     assert len(seen) == len(offsets)
     assert [config.label_offset for config in seen] == offsets
-    assert all(config.mode.value == mode for config in seen)
-    assert all(("speaking_rate" in config.tasks) == (mode == "fmri_tr_pre_fir") for config in seen)
+    assert all(config.mode.value == "within_dataset" for config in seen)
+    assert all(config.fmri_tr_pre_fir is tr_enabled for config in seen)
+    assert all(("speaking_rate" in config.tasks) == tr_enabled for config in seen)
     assert all(config.encoding.offset == 0 for config in seen)
     assert all(config.rrr_source["offset"] == 0 for config in seen)

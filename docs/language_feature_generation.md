@@ -82,9 +82,10 @@ word-level label comes from the syntactic head component and the full crosswalk 
 Word decoding supports `label_offset`: embedding at word t decodes the label at
 t + offset, independently of neural `encoding.offset`. Labels are shifted on the
 full canonical transcript before row selection; out-of-range labels remain missing.
-fMRI shifts reset per story. Checked-in batch manifests sweep `label_offsets:
-[-1, 0, 1]` for word modes only, in the same per-model job. TR/pre-FIR remains at
-zero. To run only one offset, pass `OVERRIDES="--label_offset=1"` to Make.
+fMRI shifts reset per story. Podcast, Cars 2, and fMRI batch manifests sweep
+`label_offsets: [-1, 0, 1]` for word decoding in the same per-model job.
+TR/pre-FIR remains at zero. To run only one offset, pass
+`OVERRIDES="--label_offset=1"` to Make.
 Artifact configuration variants distinguish label offsets while retaining the same
 upstream basis and fold selection.
 
@@ -346,8 +347,8 @@ occurrence). Pause durations and word duration are included for all three datase
 IU end is included where aligned IUs exist (Podcast and fMRI), and native pitch/RMS
 intensity are included for Cars 2.
 
-fMRI decoding manifests additionally use `tr_tasks: [speaking_rate]`, excluded
-when the batch launcher is switched to a single-word mode. This target is computed
+fMRI decoding manifests additionally use `tr_tasks: [speaking_rate]`, included
+only when `fmri_tr_pre_fir` is true. This target is computed
 directly from transcript word starts on the acquisition grid, not stored per word
 or Lanczos-interpolated. Each centered TR interval is left-inclusive/right-exclusive;
 its word count is divided by the full TR duration, including silence. Raw words/sec

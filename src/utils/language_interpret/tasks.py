@@ -257,7 +257,7 @@ def _register_artifact_task(
 # counts, and deterministic dependency-tree measures.
 @register_language_task("speaking_rate", "Speaking rate (words/second)", "continuous")
 def _speaking_rate_word_target(context: PodcastTaskContext) -> np.ndarray:
-    raise ValueError("speaking_rate is only available in fmri_tr_pre_fir mode")
+    raise ValueError("speaking_rate requires fmri_tr_pre_fir=true")
 
 
 _CONTINUOUS_TASKS = {

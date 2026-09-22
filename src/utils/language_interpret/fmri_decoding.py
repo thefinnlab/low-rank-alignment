@@ -13,7 +13,7 @@ from sklearn.metrics import r2_score
 from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import StandardScaler
 
-from src.core.config import LanguageDecodingConfig, LanguageDecodingMode
+from src.core.config import LanguageDecodingConfig
 from src.utils.language_interpret.decoding import (
     _configure_decoder_backend,
     _decoder_metrics,
@@ -242,7 +242,7 @@ def build_word_targets(
     result = {}
     for task in tasks:
         if task == "speaking_rate":
-            raise ValueError("speaking_rate is only available in fmri_tr_pre_fir mode")
+            raise ValueError("speaking_rate requires fmri_tr_pre_fir=true")
         spec = get_language_task(task)
         tables = {}
         for story in stories:
@@ -499,8 +499,8 @@ def run_fmri_word_decoding(
     artifact=None,
 ) -> Path:
     """Decode held-out fMRI transcript words from projected word embeddings."""
-    if config.mode != LanguageDecodingMode.FMRI_WORD:
-        raise ValueError(f"Unsupported fMRI word decoding mode: {config.mode}")
+    if config.fmri_tr_pre_fir:
+        raise ValueError("Word decoding requires fmri_tr_pre_fir=false")
     _configure_decoder_backend(config.device)
     fmri = source_config["fmri"]
     train_stories, test_stories, groups = resolve_fmri_stories(
@@ -673,15 +673,13 @@ def run_fmri_decoding(
     artifact=None,
 ) -> Path:
     """Dispatch one primary fMRI language-decoding mode."""
-    if config.mode == LanguageDecodingMode.FMRI_WORD:
-        return run_fmri_word_decoding(
-            config, source_config, factors, source_scaler, output_dir, artifact
-        )
-    if config.mode == LanguageDecodingMode.FMRI_TR_PRE_FIR:
+    if config.fmri_tr_pre_fir:
         return run_fmri_tr_decoding(
             config, source_config, factors, source_scaler, output_dir, artifact
         )
-    raise ValueError(f"Unsupported fMRI language-decoding mode: {config.mode}")
+    return run_fmri_word_decoding(
+        config, source_config, factors, source_scaler, output_dir, artifact
+    )
 
 
 def run_fmri_tr_decoding(
@@ -693,8 +691,8 @@ def run_fmri_tr_decoding(
     artifact=None,
 ) -> Path:
     """Run one held-out-story fMRI TR decoding sweep into a staging directory."""
-    if config.mode != LanguageDecodingMode.FMRI_TR_PRE_FIR:
-        raise ValueError(f"Unsupported fMRI TR decoding mode: {config.mode}")
+    if not config.fmri_tr_pre_fir:
+        raise ValueError("TR decoding requires fmri_tr_pre_fir=true")
     _configure_decoder_backend(config.device)
     fmri = source_config["fmri"]
     train_stories, test_stories, groups = resolve_fmri_stories(

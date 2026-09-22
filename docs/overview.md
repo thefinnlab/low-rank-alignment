@@ -26,7 +26,7 @@ embeddings predict iEEG and fMRI responses. The supported executable surface is
   generating dataset/model/layer/subspace.
 - `scripts/fmri/` contains fMRI embedding generation workflows.
 - `scripts/language-interpret/` contains language decoding and reconstruction.
-  Language decoding includes word-aligned and TR-aligned pre-FIR modes for fMRI,
+  Language decoding includes word-aligned and TR-aligned pre-FIR methods for fMRI,
   all published through the same Artifact client.
   Decoders write result fields directly into a compressed HDF5 Artifact container,
   with plots retained as separate PNGs.
@@ -38,16 +38,21 @@ embeddings predict iEEG and fMRI responses. The supported executable surface is
   to isolate one configured layer in its own job, or use
   `make language-decoding PER_LAYER=true` to submit every configured model/layer
   combination separately. `LANGUAGE_DECODING_CPUS=<n>` controls each Slurm
-  job's CPU allocation (default 1); categorical decoder cross-validation uses
+  job's CPU allocation (default 1). `FMRI_TR_PRE_FIR=true` selects TR decoding
+  for fMRI targets in both ordinary and missing-only Make targets; categorical decoder cross-validation uses
   every CPU available to the process. Directed decoding applies the source dataset's saved internal basis to
   the target transcript; iEEG sources use their single `full_fit` basis.
   For directed decoding into fMRI, `fmri_target_artifact` supplies the target data
   configuration, while `rrr_source` supplies the transferred RRR/PCA bases.
   Its optional `--layer` filter supports small exploratory runs, and output-root
   overrides leave upstream RRR lookups at their separately configured roots.
-  Word decoding sweeps label offsets -1/0/+1 using the same upstream basis; TR
-  decoding stays at label offset 0. Checked-in manifests use TR/pre-FIR mode
-  whenever fMRI is the target, for both internal and directed cross-dataset decoding.
+  Word decoding uses the label offsets declared by each manifest and the same
+  upstream basis; TR decoding stays at label offset 0. fMRI targets decode words
+  by default for both internal and directed cross-dataset decoding. The
+  `fmri_tr_pre_fir` flag selects TR decoding and adds speaking rate. All fMRI
+  decoding uses `within_dataset` or `cross_dataset` Artifact modes according to
+  the source/target relationship; TR results occupy an additional
+  `fmri_tr_pre_fir` folder within that mode's path.
   Word-aligned speaker decoding retains individual speakers only when present in
   every outer fold's training and test sets; remaining speakers share an `other`
   class. Speaker runs use a separate Artifact variant and save the class mapping.

@@ -5,7 +5,7 @@ import pandas as pd
 import pytest
 import yaml
 
-from src.core.config import LanguageDecodingConfig, LanguageDecodingMode
+from src.core.config import EncodingConfig, LanguageDecodingConfig, LanguageDecodingMode
 from scripts.run_language_decoding import Artifact as DecodingArtifact, run_config
 from scripts.run_rrr import Artifact as RRRArtifact
 from src.utils.shared.config import dict_to_dataclass
@@ -364,23 +364,27 @@ def test_nested_language_decoding_config_roundtrip():
     assert config.tasks == ["surprisal"]
 
 
-@pytest.mark.parametrize("mode", ["fmri_word", "fmri_tr_pre_fir"])
-def test_fmri_modes_require_fmri_rrr_source(mode):
+@pytest.mark.parametrize("tr_enabled", [False, True])
+def test_fmri_decoding_requires_fmri_rrr_source(tr_enabled):
     config = dict_to_dataclass(
         {
-            "mode": mode,
+            "mode": "within_dataset",
+            "fmri_tr_pre_fir": tr_enabled,
+            "encoding": {"dataset": "deep-fmri"},
             "rrr_source": {"dataset": "deep-fmri"},
             "rank_grid": [2],
             "tasks": ["concreteness"],
         },
         LanguageDecodingConfig,
     )
-    assert config.mode.value == mode
+    assert config.fmri_tr_pre_fir is tr_enabled
 
     with pytest.raises(ValueError, match="requires a deep-fmri rrr_source"):
         dict_to_dataclass(
             {
-                "mode": mode,
+                "mode": "within_dataset",
+                "fmri_tr_pre_fir": tr_enabled,
+                "encoding": {"dataset": "deep-fmri"},
                 "rrr_source": {"dataset": "podcast"},
                 "rank_grid": [2],
                 "tasks": ["concreteness"],
@@ -390,7 +394,9 @@ def test_fmri_modes_require_fmri_rrr_source(mode):
 
     cross = dict_to_dataclass(
         {
-            "mode": mode,
+            "mode": "cross_dataset",
+            "fmri_tr_pre_fir": tr_enabled,
+            "encoding": {"dataset": "deep-fmri"},
             "rrr_source": {"dataset": "podcast", "mode": "full_fit"},
             "fmri_target_artifact": {"dataset": "deep-fmri", "mode": "internal"},
             "rank_grid": [2],
@@ -401,10 +407,11 @@ def test_fmri_modes_require_fmri_rrr_source(mode):
     assert cross.fmri_target_artifact["dataset"] == "deep-fmri"
 
 
-@pytest.mark.parametrize("mode", ["fmri_word", "fmri_tr_pre_fir"])
-def test_fmri_modes_require_internal_rrr_artifacts(mode, tmp_path):
+@pytest.mark.parametrize("tr_enabled", [False, True])
+def test_fmri_decoding_requires_internal_rrr_artifacts(tr_enabled, tmp_path):
     config = LanguageDecodingConfig(
-        mode=mode,
+        mode="within_dataset", fmri_tr_pre_fir=tr_enabled,
+        encoding=EncodingConfig(dataset="deep-fmri"),
         rrr_source={"mode": "full_fit", "dataset": "deep-fmri"},
         results_root=str(tmp_path),
         rank_grid=[2],
@@ -565,7 +572,7 @@ def test_fmri_label_offsets_reset_per_story(monkeypatch):
 
 
 def test_speaking_rate_rejected_for_word_targets():
-    with pytest.raises(ValueError, match="only available in fmri_tr_pre_fir"):
+    with pytest.raises(ValueError, match="requires fmri_tr_pre_fir=true"):
         build_word_targets(
             stories=[], frames={}, tasks=["speaking_rate"],
             task_data={}, model_dir="unused",
@@ -625,8 +632,8 @@ def test_fmri_pre_fir_rank_design_uses_saved_source_scaler():
     np.testing.assert_array_equal(prepared[4], factor)
 
 
-@pytest.mark.parametrize("mode", ["fmri_word", "fmri_tr_pre_fir"])
-def test_primary_client_publishes_fmri_results(tmp_path, monkeypatch, mode):
+@pytest.mark.parametrize("tr_enabled", [False, True])
+def test_primary_client_publishes_fmri_results(tmp_path, monkeypatch, tr_enabled):
     source = RRRArtifact(
         mode="internal", dataset="deep-fmri", offset=0,
         model="gpt2-xl-batch", layer=24, variant="source",
@@ -651,7 +658,8 @@ def test_primary_client_publishes_fmri_results(tmp_path, monkeypatch, mode):
         config, source_config, factors, source_scaler, output, artifact=None
     ):
         from src.utils.language_interpret.output import DecodingOutput
-        assert config.mode.value == mode
+        assert config.mode.value == "within_dataset"
+        assert config.fmri_tr_pre_fir is tr_enabled
         assert source_config["fmri"]["ndelays"] == 2
         np.testing.assert_array_equal(factors[("rrr", 1)], np.eye(2, 1))
         np.testing.assert_array_equal(source_scaler["scale"], np.ones(2))
@@ -661,7 +669,7 @@ def test_primary_client_publishes_fmri_results(tmp_path, monkeypatch, mode):
             "analysis_row": [0], "split": ["test"], "story": ["heldout"],
             "story_tr_index": [0], "tr_time": [1.0],
         }))
-        writer.save("run_metadata", {"mode": mode})
+        writer.save("run_metadata", {"mode": config.mode.value})
         metrics = {
             "task": "concreteness", "kind": "continuous", "fold": 0,
             "space": "rank", "subspace": "rrr", "k": 1,
@@ -687,7 +695,9 @@ def test_primary_client_publishes_fmri_results(tmp_path, monkeypatch, mode):
         "src.utils.language_interpret.fmri_decoding.run_fmri_decoding", fake_run
     )
     config = LanguageDecodingConfig(
-        mode=LanguageDecodingMode(mode),
+        mode=LanguageDecodingMode.WITHIN_DATASET,
+        fmri_tr_pre_fir=tr_enabled,
+        encoding=EncodingConfig(dataset="deep-fmri"),
         rrr_source={
             "mode": "internal", "dataset": "deep-fmri", "offset": 0,
             "model": "gpt2-xl-batch", "layer": 24, "variant": "source",
@@ -698,7 +708,8 @@ def test_primary_client_publishes_fmri_results(tmp_path, monkeypatch, mode):
     artifact = run_config(config)
 
     assert isinstance(artifact, DecodingArtifact)
-    assert artifact.identity["mode"] == mode
+    assert artifact.identity["mode"] == "within_dataset"
+    assert ("fmri_tr_pre_fir" in artifact._variant_dir().parts) is tr_enabled
     assert artifact.complete
     assert (artifact._variant_dir() / "artifact.h5").is_file()
     assert not list(artifact._variant_dir().rglob("*.npz"))

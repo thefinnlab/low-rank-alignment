@@ -137,15 +137,17 @@ def build_configs(manifest_path: str, model: str) -> list[LanguageDecodingConfig
             )
         source_item = source_by_layer[layer]
         target_is_fmri = target in FMRI_DATASETS
+        fmri_tr_pre_fir = payload.get("fmri_tr_pre_fir", False) if target_is_fmri else False
         kwargs = {
             "encoding": _target_encoding(target_public, target_item, num_folds),
             "rrr_source": _source_request(source_public, source_item),
-            "mode": "fmri_tr_pre_fir" if target_is_fmri else (
-                "cross_dataset" if cross else "within_dataset"
-            ),
+            "mode": "cross_dataset" if cross else "within_dataset",
+            "fmri_tr_pre_fir": fmri_tr_pre_fir,
             "source_name": source,
             "rank_grid": payload.get("rank_grid", [1, 2, 4, 8, 16, 32, 64, 128, 256]),
-            "tasks": list(payload["tasks"]) + (list(payload.get("tr_tasks", [])) if target_is_fmri else []),
+            "tasks": list(payload["tasks"]) + (
+                list(payload.get("tr_tasks", [])) if fmri_tr_pre_fir else []
+            ),
             "task_data": dict(payload["task_data"]),
             "device": payload.get("device", "auto"),
             "results_root": payload.get("results_root", "results"),
@@ -172,11 +174,13 @@ def main() -> None:
         if args.layer is not None and _layer(config) != args.layer:
             continue
         config = apply_overrides(config, overrides)
-        if config.mode != "fmri_tr_pre_fir":
-            tr_tasks = payload.get("tr_tasks", [])
+        tr_tasks = list(payload.get("tr_tasks", []))
+        if config.fmri_tr_pre_fir:
+            config.tasks = list(dict.fromkeys([*config.tasks, *tr_tasks]))
+        else:
             config.tasks = [task for task in config.tasks if task not in tr_tasks]
         offsets = ([config.label_offset] if "label_offset" in overrides
-                   or config.mode == "fmri_tr_pre_fir"
+                   or config.fmri_tr_pre_fir
                    else payload.get("label_offsets", [0]))
         for offset in offsets:
             run = deepcopy(config)

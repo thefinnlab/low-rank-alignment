@@ -106,6 +106,7 @@ def expected_artifacts(
     *,
     models: list[str],
     datasets: list[str],
+    fmri_tr_pre_fir: bool | None = None,
 ) -> list[ExpectedArtifact]:
     expected = []
     for target in datasets:
@@ -114,9 +115,27 @@ def expected_artifacts(
             if not path.is_file():
                 raise FileNotFoundError(f"Missing language-decoding config: {path}")
             payload = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
-            offsets = list(payload.get("label_offsets", [0]))
+            tr_enabled = False
+            if target == "fmri":
+                tr_enabled = (
+                    payload.get("fmri_tr_pre_fir", False)
+                    if fmri_tr_pre_fir is None else fmri_tr_pre_fir
+                )
+            offsets = [0] if tr_enabled else list(payload.get("label_offsets", [0]))
             for model in models:
                 for base_config in build_configs(str(path), model):
+                    if target == "fmri":
+                        base_config.fmri_tr_pre_fir = tr_enabled
+                        tr_tasks = payload.get("tr_tasks", [])
+                        if tr_enabled:
+                            base_config.tasks = list(dict.fromkeys([
+                                *base_config.tasks, *tr_tasks
+                            ]))
+                        else:
+                            base_config.tasks = [
+                                task for task in base_config.tasks
+                                if task not in tr_tasks
+                            ]
                     for offset in offsets:
                         config = deepcopy(base_config)
                         config.label_offset = int(offset)
@@ -206,6 +225,10 @@ def main() -> None:
             "missing or incomplete job, deduplicating label offsets"
         ),
     )
+    parser.add_argument(
+        "--fmri-tr-pre-fir", choices=("true", "false"),
+        help="Override the fMRI decoding flag from the manifests",
+    )
     args = parser.parse_args()
 
     try:
@@ -214,6 +237,10 @@ def main() -> None:
             args.results_root.resolve(),
             models=args.models,
             datasets=args.datasets,
+            fmri_tr_pre_fir=(
+                None if args.fmri_tr_pre_fir is None
+                else args.fmri_tr_pre_fir == "true"
+            ),
         )
     except (FileNotFoundError, KeyError, TypeError, ValueError) as error:
         raise SystemExit(str(error)) from error
