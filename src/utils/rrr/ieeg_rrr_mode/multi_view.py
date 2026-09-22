@@ -76,12 +76,13 @@ def run_multi_view(
         return []
     _, prepared_baselines, test_idxs, sig_mask_flat, target_manifest = prepared_values
     selection = np.asarray(reference["selection"])
-    bases, basis_modes = load_view_bases(
+    bases, basis_modes, view_scalers = load_view_bases(
         config,
         resolved_views,
         target_dataset_key(config, subject_ids),
         selection,
         test_idxs,
+        return_scalers=True,
     )
     view_names = [view.name for view in config.views]
     n_words = len(selection)
@@ -127,7 +128,7 @@ def run_multi_view(
         test_idx = np.asarray(test_idx, dtype=int)
         train_idx = np.setdiff1d(all_rows, test_idx, assume_unique=False)
         bands, boundaries = project_view_bands(
-            embeddings, bases, view_names, fold_f
+            embeddings, bases, view_names, fold_f, view_scalers
         )
         if band_boundaries != boundaries:
             raise ValueError("Multiview band boundaries differ across folds")

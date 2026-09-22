@@ -1234,6 +1234,7 @@ def run_language_decoding(
     multiview_config = _load_multiview_config(rrr_unit_dir, source_artifact)
     multiview_embeddings = None
     component_bases = None
+    component_scalers = None
     source_test_idxs = None
     source_selection = None
     view_names: list[str] = []
@@ -1250,6 +1251,15 @@ def run_language_decoding(
         )
         embeddings = np.asarray(embeddings, dtype=np.float32)
     else:
+        basis_modes = (
+            source_artifact.load_field(
+                "mode_metadata", selector={"kind": "multi_view"}
+            ).get("basis_modes", {})
+            if source_artifact is not None else {}
+        )
+        standardized_qr_views = bool(basis_modes) and all(
+            mode.endswith("standardized_qr") for mode in basis_modes.values()
+        )
         source_subjects = multiview_config.encoding.subjects or list(range(1, 10))
         resolved_views = resolve_rrr_views(multiview_config)
         source_key = target_dataset_key(multiview_config, source_subjects)
@@ -1263,12 +1273,14 @@ def run_language_decoding(
         source_data = load_base_comparison_data(matching_runs[0])
         source_selection = np.asarray(source_data.selection, dtype=int)
         source_test_idxs = [np.asarray(idx, dtype=int) for idx in source_data.test_idxs]
-        component_bases, _ = load_view_bases(
+        component_bases, _, component_scalers = load_view_bases(
             multiview_config,
             resolved_views,
             source_key,
             source_selection,
             source_test_idxs,
+            return_scalers=True,
+            orthonormalize=standardized_qr_views,
         )
         target_view_config = deepcopy(multiview_config)
         target_view_config.encoding = deepcopy(enc)
@@ -1380,7 +1392,8 @@ def run_language_decoding(
             full_projections = []
             for fold in range(len(folds)):
                 bands, _ = project_view_bands(
-                    multiview_embeddings, component_bases, view_names, fold
+                    multiview_embeddings, component_bases, view_names, fold,
+                    component_scalers if standardized_qr_views else None,
                 )
                 full_designs.append(
                     np.concatenate([band[selection] for band in bands], axis=1)

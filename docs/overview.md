@@ -275,8 +275,9 @@ convert the factor with the saved scale. Consequently, reduced QR at the complet
 embedding rank is an orthogonal rotation of the same standardized design used by the
 full ridge model and reproduces that model's ceiling.
 The iEEG `multi_view` mode selects every component through a complete internal RRR
-Artifact identity, converts its saved standardized-coordinate factor for use with raw
-target-dataset embeddings, and publishes the combined fit through the normal RRR
+Artifact identity, applies each component's saved input scaler to target embeddings,
+and projects through a QR-orthonormalized basis at that view's requested rank in
+standardized coordinates. It publishes the combined fit through the normal RRR
 Artifact fields. A required `multi_view_name` supplies its synthetic model identity;
 the component Artifacts remain explicit upstreams. Matching-dataset iEEG sources use
 fold-matched factors, while cross-dataset iEEG sources use a single `full_fit` basis

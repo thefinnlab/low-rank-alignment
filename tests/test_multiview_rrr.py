@@ -27,6 +27,45 @@ def test_project_view_bands_preserves_raw_A_and_config_order():
     assert boundaries == [(0, 1), (1, 2)]
 
 
+def test_matching_view_uses_fold_scaler_and_rank_specific_qr():
+    from types import SimpleNamespace
+
+    factor = np.array([[3.0, 1.0, 8.0], [0.0, 2.0, 9.0], [0.0, 0.0, 4.0]])
+    scaler = {
+        "coordinates": "standardized-v1",
+        "mean": np.array([1.0, 2.0, 3.0]),
+        "scale": np.array([2.0, 3.0, 4.0]),
+    }
+
+    class Source:
+        mode = "internal"
+
+        def load_collection(self, field, selector):
+            return {(('fold', 0),): factor}
+
+        def load_input_scaler(self, selector):
+            return scaler
+
+    view = SimpleNamespace(name="view", rank=2)
+    config = SimpleNamespace(views=[view])
+    resolved = {"view": SimpleNamespace(
+        artifact=Source(), dataset_key=("podcast", "podcast")
+    )}
+    bases, modes, scalers = load_view_bases(
+        config, resolved, ("podcast", "podcast"), np.arange(3),
+        [np.array([0])], return_scalers=True,
+    )
+    embeddings = {"view": np.array([[2.0, 3.0, 4.0], [4.0, 5.0, 6.0]])}
+    bands, _ = project_view_bands(embeddings, bases, ["view"], 0, scalers)
+    from src.utils.rrr.core import canonical_qr
+    q = canonical_qr(factor[:, :2])[0]
+    np.testing.assert_allclose(q.T @ q, np.eye(2), atol=1e-6)
+    np.testing.assert_allclose(
+        bands[0], ((embeddings["view"] - scaler["mean"]) / scaler["scale"]) @ q
+    )
+    assert modes == {"view": "matching_target_fold_standardized_qr"}
+
+
 def test_banded_ridge_recovers_concatenated_primal_weights():
     rng = np.random.default_rng(3)
     bands = [
@@ -76,6 +115,7 @@ def test_load_view_bases_uses_fmri_cross_dataset_helpers(monkeypatch):
         calls.append(("scaler", artifact, kind, rank))
         return {
             "coordinates": "standardized-v1",
+            "mean": np.zeros(2),
             "scale": np.array([2.0, 4.0]),
         }
 
@@ -97,7 +137,7 @@ def test_load_view_bases_uses_fmri_cross_dataset_helpers(monkeypatch):
     )
 
     np.testing.assert_allclose(bases["fmri"][0], [[1.0, 2.0], [1.5, 2.0]])
-    assert modes == {"fmri": "cross_dataset_fmri_rank_basis_raw"}
+    assert modes == {"fmri": "cross_dataset_fmri_standardized_qr"}
     assert calls == [
         ("factor", source, {
             "kind": "rrr", "ranks": [2], "source_format": "rank_bases",
@@ -123,6 +163,7 @@ def test_load_view_bases_uses_full_fit_for_cross_dataset_ieeg(monkeypatch):
         calls.append(("scaler", artifact, kind, rank))
         return {
             "coordinates": "standardized-v1",
+            "mean": np.zeros(2),
             "scale": np.array([2.0, 4.0]),
         }
 
@@ -143,7 +184,7 @@ def test_load_view_bases_uses_full_fit_for_cross_dataset_ieeg(monkeypatch):
     expected = np.array([[0.5, 0.0], [0.0, 0.25]])
     np.testing.assert_allclose(bases["cars"][0], expected)
     np.testing.assert_allclose(bases["cars"][1], expected)
-    assert modes == {"cars": "cross_dataset_full_fit_raw"}
+    assert modes == {"cars": "cross_dataset_full_fit_standardized_qr"}
     assert calls[0][2]["source_format"] == "rank_bases"
     assert calls[0][2]["orthonormalize"] is True
 

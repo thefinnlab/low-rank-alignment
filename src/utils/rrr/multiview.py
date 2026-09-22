@@ -16,6 +16,7 @@ from src.utils.rrr.ieeg_rrr_mode.cross_dataset_helpers import (
     load_cross_dataset_A_by_rank,
     load_cross_dataset_scaler,
 )
+from src.utils.rrr.core import canonical_qr
 from src.utils.shared.embeddings import load_embeddings
 from src.utils.shared.tensors import to_numpy
 from src.utils.rrr.subspace_io import ResolvedSubspaceRun
@@ -117,8 +118,11 @@ def load_view_embeddings(config, resolved, subject_ids):
     return loaded, reference
 
 
-def load_view_bases(config, resolved, target_key, selection, test_idxs):
-    bases, modes = {}, {}
+def load_view_bases(
+    config, resolved, target_key, selection, test_idxs, *,
+    return_scalers=False, orthonormalize=True,
+):
+    bases, modes, scalers = {}, {}, {}
     for view in config.views:
         run = resolved[view.name]
         rank = int(view.rank)
@@ -131,19 +135,27 @@ def load_view_bases(config, resolved, target_key, selection, test_idxs):
             entries = run.artifact.load_collection(
                 "input_factors", {"method": "rrr"}
             )
-            fold_values = {}
+            fold_values, fold_scalers = {}, {}
             for selector, value in entries.items():
                 mapping = dict(selector)
                 if "fold" not in mapping:
                     continue
-                factor = _factor_in_raw_coordinates(
-                    run.artifact, mapping, np.asarray(value)[:, :rank], view.name
+                scaler = run.artifact.load_input_scaler(mapping)
+                factor = np.asarray(value)[:, :rank]
+                if orthonormalize:
+                    factor = canonical_qr(factor)[0]
+                fold_values[int(mapping["fold"])] = _factor_with_scaler_in_raw_coordinates(
+                    scaler, factor, view.name
                 )
-                fold_values[int(mapping["fold"])] = factor
+                fold_scalers[int(mapping["fold"])] = scaler
             if set(fold_values) != set(range(len(test_idxs))):
                 raise ValueError(f"View {view.name} does not provide every target fold")
             bases[view.name] = fold_values
-            modes[view.name] = "matching_target_fold_raw"
+            scalers[view.name] = fold_scalers
+            modes[view.name] = (
+                "matching_target_fold_standardized_qr"
+                if orthonormalize else "matching_target_fold_raw"
+            )
         else:
             is_fmri = run.artifact.dataset == "deep-fmri"
             expected_mode = "internal" if is_fmri else "full_fit"
@@ -157,7 +169,7 @@ def load_view_bases(config, resolved, target_key, selection, test_idxs):
                 kind="rrr",
                 ranks=[rank],
                 source_format="rank_bases",
-                orthonormalize=True,
+                orthonormalize=orthonormalize,
             )[rank]
             scaler = load_cross_dataset_scaler(
                 run.artifact, "rrr", rank
@@ -166,22 +178,15 @@ def load_view_bases(config, resolved, target_key, selection, test_idxs):
                 scaler, factor, view.name
             )
             bases[view.name] = {fold: factor for fold in range(len(test_idxs))}
+            scalers[view.name] = {fold: scaler for fold in range(len(test_idxs))}
             modes[view.name] = (
-                "cross_dataset_fmri_rank_basis_raw"
+                ("cross_dataset_fmri_standardized_qr" if orthonormalize
+                 else "cross_dataset_fmri_rank_basis_raw")
                 if is_fmri
-                else "cross_dataset_full_fit_raw"
+                else ("cross_dataset_full_fit_standardized_qr" if orthonormalize
+                      else "cross_dataset_full_fit_raw")
             )
-    return bases, modes
-
-
-def _factor_in_raw_coordinates(artifact, selector, factor, view_name):
-    try:
-        scaler = artifact.load_input_scaler(selector)
-    except KeyError as error:
-        raise ValueError(
-            f"Multiview source {view_name!r} has no scaler for factor {selector}"
-        ) from error
-    return _factor_with_scaler_in_raw_coordinates(scaler, factor, view_name)
+    return (bases, modes, scalers) if return_scalers else (bases, modes)
 
 
 def _factor_with_scaler_in_raw_coordinates(scaler, factor, view_name):
@@ -204,6 +209,7 @@ def project_view_bands(
     bases: dict[str, dict[int, np.ndarray]],
     view_names: list[str],
     fold: int,
+    scalers: dict[str, dict[int, dict]] | None = None,
 ) -> tuple[list[np.ndarray], list[tuple[int, int]]]:
     """Project aligned embeddings and return bands plus concatenated boundaries."""
     bands = []
@@ -216,7 +222,14 @@ def project_view_bands(
             raise ValueError(
                 f"View {name} embedding/A dimensions differ: {X.shape[1]} vs {A.shape[0]}"
             )
-        band = X @ A
+        if scalers is None:
+            band = X @ A
+        else:
+            scaler = scalers[name][fold]
+            scale = np.asarray(scaler["scale"])
+            mean = np.asarray(scaler["mean"])
+            standardized = (X - mean) / scale
+            band = standardized @ (scale.reshape(-1, 1) * A)
         bands.append(np.asarray(band, dtype=np.float32))
         boundaries.append((start, start + band.shape[1]))
         start += band.shape[1]
