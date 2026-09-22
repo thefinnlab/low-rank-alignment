@@ -169,6 +169,7 @@ class TestDictToDataclass:
         config = dict_to_dataclass(
             {
                 "mode": "multi_view",
+                "multi_view_name": "language-model-multiview",
                 "views": [
                     {
                         "name": "layer_24",
@@ -182,6 +183,7 @@ class TestDictToDataclass:
             RRRConfig,
         )
         assert config.mode == ScriptMode.MULTI_VIEW
+        assert config.multi_view_name == "language-model-multiview"
         assert config.views == [
             RRRViewConfig(
                 name="layer_24",
@@ -194,12 +196,69 @@ class TestDictToDataclass:
 
     def test_rrr_multi_view_requires_views(self):
         with pytest.raises(ValueError, match="at least one view"):
-            RRRConfig(mode=ScriptMode.MULTI_VIEW)
+            RRRConfig(
+                mode=ScriptMode.MULTI_VIEW,
+                multi_view_name="language-model-multiview",
+            )
+
+    def test_rrr_multi_view_requires_name(self):
+        with pytest.raises(ValueError, match="requires multi_view_name"):
+            RRRConfig(
+                mode=ScriptMode.MULTI_VIEW,
+                views=[RRRViewConfig(
+                    name="view", rank=2,
+                    ieeg_rrr_source={"mode": "internal"},
+                )],
+            )
 
     def test_rrr_multi_view_rejects_duplicate_names(self):
         view = RRRViewConfig("same", "config.yml", "results/rrr", 2)
         with pytest.raises(ValueError, match="Duplicate RRR view"):
-            RRRConfig(mode=ScriptMode.MULTI_VIEW, views=[view, view])
+            RRRConfig(
+                mode=ScriptMode.MULTI_VIEW,
+                multi_view_name="language-model-multiview",
+                views=[view, view],
+            )
+
+    def test_checked_in_multiview_uses_current_podcast_sources(self):
+        config = load_config("configs/rrr/multi_view.yml", {}, RRRClientConfig)
+        selected = config.selected_config()
+
+        assert selected.multi_view_name == "language-model-multiview"
+        assert len(selected.views) == 31
+        assert {view.rank for view in selected.views} == {64}
+        assert sum(view.rank for view in selected.views) == 1984
+        assert selected.rank_grid[-1] == 1984
+        sources = [
+            view.ieeg_rrr_source or view.fmri_rrr_source
+            for view in selected.views
+        ]
+        assert {source["dataset"] for source in sources} == {"podcast"}
+        assert all(source.get("significance_selection") for source in sources)
+
+    def test_checked_in_cars_2_multiview_uses_laplacian_cars_sources(self):
+        config = load_config(
+            "configs/rrr/multi_view_cars-2.yml", {}, RRRClientConfig
+        )
+        selected = config.selected_config()
+
+        assert selected.encoding.dataset == "brain_treebank"
+        assert selected.encoding.subjects == [3, 7, 10]
+        assert selected.encoding.per_dataset_config == {
+            "movie": "cars-2", "rereference": "laplacian"
+        }
+        assert len(selected.views) == 31
+        assert {view.rank for view in selected.views} == {64}
+        assert sum(view.rank for view in selected.views) == 1984
+        sources = [
+            view.ieeg_rrr_source or view.fmri_rrr_source
+            for view in selected.views
+        ]
+        assert {source["dataset"] for source in sources} == {
+            "brain-treebank-cars-2"
+        }
+        assert {source["rereference"] for source in sources} == {"laplacian"}
+        assert all(source.get("significance_selection") for source in sources)
 
     def test_rrr_temporal_windows_roundtrip(self):
         config = dict_to_dataclass(

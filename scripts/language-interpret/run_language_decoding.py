@@ -285,7 +285,9 @@ def run_config(config: LanguageDecodingConfig) -> Artifact:
         runtime.rrr_run_path, runtime.pca_run_path = str(rrr), None if pca is None else str(pca)
         runtime.fold_results_dir, runtime.output_dir = str(root), str(root / "output")
         from src.utils.language_interpret.decoding import run_language_decoding
-        run_language_decoding(runtime, artifact=artifact)
+        run_language_decoding(
+            runtime, artifact=artifact, source_artifact=source
+        )
         artifact.finish()
     return artifact
 

@@ -66,6 +66,7 @@ class Config:
     )
     rrr_source: dict | None = None
     views: list[dict] = field(default_factory=list)
+    multi_view_name: str | None = None
     subspace_aggregation: str | None = None
     ieeg: dict | None = field(default_factory=dict)
     fmri: dict | None = None
@@ -94,6 +95,8 @@ class Config:
             ScriptMode.CROSS_DATASET, ScriptMode.CROSS_TEMPORAL_WINDOWS
         } and not self.rrr_source:
             raise ValueError(f"mode={self.mode.value} requires rrr_source")
+        if self.mode == ScriptMode.MULTI_VIEW and not self.multi_view_name:
+            raise ValueError("mode=multi_view requires multi_view_name")
         if not self.rank_grid or any(int(rank) < 1 for rank in self.rank_grid):
             raise ValueError("rank_grid must contain positive integers")
 
@@ -134,6 +137,7 @@ class Config:
             return _strict_branch(payload, FMRICrossDatasetRRRConfig)
 
         payload.setdefault("encoding", {})["dataset"] = self.dataset
+        payload["multi_view_name"] = self.multi_view_name
         payload["mode"] = (
             ScriptMode.CROSS_SUBJECT if self.mode == ScriptMode.INTERNAL else self.mode
         )
@@ -290,18 +294,35 @@ class Artifact(ArtifactStore):
     @classmethod
     def from_ieeg_config(cls, config, dataset_context):
         enc = config.encoding
-        model = enc.per_model_config.get("model_dir", enc.model)
+        is_multi_view = config.mode == ScriptMode.MULTI_VIEW
+        model = (
+            config.multi_view_name
+            if is_multi_view
+            else enc.per_model_config.get("model_dir", enc.model)
+        )
         mode = "internal" if config.mode == ScriptMode.CROSS_SUBJECT else config.mode.value
+        selected_rereference = getattr(dataset_context, "rereference", None)
         artifact = cls(
             mode=mode,
             dataset=normalize_dataset(enc.dataset, dataset_context.stimulus_id),
             offset=enc.offset,
             model=normalize_model(model, glove_dim=enc.per_model_config.get("dim")),
-            layer=None if enc.model == "glove" else enc.per_model_config.get("layer"),
+            layer=(
+                None
+                if is_multi_view or enc.model == "glove"
+                else enc.per_model_config.get("layer")
+            ),
+            significance_selection=(
+                config.significance_selection if is_multi_view else None
+            ),
+            subspace_aggregation=(
+                config.subspace_aggregation if is_multi_view else None
+            ),
+            rereference=(selected_rereference if is_multi_view else None),
             results_root=config.results_root,
         )
         artifact.variant_extras = {}
-        rereference = getattr(dataset_context, "rereference", None)
+        rereference = selected_rereference
         if rereference not in (None, "common_average"):
             artifact.variant_extras["rereference"] = rereference
         if config.mode == ScriptMode.LEAVE_ONE_SUBJECT_OUT:
@@ -480,7 +501,7 @@ class Artifact(ArtifactStore):
             factor_selector = self._selector(unit, fold=int(fold))
             factors = (not require_input_factors or
                        self.has_field("input_factors", selector=factor_selector))
-            if factors and require_input_factors and self.mode != "multi_view":
+            if factors and require_input_factors:
                 factors = self.has_input_scaler(factor_selector)
             targets = (not require_target_factors or
                        self.has_field("target_factors", selector=factor_selector))

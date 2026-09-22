@@ -38,7 +38,7 @@ from src.utils.shared.ieeg import (
 )
 from src.utils.shared.embeddings import load_embeddings
 from src.utils.language_interpret.output import DecodingOutput
-from src.utils.shared.config import load_config, save_effective_config
+from src.utils.shared.config import dict_to_dataclass, load_config, save_effective_config
 from src.utils.language_interpret.tasks import PodcastTaskContext, get_language_task
 from src.utils.rrr.core import canonical_qr
 from src.utils.rrr.multiview import (
@@ -930,6 +930,21 @@ def _load_saved_multiview_config(unit_dir: Path) -> RRRConfig | None:
     return saved if saved.mode == ScriptMode.MULTI_VIEW else None
 
 
+def _load_multiview_config(unit_dir: Path, source_artifact=None) -> RRRConfig | None:
+    """Resolve multiview provenance from the source Artifact, with legacy fallback."""
+    if source_artifact is None:
+        return _load_saved_multiview_config(unit_dir)
+    if source_artifact.mode != "multi_view":
+        return None
+    effective = source_artifact.load_field("effective_config")
+    config = dict_to_dataclass(effective, RRRConfig)
+    if config.mode != ScriptMode.MULTI_VIEW:
+        raise ValueError(
+            "A mode=multi_view RRR Artifact must store a multi_view effective config"
+        )
+    return config
+
+
 def _raw_embedding_slices(
     embeddings: dict[str, np.ndarray], view_names: list[str]
 ) -> dict[str, slice]:
@@ -1201,7 +1216,9 @@ def _run_subspace_decoding(
     return rows
 
 
-def run_language_decoding(config: LanguageDecodingConfig, artifact=None) -> Path:
+def run_language_decoding(
+    config: LanguageDecodingConfig, artifact=None, source_artifact=None
+) -> Path:
     """Run the configured task/rank sweep and return its output directory."""
     effective_device = _configure_decoder_backend(config.device)
     print(
@@ -1214,7 +1231,7 @@ def run_language_decoding(config: LanguageDecodingConfig, artifact=None) -> Path
         enc.dataset, subject_ids, enc.per_dataset_config, enc.data_root
     )
     rrr_unit_dir = resolve_subspace_unit_dir(config.rrr_run_path, "rrr")
-    multiview_config = _load_saved_multiview_config(rrr_unit_dir)
+    multiview_config = _load_multiview_config(rrr_unit_dir, source_artifact)
     multiview_embeddings = None
     component_bases = None
     source_test_idxs = None

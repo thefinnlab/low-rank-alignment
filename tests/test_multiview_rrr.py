@@ -4,6 +4,7 @@ import numpy as np
 
 from src.utils.rrr.multiview import (
     fit_banded_ridge_baseline,
+    load_view_bases,
     project_view_bands,
 )
 
@@ -57,3 +58,111 @@ def test_banded_ridge_recovers_concatenated_primal_weights():
         rtol=2e-4,
         atol=2e-4,
     )
+
+
+def test_load_view_bases_uses_fmri_cross_dataset_helpers(monkeypatch):
+    class FakeArtifact:
+        dataset = "deep-fmri"
+        mode = "internal"
+
+    source = FakeArtifact()
+    calls = []
+
+    def load_factors(artifact, **kwargs):
+        calls.append(("factor", artifact, kwargs))
+        return {2: np.array([[2.0, 4.0], [6.0, 8.0]], dtype=np.float32)}
+
+    def load_scaler(artifact, kind, rank):
+        calls.append(("scaler", artifact, kind, rank))
+        return {
+            "coordinates": "standardized-v1",
+            "scale": np.array([2.0, 4.0]),
+        }
+
+    monkeypatch.setattr("src.utils.rrr.multiview.load_cross_dataset_A_by_rank", load_factors)
+    monkeypatch.setattr("src.utils.rrr.multiview.load_cross_dataset_scaler", load_scaler)
+
+    from types import SimpleNamespace
+
+    view = SimpleNamespace(name="fmri", rank=2)
+    config = SimpleNamespace(views=[view], subspace_aggregation="extrinsic")
+    resolved = {
+        "fmri": SimpleNamespace(
+            artifact=source, dataset_key=("deep-fmri", "deep-fmri")
+        )
+    }
+
+    bases, modes = load_view_bases(
+        config, resolved, ("podcast", "podcast"), np.arange(3), [np.array([0])]
+    )
+
+    np.testing.assert_allclose(bases["fmri"][0], [[1.0, 2.0], [1.5, 2.0]])
+    assert modes == {"fmri": "cross_dataset_fmri_rank_basis_raw"}
+    assert calls == [
+        ("factor", source, {
+            "kind": "rrr", "ranks": [2], "source_format": "rank_bases",
+            "orthonormalize": True,
+        }),
+        ("scaler", source, "rrr", 2),
+    ]
+
+
+def test_load_view_bases_uses_full_fit_for_cross_dataset_ieeg(monkeypatch):
+    from types import SimpleNamespace
+
+    source = SimpleNamespace(dataset="brain-treebank-cars-2", mode="full_fit")
+    view = SimpleNamespace(name="cars", rank=2)
+    config = SimpleNamespace(views=[view])
+    calls = []
+
+    def load_factors(artifact, **kwargs):
+        calls.append(("factor", artifact, kwargs))
+        return {2: np.array([[1.0, 0.0], [0.0, 1.0]], dtype=np.float32)}
+
+    def load_scaler(artifact, kind, rank):
+        calls.append(("scaler", artifact, kind, rank))
+        return {
+            "coordinates": "standardized-v1",
+            "scale": np.array([2.0, 4.0]),
+        }
+
+    monkeypatch.setattr("src.utils.rrr.multiview.load_cross_dataset_A_by_rank", load_factors)
+    monkeypatch.setattr("src.utils.rrr.multiview.load_cross_dataset_scaler", load_scaler)
+
+    bases, modes = load_view_bases(
+        config,
+        {"cars": SimpleNamespace(
+            artifact=source,
+            dataset_key=("brain-treebank-cars-2", "cars-2"),
+        )},
+        ("podcast", "podcast"),
+        np.arange(3),
+        [np.array([0]), np.array([1])],
+    )
+
+    expected = np.array([[0.5, 0.0], [0.0, 0.25]])
+    np.testing.assert_allclose(bases["cars"][0], expected)
+    np.testing.assert_allclose(bases["cars"][1], expected)
+    assert modes == {"cars": "cross_dataset_full_fit_raw"}
+    assert calls[0][2]["source_format"] == "rank_bases"
+    assert calls[0][2]["orthonormalize"] is True
+
+
+def test_load_view_bases_rejects_cross_dataset_ieeg_fold_artifact():
+    from types import SimpleNamespace
+
+    view = SimpleNamespace(name="cars", rank=2)
+    config = SimpleNamespace(views=[view])
+    source = SimpleNamespace(dataset="brain-treebank-cars-2", mode="internal")
+
+    with np.testing.assert_raises_regex(ValueError, "must use a full_fit"):
+        load_view_bases(
+            config,
+            {"cars": SimpleNamespace(
+                artifact=source,
+                dataset_key=("brain-treebank-cars-2", "cars-2"),
+            )},
+            ("podcast", "podcast"),
+            np.arange(3),
+            [np.array([0])],
+        )

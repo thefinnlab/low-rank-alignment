@@ -109,12 +109,27 @@ HDF5 container while keeping plots as separately browsable PNG files.
 
 ## Source layout
 
-- `notebooks/plots.py` provides interactive RRR/PCA comparisons, including each
+- `notebooks/plots.py` provides interactive RRR/PCA comparisons, including a
+  shared top-level model multiselect that filters internal RRR, leave-one-subject-out,
+  and directed cross-dataset RRR results before plotting (defaulting to all available
+  models),
   electrode/voxel's performance relative to its best tested rank within RRR or PCA, summarized
   across targets as a mean with ±1 SD after averaging evaluation folds. Its normalized
   convergence plots compare RRR and PCA across model layers by interpolating monotonic
   curves over zero-based relative rank on a symmetric-log axis and weighting each model
-  layer equally. The leave-one-subject-out view applies the same comparison to the RRR
+  layer equally. Internal RRR/PCA, leave-one-subject-out, and directed cross-dataset
+  views each provide paired AUC and saturation-rank distributions, with an independent
+  percentage-of-maximum slider for each view. Correlations are averaged in Fisher-z
+  space and converted back before normalization and thresholding. Saturation is the
+  first tested rank reaching the selected percentage; LOSO computes it per subject
+  before averaging ranks per model/layer, using the same baseline selector as AUC.
+  Dedicated loading cells retain compact per-rank tables in memory: internal means,
+  LOSO subject means (including both baseline choices), and cross-dataset fold means.
+  Convergence filters, saturation controls, and LOSO/cross-dataset model-layer
+  selectors reuse these tables without artifact reads. Compact loader caches can be
+  cleared before rerunning loading cells to refresh results; target-level violin
+  plots still load individual target values for the selected artifact.
+  The leave-one-subject-out convergence view applies the same comparison to the RRR
   baseline, transferred RRR, and PCA baseline after averaging subjects within each model
   layer and rank. Directed cross-dataset panels compare within-dataset RRR/PCA with their
   transferred counterparts after averaging folds within each model layer, retaining only
@@ -147,7 +162,9 @@ HDF5 container while keeping plots as separately browsable PNG files.
   transfer-consistency view integrates each clamped relative curve over
   normalized log-rank, matches each directed cross-dataset result to either its
   source- or target-internal result by model, layer, task, and label offset, and
-  ranks directed dataset pairs by Pearson correlation. Offsets are selectable;
+  ranks directed dataset pairs by Pearson correlation. Its internal-fMRI and
+  fMRI-target cross-dataset RRR views explicitly select the
+  `input_scaling-pooled-training-stories-v1` variants. Offsets are selectable;
   selecting a pair displays its AUC scatter, fitted line, and identity line.
 - `src/core/config.py` defines the modality implementation dataclasses; the two
   public facade scripts define the strict client Configs.
@@ -257,10 +274,23 @@ workflows standardize inputs before projection; consumers operating on raw embed
 convert the factor with the saved scale. Consequently, reduced QR at the complete
 embedding rank is an orthogonal rotation of the same standardized design used by the
 full ridge model and reproduces that model's ceiling.
+The iEEG `multi_view` mode selects every component through a complete internal RRR
+Artifact identity, converts its saved standardized-coordinate factor for use with raw
+target-dataset embeddings, and publishes the combined fit through the normal RRR
+Artifact fields. A required `multi_view_name` supplies its synthetic model identity;
+the component Artifacts remain explicit upstreams. Matching-dataset iEEG sources use
+fold-matched factors, while cross-dataset iEEG sources use a single `full_fit` basis
+trained on the complete source dataset and fMRI sources use their requested
+whole-training rank-specific basis. The checked-in Podcast and Cars 2 configurations
+each use only matching-dataset sources: five layers from each of six transformer
+families plus GloVe, retaining 64 components per view. Cars 2 selects subjects 3, 7,
+and 10 with Laplacian rereferencing.
 Cross-dataset iEEG language decoding consumes a single `full_fit` factor and its scaler
 directly rather than computing a Grassmann mean across source folds. fMRI language
 decoding consumes rank factor/scaler pairs from a normal internal fMRI RRR Artifact.
-All decoding modes apply the saved source scaler before projection. Directed
+Artifact-backed language decoding reads multi-view provenance from the RRR Artifact
+rather than requiring a legacy materialized `config.yml`. All decoding modes apply the
+saved source scaler before projection. Directed
 cross-dataset decoding uses a QR-orthonormalized source basis and passes its projected
 vectors directly to the decoder without target-dataset normalization; internal
 decoding retains its ordinary training-fold decoder scaler.

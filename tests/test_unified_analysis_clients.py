@@ -92,6 +92,42 @@ def test_rrr_internal_mode_and_generic_source_translation():
     }
 
 
+def test_rrr_multiview_uses_synthetic_model_identity():
+    selected = RRRClientConfig(
+        mode="multi_view",
+        multi_view_name="language-model-multiview",
+        significance_selection={
+            "mode": "within-layer",
+            "reference_artifact": {"dataset": "podcast"},
+        },
+        views=[{
+            "name": "gpt2_l0",
+            "rank": 64,
+            "source": {
+                "mode": "internal", "dataset": "podcast",
+                "model": "gpt2", "layer": 0,
+            },
+        }],
+        ieeg={"encoding": {}},
+    ).selected_config()
+    context = DatasetContext(
+        dataset="podcast", stimulus_id="podcast", stimulus_label="podcast"
+    )
+
+    artifact = RRRArtifact.from_ieeg_config(selected, context)
+
+    assert artifact.identity == {
+        "script": "run_rrr",
+        "mode": "multi_view",
+        "dataset": "podcast",
+        "offset": 0,
+        "model": "language-model-multiview",
+        "layer": None,
+    }
+    assert artifact.variant.startswith("significance-within-layer-")
+    assert "source" not in artifact.variant
+
+
 def test_rrr_fmri_leave_one_subject_out_translation():
     selected = RRRClientConfig(
         dataset="deep-fmri",

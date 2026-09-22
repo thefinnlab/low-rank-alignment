@@ -265,6 +265,7 @@ class RRRConfig:
     fmri_rrr_source: dict | None = None
     cross_source_format: str = "fold_factors"
     views: list[RRRViewConfig] = field(default_factory=list)
+    multi_view_name: str | None = None
     temporal_windows: list[RRRTemporalWindowConfig] = field(default_factory=list)
     temporal_window_pairs: list[RRRCrossTemporalWindowPairConfig] = field(
         default_factory=list
@@ -336,6 +337,8 @@ class RRRConfig:
             raise ValueError("banded_ridge_alphas must contain non-negative values")
         if self.mode == ScriptMode.MULTI_VIEW and not self.views:
             raise ValueError("RRRConfig.views must contain at least one view")
+        if self.mode == ScriptMode.MULTI_VIEW and not self.multi_view_name:
+            raise ValueError("mode=multi_view requires multi_view_name")
         names = [view.name for view in self.views]
         duplicates = sorted({name for name in names if names.count(name) > 1})
         if duplicates:

@@ -1590,8 +1590,8 @@ def run_ieeg(config: RRRConfig, target_pca_dim: int | None = None):
             significance=significance,
             subject_ids=subject_ids,
         )
-        required = {"target_manifest": [], "input_factors": [], "full_metrics": [],
-                    "rank_metrics": [], "mean_results": []}
+        required = {"target_manifest": [], "input_factors": [], "input_scalers": [],
+                    "full_metrics": [], "rank_metrics": [], "mean_results": []}
         if config.save_b_matrices:
             required["target_factors"] = []
         for unit, n_folds in units:
@@ -1600,6 +1600,7 @@ def run_ieeg(config: RRRConfig, target_pca_dim: int | None = None):
             for fold in range(n_folds):
                 selector = artifact._selector(unit, fold=fold)
                 required["input_factors"].append(selector)
+                required["input_scalers"].append(selector)
                 required["full_metrics"].append(selector)
                 if config.save_b_matrices:
                     required["target_factors"].append(selector)

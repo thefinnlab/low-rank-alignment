@@ -10,10 +10,14 @@ import numpy as np
 import pandas as pd
 from sklearn.model_selection import KFold
 
+from src.core.artifacts import normalize_dataset
 from src.core.registry import resolve_dataset_context
+from src.utils.rrr.ieeg_rrr_mode.cross_dataset_helpers import (
+    load_cross_dataset_A_by_rank,
+    load_cross_dataset_scaler,
+)
 from src.utils.shared.embeddings import load_embeddings
 from src.utils.shared.tensors import to_numpy
-from src.utils.subspace_comparison.metrics import aggregate_subspace_basis
 from src.utils.rrr.subspace_io import ResolvedSubspaceRun
 
 @dataclass
@@ -36,9 +40,39 @@ def resolve_rrr_views(config):
         source = view.ieeg_rrr_source or view.fmri_rrr_source
         kwargs = dict(source or {})
         kwargs.setdefault("results_root", config.results_root)
-        artifact = Artifact(**kwargs).load_artifacts(["effective_config"])
+        artifact = Artifact(**kwargs)
+        if artifact.variant is None:
+            artifact._resolve_variant()
+        if artifact.mode not in {"internal", "full_fit"}:
+            raise ValueError(
+                f"Multiview source {view.name!r} must be an internal or full_fit "
+                "RRR Artifact; "
+                f"got mode={artifact.mode!r}"
+            )
+        manifest = artifact.manifest()
+        if not manifest.get("complete"):
+            raise ValueError(f"Multiview source {view.name!r} is incomplete")
+        artifact.load_artifacts(["effective_config"])
         effective = artifact.effective_config
-        enc = effective.get("encoding", {})
+        enc = effective.get("encoding")
+        if enc is None:
+            is_glove = artifact.model.startswith("glove-")
+            enc = {
+                "model": "glove" if is_glove else "transformer",
+                "offset": artifact.offset,
+                "limit_to_glove": bool(
+                    effective.get("fmri", {}).get("limit_to_glove", False)
+                ),
+                "per_model_config": {
+                    "model_dir": artifact.model,
+                    "layer": artifact.layer,
+                    **(
+                        {"dim": int(artifact.model.split("-", 1)[1])}
+                        if is_glove
+                        else {}
+                    ),
+                },
+            }
         dataset = artifact.dataset
         stimulus = dataset.removeprefix("brain-treebank-")
         resolved[view.name] = ResolvedSubspaceRun(
@@ -53,7 +87,7 @@ def target_dataset_key(config, subject_ids):
     enc = config.encoding
     context = resolve_dataset_context(enc.dataset, subject_ids,
                                       enc.per_dataset_config, enc.data_root)
-    return (getattr(context, "dataset", enc.dataset),
+    return (normalize_dataset(enc.dataset, context.stimulus_id),
             str(getattr(context, "stimulus_id", enc.dataset)))
 
 
@@ -85,32 +119,85 @@ def load_view_embeddings(config, resolved, subject_ids):
 
 def load_view_bases(config, resolved, target_key, selection, test_idxs):
     bases, modes = {}, {}
-    aggregation_method = config.subspace_aggregation or "extrinsic"
     for view in config.views:
         run = resolved[view.name]
         rank = int(view.rank)
-        entries = run.artifact.load_collection("input_factors", {"method": "rrr"})
-        fold_values = {}
-        for selector, value in entries.items():
-            mapping = dict(selector)
-            if "fold" not in mapping:
-                continue
-            factor = np.asarray(value)[:, :rank]
-            if run.artifact.dataset != "deep-fmri":
-                scaler = run.artifact.load_field("input_scalers", selector=mapping)
-                factor = factor / np.asarray(scaler["scale"])[:, np.newaxis]
-            fold_values[int(mapping["fold"])] = factor
         if run.dataset_key == target_key:
+            if run.artifact.mode != "internal":
+                raise ValueError(
+                    f"Matching-dataset multiview source {view.name!r} must use an "
+                    "internal RRR Artifact"
+                )
+            entries = run.artifact.load_collection(
+                "input_factors", {"method": "rrr"}
+            )
+            fold_values = {}
+            for selector, value in entries.items():
+                mapping = dict(selector)
+                if "fold" not in mapping:
+                    continue
+                factor = _factor_in_raw_coordinates(
+                    run.artifact, mapping, np.asarray(value)[:, :rank], view.name
+                )
+                fold_values[int(mapping["fold"])] = factor
             if set(fold_values) != set(range(len(test_idxs))):
                 raise ValueError(f"View {view.name} does not provide every target fold")
             bases[view.name] = fold_values
             modes[view.name] = "matching_target_fold_raw"
         else:
-            mean = aggregate_subspace_basis(list(fold_values.values()), rank=rank,
-                                            method=aggregation_method)
-            bases[view.name] = {fold: mean for fold in range(len(test_idxs))}
-            modes[view.name] = f"cross_dataset_fold_{aggregation_method}"
+            is_fmri = run.artifact.dataset == "deep-fmri"
+            expected_mode = "internal" if is_fmri else "full_fit"
+            if run.artifact.mode != expected_mode:
+                raise ValueError(
+                    f"Cross-dataset multiview source {view.name!r} must use a "
+                    f"{expected_mode} RRR Artifact; got mode={run.artifact.mode!r}"
+                )
+            factor = load_cross_dataset_A_by_rank(
+                run.artifact,
+                kind="rrr",
+                ranks=[rank],
+                source_format="rank_bases",
+                orthonormalize=True,
+            )[rank]
+            scaler = load_cross_dataset_scaler(
+                run.artifact, "rrr", rank
+            )
+            factor = _factor_with_scaler_in_raw_coordinates(
+                scaler, factor, view.name
+            )
+            bases[view.name] = {fold: factor for fold in range(len(test_idxs))}
+            modes[view.name] = (
+                "cross_dataset_fmri_rank_basis_raw"
+                if is_fmri
+                else "cross_dataset_full_fit_raw"
+            )
     return bases, modes
+
+
+def _factor_in_raw_coordinates(artifact, selector, factor, view_name):
+    try:
+        scaler = artifact.load_input_scaler(selector)
+    except KeyError as error:
+        raise ValueError(
+            f"Multiview source {view_name!r} has no scaler for factor {selector}"
+        ) from error
+    return _factor_with_scaler_in_raw_coordinates(scaler, factor, view_name)
+
+
+def _factor_with_scaler_in_raw_coordinates(scaler, factor, view_name):
+    if scaler.get("coordinates") != "standardized-v1":
+        raise ValueError(
+            f"Multiview source {view_name!r} uses unsupported coordinates "
+            f"{scaler.get('coordinates')!r}"
+        )
+    scale = np.asarray(scaler["scale"])
+    value = np.asarray(factor)
+    if value.ndim != 2 or value.shape[0] != scale.shape[0]:
+        raise ValueError(
+            f"Multiview source {view_name!r} factor/scaler dimensions differ: "
+            f"{value.shape} vs {scale.shape}"
+        )
+    return value / scale[:, np.newaxis]
 
 def project_view_bands(
     embeddings: dict[str, np.ndarray],

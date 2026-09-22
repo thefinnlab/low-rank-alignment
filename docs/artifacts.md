@@ -129,7 +129,21 @@ Artifact identity per layer. The reference and every expanded selection Artifact
 recorded as upstreams.
 Cross-dataset and multiview inputs use generic `rrr_source`/`source` identities;
 there are no modality-named dependency fields. `internal` identifies the ordinary
-within-dataset RRR producer for both modalities.
+within-dataset RRR producer for both modalities. Multi-view runs require a
+`multi_view_name`, stored as the output Artifact's synthetic model with `layer-none`;
+every view's concrete RRR Artifact is recorded as an upstream. Each view independently
+selects its retained rank. Produced multi-view factors and their fold scalers use the
+same fields and selectors as other internal iEEG RRR results, so downstream language
+decoding can reconstruct the component spaces from Artifact provenance alone. The
+synthetic model name owns the component composition, keeping the readable variant to
+the target significance and aggregation choices instead of expanding every view into
+the output path; changing the composition under an existing name is rejected as a
+configuration collision.
+Matching-dataset iEEG views select fold-matched internal factors. Cross-dataset iEEG
+views instead require a `full_fit` Artifact and use its one whole-dataset factor and
+scaler through the same loader as ordinary cross-dataset RRR; they never aggregate
+fold factors. Cross-dataset fMRI views use the internal Artifact's rank-specific
+whole-training basis and artifact-level scaler.
 Cross-dataset RRR requires corresponding source and target significance selections.
 Their selection modes and reference model/layer must match, while each reference must
 match its own dataset-specific RRR identity. For `cross-model-layer`, the complete
