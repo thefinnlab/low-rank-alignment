@@ -82,10 +82,10 @@ embeddings predict iEEG and fMRI responses. The supported executable surface is
   submits each missing or incomplete model/layer as a separate job with refresh
   disabled.
 
-The Makefile has five individual analysis targets: `significance`, `rrr`,
-`target-dimensionality`, `cross-condition`, and `language-decoding`. They share
-`DATASET`, `MODELS`,
-`CMD`, and `OVERRIDES` controls; RRR and target-dimensionality additionally use
+The Makefile has six individual analysis targets: `significance`, `rrr`,
+`multi-view`, `target-dimensionality`, `cross-condition`, and `language-decoding`.
+They share `DATASET`, `CMD`, and `OVERRIDES` controls; all except `multi-view`
+also use `MODELS`. RRR and target-dimensionality additionally use
 `RRR_MODE`, while RRR uses `SOURCE_DATASET` for cross-dataset transfer and
 cross-condition uses `CROSS_MODE=region|stimulus`. Target-dimensionality accepts
 the ordinary internal `cross_subject` and `cross_model_layer` configurations and
@@ -96,8 +96,9 @@ submits each configured model layer as a separate process or Slurm job, providin
 a hard memory-release boundary between layers; the ordinary `cross_model_layer`
 mode continues to submit one job per model. Slurm submission is the default; cross-condition
 submits one job per configured model layer (and one layerless job for GloVe), as do
-iEEG and fMRI leave-one-subject-out RRR. `CMD="uv run python"` runs the same jobs locally. The
-default model set
+iEEG and fMRI leave-one-subject-out RRR. `CMD="uv run python"` runs the same jobs locally.
+The `multi-view` target submits one combined-model job for Podcast, Cars 2, or fMRI
+using the corresponding checked-in configuration. The default model set
 is GPT-2, GPT-2 XL, Llama 3 8B, GPT-J 6B, RoBERTa Large, randomly initialized
 GPT-2, and GloVe 300D. fMRI supports this complete set and supports its internal,
 cross-model-layer, leave-one-subject-out, and cross-dataset RRR configurations;

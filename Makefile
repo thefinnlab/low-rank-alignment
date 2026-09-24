@@ -196,6 +196,23 @@ rrr:
 		fi
 	done
 
+## Run the checked-in combined-model multi-view RRR job for one dataset.
+## DATASET: podcast, cars-2, or fmri
+## Example: make multi-view DATASET=fmri
+multi-view:
+	@set -eu
+	mkdir -p logs
+	case "$(DATASET)" in
+		podcast) config="configs/rrr/multi_view.yml" ;;
+		cars-2) config="configs/rrr/multi_view_cars-2.yml" ;;
+		fmri) config="configs/fmri/multi_view.yml" ;;
+		*) echo "Unsupported multi-view DATASET '$(DATASET)'" >&2; exit 2 ;;
+	esac
+	[ -f "$$config" ] || { echo "Missing multi-view config: $$config" >&2; exit 2; }
+	model=all
+	echo "Running multi-view RRR for $(DATASET): $$config"
+	$(call launch,multi-view-$(DATASET),scripts/run_rrr.py)
+
 ## Decode target-dataset language labels from internal or directed source bases.
 ## Each selected model is one job by default; PER_LAYER=true submits one job per layer.
 ## Leave SOURCE_DATASET empty for internal decoding, or set it to another dataset.
@@ -427,7 +444,7 @@ final-results:
 		done
 	fi
 
-.PHONY: significance significance-missing missing-significance rrr target-dimensionality cross-condition final-results language-decoding language-decoding-missing missing-language-decoding
+.PHONY: significance significance-missing missing-significance rrr multi-view target-dimensionality cross-condition final-results language-decoding language-decoding-missing missing-language-decoding
 
 missing-significance: significance-missing
 missing-language-decoding: language-decoding-missing
