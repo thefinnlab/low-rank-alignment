@@ -88,6 +88,7 @@ class Config:
             ScriptMode.INTERNAL,
             ScriptMode.CROSS_DATASET,
             ScriptMode.LEAVE_ONE_SUBJECT_OUT,
+            ScriptMode.MULTI_VIEW,
         }
         if self.modality == "fmri" and self.mode not in shared:
             raise ValueError(f"RRR mode {self.mode.value!r} is unsupported for fMRI")
@@ -113,7 +114,7 @@ class Config:
         if (
             aggregation is None
             and self.modality == "fmri"
-            and self.mode == ScriptMode.INTERNAL
+            and self.mode in {ScriptMode.INTERNAL, ScriptMode.MULTI_VIEW}
         ):
             aggregation = "prediction_weighted"
         payload.update({
@@ -124,11 +125,23 @@ class Config:
             "significance_selection": deepcopy(self.significance_selection),
             "subspace_aggregation": aggregation,
         })
+        converted_views = []
+        for view in self.views:
+            item = {key: deepcopy(value) for key, value in view.items() if key != "source"}
+            source = view.get("source")
+            if not source:
+                raise ValueError(f"RRR view {view.get('name')!r} requires source")
+            item["fmri_rrr_source" if _is_fmri(source.get("dataset"))
+                 else "ieeg_rrr_source"] = deepcopy(source)
+            converted_views.append(item)
+        payload["views"] = converted_views
+        payload["multi_view_name"] = self.multi_view_name
         if self.modality == "fmri":
             payload["source_mode"] = {
                 ScriptMode.INTERNAL: "within_fmri",
                 ScriptMode.CROSS_DATASET: "cross_dataset",
                 ScriptMode.LEAVE_ONE_SUBJECT_OUT: "leave_one_subject_out",
+                ScriptMode.MULTI_VIEW: "multi_view",
             }[self.mode]
             if self.rrr_source:
                 if _is_fmri(self.rrr_source.get("dataset")):
@@ -152,16 +165,6 @@ class Config:
             payload["cross_source_format"] = (
                 "rank_bases" if key == "fmri_rrr_source" else "fold_factors"
             )
-        converted_views = []
-        for view in self.views:
-            item = {key: deepcopy(value) for key, value in view.items() if key != "source"}
-            source = view.get("source")
-            if not source:
-                raise ValueError(f"RRR view {view.get('name')!r} requires source")
-            item["fmri_rrr_source" if _is_fmri(source.get("dataset"))
-                 else "ieeg_rrr_source"] = deepcopy(source)
-            converted_views.append(item)
-        payload["views"] = converted_views
         return _strict_branch(payload, RRRConfig)
 
 
@@ -334,12 +337,23 @@ class Artifact(ArtifactStore):
     @classmethod
     def from_fmri_config(cls, config):
         mode = "internal" if config.source_mode == "within_fmri" else config.source_mode
-        artifact = cls(mode=mode, dataset="deep-fmri", offset=0,
-                       model=normalize_model(config.model_dir), layer=config.layer,
-                       results_root=config.results_root)
+        is_multi_view = config.source_mode == "multi_view"
+        artifact = cls(
+            mode=mode,
+            dataset="deep-fmri",
+            offset=0,
+            model=(config.multi_view_name if is_multi_view
+                   else normalize_model(config.model_dir)),
+            layer=None if is_multi_view else config.layer,
+            significance_selection=(config.significance_selection if is_multi_view else None),
+            subspace_aggregation=(config.subspace_aggregation if is_multi_view else None),
+            results_root=config.results_root,
+        )
         artifact.variant_extras = {
             "input_scaling": "pooled-training-stories-v1",
         }
+        if is_multi_view:
+            artifact.variant_extras["multiview-fir"] = "view-delay-v1"
         if config.source_mode == "cross_dataset":
             artifact.variant_extras["transfer_scaling"] = (
                 "source-then-target-reduced-pre-fir-v1"

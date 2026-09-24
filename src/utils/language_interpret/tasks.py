@@ -265,6 +265,7 @@ _CONTINUOUS_TASKS = {
     "native_entropy": "Native entropy",
     "native_pitch": "Native pitch",
     "native_intensity_rms": "Native intensity (RMS)",
+    "intensity_rms": "Audio intensity (RMS)",
     "surprisal": "Standardized surprisal",
     "standardized_entropy": "Standardized entropy",
     "entropy": "Legacy/native entropy",

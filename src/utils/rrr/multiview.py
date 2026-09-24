@@ -74,11 +74,31 @@ def resolve_rrr_views(config):
                     ),
                 },
             }
+        embedding_spec = (
+            {
+                "model_dir": effective.get("model_dir", artifact.model),
+                "layer": effective.get("layer", artifact.layer),
+                "pooling": effective.get("pooling", "mean"),
+            }
+            if artifact.dataset == "deep-fmri"
+            else {
+                "model_dir": enc.get("per_model_config", {}).get(
+                    "model_dir", artifact.model
+                ),
+                "layer": enc.get("per_model_config", {}).get(
+                    "layer", artifact.layer
+                ),
+                "pooling": enc.get("per_model_config", {}).get("pooling", "mean"),
+            }
+        )
         dataset = artifact.dataset
         stimulus = dataset.removeprefix("brain-treebank-")
         resolved[view.name] = ResolvedSubspaceRun(
             view.name, view.kind or "rrr", artifact, SimpleNamespace(
-                encoding=SimpleNamespace(**enc)), (dataset, stimulus),
+                encoding=SimpleNamespace(**enc),
+                effective=effective,
+                embedding_spec=SimpleNamespace(**embedding_spec),
+            ), (dataset, stimulus),
             list(enc.get("subjects") or range(1, 10)),
         )
     return resolved
@@ -189,6 +209,36 @@ def load_view_bases(
     return (bases, modes, scalers) if return_scalers else (bases, modes)
 
 
+def load_global_view_transforms(config, resolved):
+    """Load whole-dataset factors and scalers suitable for an fMRI target."""
+    factors, scalers, modes = {}, {}, {}
+    for view in config.views:
+        run = resolved[view.name]
+        is_fmri = run.artifact.dataset == "deep-fmri"
+        expected_mode = "internal" if is_fmri else "full_fit"
+        if run.artifact.mode != expected_mode:
+            raise ValueError(
+                f"fMRI multiview source {view.name!r} must use a {expected_mode} "
+                f"Artifact; got mode={run.artifact.mode!r}"
+            )
+        rank = int(view.rank)
+        kind = view.kind or "rrr"
+        factors[view.name] = load_cross_dataset_A_by_rank(
+            run.artifact,
+            kind=kind,
+            ranks=[rank],
+            source_format="rank_bases",
+            orthonormalize=True,
+        )[rank]
+        scalers[view.name] = load_cross_dataset_scaler(
+            run.artifact, kind, rank
+        )
+        modes[view.name] = (
+            "fmri_internal_whole_training" if is_fmri else "ieeg_full_fit"
+        )
+    return factors, scalers, modes
+
+
 def _factor_with_scaler_in_raw_coordinates(scaler, factor, view_name):
     if scaler.get("coordinates") != "standardized-v1":
         raise ValueError(
@@ -242,8 +292,9 @@ def fit_banded_ridge_baseline(
     Y_train: np.ndarray,
     *,
     alphas: np.ndarray,
-    ridge_cv_folds: int,
     solver_params: dict,
+    ridge_cv_folds: int | None = None,
+    cv=None,
     y_in_cpu: bool | None = None,
     force_cpu: bool | None = None,
 ) -> BandedRidgeBaseline:
@@ -258,10 +309,14 @@ def fit_banded_ridge_baseline(
     resolved_solver_params = dict(solver_params)
     random_state = resolved_solver_params.pop("random_state", 42)
     resolved_solver_params["alphas"] = np.asarray(alphas, dtype=float)
+    if cv is None:
+        if ridge_cv_folds is None:
+            raise ValueError("Banded ridge requires cv or ridge_cv_folds")
+        cv = KFold(n_splits=ridge_cv_folds, shuffle=False)
     kwargs = {
         "groups": "input",
         "solver": "random_search",
-        "cv": KFold(n_splits=ridge_cv_folds, shuffle=False),
+        "cv": cv,
         "random_state": random_state,
         "fit_intercept": True,
         "solver_params": resolved_solver_params,

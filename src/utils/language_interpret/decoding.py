@@ -22,6 +22,7 @@ from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import StandardScaler
 
 from src.core.config import (
+    FMRICrossDatasetRRRConfig,
     LanguageDecodingConfig,
     LanguageDecodingMode,
     RRRConfig,
@@ -930,18 +931,21 @@ def _load_saved_multiview_config(unit_dir: Path) -> RRRConfig | None:
     return saved if saved.mode == ScriptMode.MULTI_VIEW else None
 
 
-def _load_multiview_config(unit_dir: Path, source_artifact=None) -> RRRConfig | None:
+def _load_multiview_config(unit_dir: Path, source_artifact=None):
     """Resolve multiview provenance from the source Artifact, with legacy fallback."""
     if source_artifact is None:
         return _load_saved_multiview_config(unit_dir)
     if source_artifact.mode != "multi_view":
         return None
     effective = source_artifact.load_field("effective_config")
-    config = dict_to_dataclass(effective, RRRConfig)
-    if config.mode != ScriptMode.MULTI_VIEW:
-        raise ValueError(
-            "A mode=multi_view RRR Artifact must store a multi_view effective config"
-        )
+    if effective.get("source_mode") == "multi_view":
+        config = dict_to_dataclass(effective, FMRICrossDatasetRRRConfig)
+    else:
+        config = dict_to_dataclass(effective, RRRConfig)
+        if config.mode != ScriptMode.MULTI_VIEW:
+            raise ValueError(
+                "A mode=multi_view RRR Artifact must store a multi_view effective config"
+            )
     return config
 
 
@@ -1030,6 +1034,41 @@ def _prepare_multiview_subspaces(
             design = _apply_raw_factor(embeddings, view_names, factor, selection)
             for fold in range(len(folds)):
                 prepared[(fold, rank)] = (design, factor)
+    return prepared
+
+
+def _prepare_global_multiview_subspaces(
+    *,
+    subspace: str,
+    final_factor_paths: list[Path],
+    combined_design: np.ndarray,
+    selection: np.ndarray,
+    folds: list[tuple[np.ndarray, np.ndarray]],
+    config: LanguageDecodingConfig,
+) -> dict[tuple[int, int], tuple[np.ndarray, np.ndarray]]:
+    """Apply rank-indexed factors from a whole-training fMRI multiview source."""
+    available = {}
+    for path in final_factor_paths:
+        name = path.parent.name
+        if not name.startswith("rank_"):
+            continue
+        available[int(name.removeprefix("rank_"))] = np.asarray(np.load(path))
+    prepared = {}
+    selected_design = np.asarray(combined_design)[selection]
+    for rank in map(int, config.rank_grid):
+        if rank not in available:
+            raise FileNotFoundError(
+                f"No {subspace.upper()} factor found for multiview rank {rank}"
+            )
+        factor = available[rank]
+        if factor.shape != (selected_design.shape[1], rank):
+            raise ValueError(
+                f"{subspace.upper()} rank {rank} factor has shape {factor.shape}; "
+                f"expected {(selected_design.shape[1], rank)}"
+            )
+        design = np.asarray(selected_design @ factor, dtype=np.float32)
+        for fold in range(len(folds)):
+            prepared[(fold, rank)] = (design, factor)
     return prepared
 
 
@@ -1234,6 +1273,7 @@ def run_language_decoding(
     multiview_config = _load_multiview_config(rrr_unit_dir, source_artifact)
     multiview_embeddings = None
     component_bases = None
+    global_multiview = False
     component_scalers = None
     source_test_idxs = None
     source_selection = None
@@ -1250,6 +1290,36 @@ def run_language_decoding(
             **enc.per_model_config,
         )
         embeddings = np.asarray(embeddings, dtype=np.float32)
+    elif isinstance(multiview_config, FMRICrossDatasetRRRConfig):
+        from src.utils.rrr.multiview import load_global_view_transforms
+        from src.utils.shared.fmri import apply_embedding_scaler
+
+        if config.mode == LanguageDecodingMode.WITHIN_DATASET:
+            raise ValueError(
+                "An fMRI multiview source uses rank-indexed whole-training factors; "
+                "use cross_dataset decoding for an iEEG target"
+            )
+        global_multiview = True
+        resolved_views = resolve_rrr_views(multiview_config)
+        components, component_scalers, _ = load_global_view_transforms(
+            multiview_config, resolved_views
+        )
+        target_view_config = deepcopy(multiview_config)
+        target_view_config.encoding = deepcopy(enc)
+        raw_views, word_df = load_view_embeddings(
+            target_view_config, resolved_views, subject_ids
+        )
+        multiview_embeddings = {
+            name: np.asarray(
+                apply_embedding_scaler(raw_views[name], component_scalers[name])
+                @ components[name],
+                dtype=np.float32,
+            )
+            for name in raw_views
+        }
+        component_bases = components
+        view_names = [view.name for view in multiview_config.views]
+        embeddings = None
     else:
         basis_modes = (
             source_artifact.load_field(
@@ -1387,7 +1457,14 @@ def run_language_decoding(
             writer.save("speaker_class_mapping", mapping, {"task": name})
 
     if multiview_config is not None:
-        if config.mode == LanguageDecodingMode.WITHIN_DATASET:
+        if global_multiview:
+            full_design = np.concatenate(
+                [multiview_embeddings[name][selection] for name in view_names], axis=1
+            )
+            full_designs = [full_design] * len(folds)
+            identity = np.eye(full_design.shape[1], dtype=np.float32)
+            full_projections = [identity] * len(folds)
+        elif config.mode == LanguageDecodingMode.WITHIN_DATASET:
             full_designs = []
             full_projections = []
             for fold in range(len(folds)):
@@ -1492,31 +1569,32 @@ def run_language_decoding(
     writer.save("run_metadata", metadata)
 
     rows = []
-    print("\n[Full embeddings]")
-    for fold, (train_idx, test_idx) in enumerate(folds):
-        print(f"  [fold {fold}]")
-        train_idx = np.asarray(train_idx)
-        test_idx = np.asarray(test_idx)
-        X_full = X[fold] if isinstance(X, list) else X
-        full_projection = (
-            full_projections[fold] if multiview_config is not None else None
-        )
-        rows.extend(
-            _run_task_decoding(
-                output_dir=output_dir,
-                fold=fold,
-                rank=None,
-                X=X_full,
-                task_targets=task_targets,
-                train_idx=train_idx,
-                test_idx=test_idx,
-                config=config,
-                A=full_projection,
-                subspace="full",
-                block_ids=block_ids,
-                writer=writer,
+    if config.include_full_embeddings:
+        print("\n[Full embeddings]")
+        for fold, (train_idx, test_idx) in enumerate(folds):
+            print(f"  [fold {fold}]")
+            train_idx = np.asarray(train_idx)
+            test_idx = np.asarray(test_idx)
+            X_full = X[fold] if isinstance(X, list) else X
+            full_projection = (
+                full_projections[fold] if multiview_config is not None else None
             )
-        )
+            rows.extend(
+                _run_task_decoding(
+                    output_dir=output_dir,
+                    fold=fold,
+                    rank=None,
+                    X=X_full,
+                    task_targets=task_targets,
+                    train_idx=train_idx,
+                    test_idx=test_idx,
+                    config=config,
+                    A=full_projection,
+                    subspace="full",
+                    block_ids=block_ids,
+                    writer=writer,
+                )
+            )
 
     if multiview_config is None:
         rrr_prepared = _prepare_single_view_subspaces(
@@ -1524,6 +1602,17 @@ def run_language_decoding(
             factor_paths=rrr_factor_paths,
             folds=folds,
             X=X,
+            config=config,
+        )
+    elif global_multiview:
+        rrr_prepared = _prepare_global_multiview_subspaces(
+            subspace="rrr",
+            final_factor_paths=rrr_factor_paths,
+            combined_design=np.concatenate(
+                [multiview_embeddings[name] for name in view_names], axis=1
+            ),
+            selection=selection,
+            folds=folds,
             config=config,
         )
     else:
@@ -1555,6 +1644,17 @@ def run_language_decoding(
                 factor_paths=pca_factor_paths,
                 folds=folds,
                 X=X,
+                config=config,
+            )
+        elif global_multiview:
+            pca_prepared = _prepare_global_multiview_subspaces(
+                subspace="pca",
+                final_factor_paths=pca_factor_paths,
+                combined_design=np.concatenate(
+                    [multiview_embeddings[name] for name in view_names], axis=1
+                ),
+                selection=selection,
+                folds=folds,
                 config=config,
             )
         else:

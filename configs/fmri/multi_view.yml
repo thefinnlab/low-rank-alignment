@@ -1,0 +1,78 @@
+dataset: deep-fmri
+mode: multi_view
+multi_view_name: language-model-multiview
+results_root: results
+plot: true
+refresh: false
+rank_grid: [1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 1984]
+significance_selection:
+  mode: cross-model-layer
+  reference_artifact: {mode: held_out_session, dataset: deep-fmri, offset: 0, model: gpt2-xl-batch, layer: 24}
+  artifacts:
+  - {mode: held_out_session, dataset: deep-fmri, offset: 0, model: gpt2, layer: [0, 3, 6, 9, 12]}
+  - {mode: held_out_session, dataset: deep-fmri, offset: 0, model: gpt2-xl-batch, layer: [0, 12, 24, 36, 48]}
+  - {mode: held_out_session, dataset: deep-fmri, offset: 0, model: gpt-j-6b, layer: [0, 7, 14, 21, 28]}
+  - {mode: held_out_session, dataset: deep-fmri, offset: 0, model: roberta-large, layer: [0, 6, 12, 18, 24]}
+  - {mode: held_out_session, dataset: deep-fmri, offset: 0, model: llama3-8b, layer: [0, 8, 16, 24, 32]}
+  - {mode: held_out_session, dataset: deep-fmri, offset: 0, model: random-gpt2, layer: [0, 3, 6, 9, 12]}
+  - {mode: held_out_session, dataset: deep-fmri, offset: 0, model: glove-300, layer: null}
+subspace_aggregation: prediction_weighted
+views:
+- {name: fmri_gpt2_l0, rank: 64, source: {mode: internal, dataset: deep-fmri, offset: 0, model: gpt2, layer: 0, variant: input_scaling-pooled-training-stories-v1, subspace_aggregation: prediction_weighted}}
+- {name: fmri_gpt2_l3, rank: 64, source: {mode: internal, dataset: deep-fmri, offset: 0, model: gpt2, layer: 3, variant: input_scaling-pooled-training-stories-v1, subspace_aggregation: prediction_weighted}}
+- {name: fmri_gpt2_l6, rank: 64, source: {mode: internal, dataset: deep-fmri, offset: 0, model: gpt2, layer: 6, variant: input_scaling-pooled-training-stories-v1, subspace_aggregation: prediction_weighted}}
+- {name: fmri_gpt2_l9, rank: 64, source: {mode: internal, dataset: deep-fmri, offset: 0, model: gpt2, layer: 9, variant: input_scaling-pooled-training-stories-v1, subspace_aggregation: prediction_weighted}}
+- {name: fmri_gpt2_l12, rank: 64, source: {mode: internal, dataset: deep-fmri, offset: 0, model: gpt2, layer: 12, variant: input_scaling-pooled-training-stories-v1, subspace_aggregation: prediction_weighted}}
+- {name: fmri_gpt2xl_l0, rank: 64, source: {mode: internal, dataset: deep-fmri, offset: 0, model: gpt2-xl-batch, layer: 0, variant: input_scaling-pooled-training-stories-v1, subspace_aggregation: prediction_weighted}}
+- {name: fmri_gpt2xl_l12, rank: 64, source: {mode: internal, dataset: deep-fmri, offset: 0, model: gpt2-xl-batch, layer: 12, variant: input_scaling-pooled-training-stories-v1, subspace_aggregation: prediction_weighted}}
+- {name: fmri_gpt2xl_l24, rank: 64, source: {mode: internal, dataset: deep-fmri, offset: 0, model: gpt2-xl-batch, layer: 24, variant: input_scaling-pooled-training-stories-v1, subspace_aggregation: prediction_weighted}}
+- {name: fmri_gpt2xl_l36, rank: 64, source: {mode: internal, dataset: deep-fmri, offset: 0, model: gpt2-xl-batch, layer: 36, variant: input_scaling-pooled-training-stories-v1, subspace_aggregation: prediction_weighted}}
+- {name: fmri_gpt2xl_l48, rank: 64, source: {mode: internal, dataset: deep-fmri, offset: 0, model: gpt2-xl-batch, layer: 48, variant: input_scaling-pooled-training-stories-v1, subspace_aggregation: prediction_weighted}}
+- {name: fmri_gptj6b_l0, rank: 64, source: {mode: internal, dataset: deep-fmri, offset: 0, model: gpt-j-6b, layer: 0, variant: input_scaling-pooled-training-stories-v1, subspace_aggregation: prediction_weighted}}
+- {name: fmri_gptj6b_l7, rank: 64, source: {mode: internal, dataset: deep-fmri, offset: 0, model: gpt-j-6b, layer: 7, variant: input_scaling-pooled-training-stories-v1, subspace_aggregation: prediction_weighted}}
+- {name: fmri_gptj6b_l14, rank: 64, source: {mode: internal, dataset: deep-fmri, offset: 0, model: gpt-j-6b, layer: 14, variant: input_scaling-pooled-training-stories-v1, subspace_aggregation: prediction_weighted}}
+- {name: fmri_gptj6b_l21, rank: 64, source: {mode: internal, dataset: deep-fmri, offset: 0, model: gpt-j-6b, layer: 21, variant: input_scaling-pooled-training-stories-v1, subspace_aggregation: prediction_weighted}}
+- {name: fmri_gptj6b_l28, rank: 64, source: {mode: internal, dataset: deep-fmri, offset: 0, model: gpt-j-6b, layer: 28, variant: input_scaling-pooled-training-stories-v1, subspace_aggregation: prediction_weighted}}
+- {name: fmri_roberta_l0, rank: 64, source: {mode: internal, dataset: deep-fmri, offset: 0, model: roberta-large, layer: 0, variant: input_scaling-pooled-training-stories-v1, subspace_aggregation: prediction_weighted}}
+- {name: fmri_roberta_l6, rank: 64, source: {mode: internal, dataset: deep-fmri, offset: 0, model: roberta-large, layer: 6, variant: input_scaling-pooled-training-stories-v1, subspace_aggregation: prediction_weighted}}
+- {name: fmri_roberta_l12, rank: 64, source: {mode: internal, dataset: deep-fmri, offset: 0, model: roberta-large, layer: 12, variant: input_scaling-pooled-training-stories-v1, subspace_aggregation: prediction_weighted}}
+- {name: fmri_roberta_l18, rank: 64, source: {mode: internal, dataset: deep-fmri, offset: 0, model: roberta-large, layer: 18, variant: input_scaling-pooled-training-stories-v1, subspace_aggregation: prediction_weighted}}
+- {name: fmri_roberta_l24, rank: 64, source: {mode: internal, dataset: deep-fmri, offset: 0, model: roberta-large, layer: 24, variant: input_scaling-pooled-training-stories-v1, subspace_aggregation: prediction_weighted}}
+- {name: fmri_llama3_l0, rank: 64, source: {mode: internal, dataset: deep-fmri, offset: 0, model: llama3-8b, layer: 0, variant: input_scaling-pooled-training-stories-v1, subspace_aggregation: prediction_weighted}}
+- {name: fmri_llama3_l8, rank: 64, source: {mode: internal, dataset: deep-fmri, offset: 0, model: llama3-8b, layer: 8, variant: input_scaling-pooled-training-stories-v1, subspace_aggregation: prediction_weighted}}
+- {name: fmri_llama3_l16, rank: 64, source: {mode: internal, dataset: deep-fmri, offset: 0, model: llama3-8b, layer: 16, variant: input_scaling-pooled-training-stories-v1, subspace_aggregation: prediction_weighted}}
+- {name: fmri_llama3_l24, rank: 64, source: {mode: internal, dataset: deep-fmri, offset: 0, model: llama3-8b, layer: 24, variant: input_scaling-pooled-training-stories-v1, subspace_aggregation: prediction_weighted}}
+- {name: fmri_llama3_l32, rank: 64, source: {mode: internal, dataset: deep-fmri, offset: 0, model: llama3-8b, layer: 32, variant: input_scaling-pooled-training-stories-v1, subspace_aggregation: prediction_weighted}}
+- {name: fmri_random_gpt2_l0, rank: 64, source: {mode: internal, dataset: deep-fmri, offset: 0, model: random-gpt2, layer: 0, variant: input_scaling-pooled-training-stories-v1, subspace_aggregation: prediction_weighted}}
+- {name: fmri_random_gpt2_l3, rank: 64, source: {mode: internal, dataset: deep-fmri, offset: 0, model: random-gpt2, layer: 3, variant: input_scaling-pooled-training-stories-v1, subspace_aggregation: prediction_weighted}}
+- {name: fmri_random_gpt2_l6, rank: 64, source: {mode: internal, dataset: deep-fmri, offset: 0, model: random-gpt2, layer: 6, variant: input_scaling-pooled-training-stories-v1, subspace_aggregation: prediction_weighted}}
+- {name: fmri_random_gpt2_l9, rank: 64, source: {mode: internal, dataset: deep-fmri, offset: 0, model: random-gpt2, layer: 9, variant: input_scaling-pooled-training-stories-v1, subspace_aggregation: prediction_weighted}}
+- {name: fmri_random_gpt2_l12, rank: 64, source: {mode: internal, dataset: deep-fmri, offset: 0, model: random-gpt2, layer: 12, variant: input_scaling-pooled-training-stories-v1, subspace_aggregation: prediction_weighted}}
+- {name: fmri_glove_300, rank: 64, source: {mode: internal, dataset: deep-fmri, offset: 0, model: glove-300, layer: null, variant: input_scaling-pooled-training-stories-v1, subspace_aggregation: prediction_weighted}}
+ieeg: null
+fmri:
+  ridge:
+    alphas: null
+    alpha_grid: {}
+    solver_params: {n_targets_batch: 4096, n_targets_batch_refit: 4096}
+    y_in_cpu: true
+    force_cpu: false
+    log_alphas: true
+  banded_ridge_alphas: null
+  banded_ridge_solver_params:
+    n_iter: 1000
+    random_state: 43
+    progress_bar: true
+    n_targets_batch: 4096
+    n_targets_batch_refit: 4096
+  rrr_use_low_rank_svd: true
+  rrr_save_b_matrix: false
+  data:
+    fmri_repo_root: data/deep-fMRI-dataset
+    embedding_root: data/fmri/stimuli
+    limit_to_glove: true
+    glove_dim: 300
+    sessions: [1, 2, 3, 4, 5]
+    subjects: [UTS01, UTS02, UTS03, UTS04, UTS05, UTS06, UTS07, UTS08, UTS09]
+    trim: 5
+    ndelays: 4

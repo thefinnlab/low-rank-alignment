@@ -5,6 +5,7 @@ device: auto
 refresh: false
 
 tasks:
+  - intensity_rms
   - word_in_previous_5
   - prior_word_count
   - distance_from_previous_occurrence

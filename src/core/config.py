@@ -425,6 +425,7 @@ class LanguageDecodingConfig:
     pca_run_path: str | None = None
     mode: LanguageDecodingMode = LanguageDecodingMode.WITHIN_DATASET
     fmri_tr_pre_fir: bool = False
+    include_full_embeddings: bool = True
     # Decode label at transcript word t + label_offset from embedding at t.
     label_offset: int = 0
     source_name: str | None = None
@@ -471,6 +472,8 @@ class LanguageDecodingConfig:
             raise ValueError("label_offset must be an integer")
         if not isinstance(self.fmri_tr_pre_fir, bool):
             raise ValueError("fmri_tr_pre_fir must be a boolean")
+        if not isinstance(self.include_full_embeddings, bool):
+            raise ValueError("include_full_embeddings must be a boolean")
         if self.fmri_tr_pre_fir and self.label_offset != 0:
             raise ValueError("label_offset is only supported for word decoding")
         _validate_subspace_aggregation(self.subspace_aggregation)
@@ -990,6 +993,12 @@ class FMRICrossDatasetRRRConfig:
         default_factory=SignificanceSelectionConfig
     )
     ieeg_rrr_source: dict | None = None
+    views: list[RRRViewConfig] = field(default_factory=list)
+    multi_view_name: str | None = None
+    banded_ridge_alphas: list[float] | None = None
+    banded_ridge_solver_params: dict = field(
+        default_factory=lambda: {"n_iter": 100, "random_state": 42}
+    )
     source_mode: str = "cross_dataset"
     subspace_aggregation: str | None = None
     rrr_svd_on_cpu: bool = False
@@ -1009,20 +1018,20 @@ class FMRICrossDatasetRRRConfig:
         if is_glove and self.layer is not None:
             raise ValueError("fMRI GloVe configurations require layer=null")
         if self.source_mode not in {
-            "cross_dataset", "within_fmri", "leave_one_subject_out"
+            "cross_dataset", "within_fmri", "leave_one_subject_out", "multi_view"
         }:
             raise ValueError(
                 "source_mode must be 'cross_dataset', 'within_fmri', "
-                "or 'leave_one_subject_out', "
+                "'leave_one_subject_out', or 'multi_view', "
                 f"got {self.source_mode!r}"
             )
         if self.subspace_aggregation is None and self.source_mode in {
-            "within_fmri", "leave_one_subject_out"
+            "within_fmri", "leave_one_subject_out", "multi_view"
         }:
             self.subspace_aggregation = "prediction_weighted"
         allowed_aggregation = (
             FMRI_FIR_SUBSPACE_AGGREGATION_METHODS
-            if self.source_mode in {"within_fmri", "leave_one_subject_out"}
+            if self.source_mode in {"within_fmri", "leave_one_subject_out", "multi_view"}
             else SUBSPACE_AGGREGATION_METHODS
         )
         if (
@@ -1048,6 +1057,30 @@ class FMRICrossDatasetRRRConfig:
             raise ValueError(
                 "fMRI leave_one_subject_out requires at least two subjects"
             )
+        if self.banded_ridge_alphas is not None and (
+            not self.banded_ridge_alphas
+            or any(float(alpha) < 0 for alpha in self.banded_ridge_alphas)
+        ):
+            raise ValueError("banded_ridge_alphas must contain non-negative values")
+        if self.source_mode == "multi_view":
+            if not self.multi_view_name:
+                raise ValueError("source_mode=multi_view requires multi_view_name")
+            if not self.views:
+                raise ValueError("source_mode=multi_view requires at least one view")
+            names = [view.name for view in self.views]
+            if any(not name for name in names):
+                raise ValueError("Every RRR view name must be non-empty")
+            duplicates = sorted({name for name in names if names.count(name) > 1})
+            if duplicates:
+                raise ValueError(f"Duplicate RRR view name(s): {duplicates}")
+            for view in self.views:
+                if int(view.rank) < 1:
+                    raise ValueError("Every RRR view rank must be positive")
+                if bool(view.ieeg_rrr_source) == bool(view.fmri_rrr_source):
+                    raise ValueError(
+                        f"RRR view {view.name!r} must define exactly one of "
+                        "ieeg_rrr_source or fmri_rrr_source"
+                    )
 
     def __post_init__(self):
         self.validate()

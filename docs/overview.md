@@ -65,6 +65,14 @@ embeddings predict iEEG and fMRI responses. The supported executable surface is
   correlations for only the union of selected electrodes, without permutation tests.
   `generate_recurrence_features.py` updates existing word-recurrence labels across
   datasets without rerunning unrelated annotation providers.
+  `generate_audio_intensity.py` adds Brain Treebank-style 500 ms RMS intensity
+  labels from Podcast and fMRI WAV files to their word-feature artifacts.
+  `run_audio_intensity_decoding_sweep.py` runs the intensity-only internal decoder
+  over the configured Podcast and fMRI model/layer and word-offset grids.
+  Intensity RMS decoding is an optional task stored in the standard language
+  decoding Artifact. `migrate_intensity_decoding.py` moves newer rank-only
+  intensity results into matching standard Artifacts, including their aggregate
+  tables and plots; it defaults to a dry run and requires `--apply` to write.
   `check_rrr_results.py` checks the complete internal, leave-one-subject-out, and
   directed cross-dataset matrix for podcast, Cars 2, and fMRI, reporting artifacts
   that are absent or not marked complete by the standard manifest contract.
@@ -114,8 +122,24 @@ HDF5 container while keeping plots as separately browsable PNG files.
 
 ## Source layout
 
-- `notebooks/plots.py` provides interactive RRR/PCA comparisons, including a
-  shared top-level model multiselect that filters internal RRR, leave-one-subject-out,
+- `notebooks/plots.py` provides interactive RRR/PCA comparisons, including aggregate
+  landscape figures for internal, leave-one-subject-out, and directed cross-dataset
+  RRR. Internal and leave-one-subject-out views stack selected model/layer plots
+  with dashed red full-model references (including full-embedding regression for LOSO)
+  and normalized convergence line plots by dataset, with shared x-axes and saturation
+  distributions in columns on the right that share a y-axis. Cross-dataset shows
+  all six directed normalized convergence panels alongside paired distributions
+  of normalized AUC differences (internal RRR minus transfer RRR, transfer RRR minus
+  transfer PCA, and internal PCA minus transfer PCA) for each directed pair. A
+  separate scatter figure compares the PCA and RRR internal-minus-transfer AUC gaps
+  for every directed model/layer result. A linear-model figure compares the PCA
+  gap alone with the PCA gap plus offset-zero cross-dataset correlation of decoded
+  feature advantage, showing fitted and leave-one-model-layer-out R². A
+  language-decoding aggregate shows
+  internal RRR–PCA relative-difference curves for concreteness, sentence position,
+  and entropy beside offset-zero correlations of the same advantage across datasets.
+  Interactive plots also
+  include a shared top-level model multiselect that filters internal RRR, leave-one-subject-out,
   and directed cross-dataset RRR results before plotting (defaulting to all available
   models),
   electrode/voxel's performance relative to its best tested rank within RRR or PCA, summarized
@@ -279,24 +303,28 @@ workflows standardize inputs before projection; consumers operating on raw embed
 convert the factor with the saved scale. Consequently, reduced QR at the complete
 embedding rank is an orthogonal rotation of the same standardized design used by the
 full ridge model and reproduces that model's ceiling.
-The iEEG `multi_view` mode selects every component through a complete internal RRR
-Artifact identity, applies each component's saved input scaler to target embeddings,
-and projects through a QR-orthonormalized basis at that view's requested rank in
-standardized coordinates. It publishes the combined fit through the normal RRR
+The iEEG and fMRI `multi_view` modes select every component through a complete RRR
+Artifact identity, apply each component's saved input scaler to target embeddings,
+and project through a QR-orthonormalized basis at that view's requested rank in
+standardized coordinates. They publish the combined fit through the normal RRR
 Artifact fields. A required `multi_view_name` supplies its synthetic model identity;
 the component Artifacts remain explicit upstreams. Matching-dataset iEEG sources use
 fold-matched factors, while cross-dataset iEEG sources use a single `full_fit` basis
 trained on the complete source dataset and fMRI sources use their requested
-whole-training rank-specific basis. The checked-in Podcast and Cars 2 configurations
-each use only matching-dataset sources: five layers from each of six transformer
-families plus GloVe, retaining 64 components per view. Cars 2 selects subjects 3, 7,
-and 10 with Laplacian rereferencing.
+whole-training rank-specific basis. fMRI targets apply each component scaler before
+FIR expansion, fit one band per view and delay with training-session CV, and aggregate
+the fitted full-FIR RRR delay blocks into a reusable pre-FIR basis. The checked-in
+Podcast, Cars 2, and fMRI configurations use five layers from each of six transformer
+families plus GloVe, retaining 64 components per view; four-delay fMRI runs therefore
+use 124 bands. Cars 2 selects subjects 3, 7, and 10 with Laplacian rereferencing.
 Cross-dataset iEEG language decoding consumes a single `full_fit` factor and its scaler
 directly rather than computing a Grassmann mean across source folds. fMRI language
 decoding consumes rank factor/scaler pairs from a normal internal fMRI RRR Artifact.
 Artifact-backed language decoding reads multi-view provenance from the RRR Artifact
 rather than requiring a legacy materialized `config.yml`. All decoding modes apply the
-saved source scaler before projection. Directed
+saved source scaler before projection. fMRI word and TR/pre-FIR decoding reconstruct
+fMRI multi-view component spaces from that provenance, and directed word decoding can
+transfer a saved fMRI multi-view source into an iEEG target. Directed
 cross-dataset decoding uses a QR-orthonormalized source basis and passes its projected
 vectors directly to the decoder without target-dataset normalization; internal
 decoding retains its ordinary training-fold decoder scaler.

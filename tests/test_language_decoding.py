@@ -632,6 +632,34 @@ def test_fmri_pre_fir_rank_design_uses_saved_source_scaler():
     np.testing.assert_array_equal(prepared[4], factor)
 
 
+def test_global_fmri_multiview_rank_factors_apply_to_combined_design(tmp_path):
+    from src.utils.language_interpret.decoding import (
+        _prepare_global_multiview_subspaces,
+    )
+
+    factor_dir = tmp_path / "rank_2"
+    factor_dir.mkdir()
+    factor = np.array([[1.0, 0.0], [0.0, 1.0], [1.0, 1.0]], dtype=np.float32)
+    np.save(factor_dir / "A.npy", factor)
+    design = np.arange(18, dtype=np.float32).reshape(6, 3)
+    config = LanguageDecodingConfig(
+        rank_grid=[2], rrr_source={"mode": "multi_view"}
+    )
+    folds = [(np.array([0, 1, 2]), np.array([3, 4, 5]))]
+
+    prepared = _prepare_global_multiview_subspaces(
+        subspace="rrr",
+        final_factor_paths=[factor_dir / "A.npy"],
+        combined_design=design,
+        selection=np.arange(6),
+        folds=folds,
+        config=config,
+    )
+
+    np.testing.assert_array_equal(prepared[(0, 2)][0], design @ factor)
+    np.testing.assert_array_equal(prepared[(0, 2)][1], factor)
+
+
 @pytest.mark.parametrize("tr_enabled", [False, True])
 def test_primary_client_publishes_fmri_results(tmp_path, monkeypatch, tr_enabled):
     source = RRRArtifact(

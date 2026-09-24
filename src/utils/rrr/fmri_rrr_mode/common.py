@@ -350,6 +350,13 @@ def prepare_fmri_run(config, target_pca_dim=None):
             source._resolve_variant()
         source.manifest()
         upstreams.append(source.identity_record())
+    if config.source_mode == "multi_view":
+        from src.utils.rrr.multiview import resolve_rrr_views
+
+        for run in resolve_rrr_views(config).values():
+            identity = run.artifact.identity_record()
+            if identity not in upstreams:
+                upstreams.append(identity)
 
     artifact_cls = Artifact
     if target_pca_dim is not None:

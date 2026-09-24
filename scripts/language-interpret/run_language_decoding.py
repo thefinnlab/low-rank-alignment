@@ -111,9 +111,12 @@ def _source_artifact(config) -> RRRArtifact:
     kwargs = dict(config.rrr_source)
     if config.encoding.dataset in {"fmri", "deep_fmri", "deep-fmri"} and (
         not config.fmri_target_artifact
-        and kwargs.get("mode", "internal") != "internal"
+        and kwargs.get("mode", "internal") not in {"internal", "multi_view"}
     ):
-        raise ValueError("Within-fMRI decoding requires a normal internal RRR source Artifact")
+        raise ValueError(
+            "Within-fMRI decoding requires a normal internal RRR source Artifact "
+            "or an fMRI multi_view RRR source Artifact"
+        )
     kwargs.setdefault("results_root", config.results_root)
     source = RRRArtifact(**kwargs)
     if source.variant is None:
@@ -208,8 +211,13 @@ def run_config(config: LanguageDecodingConfig) -> Artifact:
     upstreams = [source.identity_record()]
     if target is not None:
         upstreams.append(target.identity_record())
+    # Intensity is an optional result family within the ordinary decoding job.
+    # Exclude it from the resume contract so adding/removing this task does not
+    # create a second variant or make an existing artifact non-resumable.
+    identity_config = deepcopy(config)
+    identity_config.tasks = [task for task in config.tasks if task != "intensity_rms"]
     artifact = Artifact.from_config(config, source=source, target=target).begin(
-        config=config, upstreams=upstreams, refresh=config.refresh,
+        config=identity_config, upstreams=upstreams, refresh=config.refresh,
         variant_extras={
             **({"speaker-labels": "outer-fold-shared-other"}
                if {"speaker_identity", "native_speaker"} & set(config.tasks)

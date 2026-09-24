@@ -9,6 +9,12 @@ Language decoding uses the same compact `artifact.h5` storage as RRR for non-plo
 fields. Its runners save fits, predictions, summaries, and target diagnostics
 directly through the Artifact client; PNG plots remain separate. Existing
 file-backed decoding artifacts remain readable through their manifests.
+`intensity_rms` is optional within the standard decoding variant and is omitted
+from its resume identity. `scripts/utilities/migrate_intensity_decoding.py`
+preflights and copies the newer rank-only intensity entries from
+`audio-intensity-ranks-v1` into existing standard Artifacts, using the
+speaker-label variant for Podcast. It updates aggregate tables and rank plots,
+omits legacy full-embedding intensity fits, and retains the source variants.
 
 The canonical identity is:
 
@@ -144,6 +150,13 @@ views instead require a `full_fit` Artifact and use its one whole-dataset factor
 scaler through the same loader as ordinary cross-dataset RRR; they never aggregate
 fold factors. Cross-dataset fMRI views use the internal Artifact's rank-specific
 whole-training basis and artifact-level scaler.
+An fMRI-target multi-view Artifact adds the `multiview-fir-view-delay-v1` variant
+component. Its rank factors use the concatenated, component-standardized pre-FIR
+coordinate space. `mode_metadata` records component order, retained ranks, delay
+order, and `view_by_delay` band granularity. Each component Artifact remains required
+provenance because the synthetic output's identity scaler does not replace the
+component-specific scalers and bases needed to reconstruct that space. Full-model
+band diagnostics order groups by delay and then configured view.
 Cross-dataset RRR requires corresponding source and target significance selections.
 Their selection modes and reference model/layer must match, while each reference must
 match its own dataset-specific RRR identity. For `cross-model-layer`, the complete

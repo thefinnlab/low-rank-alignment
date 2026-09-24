@@ -13,7 +13,7 @@ from sklearn.metrics import r2_score
 from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import StandardScaler
 
-from src.core.config import LanguageDecodingConfig
+from src.core.config import FMRICrossDatasetRRRConfig, LanguageDecodingConfig
 from src.utils.language_interpret.decoding import (
     _configure_decoder_backend,
     _decoder_metrics,
@@ -39,6 +39,31 @@ from src.utils.shared.fmri import (
     session_cv_splits,
 )
 from src.utils.shared.tensors import to_numpy
+from src.utils.shared.config import dict_to_dataclass
+
+
+def _is_multiview_source(source_config: dict) -> bool:
+    return source_config.get("source_mode") == "multi_view"
+
+
+def _task_model_dir(config: LanguageDecodingConfig, source_config: dict) -> str:
+    return str(
+        config.encoding.per_model_config.get(
+            "model_dir", source_config.get("model_dir", "gpt2-xl")
+        )
+    )
+
+
+def _multiview_components(source_config: dict):
+    from src.utils.rrr.multiview import (
+        load_global_view_transforms,
+        resolve_rrr_views,
+    )
+
+    selected = dict_to_dataclass(source_config, FMRICrossDatasetRRRConfig)
+    resolved = resolve_rrr_views(selected)
+    factors, scalers, _ = load_global_view_transforms(selected, resolved)
+    return selected, resolved, factors, scalers
 
 
 @dataclass
@@ -513,18 +538,34 @@ def run_fmri_word_decoding(
     embedding_cache = tempfile.TemporaryDirectory(prefix="fmri-word-embeddings-")
     embedding_paths = {}
     ambient_dim = None
+    multiview_words = None
+    if _is_multiview_source(source_config):
+        from src.utils.rrr.fmri_rrr_mode.multi_view import (
+            load_projected_fmri_word_views,
+        )
+
+        selected, resolved, components, component_scalers = _multiview_components(
+            source_config
+        )
+        multiview_words = load_projected_fmri_word_views(
+            selected, resolved, components, component_scalers, stories
+        )
     for story in stories:
-        embedding = load_story_embeddings(
-            fmri["embedding_root"],
-            source_config["model_dir"],
-            [story],
-            source_config["layer"],
-            source_config.get("pooling", "mean"),
-            fmri_repo_root=fmri["fmri_repo_root"],
-            glove_data_root=fmri.get("glove_data_root", "data"),
-            limit_to_glove=bool(fmri.get("limit_to_glove", False)),
-            glove_dim=int(fmri.get("glove_dim", 300)),
-        )[story]
+        embedding = (
+            multiview_words[story]
+            if multiview_words is not None
+            else load_story_embeddings(
+                fmri["embedding_root"],
+                source_config["model_dir"],
+                [story],
+                source_config["layer"],
+                source_config.get("pooling", "mean"),
+                fmri_repo_root=fmri["fmri_repo_root"],
+                glove_data_root=fmri.get("glove_data_root", "data"),
+                limit_to_glove=bool(fmri.get("limit_to_glove", False)),
+                glove_dim=int(fmri.get("glove_dim", 300)),
+            )[story]
+        )
         if len(embedding) != len(frames[story]):
             raise ValueError(f"Embedding/transcript alignment failed for {story}")
         if ambient_dim is None:
@@ -542,7 +583,7 @@ def run_fmri_word_decoding(
         frames=frames,
         tasks=config.tasks,
         task_data=config.task_data,
-        model_dir=source_config["model_dir"],
+        model_dir=_task_model_dir(config, source_config),
         label_offset=config.label_offset,
     )
 
@@ -701,31 +742,41 @@ def run_fmri_tr_decoding(
     if len(test_stories) != 1:
         raise ValueError(f"Expected one held-out fMRI story, got {test_stories}")
     stories = train_stories + test_stories
-    embeddings = load_story_embeddings(
-        fmri["embedding_root"],
-        source_config["model_dir"],
-        stories,
-        source_config["layer"],
-        source_config.get("pooling", "mean"),
-        fmri_repo_root=fmri["fmri_repo_root"],
-        glove_data_root=fmri.get("glove_data_root", "data"),
-        limit_to_glove=bool(fmri.get("limit_to_glove", False)),
-        glove_dim=int(fmri.get("glove_dim", 300)),
-    )
     frames, sequences = load_story_word_data(fmri["fmri_repo_root"], stories)
-    for story in stories:
-        if len(embeddings[story]) != len(frames[story]):
-            raise ValueError(f"Embedding/transcript alignment failed for {story}")
-    aligned = align_fmri_stimuli(
-        fmri["fmri_repo_root"], stories, embeddings, trim=int(fmri["trim"])
-    )
+    if _is_multiview_source(source_config):
+        from src.utils.rrr.fmri_rrr_mode.multi_view import load_projected_fmri_views
+
+        selected, resolved, components, component_scalers = _multiview_components(
+            source_config
+        )
+        aligned = load_projected_fmri_views(
+            selected, resolved, components, component_scalers, stories
+        )
+    else:
+        embeddings = load_story_embeddings(
+            fmri["embedding_root"],
+            source_config["model_dir"],
+            stories,
+            source_config["layer"],
+            source_config.get("pooling", "mean"),
+            fmri_repo_root=fmri["fmri_repo_root"],
+            glove_data_root=fmri.get("glove_data_root", "data"),
+            limit_to_glove=bool(fmri.get("limit_to_glove", False)),
+            glove_dim=int(fmri.get("glove_dim", 300)),
+        )
+        for story in stories:
+            if len(embeddings[story]) != len(frames[story]):
+                raise ValueError(f"Embedding/transcript alignment failed for {story}")
+        aligned = align_fmri_stimuli(
+            fmri["fmri_repo_root"], stories, embeddings, trim=int(fmri["trim"])
+        )
     targets = build_tr_targets(
         stories=stories,
         frames=frames,
         sequences=sequences,
         tasks=config.tasks,
         task_data=config.task_data,
-        model_dir=source_config["model_dir"],
+        model_dir=_task_model_dir(config, source_config),
         fmri_repo_root=fmri["fmri_repo_root"],
         trim=int(fmri["trim"]),
     )

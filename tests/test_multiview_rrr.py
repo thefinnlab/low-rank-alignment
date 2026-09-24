@@ -82,7 +82,10 @@ def test_banded_ridge_recovers_concatenated_primal_weights():
         [band[36:] for band in bands],
         targets[:36],
         alphas=np.logspace(-2, 2, 5),
-        ridge_cv_folds=3,
+        cv=[
+            (np.r_[0:12, 24:36], np.r_[12:24]),
+            (np.r_[0:24], np.r_[24:36]),
+        ],
         solver_params={"n_iter": 5, "random_state": 7, "progress_bar": False},
         force_cpu=True,
     )

@@ -128,6 +128,40 @@ def test_rrr_multiview_uses_synthetic_model_identity():
     assert "source" not in artifact.variant
 
 
+def test_rrr_fmri_multiview_uses_synthetic_model_identity():
+    selected = RRRClientConfig(
+        dataset="deep-fmri",
+        mode="multi_view",
+        multi_view_name="language-model-multiview",
+        significance_selection={
+            "mode": "within-layer",
+            "reference_artifact": {"dataset": "deep-fmri"},
+        },
+        views=[{
+            "name": "gpt2_l0",
+            "rank": 64,
+            "source": {
+                "mode": "internal", "dataset": "deep-fmri",
+                "model": "gpt2", "layer": 0,
+            },
+        }],
+        ieeg=None,
+        fmri={"data": {"subjects": ["UTS01"]}},
+    ).selected_config()
+
+    artifact = RRRArtifact.from_fmri_config(selected)
+
+    assert artifact.identity == {
+        "script": "run_rrr",
+        "mode": "multi_view",
+        "dataset": "deep-fmri",
+        "offset": 0,
+        "model": "language-model-multiview",
+        "layer": None,
+    }
+    assert artifact.variant_extras["multiview-fir"] == "view-delay-v1"
+
+
 def test_rrr_fmri_leave_one_subject_out_translation():
     selected = RRRClientConfig(
         dataset="deep-fmri",

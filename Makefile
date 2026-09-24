@@ -17,6 +17,7 @@ OVERRIDES ?=
 LAYER ?=
 PER_LAYER ?= false
 LANGUAGE_DECODING_CPUS ?= 1
+FMRI_TR_PRE_FIR ?=
 SIGNIFICANCE_CHECK ?= python -m scripts.utilities.check_final_significance
 LANGUAGE_DECODING_CHECK ?= uv run python -m scripts.utilities.check_language_decoding_results
 
@@ -201,6 +202,7 @@ rrr:
 language-decoding:
 	@set -eu
 	mkdir -p logs
+	case "$(FMRI_TR_PRE_FIR)" in ""|true|false) ;; *) echo "FMRI_TR_PRE_FIR must be true or false" >&2; exit 2 ;; esac
 	case "$(DATASET)" in podcast|cars-2|fmri) ;; *) echo "Unsupported language-decoding DATASET '$(DATASET)'" >&2; exit 2 ;; esac
 	if [ -n "$(SOURCE_DATASET)" ]; then
 		[ "$(SOURCE_DATASET)" != "$(DATASET)" ] || { echo "Leave SOURCE_DATASET empty for internal decoding" >&2; exit 2; }
@@ -212,6 +214,8 @@ language-decoding:
 		label="language-decoding-$(DATASET)"
 	fi
 	[ -f "$$config" ] || { echo "Missing language-decoding config: $$config" >&2; exit 2; }
+	fmri_tr_arg=""
+	if [ "$(DATASET)" = "fmri" ] && [ -n "$(FMRI_TR_PRE_FIR)" ]; then fmri_tr_arg="--fmri_tr_pre_fir=$(FMRI_TR_PRE_FIR)"; fi
 	[ -n "$(strip $(MODELS))" ] || { echo "MODELS must contain at least one model" >&2; exit 2; }
 	case "$(PER_LAYER)" in true|false) ;; *) echo "PER_LAYER must be true or false" >&2; exit 2 ;; esac
 	[ "$(PER_LAYER)" != "true" ] || [ -z "$(LAYER)" ] || { echo "PER_LAYER=true and LAYER cannot be used together" >&2; exit 2; }
@@ -228,9 +232,9 @@ language-decoding:
 			if [ "$$layer" != "none" ]; then layer_arg="--layer $$layer"; layer_label="$$layer"; fi
 			echo "Running $$label / $$model / layer $$layer_label: $$config"
 			if [ "$(CMD)" = "sbatch" ]; then
-				$(SBATCH) --cpus-per-task=$(LANGUAGE_DECODING_CPUS) --job-name="$$label-$$model-layer-$$layer_label-$(USR)-$(DT)" submit.sh scripts/run_language_decoding_batch.py --config "$$config" --model "$$model" $$layer_arg $(OVERRIDES)
+				$(SBATCH) --cpus-per-task=$(LANGUAGE_DECODING_CPUS) --job-name="$$label-$$model-layer-$$layer_label-$(USR)-$(DT)" submit.sh scripts/run_language_decoding_batch.py --config "$$config" --model "$$model" $$layer_arg $$fmri_tr_arg $(OVERRIDES)
 			else
-				$(CMD) scripts/run_language_decoding_batch.py --config "$$config" --model "$$model" $$layer_arg $(OVERRIDES)
+				$(CMD) scripts/run_language_decoding_batch.py --config "$$config" --model "$$model" $$layer_arg $$fmri_tr_arg $(OVERRIDES)
 			fi
 		done
 	done
@@ -240,7 +244,11 @@ language-decoding:
 language-decoding-missing:
 	@set -eu
 	mkdir -p logs
-	missing="$$($(LANGUAGE_DECODING_CHECK) --results-root results --models $(MODELS) --missing)"
+	case "$(FMRI_TR_PRE_FIR)" in ""|true|false) ;; *) echo "FMRI_TR_PRE_FIR must be true or false" >&2; exit 2 ;; esac
+	case "$(OVERRIDES)" in *--fmri_tr_pre_fir=*) echo "Use FMRI_TR_PRE_FIR for language-decoding-missing" >&2; exit 2 ;; esac
+	check_tr_arg=""
+	if [ -n "$(FMRI_TR_PRE_FIR)" ]; then check_tr_arg="--fmri-tr-pre-fir=$(FMRI_TR_PRE_FIR)"; fi
+	missing="$$($(LANGUAGE_DECODING_CHECK) --results-root results --models $(MODELS) $$check_tr_arg --missing)"
 	if [ -z "$$missing" ]; then
 		echo "All required language-decoding Artifacts are complete."
 		exit 0
@@ -254,11 +262,13 @@ language-decoding-missing:
 		else
 			label="language-decoding-$$source-to-$$target"
 		fi
+		fmri_tr_arg=""
+		if [ "$$target" = "fmri" ] && [ -n "$(FMRI_TR_PRE_FIR)" ]; then fmri_tr_arg="--fmri_tr_pre_fir=$(FMRI_TR_PRE_FIR)"; fi
 		echo "Submitting missing $$label / $$model / layer $$layer_label: $$config"
 		if [ "$(CMD)" = "sbatch" ]; then
-			$(SBATCH) --cpus-per-task=$(LANGUAGE_DECODING_CPUS) --job-name="$$label-$$model-layer-$$layer_label-$(USR)-$(DT)" submit.sh scripts/run_language_decoding_batch.py --config "$$config" --model "$$model" $$layer_arg $(OVERRIDES) --refresh=false
+			$(SBATCH) --cpus-per-task=$(LANGUAGE_DECODING_CPUS) --job-name="$$label-$$model-layer-$$layer_label-$(USR)-$(DT)" submit.sh scripts/run_language_decoding_batch.py --config "$$config" --model "$$model" $$layer_arg $$fmri_tr_arg $(OVERRIDES) --refresh=false
 		else
-			$(CMD) scripts/run_language_decoding_batch.py --config "$$config" --model "$$model" $$layer_arg $(OVERRIDES) --refresh=false
+			$(CMD) scripts/run_language_decoding_batch.py --config "$$config" --model "$$model" $$layer_arg $$fmri_tr_arg $(OVERRIDES) --refresh=false
 		fi
 	done
 

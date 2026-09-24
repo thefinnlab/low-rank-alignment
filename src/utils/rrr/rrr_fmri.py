@@ -74,6 +74,10 @@ def run_fmri(
         )
 
         return run_leave_one_subject_out(setup)
+    if config.source_mode == "multi_view":
+        from src.utils.rrr.fmri_rrr_mode.multi_view import run_multi_view
+
+        return run_multi_view(setup)
     raise ValueError(f"Unsupported fMRI source_mode {config.source_mode!r}")
 
 

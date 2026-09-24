@@ -36,6 +36,12 @@ Generate these model-specific values by invoking
 `scripts/utilities/generate_fmri_iu_features.py` similarly
 populates IU position, onset, end, and length from the already aligned PSST boundaries
 without rerunning audio inference or unrelated providers.
+`scripts/utilities/generate_audio_intensity.py` adds `intensity_rms` to Podcast and
+fMRI word artifacts from their WAV files. It resamples audio to 48 kHz and averages
+Librosa RMS frames (2,048 samples, 512-sample hop) in the fixed 500 ms after each
+word onset, matching the [Brain Treebank paper's auditory feature definition](https://www.proceedings.com/content/079/079017-3060open.pdf).
+Run it with repeated `--config` arguments for `configs/language_features/podcast.yml`
+and `configs/language_features/fmri.yml` after generating the base artifacts.
 `scripts/utilities/generate_fmri_interpretable_features.py` adds the shared decoding subset from native timing
 and sentence structure, Stanza UD syntax, and lexical norms without invoking the heavy
 diarization or document-level coreference providers.
@@ -149,6 +155,7 @@ complete interface.
 | `pre_word_pause` | continuous | Silence before word | Native provider | Complete |
 | `post_word_pause` | continuous | Silence after word | Native provider | Complete |
 | `word_duration` | continuous | Word duration | Native provider | Complete |
+| `intensity_rms` | continuous | Mean RMS over 500 ms after word onset | WAV audio | Podcast and fMRI complete |
 | `word_length` | continuous | Orthographic length | Native provider | Complete |
 | `word_zipf_frequency` | continuous | Zipf lexical frequency | wordfreq | Complete |
 | `concreteness` | continuous | Concreteness norm | Lexical norms | Complete |

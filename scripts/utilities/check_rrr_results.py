@@ -56,6 +56,27 @@ class Failure:
     detail: str
 
 
+def _configuration_differences(expected: dict, actual: dict) -> list[str]:
+    """Return differing config paths, including keys present on only one side."""
+    differences = []
+
+    def compare(expected_value, actual_value, path: str) -> None:
+        if isinstance(expected_value, dict) and isinstance(actual_value, dict):
+            for key in sorted(expected_value.keys() | actual_value.keys()):
+                child_path = f"{path}.{key}" if path else key
+                if key not in expected_value:
+                    differences.append(child_path)
+                elif key not in actual_value:
+                    differences.append(child_path)
+                else:
+                    compare(expected_value[key], actual_value[key], child_path)
+        elif expected_value != actual_value:
+            differences.append(path)
+
+    compare(expected, actual, "")
+    return differences
+
+
 def _config_paths(
     repo_root: Path, mode: str, dataset: str, model: str
 ) -> list[Path]:
@@ -156,6 +177,7 @@ def find_failures(expected: list[ExpectedArtifact]) -> list[Failure]:
             continue
 
         matches = []
+        config_differences = []
         unreadable = []
         for variant in index.get("variants", {}):
             manifest_path = item.leaf / variant / "manifest.json"
@@ -164,19 +186,36 @@ def find_failures(expected: list[ExpectedArtifact]) -> list[Failure]:
             except (OSError, json.JSONDecodeError) as error:
                 unreadable.append(f"{variant}: {error}")
                 continue
-            if normalized_config(
+            saved_configuration = normalized_config(
                 manifest.get("configuration", {}), drop_paths=False
-            ) == item.configuration:
+            )
+            if saved_configuration == item.configuration:
                 matches.append((variant, manifest))
+            else:
+                config_differences.extend(
+                    (variant, difference)
+                    for difference in _configuration_differences(
+                        item.configuration, saved_configuration
+                    )
+                )
 
         if not matches:
+            unique_differences = sorted(
+                {difference for _, difference in config_differences}
+            )
+            difference_detail = (
+                "; mismatched config fields: " + ", ".join(unique_differences)
+                if unique_differences
+                else ""
+            )
             if unreadable:
                 detail = (
                     "no artifact matches the current config; unreadable unrelated "
                     "variant manifest(s): " + "; ".join(unreadable)
+                    + difference_detail
                 )
             else:
-                detail = "no artifact matches the current config"
+                detail = "no artifact matches the current config" + difference_detail
             failures.append(Failure("MISSING", item, detail))
             continue
         incomplete = [
@@ -204,6 +243,14 @@ def main() -> None:
     parser.add_argument("--models", nargs="+", choices=MODELS, default=list(MODELS))
     parser.add_argument("--modes", nargs="+", choices=MODES, default=list(MODES))
     parser.add_argument("--datasets", nargs="+", choices=DATASETS, default=list(DATASETS))
+    parser.add_argument(
+        "--missing-or-incomplete",
+        action="store_true",
+        help=(
+            "print only runs with no artifact identity or a matched variant "
+            "marked incomplete, ignoring config mismatches"
+        ),
+    )
     args = parser.parse_args()
 
     try:
@@ -218,9 +265,21 @@ def main() -> None:
         raise SystemExit(str(error)) from error
 
     failures = find_failures(expected)
+    if args.missing_or_incomplete:
+        failures = [
+            failure
+            for failure in failures
+            if failure.detail == "artifact identity does not exist"
+            or failure.detail.startswith("variant(s) not marked complete:")
+        ]
     for failure in failures:
-        print(f"{failure.status}\t{failure.expected.label}\t{failure.detail}")
+        if args.missing_or_incomplete:
+            print(f"{failure.status}\t{failure.expected.label}")
+        else:
+            print(f"{failure.status}\t{failure.expected.label}\t{failure.detail}")
     if failures:
+        if args.missing_or_incomplete:
+            raise SystemExit(1)
         raise SystemExit(
             f"Found {len(failures)} missing or incomplete RRR artifacts "
             f"out of {len(expected)} expected."

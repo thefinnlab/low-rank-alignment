@@ -260,6 +260,22 @@ class TestDictToDataclass:
         assert {source["rereference"] for source in sources} == {"laplacian"}
         assert all(source.get("significance_selection") for source in sources)
 
+    def test_checked_in_fmri_multiview_uses_view_delay_bands(self):
+        config = load_config(
+            "configs/fmri/multi_view.yml", {}, RRRClientConfig
+        )
+        selected = config.selected_config()
+
+        assert selected.source_mode == "multi_view"
+        assert selected.multi_view_name == "language-model-multiview"
+        assert selected.subspace_aggregation == "prediction_weighted"
+        assert len(selected.views) == 31
+        assert {view.rank for view in selected.views} == {64}
+        assert sum(view.rank for view in selected.views) == 1984
+        assert selected.fmri.ndelays == 4
+        assert selected.banded_ridge_solver_params["n_iter"] == 1000
+        assert all(view.fmri_rrr_source for view in selected.views)
+
     def test_rrr_temporal_windows_roundtrip(self):
         config = dict_to_dataclass(
             {
