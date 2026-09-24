@@ -2,11 +2,61 @@
 
 import numpy as np
 
+from src.core.config import EncodingConfig
 from src.utils.rrr.multiview import (
     fit_banded_ridge_baseline,
     load_view_bases,
     project_view_bands,
 )
+
+
+def test_multiview_preparation_aligns_every_view_after_word_filter(monkeypatch):
+    from src.utils.rrr.ieeg_rrr_mode import common
+
+    first = np.arange(8, dtype=np.float32)[:, None]
+    second = (100 + np.arange(8, dtype=np.float32))[:, None]
+    selection = np.array([0, 2, 3, 4, 5])
+    in_glove = np.array([True, True, True, False, True, True, True, True])
+    expected_rows = np.array([0, 2, 4, 5])
+
+    def fake_build_xy(subject_ids, encoding, electrodes, embeddings, **kwargs):
+        np.testing.assert_array_equal(kwargs["valid_rows"], in_glove)
+        return (
+            embeddings[expected_rows],
+            np.arange(4, dtype=np.float32)[:, None],
+            selection,
+            [["electrode"]],
+        )
+
+    def fake_baselines(X_raw, targets, test_idxs, **kwargs):
+        assert X_raw.shape[0] == targets.shape[0] == 4
+        return [{"train_idx": np.array([1, 2, 3])}]
+
+    monkeypatch.setattr(
+        "src.utils.rrr.inputs.build_XY_from_subjects", fake_build_xy
+    )
+    monkeypatch.setattr(common, "build_per_fold_baselines", fake_baselines)
+    result = common._build_rrr_decomposition_inputs(
+        [1], {1: ["electrode"]},
+        {"test_idxs": [np.array([0])], "lags": np.array([0.0])},
+        None, EncodingConfig(offset=0),
+        {"first": first, "second": second}, None,
+        word_in_glove=in_glove,
+        return_aligned_embeddings=True,
+    )
+
+    X_aligned, baselines, _, _, _, aligned = result
+    assert X_aligned.shape[0] == 4
+    assert len(baselines) == 1
+    np.testing.assert_array_equal(aligned["first"], first[expected_rows])
+    np.testing.assert_array_equal(aligned["second"], second[expected_rows])
+    bands, _ = project_view_bands(
+        aligned,
+        {name: {0: np.eye(1)} for name in aligned},
+        ["first", "second"],
+        fold=0,
+    )
+    assert all(band.shape[0] == X_aligned.shape[0] for band in bands)
 
 
 def test_project_view_bands_preserves_raw_A_and_config_order():

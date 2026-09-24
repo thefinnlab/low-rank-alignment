@@ -66,15 +66,19 @@ def run_multi_view(
         reference,
         significance.detailed_significance,
         enc,
-        embeddings[config.views[0].name],
+        embeddings,
         word_df,
         compute_sig_nonsig=config.compute_sig_nonsig,
         word_in_glove=word_in_glove,
         shared_selection_metadata=shared_selection_metadata,
+        return_aligned_embeddings=True,
     )
     if prepared_values is None:
         return []
-    _, prepared_baselines, test_idxs, sig_mask_flat, target_manifest = prepared_values
+    (
+        X_aligned, prepared_baselines, test_idxs, sig_mask_flat,
+        target_manifest, aligned_embeddings,
+    ) = prepared_values
     selection = np.asarray(reference["selection"])
     bases, basis_modes, view_scalers = load_view_bases(
         config,
@@ -85,7 +89,7 @@ def run_multi_view(
         return_scalers=True,
     )
     view_names = [view.name for view in config.views]
-    n_words = len(selection)
+    n_words = X_aligned.shape[0]
     all_rows = np.arange(n_words, dtype=int)
     widths = [int(view.rank) for view in config.views]
     stops = np.cumsum(widths)
@@ -128,7 +132,7 @@ def run_multi_view(
         test_idx = np.asarray(test_idx, dtype=int)
         train_idx = np.setdiff1d(all_rows, test_idx, assume_unique=False)
         bands, boundaries = project_view_bands(
-            embeddings, bases, view_names, fold_f, view_scalers
+            aligned_embeddings, bases, view_names, fold_f, view_scalers
         )
         if band_boundaries != boundaries:
             raise ValueError("Multiview band boundaries differ across folds")

@@ -1413,6 +1413,7 @@ def _build_rrr_decomposition_inputs(
     folds_to_build: "set[int] | None" = None,
     shared_selection_metadata: "dict | None" = None,
     target_pca_dim: "int | None" = None,
+    return_aligned_embeddings: bool = False,
 ):
     prepared = _get_decomposition_inputs(
         subject_ids,
@@ -1464,8 +1465,9 @@ def _build_rrr_decomposition_inputs(
         })
         sig_mask_flat = None
 
-    return (X_raw, per_fold_baselines, prepared.test_idxs,
-            sig_mask_flat, target_manifest)
+    result = (X_raw, per_fold_baselines, prepared.test_idxs,
+              sig_mask_flat, target_manifest)
+    return (*result, prepared.embeddings) if return_aligned_embeddings else result
 
 
 def _temporal_window_target_mask(target_manifest, window) -> np.ndarray:
