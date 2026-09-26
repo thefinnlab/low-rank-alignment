@@ -1732,7 +1732,7 @@ def language_decoding_aggregate_figure(
 
 
 @app.cell(hide_code=True)
-def normalized_performance_curve(REPO_ROOT, np):
+def normalized_performance_curve():
     from src.utils.rrr.plot_metrics import (
         monotonic_normalized_curve as normalized_performance_curve,
     )
@@ -1741,7 +1741,7 @@ def normalized_performance_curve(REPO_ROOT, np):
 
 
 @app.cell(hide_code=True)
-def normalized_log_rank_auc(REPO_ROOT, np):
+def normalized_log_rank_auc():
     from src.utils.rrr.plot_metrics import normalized_log_rank_auc
 
     return (normalized_log_rank_auc,)
@@ -6679,11 +6679,54 @@ def language_decoding_summary_helpers(
 
 
 @app.cell(hide_code=True)
-def language_decoding_summary_controls(mo):
+def language_decoding_summary_controls(
+    language_decoding_rank_differences,
+    mo,
+    pd,
+):
+    _summary_data = language_decoding_rank_differences[
+        language_decoding_rank_differences["Layer"].notna()
+    ]
+    _models = sorted(_summary_data["model"].dropna().unique())
+    _layers = sorted(
+        int(layer)
+        for layer in _summary_data["Layer"].dropna().unique()
+        if str(layer) != "layerless"
+    )
+    _layer_options = {str(layer): layer for layer in _layers}
+    _layer_options["Layerless"] = "layerless"
+    _default_groups = {
+        "gpt-j-6b": "Causal",
+        "gpt2": "Causal",
+        "gpt2-xl-batch": "Causal",
+        "llama3-8b": "Causal",
+        "roberta-large": "Bidirectional",
+        "random-gpt2": "Random",
+        "glove-300": "GloVe",
+    }
+    _group_assignments = pd.DataFrame({
+        "Model": _models,
+        "Group": [_default_groups.get(model, model) for model in _models],
+    })
+    language_decoding_summary_group_editor = mo.ui.data_editor(
+        _group_assignments,
+        label="Assign each model to one group (edit the Group column)",
+        editable_columns=["Group"],
+        pagination=False,
+    )
+    language_decoding_summary_models = mo.ui.multiselect(
+        options=_models, value=_models, label="Models included"
+    )
+    language_decoding_summary_layers = mo.ui.multiselect(
+        options=_layer_options,
+        value=list(_layer_options.keys()),
+        label="Layer indices included",
+    )
     language_decoding_summary_type = mo.ui.radio(
         options={
             "Model depth (across types)": "depth",
             "Model type (across layers)": "model",
+            "Custom model groups": "custom",
         },
         value="Model depth (across types)",
         label="Split curves by",
@@ -6698,8 +6741,19 @@ def language_decoding_summary_controls(mo):
         label="Averaging",
         inline=True,
     )
-    mo.hstack([language_decoding_summary_type, language_decoding_averaging_mode], justify="start", gap=2)
-    return language_decoding_averaging_mode, language_decoding_summary_type
+    mo.vstack([
+        mo.hstack([language_decoding_summary_type, language_decoding_averaging_mode], justify="start", gap=2),
+        mo.hstack([language_decoding_summary_models, language_decoding_summary_layers], justify="start", gap=2),
+        mo.md("Edit the Group column to define your custom comparison groups; blank groups are omitted."),
+        language_decoding_summary_group_editor,
+    ])
+    return (
+        language_decoding_averaging_mode,
+        language_decoding_summary_group_editor,
+        language_decoding_summary_layers,
+        language_decoding_summary_models,
+        language_decoding_summary_type,
+    )
 
 
 @app.cell(hide_code=True)
@@ -6707,19 +6761,89 @@ def language_decoding_summary_data(
     language_decoding_averaging_mode,
     language_decoding_rank_differences,
     language_decoding_relative_epsilon,
+    language_decoding_summary_group_editor,
+    language_decoding_summary_layers,
+    language_decoding_summary_models,
     language_decoding_summary_type,
+    np,
     prepare_language_decoding_summary_curves,
     summarize_language_decoding_average_curves,
 ):
-    (
-        language_decoding_summary_members,
-        language_decoding_summary_curves,
-    ) = prepare_language_decoding_summary_curves(
-        language_decoding_rank_differences,
-        language_decoding_summary_type.value,
-        language_decoding_averaging_mode.value,
-        language_decoding_relative_epsilon,
-    )
+    _summary_filtered_rank_differences = language_decoding_rank_differences[
+        language_decoding_rank_differences["model"].isin(
+            language_decoding_summary_models.value
+        )
+        & language_decoding_rank_differences["Layer"].astype(str).isin(
+            [str(layer) for layer in language_decoding_summary_layers.value]
+        )
+    ].copy()
+    if language_decoding_summary_type.value == "custom":
+        _group_assignments = language_decoding_summary_group_editor.value.copy()
+        _group_assignments["Group"] = _group_assignments["Group"].fillna("").astype(str).str.strip()
+        _model_group_map = dict(zip(_group_assignments["Model"], _group_assignments["Group"]))
+        _custom_data = _summary_filtered_rank_differences.copy()
+        _custom_data["Summary group"] = _custom_data["model"].map(_model_group_map)
+        _custom_data = _custom_data[_custom_data["Summary group"].notna() & _custom_data["Summary group"].ne("")].copy()
+        _custom_data["RRR clipped"] = _custom_data["RRR"].clip(lower=0)
+        _custom_data["PCA clipped"] = _custom_data["PCA"].clip(lower=0)
+        _custom_data["Member relative difference"] = (
+            _custom_data["RRR clipped"] - _custom_data["PCA clipped"]
+        ) / (
+            (_custom_data["RRR clipped"] + _custom_data["PCA clipped"]) / 2
+            + language_decoding_relative_epsilon
+        )
+        _custom_data["Context"] = _custom_data["Dataset"] + " · " + _custom_data["Source space"]
+        _custom_data["Member"] = (
+            _custom_data["model"] + " / layer " + _custom_data["Layer"].astype(str)
+        )
+        _custom_keys = [
+            "Summary group", "Context", "label_offset", "task", "kind",
+            "Selected metric", "k",
+        ]
+        language_decoding_summary_curves = (
+            _custom_data.groupby(_custom_keys, as_index=False, dropna=False)
+            .agg(
+                **{
+                    "Average RRR": ("RRR clipped", "mean"),
+                    "Average PCA": ("PCA clipped", "mean"),
+                    "Mean member relative difference": ("Member relative difference", "mean"),
+                    "Members available": ("Member", "nunique"),
+                }
+            )
+        )
+        language_decoding_summary_curves["Average difference"] = (
+            language_decoding_summary_curves["Average RRR"]
+            - language_decoding_summary_curves["Average PCA"]
+        )
+        if language_decoding_averaging_mode.value == "relative_first":
+            language_decoding_summary_curves["Average relative difference"] = language_decoding_summary_curves["Mean member relative difference"]
+        else:
+            language_decoding_summary_curves["Average relative difference"] = (
+                language_decoding_summary_curves["Average difference"]
+                / (
+                    (language_decoding_summary_curves["Average RRR"] + language_decoding_summary_curves["Average PCA"]) / 2
+                    + language_decoding_relative_epsilon
+                )
+            )
+        _custom_summary_keys = ["Context", "label_offset", "task", "kind", "Selected metric"]
+        _custom_ids = language_decoding_summary_curves[_custom_summary_keys].drop_duplicates().reset_index(drop=True)
+        _custom_ids["Summary ID"] = np.arange(len(_custom_ids))
+        language_decoding_summary_curves = language_decoding_summary_curves.merge(
+            _custom_ids, on=_custom_summary_keys, how="left"
+        )
+        language_decoding_summary_members = _custom_data.merge(
+            _custom_ids, on=_custom_summary_keys, how="inner"
+        )
+    else:
+        (
+            language_decoding_summary_members,
+            language_decoding_summary_curves,
+        ) = prepare_language_decoding_summary_curves(
+            _summary_filtered_rank_differences,
+            language_decoding_summary_type.value,
+            language_decoding_averaging_mode.value,
+            language_decoding_relative_epsilon,
+        )
     language_decoding_summary_results = summarize_language_decoding_average_curves(
         language_decoding_summary_curves, language_decoding_averaging_mode.value
     )

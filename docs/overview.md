@@ -120,15 +120,20 @@ HDF5 container while keeping plots as separately browsable PNG files.
   completed RRR, significance, and decoding results once at startup, reports
   missing directed results, and draws the aggregate, encoding, significance,
   quantile, and paired RRR/PCA saturation-sensitivity figures from compact
-  in-memory data. Saturation is the interpolated rank reaching 99% of the peak
-  mean correlation; internal and LOSO sensitivity analyses vary the required
-  peak percentage. LOSO averages each subject's saturation rank within model layers.
+  in-memory data. Saturation is the latest interpolated first crossing of 99%
+  of each eligible target quantile's own peak, treating curves as monotonic and
+  excluding peaks at or below 0.005. Internal and LOSO sensitivity analyses vary
+  the required peak percentage. Internal cutoff sensitivity also compares
+  minimum peaks of 0, 0.005, and 0.01 at a fixed 99% threshold.
+  LOSO averages each subject's saturation rank
+  within model layers.
   Target-quantile plots retain the 5th, 10th, 25th, 50th, 75th, and 90th percentiles.
-  Primary RRR aggregates, convergence, saturation, and decoding figures exclude
-  random GPT-2 and GloVe; their loaded results remain available as appendix controls.
-  The same filter applies to batch exports and sample-model selectors.
-  Separate appendix figures show random GPT-2 and GloVe internal saturation
-  ranks as layer dots connected between RRR and PCA for each dataset.
+  Main analyses and sample-model selectors include random GPT-2 and GloVe
+  alongside the trained models; there are no separate control appendix plots.
+  A separate internal robustness figure requires all eligible 25th, 50th, and
+  75th percentile curves to reach 99% of their own peaks under monotonicity;
+  only positive-peak curves contribute, while primary saturation uses all loaded
+  quantiles with the 0.005 peak cutoff.
   The significant-target LaTeX table groups rows by dataset, with one row per
   model and columns for 0%, 25%, 50%, 75%, and 100% relative layer depth.
   A bottom exploratory plot tracks individual positive-peak targets for the
@@ -136,6 +141,8 @@ HDF5 container while keeping plots as separately browsable PNG files.
   it leaves the aggregate calculations unchanged.
   Its decoding aggregate includes a volume feature that aligns
   Podcast and fMRI audio RMS with Cars 2 native intensity RMS.
+  Example decoding curves have blue upward “RRR better” and green downward
+  “PCA better” arrows on their right sides, centered on zero.
   Its leave-one-subject-out aggregate compares transfer and PCA with a
   subject-matched RRR control from the full internal training run.
   A fingerprinted cache under `results/` makes later starts fast while artifact

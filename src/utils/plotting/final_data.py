@@ -31,24 +31,6 @@ PAIRS = tuple((model, layer) for model, layers in MODEL_LAYERS.values() for laye
 FMRI_VARIANT = "input_scaling-pooled-training-stories-v1"
 CACHE_VERSION = 1
 
-CONTROL_MODELS = frozenset({"random-gpt2", "glove", "glove-300"})
-
-
-def primary_analysis_data(internal, loso, cross, quantiles, loso_quantiles, decoding):
-    """Exclude appendix controls from primary summaries without changing loaded data."""
-    def primary_frame(frame):
-        if frame.empty:
-            return frame.copy()
-        return frame.loc[~frame["model"].isin(CONTROL_MODELS)].copy()
-
-    return (
-        primary_frame(internal), primary_frame(loso), primary_frame(cross),
-        {key: value for key, value in quantiles.items() if key[1] not in CONTROL_MODELS},
-        {key: value for key, value in loso_quantiles.items() if key[1] not in CONTROL_MODELS},
-        primary_frame(decoding),
-    )
-
-
 def _cache_fingerprint(results_root):
     """Track artifact manifests and summary code without opening large payloads."""
     digest = hashlib.blake2b(digest_size=20)

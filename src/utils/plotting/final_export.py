@@ -20,13 +20,13 @@ def _layer(value):
 
 def available_pairs(quantiles, *, loso=False):
     """Use the same eligibility criteria as the notebook's example dropdowns."""
-    from src.utils.plotting.final_data import CONTROL_MODELS, DATASETS
+    from src.utils.plotting.final_data import DATASETS
 
     methods = ("RRR baseline", "RRR transfer", "PCA baseline") if loso else ("rrr", "pca")
     present = {(key[0], key[1], key[2], key[-1]) for key in quantiles}
     return sorted(
         {(key[1], key[2]) for key in quantiles
-         if key[1] not in CONTROL_MODELS and all((dataset, key[1], key[2], method) in present
+         if all((dataset, key[1], key[2], method) in present
                 for dataset in DATASETS for method in methods)},
         key=lambda pair: (pair[0], pair[1] is not None,
                           pair[1] if pair[1] is not None else -1),
@@ -40,12 +40,6 @@ def export_figures(data, output_dir, formats, example_pair, loso_pair):
 
     (internal, loso, cross, quantiles, loso_quantiles, full_rows,
      significant, decoding, gaps) = data
-    control_internal = internal
-    from src.utils.plotting.final_data import primary_analysis_data
-
-    (internal, loso, cross, quantiles, loso_quantiles, decoding) = primary_analysis_data(
-        internal, loso, cross, quantiles, loso_quantiles, decoding
-    )
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     order = figures.model_order(full_rows)
@@ -61,16 +55,15 @@ def export_figures(data, output_dir, formats, example_pair, loso_pair):
         ("language_decoding_aggregate", lambda: figures.decoding_aggregate(decoding)),
         ("encoding_performance", lambda: figures.encoding_grid(full_rows, order)),
         ("significant_targets", lambda: figures.significance_grid(significant, order)),
-        ("rrr_pca_target_quantiles", lambda: figures.quantile_grid(quantiles, example_pair, internal)),
+        ("rrr_pca_target_quantiles", lambda: figures.quantile_grid(quantiles, example_pair)),
         ("mean_normalized_quantiles", lambda: figures.average_quantile_grid(quantiles)),
+        ("quantile_saturation_robustness", lambda: figures.quantile_saturation_robustness(quantiles)),
+        ("saturation_sensitivity_floor", lambda: figures.sensitivity_grid(
+            quantiles, (0, .005, .01), variable="floor")),
         ("saturation_sensitivity_fraction", lambda: figures.sensitivity_grid(
-            internal, (.5, .75, .9, .95, .99, 1.0))),
+            quantiles, (.5, .75, .9, .95, .975, .99, 1.0))),
         ("loso_saturation_sensitivity_fraction", lambda: figures.sensitivity_grid(
-            loso, (.5, .75, .9, .95, .99, 1.0), mode="loso")),
-        ("appendix_random_gpt2_saturation", lambda: figures.control_saturation_grid(
-            control_internal, "random-gpt2")),
-        ("appendix_glove_saturation", lambda: figures.control_saturation_grid(
-            control_internal, "glove-300")),
+            loso_quantiles, (.5, .75, .9, .95, .975, .99, 1.0), mode="loso")),
     ]
     paths = []
     for index, (name, build) in enumerate(jobs, start=1):

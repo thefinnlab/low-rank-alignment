@@ -16,26 +16,23 @@ def _():
     if str(repo_root) not in sys.path:
         sys.path.insert(0, str(repo_root))
 
-    from src.utils.plotting.final_data import load_final_data, primary_analysis_data
+    from src.utils.plotting.final_data import load_final_data
     from src.utils.plotting.final_figures import (
         average_quantile_grid, cross_aggregate, cross_gap_scatter,
-        control_saturation_grid, decoding_aggregate, encoding_grid, model_order, quantile_grid,
-        rrr_aggregate, sensitivity_grid, significance_grid,
+        decoding_aggregate, encoding_grid, model_order, quantile_grid,
+        rrr_aggregate, sensitivity_grid, significance_grid, quantile_saturation_robustness,
         significance_latex,
     )
 
     results_root = repo_root / "results"
     return (
         average_quantile_grid,
-        control_saturation_grid,
         cross_aggregate,
         cross_gap_scatter,
-        decoding_aggregate,
         encoding_grid,
         load_final_data,
         mo,
         model_order,
-        primary_analysis_data,
         quantile_grid,
         results_root,
         rrr_aggregate,
@@ -63,32 +60,6 @@ def _(load_final_data, results_root):
     )
 
 
-@app.cell(hide_code=True)
-def _(
-    cross,
-    decoding,
-    internal,
-    loso,
-    loso_quantiles,
-    primary_analysis_data,
-    quantiles,
-):
-    # Keep all loaded model results available for appendix controls.
-    (primary_internal, primary_loso, primary_cross, primary_quantiles,
-     primary_loso_quantiles, primary_decoding) = primary_analysis_data(
-        internal, loso, cross, quantiles, loso_quantiles, decoding
-    )
-
-    return (
-        primary_cross,
-        primary_decoding,
-        primary_internal,
-        primary_loso,
-        primary_loso_quantiles,
-        primary_quantiles,
-    )
-
-
 @app.cell
 def _(gaps, mo):
     directed_gaps = [gap for gap in gaps if gap.startswith("directed ")]
@@ -108,9 +79,9 @@ def _(gaps, mo):
 
 
 @app.cell
-def _(mo, primary_quantiles):
-    pairs = sorted({(model, layer) for dataset, model, layer, method in primary_quantiles
-                    if all((required_dataset, model, layer, required_method) in primary_quantiles
+def _(mo, quantiles):
+    pairs = sorted({(model, layer) for dataset, model, layer, method in quantiles
+                    if all((required_dataset, model, layer, required_method) in quantiles
                            for required_dataset in ("podcast", "cars-2", "fmri")
                            for required_method in ("rrr", "pca"))},
                    key=lambda item: (item[0], item[1] is not None, item[1] or -1))
@@ -127,10 +98,10 @@ def _(mo, primary_quantiles):
 
 
 @app.cell
-def _(mo, primary_loso_quantiles):
-    _loso_pairs = sorted({(model, layer) for dataset, model, layer, subject, method in primary_loso_quantiles
+def _(loso_quantiles, mo):
+    _loso_pairs = sorted({(model, layer) for dataset, model, layer, subject, method in loso_quantiles
                     if all(any(key[:3] == (required_dataset, model, layer)
-                               and key[-1] == required_method for key in primary_loso_quantiles)
+                               and key[-1] == required_method for key in loso_quantiles)
                            for required_dataset in ("podcast", "cars-2", "fmri")
                            for required_method in ("RRR baseline", "RRR transfer", "PCA baseline"))},
                    key=lambda item: (item[0], item[1] is not None, item[1] or -1))
@@ -149,12 +120,12 @@ def _(mo, primary_loso_quantiles):
 @app.cell
 def _(
     full_rows,
+    internal,
+    loso,
     loso_pair,
+    loso_quantiles,
     mo,
-    primary_internal,
-    primary_loso,
-    primary_loso_quantiles,
-    primary_quantiles,
+    quantiles,
     rrr_aggregate,
     selected_pair,
 ):
@@ -164,13 +135,13 @@ def _(
         pair = selected_pair.value
         figures = [
             mo.md("## Internal RRR aggregate"),
-            rrr_aggregate(primary_internal, primary_loso, primary_quantiles, primary_loso_quantiles,
+            rrr_aggregate(internal, loso, quantiles, loso_quantiles,
                           full_rows, pair, mode="internal"),
         ]
         if loso_pair.value is not None:
             figures.extend([
                 mo.md("## Leave-one-subject-out RRR aggregate"),
-                rrr_aggregate(primary_internal, primary_loso, primary_quantiles, primary_loso_quantiles,
+                rrr_aggregate(internal, loso, quantiles, loso_quantiles,
                               full_rows, loso_pair.value, mode="loso"),
             ])
         aggregate_output = mo.vstack(figures)
@@ -179,20 +150,27 @@ def _(
 
 
 @app.cell
-def _(cross_aggregate, cross_gap_scatter, mo, primary_cross):
+def _(cross, cross_aggregate, cross_gap_scatter, mo):
     mo.vstack([
         mo.md("## Directed cross-dataset RRR aggregate"),
-        cross_aggregate(primary_cross),
+        cross_aggregate(cross),
         mo.md("## Internal minus transfer AUC gap correlation"),
-        cross_gap_scatter(primary_cross),
+        cross_gap_scatter(cross),
     ])
     return
 
 
 @app.cell
-def _(decoding_aggregate, mo, primary_decoding):
+def _():
+    return
+
+
+@app.cell
+def _(decoding, mo):
+    from src.utils.plotting import final_figures as _final_figures
+
     mo.vstack([mo.md("## Language decoding aggregate"),
-               decoding_aggregate(primary_decoding)])
+               _final_figures.decoding_aggregate(decoding)])
     return
 
 
@@ -202,6 +180,12 @@ def _(encoding_grid, full_rows, mo, model_order):
     mo.vstack([mo.md("## Full encoding-model performance"),
                encoding_grid(full_rows, order)])
     return (order,)
+
+
+@app.cell
+def _(encoding_grid, full_rows, order):
+    encoding_grid(full_rows, order).savefig("encodingresults.png")
+    return
 
 
 @app.cell
@@ -217,52 +201,61 @@ def _(mo, order, significance_grid, significance_latex, significant):
 
 
 @app.cell
-def _(mo, primary_internal, primary_quantiles, quantile_grid, selected_pair):
+def _(mo, quantile_grid, quantiles, selected_pair):
     if selected_pair.value is None:
         quantile_output = mo.md("No selected model layer.")
     else:
         quantile_output = mo.vstack([
             mo.md("## RRR and PCA target quantiles by rank"),
-            quantile_grid(primary_quantiles, selected_pair.value, primary_internal),
+            quantile_grid(quantiles, selected_pair.value),
         ])
     quantile_output
     return
 
 
 @app.cell
-def _(average_quantile_grid, mo, primary_quantiles):
+def _(average_quantile_grid, quantiles):
+    average_quantile_grid(quantiles).savefig("average-quantiles.png")
+    return
+
+
+@app.cell
+def _(average_quantile_grid, mo, quantiles):
     mo.vstack([
         mo.md("## Mean normalized quantile curves across model layers"),
-        average_quantile_grid(primary_quantiles),
+        average_quantile_grid(quantiles),
     ])
     return
 
 
 @app.cell
-def _(mo, primary_internal, sensitivity_grid):
+def _(quantiles, sensitivity_grid):
+    sensitivity_grid(quantiles, (0, .005, .01), variable="floor").savefig("floor-sensitivity.png")
+    return
+
+
+@app.cell
+def _(mo, quantiles, sensitivity_grid):
     mo.vstack([
+        mo.md("## Saturation sensitivity to minimum quantile correlation"),
+        sensitivity_grid(quantiles, (0, .005, .01), variable="floor"),
         mo.md("## Saturation sensitivity to required peak performance"),
-        sensitivity_grid(primary_internal, (.5, .75, .9, .95, .975, .99, 1.0)),
+        sensitivity_grid(quantiles, (.5, .75, .9, .95, .975, .99, 1.0)),
     ])
+    return
+
+
+@app.cell
+def _(quantiles, sensitivity_grid):
+    sensitivity_grid(quantiles, (.5, .75, .9, .95, .975, .99, 1.0)).savefig("perf-sensitivity.png")
     return
 
 
 @app.cell(hide_code=True)
-def _(mo, primary_loso, sensitivity_grid):
+def _(loso_quantiles, mo, sensitivity_grid):
     mo.vstack([
         mo.md("## LOSO saturation sensitivity to required peak performance"),
-        sensitivity_grid(primary_loso, (.5, .75, .9, .95, .975, .99, 1.0), mode="loso"),
-    ])
-    return
-
-
-@app.cell
-def _(control_saturation_grid, internal, mo):
-    mo.vstack([
-        mo.md("## Appendix: random GPT-2 internal saturation ranks"),
-        control_saturation_grid(internal, "random-gpt2"),
-        mo.md("## Appendix: GloVe internal saturation ranks"),
-        control_saturation_grid(internal, "glove-300"),
+        sensitivity_grid(loso_quantiles, (.5, .75, .9, .95, .975, .99, 1.0), mode="loso"),
     ])
     return
 
