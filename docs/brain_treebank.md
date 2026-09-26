@@ -30,8 +30,7 @@ preprocessing implementation:
 
 ```bash
 uv run python scripts/utilities/precompute_epochs.py \
-  --config configs/brain_treebank/cross_condition/gpt2.yml \
-  --cross-condition
+  --config configs/brain_treebank/cars_2/precompute_epochs.yml
 ```
 
 If system memory is limited, reduce the temporary epoch-extraction batch, for
@@ -39,8 +38,7 @@ example:
 
 ```bash
 uv run python scripts/utilities/precompute_epochs.py \
-  --config configs/brain_treebank/cross_condition/gpt2.yml \
-  --cross-condition \
+  --config configs/brain_treebank/cars_2/precompute_epochs.yml \
   --epoch-batch-size 8
 ```
 
@@ -50,15 +48,13 @@ of memory while calculating the high-gamma envelope:
 
 ```bash
 uv run python scripts/utilities/precompute_epochs.py \
-  --config configs/brain_treebank/cross_condition/gpt2.yml \
-  --cross-condition \
+  --config configs/brain_treebank/cars_2/precompute_epochs.yml \
   --epoch-batch-size 8 \
   --high-gamma-channel-batch-size 8
 ```
 
-This mode discovers eligible subjects, gathers every exact subject/trial pair,
-and invokes the same per-trial preprocessing used by the standard command. A
-single trial can be run with `--subject SUBJECT --trial TRIAL`.
+This command processes the subjects and movie selected by the Cars 2 config.
+A single trial can be run with `--subject SUBJECT --trial TRIAL`.
 
 Brain Treebank word-aligned epoch preprocessing computes a 70–200 Hz Hilbert envelope
 from the source HDF5 voltage traces. It drops contacts listed in `corrupted_elec.json`,
@@ -97,16 +93,6 @@ treated as `common_average`. Precomputation provenance is stimulus-scoped within
 subject directory: common-average uses `config_movie-<movie>.yml`, and Laplacian uses
 `config_movie-<movie>_ref-laplacian.yml`. This prevents two movies watched by the same
 subject from attempting to reuse one provenance file.
-
-Legacy provenance files can be migrated without changing epoch data. For example,
-preview and then migrate the Cars 2 Laplacian files with:
-
-```bash
-uv run python scripts/utilities/migrate_brain_treebank_epoch_provenance.py \
-  --movie cars-2 --rereference laplacian --dry-run
-uv run python scripts/utilities/migrate_brain_treebank_epoch_provenance.py \
-  --movie cars-2 --rereference laplacian
-```
 
 Use the same `per_dataset_config.rereference` value in precomputation and every
 downstream significance, RRR, comparison, or language-analysis encoding configuration.

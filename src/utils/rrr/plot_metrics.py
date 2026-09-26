@@ -85,6 +85,32 @@ def normalized_quantile_curve(values, min_peak=PEAK_FLOOR):
     return result
 
 
+def mean_saturation_rank(ranks, correlations, fraction=0.99):
+    """Interpolate the first rank reaching a fraction of peak mean correlation."""
+    if not 0 < fraction <= 1:
+        raise ValueError("fraction must be in (0, 1]")
+    ranks = np.asarray(ranks, dtype=float)
+    correlations = np.asarray(correlations, dtype=float)
+    if ranks.ndim != 1 or correlations.shape != ranks.shape:
+        raise ValueError("Expected one mean correlation per rank")
+    finite = np.isfinite(ranks) & np.isfinite(correlations)
+    ranks, correlations = ranks[finite], correlations[finite]
+    if not len(ranks):
+        return np.nan
+    order = np.argsort(ranks)
+    ranks, correlations = ranks[order], correlations[order]
+    threshold = fraction * correlations.max()
+    reached = np.flatnonzero(correlations >= threshold)
+    if not len(reached):
+        return np.nan
+    index = int(reached[0])
+    if index == 0:
+        return float(ranks[0])
+    left, right = correlations[index - 1:index + 1]
+    weight = (threshold - left) / (right - left)
+    return float(ranks[index - 1] + weight * (ranks[index] - ranks[index - 1]))
+
+
 def quantile_saturation_rank(ranks, quantiles, fraction=0.99, min_peak=PEAK_FLOOR):
     """Latest first crossing among eligible quantiles, interpolated in rank."""
     if not 0 < fraction <= 1:

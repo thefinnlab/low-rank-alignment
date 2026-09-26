@@ -1,8 +1,8 @@
 # Analysis Artifacts
 
 Core analysis results are owned by the `Artifact` classes in the producing scripts.
-Significance and RRR use unified modality-neutral contracts; language decoding,
-language reconstruction, and subspace comparison define result-specific contracts.
+Significance and RRR use unified modality-neutral contracts; language decoding
+defines its result-specific contract.
 Consumers use generic artifact identity blocks rather than result paths.
 
 Language decoding uses the same compact `artifact.h5` storage as RRR for non-plot
@@ -10,11 +10,7 @@ fields. Its runners save fits, predictions, summaries, and target diagnostics
 directly through the Artifact client; PNG plots remain separate. Existing
 file-backed decoding artifacts remain readable through their manifests.
 `intensity_rms` is optional within the standard decoding variant and is omitted
-from its resume identity. `scripts/utilities/migrate_intensity_decoding.py`
-preflights and copies the newer rank-only intensity entries from
-`audio-intensity-ranks-v1` into existing standard Artifacts, using the
-speaker-label variant for Podcast. It updates aggregate tables and rank plots,
-omits legacy full-embedding intensity fits, and retains the source variants.
+from its resume identity.
 
 The canonical identity is:
 
@@ -22,10 +18,8 @@ The canonical identity is:
 results/<script>/<mode>/<dataset>/offset-<offset>/<model>/layer-<layer>/
 ```
 
-Script components include `run_significance`, `run_rrr`,
-`run_target_dimensionality_rrr`,
-`run_cross_condition_rrr`,
-`run_language_decoding`, `run_language_reconstruction`, and `compare_subspaces`.
+Script components are `run_significance`, `run_rrr`, and
+`run_language_decoding`.
 Dataset components are `podcast`,
 `brain-treebank-<stimulus>`, and `deep-fmri`. fMRI always uses `offset-0`.
 GloVe dimensions are part of the model (`glove-300`) and its layer is
@@ -81,12 +75,12 @@ instance.
 
 Writes publish payloads and then update the manifest, with the physical codec and
 uncompressed size recorded for every selector entry. `run_rrr` and
-`run_cross_condition_rrr`, and `run_language_decoding` store all non-plot payloads in one compressed
+and `run_language_decoding` store all non-plot payloads in one compressed
 `artifact.h5` container per variant; their plots remain ordinary PNG files in the
 existing selector-based subdirectories. The Artifact API still exposes each field
 and selector independently. Other producers use individual files: tables are CSV,
 arrays are NPY, array mappings are NPZ, plots are PNG, JSON-compatible values are
-JSON, and fitted encoding/reconstruction objects are joblib files. Partial runs are valid.
+JSON, and fitted encoding objects are joblib files. Partial runs are valid.
 Required fields and selector combinations are checked only by `mark_complete()`.
 Plot fields are optional, and `plot: false` never prevents completion.
 
@@ -182,11 +176,11 @@ variant so legacy results are not reused.
 
 ## Language interpretation
 
-Language decoding and reconstruction accept one `rrr_source` identity. The selected
+Language decoding accepts one `rrr_source` identity. The selected
 RRR Artifact supplies both `method: rrr` and `method: pca` factors; optional
 `rrr_selectors` narrow unit-scoped factors such as a subject, region, or temporal
 window. The RRR source is recorded as an upstream dependency. Result identities use
-the decoded/reconstructed dataset, offset, embedding model, and layer. fMRI
+the decoded dataset, offset, embedding model, and layer. fMRI
 decoding uses `within_dataset` or `cross_dataset` as the Artifact mode according
 to its source/target relationship. The fMRI-only `fmri_tr_pre_fir` flag selects
 TR decoding instead of the default word decoding, and TR results use an
@@ -205,64 +199,14 @@ Directed fMRI decoding QR-orthonormalizes the source factor and does not fit a t
 reduced-space scaler; internal fMRI decoding retains its training-data scaling.
 Categorical TR targets also expose per-channel metrics, availability diagnostics,
 smoothed-channel ridge weights, and dominant-label classifier weights.
-Reconstruction exposes corresponding provenance,
-per-fit metrics, optional fitted models, fold and summary tables, RRR/PCA contrasts,
-predictor contrasts, and plots.
 In `cross_dataset` language modes, a single full-fit factor/scaler pair is applied
 directly, the rank-truncated factor is QR-orthonormalized, and the projected vectors
 enter the decoder without target normalization. Legacy fold-factor aggregation is
 rejected because differently standardized source folds do not define one transferable
 ambient coordinate system.
 
-The importable downstream facades are `scripts.run_language_decoding.Artifact` and
-`scripts.run_language_reconstruction.Artifact`; the existing executable files under
-`scripts/language-interpret/` retain their command-line roles.
-
-## Subspace comparisons
-
-Subspace comparison configuration uses an ordered list whose entries contain
-`model`, `layers`, and `datasets`; `offsets` defaults to `[0]`. Each configured source
-dataset/model/layer/subspace owns a `compare_subspaces` Artifact. Its fields contain
-the source-to-target cell cache, fold metrics, summary, row matrices, row heatmaps,
-source metadata, validation metadata, and all RRR upstream identities.
-
-A downstream collection loader requires the same explicit selection shape and keeps
-only comparisons whose source and target both belong to it:
-
-```python
-Artifact(
-    analysis_name="all_spaces_over_podcast_saturation_rrr",
-    evaluation_dataset="podcast",
-    models=[
-        {"model": "gpt2", "layers": [0, 6, 12],
-         "datasets": ["podcast", "cars-2"]},
-        {"model": "gpt2-xl-batch", "layers": [0, 24, 48],
-         "datasets": ["podcast"]},
-    ],
-    results_root="results/subspace_comparisons",
-).load_artifacts(["fold_metrics", "summary"])
-```
-
-The loaded object also exposes `available_comparisons`, containing the distinct
-source/target endpoints actually found. Missing, never-computed pairs are omitted.
-
-## Legacy migration
-
-`scripts/utilities/migrate_results.py` is dry-run by default. It inventories legacy
-trees, emits a YAML mapping template for identities it cannot prove, and converts
-recognized files into loadable unified Artifact fields when `--apply` is given.
-Source paths and sizes are recorded, every rerun is semantically compared with the
-decoded Artifact values, differing reruns are rejected, identical reruns are
-reported as skipped, and incomplete legacy runs remain partial manifests. Legacy dependency
-directories are replaced by path-free `rrr_source` identities before configuration
-storage. Canonical script roots are excluded from legacy discovery;
-rank-saturation, subspace-comparison, multiview, and config-less nested
-cross-dataset outputs are intentionally deferred.
+The importable decoding facade is `scripts.run_language_decoding.Artifact`;
+`scripts/language-interpret/run_language_decoding.py` contains its implementation.
 
 Legacy manifests with a missing or null `upstreams` field are read as having no
 upstream dependencies. They remain incompatible with runs that declare an upstream.
-
-For older iEEG significance artifacts that lack the saved stimulus-row `selection`,
-`scripts/utilities/migrate_ieeg_selection.py` performs a metadata-only repair from
-the existing epoch caches. It does not retrain significance models or recompute
-statistics.

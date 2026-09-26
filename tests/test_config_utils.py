@@ -220,8 +220,8 @@ class TestDictToDataclass:
                 views=[view, view],
             )
 
-    def test_checked_in_multiview_uses_current_podcast_sources(self):
-        config = load_config("configs/rrr/multi_view.yml", {}, RRRClientConfig)
+    def test_multiview_fixture_uses_current_podcast_sources(self):
+        config = load_config("tests/fixtures/configs/multi_view_podcast.yml", {}, RRRClientConfig)
         selected = config.selected_config()
 
         assert selected.multi_view_name == "language-model-multiview"
@@ -236,9 +236,9 @@ class TestDictToDataclass:
         assert {source["dataset"] for source in sources} == {"podcast"}
         assert all(source.get("significance_selection") for source in sources)
 
-    def test_checked_in_cars_2_multiview_uses_laplacian_cars_sources(self):
+    def test_cars_2_multiview_fixture_uses_laplacian_cars_sources(self):
         config = load_config(
-            "configs/rrr/multi_view_cars-2.yml", {}, RRRClientConfig
+            "tests/fixtures/configs/multi_view_cars-2.yml", {}, RRRClientConfig
         )
         selected = config.selected_config()
 
@@ -260,9 +260,9 @@ class TestDictToDataclass:
         assert {source["rereference"] for source in sources} == {"laplacian"}
         assert all(source.get("significance_selection") for source in sources)
 
-    def test_checked_in_fmri_multiview_uses_view_delay_bands(self):
+    def test_fmri_multiview_fixture_uses_view_delay_bands(self):
         config = load_config(
-            "configs/fmri/multi_view.yml", {}, RRRClientConfig
+            "tests/fixtures/configs/multi_view_fmri.yml", {}, RRRClientConfig
         )
         selected = config.selected_config()
 

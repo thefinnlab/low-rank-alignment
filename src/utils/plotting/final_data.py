@@ -21,14 +21,32 @@ from scripts.run_rrr import Artifact as RRRArtifact
 from scripts.run_significance import Artifact as SignificanceArtifact
 from scripts.run_language_decoding import Artifact as DecodingArtifact
 from scripts.utilities.check_final_significance import MODEL_LAYERS
-from src.utils.rrr.plot_metrics import QUANTILES, fisher_mean, rank_quantiles
+from src.utils.rrr.plot_metrics import fisher_mean, rank_quantiles
 
 
 DATASETS = {"podcast": "podcast", "cars-2": "brain-treebank-cars-2", "fmri": "deep-fmri"}
+QUANTILES = (.05, .10, .25, .50, .75, .90)
 LABELS = {"podcast": "Podcast", "cars-2": "Cars 2", "fmri": "fMRI"}
 PAIRS = tuple((model, layer) for model, layers in MODEL_LAYERS.values() for layer in layers)
 FMRI_VARIANT = "input_scaling-pooled-training-stories-v1"
 CACHE_VERSION = 1
+
+CONTROL_MODELS = frozenset({"random-gpt2", "glove", "glove-300"})
+
+
+def primary_analysis_data(internal, loso, cross, quantiles, loso_quantiles, decoding):
+    """Exclude appendix controls from primary summaries without changing loaded data."""
+    def primary_frame(frame):
+        if frame.empty:
+            return frame.copy()
+        return frame.loc[~frame["model"].isin(CONTROL_MODELS)].copy()
+
+    return (
+        primary_frame(internal), primary_frame(loso), primary_frame(cross),
+        {key: value for key, value in quantiles.items() if key[1] not in CONTROL_MODELS},
+        {key: value for key, value in loso_quantiles.items() if key[1] not in CONTROL_MODELS},
+        primary_frame(decoding),
+    )
 
 
 def _cache_fingerprint(results_root):

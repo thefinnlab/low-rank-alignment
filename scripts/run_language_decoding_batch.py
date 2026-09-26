@@ -33,11 +33,7 @@ FMRI_DATASETS = {"fmri", "deep-fmri", "deep_fmri"}
 def _rrr_config_path(dataset: str, model: str, *, source: bool, cross: bool) -> str:
     if dataset in FMRI_DATASETS:
         return f"configs/fmri/within_fmri_cross_model_layer/{model}.yml"
-    suffix = (
-        "full_fit.yml" if source and cross else
-        "cross_model_layer.yml" if source else
-        "cross_subject.yml"
-    )
+    suffix = "full_fit.yml" if source and cross else "cross_model_layer.yml"
     if dataset == "podcast":
         return f"configs/rrr/{model}/{suffix}"
     if dataset == "cars-2":

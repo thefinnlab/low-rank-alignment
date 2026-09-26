@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections import defaultdict
 
 import matplotlib.pyplot as plt
-from matplotlib.ticker import MaxNLocator
+from matplotlib.ticker import FuncFormatter, MaxNLocator
 import numpy as np
 import pandas as pd
 
@@ -16,10 +16,11 @@ from src.utils.plotting.final_axes import (
     normalized_curve_axis, pairwise_test_brackets, paper_style, quantile_axis, rank_curve_axis,
     target_bar_axis,
 )
-from src.utils.plotting.final_data import DATASETS, LABELS
+from src.utils.plotting.final_data import DATASETS, LABELS, QUANTILES
+from scripts.utilities.check_final_significance import MODEL_LAYERS
 from src.utils.rrr.plot_metrics import (
-    PEAK_FLOOR, QUANTILES, average_normalized_quantiles, fisher_mean,
-    normalized_log_rank_auc, paired_sign_flip, quantile_saturation_rank,
+    average_normalized_quantiles, fisher_mean,
+    mean_saturation_rank, normalized_log_rank_auc, paired_sign_flip,
 )
 
 
@@ -49,14 +50,14 @@ def _members(frame):
     return members
 
 
-def _saturation_values(quantiles, dataset, methods, fraction, *, min_peak=PEAK_FLOOR):
+def _saturation_values(frame, dataset, methods, fraction):
     values = defaultdict(list)
-    for key, (ranks, matrix) in quantiles.items():
-        if key[0] != dataset or key[-1] not in methods:
-            continue
-        rank = quantile_saturation_rank(ranks, matrix, fraction, min_peak)
-        if np.isfinite(rank):
-            values[key[-1]].append((key[1:3], rank))
+    frame = frame[frame["dataset"].eq(dataset) & frame["method"].isin(methods)]
+    for (model, layer), group in frame.groupby(["model", "layer"], dropna=False):
+        for method, curve in _curves(group).items():
+            rank = mean_saturation_rank(*curve, fraction)
+            if np.isfinite(rank):
+                values[method].append(((model, _layer(layer)), rank))
     return values
 
 
@@ -94,14 +95,16 @@ def _saturation_comparison_axis(ax, ranks, methods, labels, tests, *,
     ])
 
 
-def _loso_saturation_values(quantiles, dataset, fraction):
+def _loso_saturation_values(frame, dataset, fraction):
     by_pair = defaultdict(list)
-    for key, (ranks, matrix) in quantiles.items():
-        if key[0] != dataset:
-            continue
-        rank = quantile_saturation_rank(ranks, matrix, fraction)
-        if np.isfinite(rank):
-            by_pair[(key[1], key[2], key[4])].append(rank)
+    frame = frame[frame["dataset"].eq(dataset)]
+    for (model, layer, subject), group in frame.groupby(
+        ["model", "layer", "subject"], dropna=False
+    ):
+        for method, curve in _curves(group).items():
+            rank = mean_saturation_rank(*curve, fraction)
+            if np.isfinite(rank):
+                by_pair[(model, _layer(layer), method)].append(rank)
     values = defaultdict(list)
     for (model, layer, method), ranks in by_pair.items():
         values[method].append(((model, layer), np.mean(ranks)))
@@ -128,21 +131,15 @@ def rrr_aggregate(internal, loso, quantiles, loso_quantiles, full_rows,
             sample = _pair_rows(frame, *selected_pair)
             sample_curves = _curves(sample)
             if mode == "internal":
-                ranks = _saturation_values(quantiles, dataset, methods, fraction)
+                ranks = _saturation_values(internal, dataset, methods, fraction)
                 markers = {
-                    method: quantile_saturation_rank(*quantiles[(dataset, *selected_pair, method)], fraction)
-                    for method in methods if (dataset, *selected_pair, method) in quantiles
+                    method: mean_saturation_rank(*curve, fraction)
+                    for method, curve in sample_curves.items()
                 }
             else:
-                ranks = _loso_saturation_values(loso_quantiles, dataset, fraction)
-                markers = {}
-                for method in methods:
-                    subject_ranks = [quantile_saturation_rank(*value, fraction)
-                                     for key, value in loso_quantiles.items()
-                                     if key[:3] == (dataset, *selected_pair) and key[-1] == method]
-                    finite = [value for value in subject_ranks if np.isfinite(value)]
-                    if finite:
-                        markers[method] = float(np.mean(finite))
+                ranks = _loso_saturation_values(loso, dataset, fraction)
+                sample_ranks = _loso_saturation_values(sample, dataset, fraction)
+                markers = {method: values[0][1] for method, values in sample_ranks.items()}
             sample_ax = figure.add_subplot(grid[row, 0])
             rank_curve_axis(sample_ax, sample_curves, saturation=markers,
                             baseline=baseline_map.get((dataset, *selected_pair)))
@@ -200,6 +197,39 @@ def rrr_aggregate(internal, loso, quantiles, loso_quantiles, full_rows,
         figure.text((saturation_start.x0 + saturation_end.x1) / 2, .965,
                     f"C. Saturation Distributions ({fraction * 100:g}% Peak Performance)",
                     ha="center", va="bottom", fontsize=15, weight="bold")
+        return figure
+
+
+def control_saturation_grid(internal, model, *, fraction=.99):
+    """Show matched internal RRR/PCA control ranks as connected layer dots."""
+    names = {"random-gpt2": "Random GPT-2", "glove": "GloVe", "glove-300": "GloVe"}
+    if model not in names:
+        raise ValueError("Expected a random GPT-2 or GloVe control model")
+    aliases = ("glove", "glove-300") if model.startswith("glove") else (model,)
+    frame = internal[internal["model"].isin(aliases)]
+    with paper_style():
+        figure, axes = plt.subplots(1, 3, figsize=(12, 5), sharey=True)
+        for ax, dataset in zip(axes, DATASETS):
+            ranks = _saturation_values(frame, dataset, ("rrr", "pca"), fraction)
+            by_method = {method: dict(ranks.get(method, [])) for method in ("rrr", "pca")}
+            pairs = sorted(set(by_method["rrr"]) | set(by_method["pca"]), key=str)
+            palette = plt.get_cmap("viridis")(np.linspace(.1, .9, max(len(pairs), 1)))
+            for pair, color in zip(pairs, palette):
+                positions = [index for index, method in enumerate(("rrr", "pca")) if pair in by_method[method]]
+                values = [by_method[method][pair] for method in ("rrr", "pca") if pair in by_method[method]]
+                label = "Layerless" if pair[1] is None else f"Layer {pair[1]}"
+                ax.plot(positions, values, "o-", color=color, linewidth=1.5, markersize=7, label=label)
+            ax.set_xticks([0, 1], ["RRR", "PCA"])
+            ax.set_xlim(-.35, 1.35)
+            ax.set_yscale("log", base=2)
+            ax.yaxis.set_major_formatter(FuncFormatter(lambda value, _: f"{value:g}"))
+            ax.set_title(LABELS[dataset])
+            finish_axis(ax)
+            if pairs and model == "random-gpt2":
+                ax.legend(frameon=False, fontsize=9)
+        axes[0].set_ylabel("Saturation rank $k$")
+        figure.suptitle(f"{names[model]} · internal saturation ({fraction * 100:g}% of peak mean correlation)")
+        figure.tight_layout(rect=(0, 0, 1, .93))
         return figure
 
 
@@ -421,25 +451,38 @@ def significance_grid(significant, order):
 
 
 def significance_latex(significant, order):
-    """Return one table with model-layer counts and dataset union totals."""
+    """Return model rows with relative-depth columns and grouped datasets."""
     order = list(order) + sorted({model for _, model, _ in significant} - set(order))
-    lines = [r"\begin{tabular}{llrr}", r"\toprule",
-             r"Dataset & Model & Layer & Significant targets \\", r"\midrule"]
+    depths = (0, .25, .5, .75, 1)
+    lines = [r"\begin{tabular}{llrrrrr}", r"\toprule",
+             r"Dataset & Model & 0\% & 25\% & 50\% & 75\% & 100\% \\",
+             r"\midrule"]
     for dataset in DATASETS:
         entries = {(model, layer): targets for (d, model, layer), targets
                    in significant.items() if d == dataset}
         union = set().union(*entries.values()) if entries else set()
-        for model, layer in entries_order(entries, order):
+        dataset_label = LABELS[dataset]
+        for model in order:
+            model_entries = {layer: targets for (m, layer), targets in entries.items() if m == model}
+            if not model_entries:
+                continue
             name = model.replace("_", r"\_")
-            layer_name = "none" if layer is None else str(layer)
-            lines.append(f"{LABELS[dataset]} & {name} & {layer_name} & {len(entries[(model, layer)]):,} " + r"\\")
-        lines.extend([r"\midrule", f"{LABELS[dataset]} & Union & -- & {len(union):,} " + r"\\", r"\midrule"])
+            if None in model_entries:
+                cells = r"\multicolumn{5}{c}{" + f"{len(model_entries[None]):,} (layerless)" + "}"
+            else:
+                configured_layers = {name: layers for name, layers in MODEL_LAYERS.values()}
+                max_layer = max(configured_layers.get(model, MODEL_LAYERS.get(model, (None, []))[1]))
+                counts = {layer / max_layer: len(targets) for layer, targets in model_entries.items()}
+                cells = " & ".join(f"{counts[depth]:,}" if depth in counts else "--" for depth in depths)
+            lines.append(f"{dataset_label} & {name} & {cells} " + r"\\")
+            dataset_label = ""
+        lines.extend([f"{dataset_label} & Union & " + r"\multicolumn{5}{c}{" + f"{len(union):,}" + "} " + r"\\", r"\midrule"])
     lines[-1] = r"\bottomrule"
     lines.append(r"\end{tabular}")
     return "\n".join(lines)
 
 
-def quantile_grid(quantiles, selected_pair, *, fraction=.99):
+def quantile_grid(quantiles, selected_pair, internal, *, fraction=.99):
     with paper_style():
         figure, axes = plt.subplots(3, 2, figsize=(13, 12))
         for row, dataset in enumerate(DATASETS):
@@ -449,7 +492,8 @@ def quantile_grid(quantiles, selected_pair, *, fraction=.99):
                 if value is not None:
                     ranks, matrix = value
                     quantile_axis(ax, ranks, matrix, QUANTILES)
-                    sat = quantile_saturation_rank(ranks, matrix, fraction)
+                    curves = _curves(_pair_rows(internal[internal["dataset"].eq(dataset)], *selected_pair))
+                    sat = mean_saturation_rank(*curves[method], fraction) if method in curves else np.nan
                     if np.isfinite(sat):
                         ax.axvline(sat, color=COLORS[method], linestyle="--", linewidth=1.4)
                 ax.set_title(f"{LABELS[dataset]} · {method.upper()}")
@@ -486,13 +530,20 @@ def average_quantile_grid(quantiles):
         return figure
 
 
-def sensitivity_grid(quantiles, values, *, variable):
-    """Compare paired internal RRR/PCA saturation ranks across settings."""
+def sensitivity_grid(results, values, *, mode="internal"):
+    """Compare paired saturation ranks across required peak fractions."""
     values = tuple(values)
     if not values:
         raise ValueError("values must contain at least one sensitivity setting")
-    if variable not in {"floor", "fraction"}:
-        raise ValueError("variable must be 'floor' or 'fraction'")
+    if mode not in {"internal", "loso"}:
+        raise ValueError("mode must be 'internal' or 'loso'")
+    methods = ("rrr", "pca") if mode == "internal" else (
+        "RRR baseline", "RRR transfer", "PCA baseline"
+    )
+    labels = ("RRR", "PCA") if mode == "internal" else methods
+    tests = (("RRR", "PCA"),) if mode == "internal" else (
+        ("RRR transfer", "PCA baseline"), ("RRR baseline", "RRR transfer")
+    )
     with paper_style():
         figure, axes = plt.subplots(
             len(values), len(DATASETS),
@@ -501,26 +552,24 @@ def sensitivity_grid(quantiles, values, *, variable):
         )
         for row, value in enumerate(values):
             for col, dataset in enumerate(DATASETS):
-                ranks = _saturation_values(
-                    quantiles, dataset, ("rrr", "pca"),
-                    .99 if variable == "floor" else value,
-                    min_peak=value if variable == "floor" else PEAK_FLOOR,
-                )
+                ranks = (_saturation_values(results, dataset, methods, value)
+                         if mode == "internal" else
+                         _loso_saturation_values(results, dataset, value))
                 ax = axes[row, col]
                 _saturation_comparison_axis(
-                    ax, ranks, ("rrr", "pca"), ("RRR", "PCA"),
-                    (("RRR", "PCA"),), show_mean_value=True,
+                    ax, ranks, methods, labels, tests, show_mean_value=True,
                 )
+                if mode == "loso":
+                    ax.set_xticklabels(["RRR\nbaseline", "RRR\ntransfer", "PCA\nbaseline"])
                 if row == 0:
                     ax.set_title(LABELS[dataset])
                 if col == 0:
-                    ax.set_ylabel(f"{value:g}", labelpad=8)
+                    ax.set_ylabel(f"{value:.0%}", labelpad=8)
                 else:
                     ax.set_ylabel("")
                     ax.tick_params(axis="y", labelleft=False)
-        figure.suptitle("Internal RRR saturation sensitivity: "
-                         + ("minimum quantile correlation" if variable == "floor"
-                            else "required peak fraction"))
+        title = "Internal" if mode == "internal" else "Leave-one-subject-out"
+        figure.suptitle(f"{title} RRR mean saturation sensitivity: required peak fraction")
         figure.text(.015, .5, "Saturation rank $k$", rotation=90,
                     va="center", ha="center", fontsize=14)
         figure.subplots_adjust(left=.13, right=.99, top=.94, bottom=.06,

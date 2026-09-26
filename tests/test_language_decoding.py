@@ -161,7 +161,7 @@ def _task_context(tmp_path):
 def test_configured_task_getters_are_registered_aligned_and_nonempty(tmp_path):
     context = _task_context(tmp_path)
     configured = yaml.safe_load(
-        open("configs/rrr/language_decoding.yml", encoding="utf-8")
+        open("tests/fixtures/configs/language_decoding_legacy.yml", encoding="utf-8")
     )["tasks"]
     assert set(configured) <= set(TASK_REGISTRY)
 

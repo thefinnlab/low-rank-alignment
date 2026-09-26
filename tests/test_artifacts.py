@@ -15,7 +15,6 @@ from src.core.artifacts import (
 from scripts.run_significance import Artifact as SignificanceArtifact
 from scripts.run_rrr import Artifact as RRRArtifact, UnitSelector
 from scripts.run_language_decoding import Artifact as DecodingArtifact
-from scripts.run_language_reconstruction import Artifact as ReconstructionArtifact
 from src.utils.rrr.significance import validate_cross_dataset_significance_alignment
 
 
@@ -33,14 +32,10 @@ def test_canonical_identity_and_defaults(tmp_path):
     assert normalize_model("glove", glove_dim=300) == "glove-300"
 
 
-def test_language_artifact_facades_expose_script_owned_contracts(tmp_path):
+def test_language_decoding_facade_exposes_script_owned_contract(tmp_path):
     decoding = DecodingArtifact(results_root=tmp_path).begin(config={"tasks": ["pos"]})
-    reconstruction = ReconstructionArtifact(results_root=tmp_path).begin(
-        config={"predictor_sets": ["tasks"]}
-    )
 
     assert decoding.identity["script"] == "run_language_decoding"
-    assert reconstruction.identity["script"] == "run_language_reconstruction"
 
 
 def test_dataframe_codec_accepts_object_columns_containing_lists(tmp_path):

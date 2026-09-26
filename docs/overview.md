@@ -4,7 +4,23 @@ This repository contains script-driven neuroscience analyses of how language-mod
 embeddings predict iEEG and fMRI responses. The supported executable surface is
 `scripts/`; utilities exist to serve those workflows rather than as a standalone API.
 
+See [reproduction.md](reproduction.md) for the ordered environment, data/resource,
+embedding, epoch, feature-label, analysis, result-check, and figure-export steps,
+including the external inputs not currently automated by this repository.
+
 ## Retained workflows
+
+The paper configuration set is limited to Podcast, Brain Treebank Cars 2, and
+fMRI with seven model families: GPT-2, GPT-2 XL, GPT-J 6B, Llama 3 8B,
+RoBERTa Large, random GPT-2, and GloVe 300D. It covers significance,
+cross-model/layer significance-filtered internal RRR, directed cross-dataset
+RRR, leave-one-subject-out RRR, and internal/cross-dataset language decoding.
+The iEEG `full_fit` transfer-source configs and supporting preprocessing
+configs are retained. See [the configuration guide](../configs/README.md)
+for the directory-to-workflow mapping and [the script guide](../scripts/README.md)
+for setup and execution. `scripts/` retains only these workflows and their data,
+feature-generation, and result-checking tools. Shared implementation code in
+`src/` may still support older modes.
 
 - `scripts/run_significance.py` dispatches significance by dataset to the iEEG
   single-lag correlation or fMRI held-out-session implementation.
@@ -12,20 +28,8 @@ embeddings predict iEEG and fMRI responses. The supported executable surface is
   one Config and Artifact contract. Its `full_fit` mode fits a single reusable
   factor set on every selected row and significant target, without a held-out rank
   evaluation, for iEEG sources.
-- `scripts/run_cross_condition_rrr.py` runs standalone directed transfer between
-  provider-generated X/Y items with no significance filtering and orthogonalized RRR
-  input spaces. Its selectable providers compare Brain Treebank movies within subject
-  using common Laplacian contacts or podcast atlas regions using all mapped contacts;
-  see
-  [cross_condition_rrr.md](cross_condition_rrr.md).
-- `scripts/run_target_dimensionality_rrr.py` reruns internal RRR over fold-safe
-  target-PCA dimensions, with one Artifact variant per dimension and compiled
-  correlation/R² sweep outputs.
-- `scripts/rrr/compare_subspaces.py` performs configured leakage-safe comparisons
-  between saved RRR/PCA spaces and publishes one source-organized Artifact per
-  generating dataset/model/layer/subspace.
 - `scripts/fmri/` contains fMRI embedding generation workflows.
-- `scripts/language-interpret/` contains language decoding and reconstruction.
+- `scripts/language-interpret/` contains the language-decoding implementation.
   Language decoding includes word-aligned and TR-aligned pre-FIR methods for fMRI,
   all published through the same Artifact client.
   Decoders write result fields directly into a compressed HDF5 Artifact container,
@@ -56,23 +60,14 @@ embeddings predict iEEG and fMRI responses. The supported executable surface is
   Word-aligned speaker decoding retains individual speakers only when present in
   every outer fold's training and test sets; remaining speakers share an `other`
   class. Speaker runs use a separate Artifact variant and save the class mapping.
-- `scripts/utilities/` contains data preparation, embedding generation, language-feature
-  generation, plotting, atlas-reporting entrypoints, and a read-only iEEG utility for
-  comparing max-lag correlation with electrode-specific or subject-wide shared-max
-  nulls, max-lag correlation/SEM, and lag-cluster significance on matched encoding
-  fits and circular-shift null samples. A companion
-  refit utility parses that comparison's console report and recomputes all-lag
-  correlations for only the union of selected electrodes, without permutation tests.
+- `scripts/utilities/` contains model caching, data preparation, embedding generation,
+  language-feature generation, and result checks.
   `generate_recurrence_features.py` updates existing word-recurrence labels across
   datasets without rerunning unrelated annotation providers.
   `generate_audio_intensity.py` adds Brain Treebank-style 500 ms RMS intensity
   labels from Podcast and fMRI WAV files to their word-feature artifacts.
-  `run_audio_intensity_decoding_sweep.py` runs the intensity-only internal decoder
-  over the configured Podcast and fMRI model/layer and word-offset grids.
   Intensity RMS decoding is an optional task stored in the standard language
-  decoding Artifact. `migrate_intensity_decoding.py` moves newer rank-only
-  intensity results into matching standard Artifacts, including their aggregate
-  tables and plots; it defaults to a dry run and requires `--apply` to write.
+  decoding Artifact.
   `check_rrr_results.py` checks the complete internal, leave-one-subject-out, and
   directed cross-dataset matrix for podcast, Cars 2, and fMRI, reporting artifacts
   that are absent or not marked complete by the standard manifest contract.
@@ -82,32 +77,30 @@ embeddings predict iEEG and fMRI responses. The supported executable surface is
   submits each missing or incomplete model/layer as a separate job with refresh
   disabled.
 
-The Makefile has six individual analysis targets: `significance`, `rrr`,
-`multi-view`, `target-dimensionality`, `cross-condition`, and `language-decoding`.
-They share `DATASET`, `CMD`, and `OVERRIDES` controls; all except `multi-view`
-also use `MODELS`. RRR and target-dimensionality additionally use
-`RRR_MODE`, while RRR uses `SOURCE_DATASET` for cross-dataset transfer and
-cross-condition uses `CROSS_MODE=region|stimulus`. Target-dimensionality accepts
-the ordinary internal `cross_subject` and `cross_model_layer` configurations and
-submits one job per selected model; the script expands configured model layers and
-PCA dimensions within each job. For fMRI RRR,
-`RRR_MODE=cross_model_layer_per_layer` reuses the cross-model-layer configs but
-submits each configured model layer as a separate process or Slurm job, providing
-a hard memory-release boundary between layers; the ordinary `cross_model_layer`
-mode continues to submit one job per model. Slurm submission is the default; cross-condition
-submits one job per configured model layer (and one layerless job for GloVe), as do
-iEEG and fMRI leave-one-subject-out RRR. `CMD="uv run python"` runs the same jobs locally.
-The `multi-view` target submits one combined-model job for Podcast, Cars 2, or fMRI
-using the corresponding checked-in configuration. The default model set
-is GPT-2, GPT-2 XL, Llama 3 8B, GPT-J 6B, RoBERTa Large, randomly initialized
-GPT-2, and GloVe 300D. fMRI supports this complete set and supports its internal,
-cross-model-layer, leave-one-subject-out, and cross-dataset RRR configurations;
-cross-condition remains iEEG-only.
-The `final-results` target checks that every significance Artifact in the configured
-cross-model/layer union is complete, submits internal RRR for podcast, Cars 2, and
-fMRI, leave-one-subject-out RRR for both iEEG datasets, and both cross-condition
-families. Its fMRI-to-podcast and fMRI-to-Cars-2 jobs use Slurm `afterok`
-dependencies on the complete internal-fMRI batch.
+The Makefile exposes three individual analysis targets: `significance`, `rrr`,
+and `language-decoding`. They share `DATASET`, `MODELS`, `CMD`, and
+`OVERRIDES` controls. RRR additionally uses `RRR_MODE`, defaulting to
+`cross_model_layer`; `internal` is an alias for that retained config set.
+RRR and language decoding use `SOURCE_DATASET` for directed cross-dataset
+transfer. The supported datasets are Podcast, Cars 2, and fMRI. The
+`multi-view`, `target-dimensionality`, and `cross-condition` Make targets
+have been removed along with the excluded experiment configs.
+For fMRI RRR, `RRR_MODE=cross_model_layer_per_layer` reuses the internal
+configs but submits each configured model layer separately, providing a
+memory-release boundary between layers. Ordinary `cross_model_layer` mode
+submits one job per model. iEEG and fMRI leave-one-subject-out RRR submit one
+job per model layer, including a layerless job for GloVe.
+Slurm submission is the default; `CMD="uv run python"` runs jobs locally.
+The default model set is GPT-2, GPT-2 XL, Llama 3 8B, GPT-J 6B,
+RoBERTa Large, random GPT-2, and GloVe 300D.
+The `final-results` target checks that every significance Artifact in the
+configured cross-model/layer union is complete, then submits internal RRR
+for all three datasets, leave-one-subject-out RRR for both iEEG datasets,
+and fMRI-to-Podcast/Cars-2 transfer. Those transfer jobs use Slurm `afterok`
+dependencies on the complete internal-fMRI batch. It is a subset of the
+paper result matrix; use individual targets for fMRI LOSO and the other
+transfer directions, or `regenerate-transfer-results` for all directed
+RRR/decoding transfers and their source fits.
 The `significance-missing` (also available as `missing-significance`) target checks
 the same model/layer matrix and submits only missing or incomplete significance
 Artifacts, grouping all missing layers into one job per dataset/model. With the
@@ -115,10 +108,10 @@ default `refresh: false`, the client skips already-present layer artifacts.
 
 Each retained analysis workflow owns one client-facing `Artifact` class. Their canonical
 identity, variants, selector fields, resume behavior, and legacy migration are
-described in [artifacts.md](artifacts.md). Language decoding and reconstruction load
+described in [artifacts.md](artifacts.md). Language decoding loads
 RRR/PCA factors through RRR Artifact identities and publish task-level results through
-their own Artifacts.
-RRR, cross-condition RRR, and language-decoding variants compact their non-plot fields into one compressed
+its own Artifact.
+RRR and language-decoding variants compact their non-plot fields into one compressed
 HDF5 container while keeping plots as separately browsable PNG files.
 
 ## Source layout
@@ -127,15 +120,29 @@ HDF5 container while keeping plots as separately browsable PNG files.
   completed RRR, significance, and decoding results once at startup, reports
   missing directed results, and draws the aggregate, encoding, significance,
   quantile, and paired RRR/PCA saturation-sensitivity figures from compact
-  in-memory data. Its decoding aggregate includes a volume feature that aligns
+  in-memory data. Saturation is the interpolated rank reaching 99% of the peak
+  mean correlation; internal and LOSO sensitivity analyses vary the required
+  peak percentage. LOSO averages each subject's saturation rank within model layers.
+  Target-quantile plots retain the 5th, 10th, 25th, 50th, 75th, and 90th percentiles.
+  Primary RRR aggregates, convergence, saturation, and decoding figures exclude
+  random GPT-2 and GloVe; their loaded results remain available as appendix controls.
+  The same filter applies to batch exports and sample-model selectors.
+  Separate appendix figures show random GPT-2 and GloVe internal saturation
+  ranks as layer dots connected between RRR and PCA for each dataset.
+  The significant-target LaTeX table groups rows by dataset, with one row per
+  model and columns for 0%, 25%, 50%, 75%, and 100% relative layer depth.
+  A bottom exploratory plot tracks individual positive-peak targets for the
+  selected internal model layer, marking when 90% reach 99% of their own peak;
+  it leaves the aggregate calculations unchanged.
+  Its decoding aggregate includes a volume feature that aligns
   Podcast and fMRI audio RMS with Cars 2 native intensity RMS.
   Its leave-one-subject-out aggregate compares transfer and PCA with a
   subject-matched RRR control from the full internal training run.
   A fingerprinted cache under `results/` makes later starts fast while artifact
   manifests and metric code are unchanged.
   Run `uv run python notebooks/final_plots.py --output-dir figures` to export all
-  eleven figures as PDF and 300-DPI PNG, plus the significance LaTeX table and
-  a result-gap report. `--format pdf` or `--format png` selects one format.
+  thirteen figures as PDF, 300-DPI PNG, and SVG, plus the significance LaTeX table and
+  a result-gap report. `--format pdf`, `--format png`, or `--format svg` selects one format.
   `--example-model gpt2 --example-layer 6` selects the sample curves in both
   RRR aggregates and the target-quantile figure (default: GPT-2 layer 0);
   `--loso-example-model` and `--loso-example-layer` override the LOSO example.
@@ -259,19 +266,11 @@ analyses are selected with `per_dataset_config.rereference: laplacian`; see
 configuration contract. The cross-condition setup helpers download the eligible
 subject trials, generate missing movie embeddings, and precompute missing
 Laplacian epoch caches through the existing preprocessing implementation.
-The checked-in Cars 2 and Megamind pipeline configs use Laplacian rereferencing;
-Megamind covers subjects 4, 6, and 7 and mirrors the Cars 2 significance and RRR
-model/mode matrix.
+The checked-in Cars 2 pipeline configs use Laplacian rereferencing for subjects
+3, 7, and 10.
 
 Imports use these explicit package paths. The former flat `src.utils.<module>` paths
 are intentionally unsupported.
-
-Target-dimensionality RRR is intentionally limited to ordinary internal iEEG and
-fMRI analyses. Target PCA is fitted only on each evaluation fold's training targets
-(or the fMRI training stories), and metrics are evaluated in the retained component
-space. Power-of-two outer and inner grids include exact endpoints; the outer endpoint
-is capped by the smallest fold-estimable PCA rank, and the inner RRR endpoint is also
-capped by the embedding dimension.
 
 Significance and RRR YAMLs use a top-level dataset discriminator, shared settings,
 and exactly one `ieeg` or `fmri` block. RRR uses modality-neutral `internal` and
@@ -345,8 +344,8 @@ fold-matched factors, while cross-dataset iEEG sources use a single `full_fit` b
 trained on the complete source dataset and fMRI sources use their requested
 whole-training rank-specific basis. fMRI targets apply each component scaler before
 FIR expansion, fit one band per view and delay with training-session CV, and aggregate
-the fitted full-FIR RRR delay blocks into a reusable pre-FIR basis. The checked-in
-Podcast, Cars 2, and fMRI configurations use five layers from each of six transformer
+the fitted full-FIR RRR delay blocks into a reusable pre-FIR basis. The regression-test fixtures for
+Podcast, Cars 2, and fMRI use five layers from each of six transformer
 families plus GloVe, retaining 64 components per view; four-delay fMRI runs therefore
 use 124 bands. Cars 2 selects subjects 3, 7, and 10 with Laplacian rereferencing.
 Cross-dataset iEEG language decoding consumes a single `full_fit` factor and its scaler
@@ -368,9 +367,7 @@ companion fit.
 Automatically generated ridge-alpha grids use 25 log-spaced values, including
 cached boundary-refined grids; explicitly configured alpha lists are used unchanged.
 Word-aligned iEEG analyses default to the shared GloVe-covered vocabulary through
-`EncodingConfig.limit_to_glove`. Cross-condition configs expose the matching
-`limit_to_glove` and `glove_dim` controls and enable the same 300D vocabulary filter.
-Contextual embeddings are still generated for the complete transcript; filtering is
+`EncodingConfig.limit_to_glove`. Contextual embeddings are still generated for the complete transcript; filtering is
 applied when embeddings and neural epochs are aligned for analysis.
 `load_embeddings(..., limit_to_glove=True, glove_dim=300)` owns the auxiliary GloVe
 lookup and adds the `in_glove` column to its returned word table, so analysis clients
@@ -396,8 +393,8 @@ phase-local, and completed partitions resume from their saved Artifact fields.
 ## Tests
 
 Tests cover behavior reachable from retained scripts: configuration and layer fanout,
-data/epoch loading, embeddings, significance, RRR and multiview analysis, fMRI,
-subspace comparison, language interpretation/features, atlas lookup, and Makefile
+data/epoch loading, embeddings, significance, RRR, fMRI,
+language decoding/features, shared subspace helpers, and Makefile
 analysis submission behavior.
 
 See [language_feature_generation.md](language_feature_generation.md) for the reusable

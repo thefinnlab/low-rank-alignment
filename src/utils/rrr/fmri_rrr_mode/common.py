@@ -360,7 +360,7 @@ def prepare_fmri_run(config, target_pca_dim=None):
 
     artifact_cls = Artifact
     if target_pca_dim is not None:
-        from scripts.run_target_dimensionality_rrr import Artifact as TargetDimArtifact
+        from src.utils.rrr.target_dimensionality_artifact import Artifact as TargetDimArtifact
 
         artifact_cls = TargetDimArtifact
     artifact = artifact_cls.from_fmri_config(config)

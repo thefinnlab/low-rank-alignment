@@ -20,19 +20,6 @@ The boundary and feature sweeps resume at the story-artifact level.
 GPT-2 surprisal and entropy columns in existing artifacts, and creates canonical minimal artifacts
 when a story has no completed full-provider output. It is resumable by model checksum
 and avoids rerunning unrelated audio and document-level providers.
-`scripts/utilities/generate_self_surprisal.py` creates
-separate model/dataset/stimulus artifacts under
-`processed_data/language_features/self_surprisal/`. Each target receives all available
-real preceding tokens up to the configured context limit. Left padding is excluded by
-the attention mask, real-context positions restart at zero, and the first target is
-missing because it has no linguistic context. Subtoken surprisal is summed within each
-word in bits, while word entropy is the first subtoken's predictive entropy in nats.
-Causal models use their configured tokenizer, final LM head, and initialization. Target
-windows are batched without changing their contexts, and the batch size halves
-automatically on CUDA OOM. The random GPT-2 XL uses its configured seed. RoBERTa uses
-the same procedure with GPT-2 small and records that fallback in `manifest.json`.
-Generate these model-specific values by invoking
-`scripts/utilities/generate_self_surprisal.py` with the desired config.
 `scripts/utilities/generate_fmri_iu_features.py` similarly
 populates IU position, onset, end, and length from the already aligned PSST boundaries
 without rerunning audio inference or unrelated providers.
@@ -102,29 +89,7 @@ dimensions remain separate from the aggregate sensorimotor strength and exclusiv
 composites. Categorical missing values are not a class: they remain missing and are
 excluded by the decoder's finite-target mask.
 
-## Task-to-subspace reconstruction
-
-`scripts/language-interpret/run_language_reconstruction.py` uses any configured subset of the same
-task registry as predictors of the RRR and PCA factors in one selected RRR Artifact.
-Unlike language decoding, missing task values are retained: continuous values
-receive fold-local median imputation plus missingness indicators, while categorical
-missingness is an explicit level. Requested tasks with no values in the selected dataset
-fail during preflight rather than silently changing the predictor set.
-
-The executable resolves the RRR and significance inputs as Artifacts and writes
-reconstruction fields directly to its output Artifact; reconstruction has no direct
-result-directory loading or saving interface.
-
-A fold-local multi-output ridge model jointly predicts every coordinate at each
-configured rank. Both raw weighted factors and QR-orthonormalized spans are evaluated.
-Because source-fold axes can rotate in cross-dataset mode, its weighted factor is derived
-from the leading eigensystem of the mean source-fold `A A^T` operator. Predictor sets
-can evaluate the registered language tasks, same-word GloVe vectors, or their combined
-design. If a GloVe condition is requested, every condition is restricted to the same
-GloVe-covered words and the saved source folds are remapped without changing fold
-identity. Results include absolute metrics, RRR-minus-PCA comparisons, and paired
-GloVe/task/combined contrasts. See `configs/rrr/language_reconstruction.yml` for the
-complete interface.
+## Available feature labels
 
 | Task name | Kind | Measurement | Source | Status |
 |---|---|---|---|---|

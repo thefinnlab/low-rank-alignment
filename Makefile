@@ -8,8 +8,7 @@ DATASET ?= podcast
 MODELS ?= gpt2 gpt2-xl llama3-8b gpt-j-6b roberta-large random-gpt2 glove
 FINAL_MODELS ?= gpt2 gpt2-xl gpt-j-6b roberta-large llama3-8b random-gpt2 glove
 SIGNIFICANCE_MODELS := gpt2 gpt2-xl gpt-j-6b roberta-large llama3-8b random-gpt2 glove
-RRR_MODE ?= cross_subject
-CROSS_MODE ?= region
+RRR_MODE ?= cross_model_layer
 SOURCE_DATASET ?=
 CMD ?= sbatch
 SBATCH ?= sbatch
@@ -18,12 +17,12 @@ LAYER ?=
 PER_LAYER ?= false
 LANGUAGE_DECODING_CPUS ?= 1
 FMRI_TR_PRE_FIR ?=
-SIGNIFICANCE_CHECK ?= python -m scripts.utilities.check_final_significance
+SIGNIFICANCE_CHECK ?= uv run python -m scripts.utilities.check_final_significance
 LANGUAGE_DECODING_CHECK ?= uv run python -m scripts.utilities.check_language_decoding_results
 
 export PYTHONPATH := $(CURDIR)
 
-# CMD=sbatch is the default. Use CMD="python" for a local run.
+# CMD=sbatch is the default. Use CMD="uv run python" for a local run.
 define launch
 if [ "$(CMD)" = "sbatch" ]; then \
 	$(SBATCH) --job-name="$(1)-$$model-$(USR)-$(DT)" submit.sh \
@@ -34,7 +33,7 @@ fi
 endef
 
 ## Run significance once per selected model.
-## DATASET: podcast, cars-2, megamind, or fmri
+## DATASET: podcast, cars-2, or fmri
 ## Example: make significance DATASET=podcast MODELS="gpt2 glove"
 significance:
 	@set -eu
@@ -42,7 +41,6 @@ significance:
 	case "$(DATASET)" in
 		podcast) config_root="configs/significance"; suffix="/significance.yml" ;;
 		cars-2) config_root="configs/brain_treebank/cars_2/significance"; suffix="/significance.yml" ;;
-		megamind) config_root="configs/brain_treebank/megamind/significance"; suffix="/significance.yml" ;;
 		fmri) config_root="configs/cross_dataset/fmri/significance"; suffix=".yml" ;;
 		*) echo "Unsupported significance DATASET '$(DATASET)'" >&2; exit 2 ;;
 	esac
@@ -103,9 +101,8 @@ significance-missing:
 
 ## Run one RRR mode once per selected model. Leave-one-subject-out and fMRI
 ## cross_model_layer_per_layer run once per selected model layer.
-## iEEG RRR_MODE: cross_subject, cross_model_layer, leave_one_subject_out,
-##                temporal_windows, cross_temporal_windows, full_fit, or cross_dataset
-## fMRI RRR_MODE: cross_subject (within), cross_model_layer,
+## iEEG RRR_MODE: cross_model_layer, leave_one_subject_out, full_fit, or cross_dataset
+## fMRI RRR_MODE: cross_model_layer,
 ##                cross_model_layer_per_layer, leave_one_subject_out, or cross_dataset
 ## cross_dataset also requires SOURCE_DATASET.
 ## Example: make rrr DATASET=fmri RRR_MODE=cross_model_layer_per_layer MODELS="gpt2 gpt2-xl"
@@ -114,14 +111,16 @@ rrr:
 	mkdir -p logs
 	mode="$(RRR_MODE)"
 	per_layer=false
-	[ "$$mode" != "internal" ] || mode="cross_subject"
+	[ "$$mode" != "internal" ] || mode="cross_model_layer"
+	case "$$mode" in
+		cross_model_layer|cross_model_layer_per_layer|leave_one_subject_out|full_fit|cross_dataset) ;;
+		*) echo "Unsupported RRR_MODE '$$mode'" >&2; exit 2 ;;
+	esac
 	case "$(DATASET)" in
 		podcast) config_root="configs/rrr" ;;
 		cars-2) config_root="configs/brain_treebank/cars_2/rrr" ;;
-		megamind) config_root="configs/brain_treebank/megamind/rrr" ;;
 		fmri)
 			case "$$mode" in
-				cross_subject) config_root="configs/cross_dataset/fmri/within" ;;
 				cross_model_layer) config_root="configs/fmri/within_fmri_cross_model_layer" ;;
 				cross_model_layer_per_layer) config_root="configs/fmri/within_fmri_cross_model_layer"; per_layer=true ;;
 				leave_one_subject_out) config_root="configs/fmri/leave_one_subject_out"; per_layer=true ;;
@@ -151,10 +150,10 @@ rrr:
 		fi
 		[ -f "$$config" ] || { echo "Missing RRR config: $$config" >&2; exit 2; }
 		if [ "$$mode" = "leave_one_subject_out" ] && [ "$(DATASET)" != "fmri" ]; then
-			layers="$$(python -c 'import sys, yaml; payload = yaml.safe_load(open(sys.argv[1])) or {}; layer = payload.get("ieeg", {}).get("encoding", {}).get("per_model_config", {}).get("layer"); print("none" if layer is None else " ".join(map(str, layer if isinstance(layer, list) else [layer])))' "$$config")"
+			layers="$$(uv run python -c 'import sys, yaml; payload = yaml.safe_load(open(sys.argv[1])) or {}; layer = payload.get("ieeg", {}).get("encoding", {}).get("per_model_config", {}).get("layer"); print("none" if layer is None else " ".join(map(str, layer if isinstance(layer, list) else [layer])))' "$$config")"
 			[ -n "$$layers" ] || { echo "Leave-one-subject-out config has no model layers: $$config" >&2; exit 2; }
 		elif [ "$$per_layer" = true ]; then
-			layers="$$(python -c 'import sys, yaml; payload = yaml.safe_load(open(sys.argv[1])) or {}; layer = payload.get("fmri", {}).get("layer"); print("none" if layer is None else " ".join(map(str, layer if isinstance(layer, list) else [layer])))' "$$config")"
+			layers="$$(uv run python -c 'import sys, yaml; payload = yaml.safe_load(open(sys.argv[1])) or {}; layer = payload.get("fmri", {}).get("layer"); print("none" if layer is None else " ".join(map(str, layer if isinstance(layer, list) else [layer])))' "$$config")"
 			[ -n "$$layers" ] || { echo "fMRI per-layer config has no model layers: $$config" >&2; exit 2; }
 		fi
 	done
@@ -165,7 +164,7 @@ rrr:
 			config="$$config_root/$$model/$$mode.yml"
 		fi
 		if [ "$$mode" = "leave_one_subject_out" ] && [ "$(DATASET)" != "fmri" ]; then
-			layers="$$(python -c 'import sys, yaml; payload = yaml.safe_load(open(sys.argv[1])) or {}; layer = payload.get("ieeg", {}).get("encoding", {}).get("per_model_config", {}).get("layer"); print("none" if layer is None else " ".join(map(str, layer if isinstance(layer, list) else [layer])))' "$$config")"
+			layers="$$(uv run python -c 'import sys, yaml; payload = yaml.safe_load(open(sys.argv[1])) or {}; layer = payload.get("ieeg", {}).get("encoding", {}).get("per_model_config", {}).get("layer"); print("none" if layer is None else " ".join(map(str, layer if isinstance(layer, list) else [layer])))' "$$config")"
 			for layer in $$layers; do
 				layer_override=""
 				layer_label="none"
@@ -177,7 +176,7 @@ rrr:
 				$(call launch,rrr-$(DATASET)-$$mode-layer-$$layer_label,scripts/run_rrr.py,$$layer_override)
 			done
 		elif [ "$$per_layer" = true ]; then
-			layers="$$(python -c 'import sys, yaml; payload = yaml.safe_load(open(sys.argv[1])) or {}; layer = payload.get("fmri", {}).get("layer"); print("none" if layer is None else " ".join(map(str, layer if isinstance(layer, list) else [layer])))' "$$config")"
+			layers="$$(uv run python -c 'import sys, yaml; payload = yaml.safe_load(open(sys.argv[1])) or {}; layer = payload.get("fmri", {}).get("layer"); print("none" if layer is None else " ".join(map(str, layer if isinstance(layer, list) else [layer])))' "$$config")"
 			job_mode="$$mode"
 			[ "$$mode" != "cross_model_layer_per_layer" ] || job_mode="cross_model_layer"
 			for layer in $$layers; do
@@ -195,23 +194,6 @@ rrr:
 			$(call launch,rrr-$(DATASET)-$$mode,scripts/run_rrr.py)
 		fi
 	done
-
-## Run the checked-in combined-model multi-view RRR job for one dataset.
-## DATASET: podcast, cars-2, or fmri
-## Example: make multi-view DATASET=fmri
-multi-view:
-	@set -eu
-	mkdir -p logs
-	case "$(DATASET)" in
-		podcast) config="configs/rrr/multi_view.yml" ;;
-		cars-2) config="configs/rrr/multi_view_cars-2.yml" ;;
-		fmri) config="configs/fmri/multi_view.yml" ;;
-		*) echo "Unsupported multi-view DATASET '$(DATASET)'" >&2; exit 2 ;;
-	esac
-	[ -f "$$config" ] || { echo "Missing multi-view config: $$config" >&2; exit 2; }
-	model=all
-	echo "Running multi-view RRR for $(DATASET): $$config"
-	$(call launch,multi-view-$(DATASET),scripts/run_rrr.py)
 
 ## Decode target-dataset language labels from internal or directed source bases.
 ## Each selected model is one job by default; PER_LAYER=true submits one job per layer.
@@ -289,93 +271,9 @@ language-decoding-missing:
 		fi
 	done
 
-## Sweep fold-safe target-PCA dimensionalities for ordinary internal RRR.
-## RRR_MODE: cross_subject or cross_model_layer
-## Example: make target-dimensionality DATASET=podcast MODELS="gpt2 glove"
-target-dimensionality:
-	@set -eu
-	mkdir -p logs
-	mode="$(RRR_MODE)"
-	[ "$$mode" != "internal" ] || mode="cross_subject"
-	case "$$mode" in
-		cross_subject|cross_model_layer) ;;
-		*) echo "RRR_MODE '$$mode' is unsupported for target-dimensionality RRR" >&2; exit 2 ;;
-	esac
-	case "$(DATASET)" in
-		podcast) config_root="configs/rrr" ;;
-		cars-2) config_root="configs/brain_treebank/cars_2/rrr" ;;
-		megamind) config_root="configs/brain_treebank/megamind/rrr" ;;
-		fmri)
-			case "$$mode" in
-				cross_subject) config_root="configs/cross_dataset/fmri/within" ;;
-				cross_model_layer) config_root="configs/fmri/within_fmri_cross_model_layer" ;;
-			esac
-			;;
-		*) echo "Unsupported target-dimensionality DATASET '$(DATASET)'" >&2; exit 2 ;;
-	esac
-	models="$(MODELS)"
-	[ -n "$$models" ] || { echo "MODELS must contain at least one model" >&2; exit 2; }
-	for model in $$models; do
-		if [ "$(DATASET)" = "fmri" ]; then
-			config="$$config_root/$$model.yml"
-		else
-			config="$$config_root/$$model/$$mode.yml"
-		fi
-		[ -f "$$config" ] || { echo "Missing target-dimensionality config: $$config" >&2; exit 2; }
-	done
-	for model in $$models; do
-		if [ "$(DATASET)" = "fmri" ]; then
-			config="$$config_root/$$model.yml"
-		else
-			config="$$config_root/$$model/$$mode.yml"
-		fi
-		echo "Running target-dimensionality RRR for $(DATASET) / $$model / $$mode: $$config"
-		$(call launch,target-dimensionality-$(DATASET)-$$mode,scripts/run_target_dimensionality_rrr.py)
-	done
-
-## Run directed cross-condition comparisons once per selected model layer.
-## Valid pairs: DATASET=podcast CROSS_MODE=region, or
-##              DATASET=brain-treebank CROSS_MODE=stimulus
-## Example: make cross-condition DATASET=podcast CROSS_MODE=region
-cross-condition:
-	@set -eu
-	mkdir -p logs
-	case "$(DATASET):$(CROSS_MODE)" in
-		podcast:region|brain-treebank:stimulus|brain_treebank:stimulus) ;;
-		fmri:*) echo "Cross-condition comparisons are not currently supported for fmri" >&2; exit 2 ;;
-		*) echo "Unsupported cross-condition combination DATASET='$(DATASET)' CROSS_MODE='$(CROSS_MODE)'" >&2; exit 2 ;;
-	esac
-	[ -n "$(strip $(MODELS))" ] || { echo "MODELS must contain at least one model" >&2; exit 2; }
-	config_root="configs/cross_condition/$(CROSS_MODE)"
-	for model in $(MODELS); do
-		config="$$config_root/$$model.yml"
-		[ -f "$$config" ] || { echo "Missing cross-condition config: $$config" >&2; exit 2; }
-		layers="$$(python -c 'import sys, yaml; payload = yaml.safe_load(open(sys.argv[1])) or {}; layer = payload.get("per_model_config", {}).get("layer"); print("none" if layer is None else " ".join(map(str, layer if isinstance(layer, list) else [layer])))' "$$config")"
-		[ -n "$$layers" ] || { echo "Cross-condition config has no model layers: $$config" >&2; exit 2; }
-	done
-	for model in $(MODELS); do
-		config="$$config_root/$$model.yml"
-		layers="$$(python -c 'import sys, yaml; payload = yaml.safe_load(open(sys.argv[1])) or {}; layer = payload.get("per_model_config", {}).get("layer"); print("none" if layer is None else " ".join(map(str, layer if isinstance(layer, list) else [layer])))' "$$config")"
-		for layer in $$layers; do
-			layer_override=""
-			layer_label="none"
-			if [ "$$layer" != "none" ]; then
-				layer_override="--per_model_config.layer=$$layer"
-				layer_label="$$layer"
-			fi
-			echo "Running $(CROSS_MODE) comparison for $(DATASET) / $$model / layer $$layer_label: $$config"
-			if [ "$(CMD)" = "sbatch" ]; then
-				$(SBATCH) --job-name="cross-condition-$(CROSS_MODE)-$$model-layer-$$layer_label-$(USR)-$(DT)" submit.sh \
-					scripts/run_cross_condition_rrr.py --config "$$config" $(OVERRIDES) $$layer_override
-			else
-				$(CMD) scripts/run_cross_condition_rrr.py --config "$$config" $(OVERRIDES) $$layer_override
-			fi
-		done
-	done
-
-## Submit the complete final-results RRR matrix after checking significance.
+## Submit internal RRR, iEEG LOSO, and fMRI-to-iEEG transfer after checking significance.
 ## Cross-dataset jobs sourced from fMRI wait for every internal fMRI job.
-## Use CMD="python" to execute the same matrix sequentially and locally.
+## Use CMD="uv run python" to execute the same matrix sequentially and locally.
 final-results:
 	@set -eu
 	mkdir -p logs
@@ -388,8 +286,6 @@ final-results:
 			"configs/fmri/within_fmri_cross_model_layer/$$model.yml" \
 			"configs/rrr/$$model/leave_one_subject_out.yml" \
 			"configs/brain_treebank/cars_2/rrr/$$model/leave_one_subject_out.yml" \
-			"configs/cross_condition/region/$$model.yml" \
-			"configs/cross_condition/stimulus/$$model.yml" \
 			"configs/cross_dataset/podcast/from_fmri/$$model.yml" \
 			"configs/cross_dataset/cars-2/from_fmri/$$model.yml"; do
 			[ -f "$$config" ] || { echo "Missing final-results config: $$config" >&2; exit 2; }
@@ -421,8 +317,6 @@ final-results:
 			fmri_dependencies="$${fmri_dependencies:+$$fmri_dependencies:}$$fmri_id"
 			submit_job loso-podcast "$$model" scripts/run_rrr.py "configs/rrr/$$model/leave_one_subject_out.yml" >/dev/null
 			submit_job loso-cars-2 "$$model" scripts/run_rrr.py "configs/brain_treebank/cars_2/rrr/$$model/leave_one_subject_out.yml" >/dev/null
-			submit_job cross-condition-region "$$model" scripts/run_cross_condition_rrr.py "configs/cross_condition/region/$$model.yml" >/dev/null
-			submit_job cross-condition-stimulus "$$model" scripts/run_cross_condition_rrr.py "configs/cross_condition/stimulus/$$model.yml" >/dev/null
 		done
 		for model in $$models; do
 			submit_job from-fmri-to-podcast "$$model" scripts/run_rrr.py "configs/cross_dataset/podcast/from_fmri/$$model.yml" "$$fmri_dependencies" >/dev/null
@@ -435,8 +329,6 @@ final-results:
 			$(CMD) scripts/run_rrr.py --config "configs/fmri/within_fmri_cross_model_layer/$$model.yml" $(OVERRIDES)
 			$(CMD) scripts/run_rrr.py --config "configs/rrr/$$model/leave_one_subject_out.yml" $(OVERRIDES)
 			$(CMD) scripts/run_rrr.py --config "configs/brain_treebank/cars_2/rrr/$$model/leave_one_subject_out.yml" $(OVERRIDES)
-			$(CMD) scripts/run_cross_condition_rrr.py --config "configs/cross_condition/region/$$model.yml" $(OVERRIDES)
-			$(CMD) scripts/run_cross_condition_rrr.py --config "configs/cross_condition/stimulus/$$model.yml" $(OVERRIDES)
 		done
 		for model in $$models; do
 			$(CMD) scripts/run_rrr.py --config "configs/cross_dataset/podcast/from_fmri/$$model.yml" $(OVERRIDES)
@@ -444,7 +336,7 @@ final-results:
 		done
 	fi
 
-.PHONY: significance significance-missing missing-significance rrr multi-view target-dimensionality cross-condition final-results language-decoding language-decoding-missing missing-language-decoding
+.PHONY: significance significance-missing missing-significance rrr final-results language-decoding language-decoding-missing missing-language-decoding
 
 missing-significance: significance-missing
 missing-language-decoding: language-decoding-missing
