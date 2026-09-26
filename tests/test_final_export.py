@@ -31,7 +31,7 @@ def test_example_selection(monkeypatch, tmp_path, arguments, internal, loso):
     calls = []
     monkeypatch.setattr(final_export, "export_figures", lambda *args: calls.append(args))
     final_export.main(["--output-dir", str(tmp_path), *arguments])
-    assert calls == [(data, tmp_path, ["pdf", "png"], internal, loso)]
+    assert calls == [(data, tmp_path, ["pdf", "png", "svg"], internal, loso)]
 
 
 @pytest.mark.parametrize("index,key", [

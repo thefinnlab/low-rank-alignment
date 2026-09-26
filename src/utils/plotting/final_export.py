@@ -63,22 +63,27 @@ def export_figures(data, output_dir, formats, example_pair, loso_pair):
             quantiles, (.5, .75, .9, .95, .99, 1.0), variable="fraction")),
     ]
     paths = []
-    for name, build in jobs:
+    for index, (name, build) in enumerate(jobs, start=1):
+        print(f"[{index}/{len(jobs)}] Building {name}...", flush=True)
         figure = build()
         try:
             for extension in dict.fromkeys(formats):
                 path = output_dir / f"{name}.{extension}"
+                print(f"Saving {path}...", flush=True)
                 figure.savefig(path, dpi=300)
                 paths.append(path)
                 print(f"Saved {path}", flush=True)
         finally:
             plt.close(figure)
     table_path = output_dir / "significant_targets.tex"
+    print(f"Saving {table_path}...", flush=True)
     table_path.write_text(figures.significance_latex(significant, order) + "\n")
     paths.append(table_path)
     gaps_path = output_dir / "result_gaps.txt"
+    print(f"Saving {gaps_path}...", flush=True)
     gaps_path.write_text("\n".join(gaps) + ("\n" if gaps else ""))
     paths.append(gaps_path)
+    print(f"Export complete: {len(paths)} files in {output_dir}", flush=True)
     return paths
 
 
@@ -86,8 +91,8 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output-dir", type=Path, required=True,
                         help="Directory for exported figures (existing filenames are replaced)")
-    parser.add_argument("--format", nargs="+", choices=("pdf", "png"),
-                        default=["pdf", "png"], help="Output formats (default: pdf png)")
+    parser.add_argument("--format", nargs="+", choices=("pdf", "png", "svg"),
+                        default=["pdf", "png", "svg"], help="Output formats (default: pdf png svg)")
     parser.add_argument("--example-model", default="gpt2")
     parser.add_argument("--example-layer", type=_layer, default=0,
                         help="Example layer, or 'none' for a layerless model (default: 0)")
@@ -102,7 +107,9 @@ def main(argv=None):
     from src.utils.plotting.final_data import load_final_data
 
     results_root = Path(__file__).resolve().parents[3] / "results"
+    print(f"Loading result summaries from {results_root} (using the cache when valid)...", flush=True)
     data = load_final_data(results_root)
+    print("Result summaries loaded. Validating example model/layers...", flush=True)
     example_pair = (args.example_model, args.example_layer)
     loso_pair = (args.loso_example_model or args.example_model,
                  getattr(args, "loso_example_layer", args.example_layer))
