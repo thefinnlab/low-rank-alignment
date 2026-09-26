@@ -250,7 +250,7 @@ def best_rank_helpers(plt):
 
     def plot_target_best_rank(performances, mean_results, dataset_label, model, layer):
         fig, axes = plt.subplots(1, 2, figsize=(13, 4.2))
-        for method, color, label in (("rrr", "#2563eb", "RRR"), ("pca", "#16a34a", "PCA")):
+        for method, color, label in (("rrr", "#6ab2e2", "RRR"), ("pca", "#63bc51", "PCA")):
             method_results = mean_results.loc[mean_results["method"] == method].sort_values("rank")
             if method_results.empty:
                 axes[0].text(0.02, 0.95, f"{label} results unavailable", transform=axes[0].transAxes)
@@ -270,7 +270,7 @@ def best_rank_helpers(plt):
         axes[0].set(ylabel="Mean correlation", title="RRR versus PCA (saved results)")
         axes[0].legend()
         target_counts = []
-        for method, color, label in (("rrr", "#2563eb", "RRR"), ("pca", "#16a34a", "PCA")):
+        for method, color, label in (("rrr", "#6ab2e2", "RRR"), ("pca", "#63bc51", "PCA")):
             if method not in performances:
                 continue
             target_means, differences = summarize_target_best_rank(performances[method])
@@ -644,7 +644,7 @@ def rrr_aggregate_figure_helpers(
     plt,
 ):
     def plot_rrr_aggregate_figure(
-        sample_frames, sample_intervals, convergence_frames, distribution_frames,
+        sample_frames, convergence_frames, distribution_frames,
         distribution_methods, distribution_colors, distribution_tests, *, distribution_grid=(1, 3),
         percentage=100,
     ):
@@ -653,13 +653,15 @@ def rrr_aggregate_figure_helpers(
         fig = plt.figure(figsize=(19, 7.4))
         grid = fig.add_gridspec(3, 5, width_ratios=[1.25, 1.25, 1.0, 1.0, 1.0])
         method_colors = {
-            "rrr": "#2563eb", "pca": "#16a34a",
-            "RRR baseline": "#2563eb", "RRR transfer": "#f97316", "PCA baseline": "#16a34a",
-            "Within RRR": "#2563eb", "Within PCA": "#16a34a",
-            "Transfer RRR": "#dc2626", "Transfer PCA": "#9333ea",
+            "rrr": "#6ab2e2", "pca": "#63bc51",
+            "RRR baseline": "#6ab2e2", "RRR transfer": "#4b98cc", "PCA baseline": "#63bc51",
+            "Within RRR": "#6ab2e2", "Within PCA": "#63bc51",
+            "Transfer RRR": "#4b98cc", "Transfer PCA": "#45963a",
         }
         shared_sample_ax = None
         shared_convergence_ax = None
+        sample_legend_items = {}
+        convergence_legend_items = {}
         for row, dataset in enumerate(("podcast", "cars-2", "fmri")):
             sample_ax = fig.add_subplot(grid[row, 0], sharex=shared_sample_ax)
             convergence_ax = fig.add_subplot(grid[row, 1], sharex=shared_convergence_ax)
@@ -676,22 +678,17 @@ def rrr_aggregate_figure_helpers(
                     sample_ax.plot(
                         scores["rank"], scores["correlation"], "o",
                         color=color,
-                        linestyle="--" if method == "Full model baseline" else "-",
+                        linestyle="--" if method == "Full model baseline" or "transfer" in method.lower() else "-",
                         linewidth=1.7 if method == "Full model baseline" else 1.35,
                         markersize=2.2, label=str(method),
                     )
-                    if method != "Full model baseline":
-                        bounds = sample_intervals[dataset]
-                        bounds = bounds[bounds["method"] == method].set_index("rank")
-                        lower = bounds.loc[scores["rank"], "lower"].to_numpy()
-                        upper = bounds.loc[scores["rank"], "upper"].to_numpy()
-                        sample_ax.vlines(scores["rank"], lower, upper, color=color,
-                                         linewidth=1.0, alpha=0.75)
                 sample_ax.set_xscale("log", base=2)
-                sample_ax.legend(frameon=False, fontsize=10, ncol=2, handlelength=1.2)
+                for _handle, _label in zip(*sample_ax.get_legend_handles_labels()):
+                    _display_label = {"rrr": "RRR", "pca": "PCA"}.get(_label, _label)
+                    sample_legend_items.setdefault(_display_label, _handle)
                 sample_ax.grid(axis="y", alpha=.2)
-            sample_ax.set_title(f"{dataset_labels[dataset]} · sample rank curves", fontsize=14)
-            sample_ax.set_ylabel("Correlation", fontsize=13)
+            sample_ax.set_title(dataset_labels[dataset], fontsize=14)
+            sample_ax.set_ylabel("Correlation" if row == 1 else "", fontsize=13)
             sample_ax.set_xlabel("")
             sample_ax.tick_params(axis="both", labelsize=11)
             sample_ax.spines[["top", "right"]].set_visible(False)
@@ -715,20 +712,44 @@ def rrr_aggregate_figure_helpers(
                         x, y = normalized_performance_curve(ranks, values)
                         if x.size:
                             method_curves.append((x, y))
+                            convergence_ax.plot(
+                                x, y, color=method_colors.get(method, "#6b7280"),
+                                alpha=.10, linewidth=.65, zorder=1,
+                                linestyle="--" if "transfer" in method.lower() else "-",
+                            )
                     if method_curves:
                         aligned = np.asarray([np.interp(grid_x, x, y) for x, y in method_curves])
                         convergence_ax.plot(grid_x, aligned.mean(axis=0), linewidth=1.7,
-                                            color=method_colors.get(method, "#6b7280"), label=str(method))
+                                            color=method_colors.get(method, "#6b7280"),
+                                                linestyle="--" if "transfer" in method.lower() else "-",
+                                                label=str(method), zorder=3)
                 convergence_ax.set_xscale("symlog", linthresh=.01)
                 convergence_ax.set_xticks([0, .001, .01, .1, 1], ["0", ".1", "1", "10", "100%"])
                 convergence_ax.set(xlim=(0, 1), ylim=(-.02, 1.02))
-                convergence_ax.legend(frameon=False, fontsize=10, ncol=2, handlelength=1.2)
+                for _handle, _label in zip(*convergence_ax.get_legend_handles_labels()):
+                    _display_label = {"rrr": "RRR", "pca": "PCA"}.get(_label, _label)
+                    convergence_legend_items.setdefault(_display_label, _handle)
                 convergence_ax.grid(alpha=.2)
-            convergence_ax.set_title(f"{dataset_labels[dataset]} · mean convergence", fontsize=14)
-            convergence_ax.set_ylabel("Normalized performance", fontsize=13)
+            convergence_ax.set_title(dataset_labels[dataset], fontsize=14)
+            convergence_ax.set_ylabel("Normalized performance" if row == 1 else "", fontsize=13)
             convergence_ax.set_xlabel("")
             convergence_ax.tick_params(axis="both", labelsize=11)
             convergence_ax.spines[["top", "right"]].set_visible(False)
+
+        if sample_legend_items:
+            fig.legend(
+                list(sample_legend_items.values()), list(sample_legend_items),
+                loc="lower center", bbox_to_anchor=(.137, .84),
+                bbox_transform=fig.transFigure, frameon=False, fontsize=9,
+                ncol=2, handlelength=1.2, columnspacing=1.0,
+            )
+        if convergence_legend_items:
+            fig.legend(
+                list(convergence_legend_items.values()), list(convergence_legend_items),
+                loc="lower center", bbox_to_anchor=(.353, .84),
+                bbox_transform=fig.transFigure, frameon=False, fontsize=9,
+                ncol=2, handlelength=1.2, columnspacing=1.0,
+            )
 
         distribution_rows, distribution_cols = distribution_grid
         distribution_grid_spec = grid[:, 2:5].subgridspec(
@@ -746,9 +767,10 @@ def rrr_aggregate_figure_helpers(
                 shared_y_ax = ax
             _, ax = plot_rank_summary_distributions(
                 values, label, distribution_methods, distribution_colors,
-                metric="rank", percentage=percentage, tests=distribution_tests, ax=ax, compact_annotations=True,
+                metric="rank", percentage=percentage, tests=distribution_tests, ax=ax,
+                compact_annotations=True,
             )
-            ax.set_title(f"{label} · {percentage:g}% saturation", fontsize=13)
+            ax.set_title(label, fontsize=13)
             ax.set_ylabel("Saturation rank $k$" if col == 0 and row == 0 else "", fontsize=13)
             ax.tick_params(axis="y", labelleft=(col == 0 and row == 0), labelsize=10)
             ax.tick_params(axis="x", labelsize=10, labelrotation=35)
@@ -758,9 +780,12 @@ def rrr_aggregate_figure_helpers(
             ax.spines[["top", "right"]].set_visible(False)
 
         # Shared column labels keep the three dataset rows compact.
+        fig.text(.137, .965, "A. Sample Rank Curves", ha="center", va="bottom", fontsize=15, weight="bold")
+        fig.text(.353, .965, "B. Mean Convergence", ha="center", va="bottom", fontsize=15, weight="bold")
+        fig.text(.715, .965, f"C. Saturation Distributions ({percentage:g}% Peak Performance)", ha="center", va="bottom", fontsize=15, weight="bold")
         fig.text(.137, .025, "Rank $k$", ha="center", fontsize=14)
         fig.text(.353, .025, "Relative rank", ha="center", fontsize=14)
-        fig.subplots_adjust(left=.055, right=.985, top=.93, bottom=.12, hspace=.48, wspace=.36)
+        fig.subplots_adjust(left=.055, right=.985, top=.78, bottom=.12, hspace=.48, wspace=.36)
         return fig
 
 
@@ -769,15 +794,17 @@ def rrr_aggregate_figure_helpers(
         dataset_labels = {"podcast": "Podcast", "cars-2": "Cars 2", "fmri": "fMRI"}
         dataset_order = ("podcast", "cars-2", "fmri")
         method_styles = {
-            "Within RRR": ("#2563eb", "Within RRR"),
-            "Within PCA": ("#16a34a", "Within PCA"),
-            "Transfer RRR": ("#dc2626", "RRR transfer"),
-            "Transfer PCA": ("#9333ea", "PCA transfer"),
+            "Within RRR": ("#6ab2e2", "Within RRR"),
+            "Within PCA": ("#63bc51", "Within PCA"),
+            "Transfer RRR": ("#4b98cc", "RRR transfer"),
+            "Transfer PCA": ("#45963a", "PCA transfer"),
         }
         fig = plt.figure(figsize=(21, 10.5))
         grid = fig.add_gridspec(3, 6)
         directed_grid = grid[:, :3].subgridspec(2, 3, hspace=.48, wspace=.3)
         difference_grid = grid[:, 3:6].subgridspec(3, 1, hspace=.30)
+        fig.text(.28, .965, "A. Directed Transfer Curves", ha="center", va="bottom", fontsize=15, weight="bold")
+        fig.text(.75, .965, "B. Normalized AUC Differences", ha="center", va="bottom", fontsize=15, weight="bold")
         internal_transfer_ax = fig.add_subplot(difference_grid[0, 0])
         saturation_ax = fig.add_subplot(difference_grid[1, 0], sharex=internal_transfer_ax)
         pca_internal_transfer_ax = fig.add_subplot(difference_grid[2, 0], sharex=internal_transfer_ax)
@@ -808,13 +835,15 @@ def rrr_aggregate_figure_helpers(
                         x, y = normalized_performance_curve(curve["rank"], curve["correlation"])
                         if x.size:
                             method_curves.append((x, y))
-                            ax.plot(x, y, color=color, alpha=.10, linewidth=.65, zorder=1)
+                            ax.plot(x, y, color=color, alpha=.10, linewidth=.65, zorder=1,
+                                    linestyle="--" if method.startswith("Transfer ") else "-")
                     if method_curves:
                         aligned = np.asarray([
                             np.interp(relative_rank_grid, x, y) for x, y in method_curves
                         ])
                         ax.plot(relative_rank_grid, aligned.mean(axis=0), color=color,
-                                linewidth=1.6, label=label, zorder=3)
+                                linewidth=1.6, label=label, zorder=3,
+                                linestyle="--" if method.startswith("Transfer ") else "-")
                 ax.set_xscale("symlog", linthresh=.01)
                 ax.set_xticks([0, .001, .01, .1, 1], ["0", ".1", "1", "10", "100%"])
                 ax.set(xlim=(0, 1), ylim=(-.02, 1.02))
@@ -992,7 +1021,7 @@ def rrr_aggregate_figure_helpers(
         internal_transfer_ax.set_xlim(.45, len(directed_labels) + .55)
         _auc_span = max(abs(_difference_min), abs(_difference_max), 0.01)
         internal_transfer_ax.set_ylim(-1.12 * _auc_span, 1.24 * _auc_span)
-        internal_transfer_ax.set_ylabel("AUC difference", fontsize=12)
+        internal_transfer_ax.set_ylabel("")
         internal_transfer_ax.set_title(
             "Internal RRR − transfer RRR normalized AUC", fontsize=14
         )
@@ -1058,7 +1087,7 @@ def rrr_aggregate_figure_helpers(
         pca_internal_transfer_ax.set_xlim(.45, len(directed_labels) + .55)
         _auc_span = max(abs(_difference_min), abs(_difference_max), 0.01)
         pca_internal_transfer_ax.set_ylim(-1.12 * _auc_span, 1.24 * _auc_span)
-        pca_internal_transfer_ax.set_ylabel("AUC difference", fontsize=12)
+        pca_internal_transfer_ax.set_ylabel("")
         pca_internal_transfer_ax.set_title(
             "Internal PCA − transfer PCA normalized AUC", fontsize=14
         )
@@ -1071,8 +1100,8 @@ def rrr_aggregate_figure_helpers(
         saturation_ax.tick_params(axis="x", labelbottom=False)
         saturation_ax.set_xlabel("")
         pca_internal_transfer_ax.set_xlabel("Directed source → target comparison", fontsize=13)
-        fig.text(.28, .025, "Relative rank", ha="center", fontsize=13)
-        fig.subplots_adjust(left=.045, right=.99, top=.96, bottom=.15, hspace=.48, wspace=.42)
+        fig.text(.28, .075, "Relative rank", ha="center", fontsize=13)
+        fig.subplots_adjust(left=.045, right=.99, top=.88, bottom=.15, hspace=.48, wspace=.42)
         return fig
 
 
@@ -1133,8 +1162,24 @@ def rrr_aggregate_figure_helpers(
                 line_x = np.linspace(points[:, 0].min(), points[:, 0].max(), 100)
                 ax.plot(line_x, slope * line_x + intercept, color="#111827",
                         linewidth=2, label="Pooled linear fit")
-            r = pd.Series(points[:, 0]).corr(pd.Series(points[:, 1]))
-            ax.set_title(f"Internal − transfer AUC gaps across directed datasets\nPearson r = {r:.2f}, n = {len(points)}", fontsize=14)
+            from scipy.stats import pearsonr as _pearsonr
+            if len(points) >= 2 and np.unique(points[:, 0]).size > 1 and np.unique(points[:, 1]).size > 1:
+                _correlation_result = _pearsonr(points[:, 0], points[:, 1])
+                r = _correlation_result.statistic
+                _p_value = _correlation_result.pvalue
+            else:
+                r = pd.Series(points[:, 0]).corr(pd.Series(points[:, 1]))
+                _p_value = np.nan
+            _p_text = (
+                "p<.001" if np.isfinite(_p_value) and _p_value < .001
+                else f"p={_p_value:.3f}" if np.isfinite(_p_value)
+                else "p=NA"
+            )
+            ax.set_title(
+                f"Internal − transfer AUC gaps across directed datasets\n"
+                f"Pearson r = {r:.2f}, {_p_text}, n = {len(points)}",
+                fontsize=14,
+            )
             ax.set_xlim(limits)
             ax.set_ylim(limits)
             ax.legend(frameon=False, fontsize=10, loc="center left", bbox_to_anchor=(1.02, .5))
@@ -1258,8 +1303,8 @@ def rrr_aggregate_figure_helpers(
 
         positions = np.arange(2)
         width = .33
-        variance_ax.bar(positions - width / 2, pca_r2, width, color="#16a34a", label="PCA gap only")
-        variance_ax.bar(positions + width / 2, full_r2, width, color="#2563eb", label="PCA gap + feature r")
+        variance_ax.bar(positions - width / 2, pca_r2, width, color="#63bc51", label="PCA gap only")
+        variance_ax.bar(positions + width / 2, full_r2, width, color="#6ab2e2", label="PCA gap + feature r")
         for x_values, scores in ((positions - width / 2, pca_r2), (positions + width / 2, full_r2)):
             for x, score in zip(x_values, scores):
                 variance_ax.text(x, score + (.012 if score >= 0 else -.012), f"{score:.2f}",
@@ -1283,7 +1328,6 @@ def rrr_aggregate_figure_helpers(
         fig.subplots_adjust(left=.07, right=.98, top=.83, bottom=.15, wspace=.28)
         return fig
 
-
     return (
         cross_dataset_gap_regression_data,
         plot_cross_dataset_aggregate_figure,
@@ -1294,196 +1338,10 @@ def rrr_aggregate_figure_helpers(
 
 
 @app.cell(hide_code=True)
-def sample_rank_interval_loader(
-    Artifact,
-    DATASET_ROOTS,
-    REPO_ROOT,
-    internal_rrr_artifact,
-    lru_cache,
-    np,
-    pd,
-):
-    @lru_cache(maxsize=24)
-    def load_sample_rank_intervals(dataset, model, layer, mode, n_boot=2000):
-        """Load target curves and compute paired hierarchical bootstrap intervals."""
-        if mode == "internal":
-            artifact = internal_rrr_artifact(
-                dataset=dataset, model=model, layer=layer, results_root=REPO_ROOT / "results"
-            ).load_artifacts(["rank_metrics", "target_manifest"])
-        elif mode == "leave_one_subject_out":
-            artifact = Artifact(
-                mode=mode, dataset=DATASET_ROOTS[dataset], model=model, layer=layer,
-                results_root=REPO_ROOT / "results",
-            ).load_artifacts(["rank_metrics", "target_manifest"])
-        else:
-            raise ValueError(f"Unsupported sample-curve mode: {mode}")
-
-        is_fmri = dataset == "fmri"
-        manifests = {tuple(sorted(dict(selector).items())): frame.reset_index(drop=True)
-                     for selector, frame in artifact.target_manifest.items()}
-        grouped_manifests = {}
-        fold_curves = {}
-
-        def target_groups(selector):
-            if mode == "internal":
-                key = () if is_fmri else (("method", selector.get("method", "rrr")),)
-            else:
-                key = tuple(sorted((
-                    ("held_out_subject", selector["held_out_subject"]),
-                    ("loso_phase", selector["loso_phase"]),
-                    ("method", selector["method"]),
-                )))
-            if key not in grouped_manifests:
-                manifest = manifests[key]
-                if is_fmri:
-                    codes = np.arange(len(manifest))
-                    ids = manifest["voxel_index"].to_numpy()
-                else:
-                    identities = pd.MultiIndex.from_frame(manifest[["subject", "electrode"]])
-                    codes, unique = pd.factorize(identities, sort=False)
-                    ids = unique.get_level_values(1).to_numpy()
-                subjects = manifest["subject"].astype(str).to_numpy()
-                group_subjects = subjects if is_fmri else subjects[np.unique(codes, return_index=True)[1]]
-                grouped_manifests[key] = (codes, ids, group_subjects)
-            return grouped_manifests[key]
-
-        def add_curve(selector, metrics, label, rank, metric_name):
-            if metric_name not in metrics:
-                return
-            values = np.asarray(metrics[metric_name], dtype=float).reshape(-1)
-            codes, ids, subjects = target_groups(selector)
-            if len(values) != len(codes):
-                raise ValueError(f"{dataset}/{model}/{mode}: metric and manifest target counts differ")
-            z = np.arctanh(np.clip(values, -1 + 1e-7, 1 - 1e-7))
-            if not is_fmri:
-                finite = np.isfinite(z)
-                sums = np.bincount(codes, weights=np.where(finite, z, 0), minlength=len(ids))
-                counts = np.bincount(codes, weights=finite.astype(float), minlength=len(ids))
-                z = np.divide(sums, counts, out=np.full(len(ids), np.nan), where=counts > 0)
-            fold = selector.get("fold")
-            for subject in np.unique(subjects):
-                mask = subjects == subject
-                fold_curves.setdefault((label, rank, subject), []).append((fold, ids[mask], z[mask]))
-
-        for selector, metrics in artifact.rank_metrics.items():
-            selector = dict(selector)
-            rank = selector.get("rank")
-            if rank is None:
-                continue
-            if mode == "internal":
-                method = selector.get("method")
-                if method not in ("rrr", "pca"):
-                    continue
-                metric_name = "corr_per_target" if is_fmri else (
-                    "nr_orth_corr_per_target" if method == "rrr" else "pca_corr_per_target"
-                )
-                label = method
-            else:
-                phase_key = (selector.get("method"), selector.get("loso_phase"))
-                labels = {("rrr", "baseline"): "RRR baseline",
-                          ("rrr", "transfer"): "RRR transfer",
-                          ("pca", "baseline"): "PCA baseline"}
-                if phase_key not in labels:
-                    continue
-                label = labels[phase_key]
-                metric_name = "corr_per_target" if is_fmri else {
-                    ("rrr", "baseline"): "nr_orth_corr_per_target",
-                    ("rrr", "transfer"): "transfer_orth_corr_per_target",
-                    ("pca", "baseline"): "pca_corr_per_target",
-                }[phase_key]
-            add_curve(selector, metrics, label, int(rank), metric_name)
-
-        curves = sorted({(method, rank) for method, rank, _ in fold_curves})
-        if not curves:
-            raise ValueError(f"No target curves for {dataset}/{model}/{mode}")
-        subjects = sorted({subject for _, _, subject in fold_curves})
-        matrices = []
-        for subject in subjects:
-            columns = []
-            reference_ids = None
-            for method, rank in curves:
-                entries = fold_curves.get((method, rank, subject))
-                if not entries:
-                    raise ValueError(f"Missing {method} rank {rank} for subject {subject}")
-                ids = entries[0][1]
-                if any(not np.array_equal(ids, entry[1]) for entry in entries[1:]):
-                    raise ValueError(f"Target order differs between folds for {subject}")
-                if reference_ids is None:
-                    reference_ids = ids
-                elif not np.array_equal(reference_ids, ids):
-                    raise ValueError(f"Target order differs between methods or ranks for {subject}")
-                columns.append(np.nanmean(np.stack([entry[2] for entry in entries]), axis=0))
-            matrices.append(np.column_stack(columns))
-        del artifact, fold_curves
-
-        rng = np.random.default_rng(1729)
-        draws = np.empty((n_boot, len(curves)))
-        subject_count = len(subjects)
-        for bootstrap in range(n_boot):
-            sampled_subjects = rng.integers(subject_count, size=subject_count)
-            numerator = np.zeros(len(curves))
-            denominator = np.zeros(len(curves))
-            subject_means = np.empty((subject_count, len(curves)))
-            for position, subject_index in enumerate(sampled_subjects):
-                matrix = matrices[subject_index]
-                sampled_targets = matrix[rng.integers(len(matrix), size=len(matrix))]
-                finite = np.isfinite(sampled_targets)
-                sums = np.where(finite, sampled_targets, 0).sum(axis=0)
-                counts = finite.sum(axis=0)
-                numerator += sums
-                denominator += counts
-                subject_means[position] = np.divide(
-                    sums, counts, out=np.full(len(curves), np.nan), where=counts > 0
-                )
-            if mode == "internal":
-                draws[bootstrap] = np.tanh(np.divide(
-                    numerator, denominator, out=np.full(len(curves), np.nan),
-                    where=denominator > 0,
-                ))
-            else:
-                draws[bootstrap] = np.nanmean(np.tanh(subject_means), axis=0)
-        bounds = np.nanquantile(draws, [0.025, 0.975], axis=0)
-        return pd.DataFrame({
-            "method": [method for method, _ in curves],
-            "rank": [rank for _, rank in curves],
-            "lower": bounds[0], "upper": bounds[1],
-        })
-
-
-    return (load_sample_rank_intervals,)
-
-
-@app.cell(hide_code=True)
-def sample_rank_interval_data(
-    load_sample_rank_intervals,
-    loso_model_layer_selector,
-    model_layer_selector,
-):
-    _internal_pair_for_intervals = model_layer_selector.value
-    _loso_pair_for_intervals = loso_model_layer_selector.value
-    internal_sample_intervals = {
-        _dataset: load_sample_rank_intervals(
-            _dataset, _internal_pair_for_intervals[0], _internal_pair_for_intervals[1], "internal"
-        )
-        for _dataset in ("podcast", "cars-2", "fmri")
-    }
-    loso_sample_intervals = {
-        _dataset: load_sample_rank_intervals(
-            _dataset, _loso_pair_for_intervals[0], _loso_pair_for_intervals[1],
-            "leave_one_subject_out",
-        )
-        for _dataset in ("podcast", "cars-2", "fmri")
-    }
-
-    return internal_sample_intervals, loso_sample_intervals
-
-
-@app.cell(hide_code=True)
 def rrr_aggregate_figures(
     METHOD_COLORS,
+    QUANTILE_PEAK_FLOOR,
     REPO_ROOT,
-    calculate_loso_summary_values,
-    calculate_saturation_ranks,
     cross_curve_depth,
     cross_curve_mode,
     cross_curve_model,
@@ -1493,17 +1351,18 @@ def rrr_aggregate_figures(
     internal_curve_depth,
     internal_curve_mode,
     internal_curve_model,
+    internal_quantile_saturation,
     internal_rrr_artifact,
-    internal_sample_intervals,
     internal_saturation_percent,
     internal_summary_curves,
     language_decoding_internal_consensus_auc,
+    loso_auc_rrr_baseline_source,
     loso_curve_depth,
     loso_curve_mode,
     loso_curve_model,
     loso_model_layer_selector,
+    loso_quantile_saturation,
     loso_rank_curves_by_dataset,
-    loso_sample_intervals,
     loso_saturation_percent,
     loso_summary_curves_by_dataset,
     mo,
@@ -1573,10 +1432,14 @@ def rrr_aggregate_figures(
         _internal_convergence[_dataset] = _filtered.assign(
             correlation=lambda _x: np.tanh(_x["mean_fisher_z"])
         )
-        _internal_sat = calculate_saturation_ranks(_filtered, _internal_pct / 100)
-        _internal_distributions.append((_labels[_dataset], _internal_sat))
+        _internal_sat = internal_quantile_saturation(
+            _dataset, _filtered, _internal_pct / 100,
+        )
+        _internal_distributions.append((
+            _labels[_dataset], _internal_sat
+        ))
     _internal_figure = plot_rrr_aggregate_figure(
-        _internal_sample, internal_sample_intervals, _internal_convergence, _internal_distributions,
+        _internal_sample, _internal_convergence, _internal_distributions,
         {"RRR": "rrr", "PCA": "pca"}, METHOD_COLORS,
         [{"first": "RRR", "second": "PCA", "alternative": "less"}],
         percentage=_internal_pct,
@@ -1604,14 +1467,17 @@ def rrr_aggregate_figures(
             loso_curve_model.value, loso_curve_depth.value,
         )
         _loso_convergence[_dataset] = _filtered
-        _loso_sat = calculate_loso_summary_values(
-            _filtered, metric="rank", fraction=_loso_pct / 100
+        _loso_sat = loso_quantile_saturation(
+            _dataset, _filtered, _loso_pct / 100,
+            baseline_source=loso_auc_rrr_baseline_source.value,
         )
-        _loso_distributions.append((_labels[_dataset], _loso_sat))
+        _loso_distributions.append((
+            _labels[_dataset], _loso_sat
+        ))
     _loso_figure = plot_rrr_aggregate_figure(
-        _loso_sample, loso_sample_intervals, _loso_convergence, _loso_distributions,
+        _loso_sample, _loso_convergence, _loso_distributions,
         {"RRR baseline": "RRR baseline", "RRR transfer": "RRR transfer", "PCA baseline": "PCA baseline"},
-        {"RRR baseline": "#2563eb", "RRR transfer": "#f97316", "PCA baseline": "#16a34a"},
+        {"RRR baseline": "#6ab2e2", "RRR transfer": "#4b98cc", "PCA baseline": "#63bc51"},
         [
             {"first": "RRR transfer", "second": "PCA baseline", "alternative": "less"},
             {"first": "RRR baseline", "second": "RRR transfer", "alternative": "less"},
@@ -1634,9 +1500,16 @@ def rrr_aggregate_figures(
         _directed_curves_by_target, language_decoding_internal_consensus_auc
     )
     _gap_regression_figure = plot_cross_dataset_gap_regression(_gap_regression_data)
+    for _figure in (
+        _internal_figure, _loso_figure, _cross_figure,
+        _cross_gap_figure, _gap_regression_figure,
+    ):
+        for _artist in _figure.findobj():
+            if hasattr(_artist, "get_fontsize") and hasattr(_artist, "set_fontsize"):
+                _artist.set_fontsize(_artist.get_fontsize() * 1.2)
+
     mo.vstack([
-        mo.md("Sample rank curves: vertical bars are 95% percentile bootstrap intervals "
-              "from 2,000 paired draws of subjects, then electrodes (iEEG) or voxels (fMRI)."),
+        mo.md(f"Sample rank curves show mean correlation at each rank; saturation requires every target quantile peaking above {QUANTILE_PEAK_FLOOR:g} to reach the selected percentage of its own peak."),
         _internal_figure, _loso_figure, _cross_figure,
         mo.md("### Cross-dataset AUC gap correlation"),
         _cross_gap_figure,
@@ -1662,8 +1535,10 @@ def language_decoding_aggregate_figure(
     np,
     plt,
 ):
+    from scipy.stats import pearsonr as _pearsonr
     _aggregate_datasets = ("Cars 2", "Podcast", "fMRI")
-    _aggregate_colors = {"Cars 2": "#f59e0b", "Podcast": "#2563eb", "fMRI": "#16a34a"}
+    _aggregate_line_color = "#4b5563"
+    _aggregate_linestyles = {"Cars 2": "-", "Podcast": "--", "fMRI": ":"}
     _aggregate_examples = (
         ("concreteness", "Concreteness"),
         ("sentence_position", "Sentence position"),
@@ -1705,7 +1580,8 @@ def language_decoding_aggregate_figure(
             if not _curve.empty:
                 _left.plot(
                     _curve["k"], _curve["Average relative difference"],
-                    color=_aggregate_colors[_dataset], linewidth=2.1,
+                    color=_aggregate_line_color,
+                    linestyle=_aggregate_linestyles[_dataset], linewidth=2.1,
                     marker="o", markersize=3.5, label=_dataset,
                 )
         _left.axhline(0, color="#111827", linewidth=.8, linestyle="--")
@@ -1714,7 +1590,7 @@ def language_decoding_aggregate_figure(
         if _ranks:
             _left.set_xticks(_ranks, [str(_rank) for _rank in _ranks])
         _left.set_title(_title, fontsize=12)
-        _left.set_ylabel("Mean RRR–PCA difference", fontsize=9)
+        _left.set_ylabel("Mean RRR–PCA difference" if _row == 1 else "", fontsize=9)
         _left.tick_params(axis="both", labelsize=8)
         if _row < 2:
             _left.tick_params(axis="x", labelbottom=False)
@@ -1723,9 +1599,64 @@ def language_decoding_aggregate_figure(
         if _row == 0:
             _handles, _labels = _left.get_legend_handles_labels()
             _fig.legend(_handles, _labels, frameon=False, ncol=3, fontsize=9,
-                        loc="upper left", bbox_to_anchor=(.07, .995))
+                        loc="upper center", bbox_to_anchor=(.19, .925))
         if _example.empty:
             _left.text(.5, .5, "No selected model/layer results", ha="center", va="center", transform=_left.transAxes)
+        _left_initial_ylim = _left.get_ylim()
+        _left_bound = max(abs(_left_initial_ylim[0]), abs(_left_initial_ylim[1]), 1e-12)
+        _left.set_ylim(-_left_bound, _left_bound)
+        _left_position = _left.get_position()
+        _left.set_position([
+            _left_position.x0, _left_position.y0,
+            _left_position.width * .80, _left_position.height,
+        ])
+        _left_xlim, _left_ylim = _left.get_xlim(), _left.get_ylim()
+        _gradient_scale = max(abs(_left_ylim[0]), abs(_left_ylim[1]), 1e-12)
+        _gradient_values = np.linspace(*_left_ylim, 256) / _gradient_scale
+        _gradient_white = np.ones(3)
+        _gradient_green = np.array([99, 188, 81]) / 255
+        _gradient_blue = np.array([106, 178, 226]) / 255
+        _gradient_rgb = np.where(
+            _gradient_values[:, None] < 0,
+            _gradient_white - _gradient_values[:, None] * (_gradient_green - _gradient_white),
+            _gradient_white + _gradient_values[:, None] * (_gradient_blue - _gradient_white),
+        )
+        _gradient_image = np.repeat(_gradient_rgb[:, None, :], 2, axis=1)
+        _left.imshow(
+            _gradient_image,
+            extent=(*_left_xlim, *_left_ylim),
+            origin="lower",
+            aspect="auto",
+            alpha=.25,
+            interpolation="bilinear",
+            zorder=-10,
+        )
+        _left.set_xlim(_left_xlim)
+        _left.set_ylim(_left_ylim)
+        _left.annotate(
+            "", xy=(1.03, .76), xytext=(1.03, .55),
+            xycoords="axes fraction", textcoords="axes fraction",
+            arrowprops={"arrowstyle": "->", "color": "#6ab2e2", "linewidth": 1.5},
+            annotation_clip=False, clip_on=False,
+        )
+        if _row == 1:
+            _left.text(
+                1.07, .83, "RRR better", transform=_left.transAxes,
+                ha="center", va="center", rotation=90,
+                color="#6ab2e2", fontsize=7, clip_on=False,
+            )
+        _left.annotate(
+            "", xy=(1.03, .24), xytext=(1.03, .45),
+            xycoords="axes fraction", textcoords="axes fraction",
+            arrowprops={"arrowstyle": "->", "color": "#63bc51", "linewidth": 1.5},
+            annotation_clip=False, clip_on=False,
+        )
+        if _row == 1:
+            _left.text(
+                1.07, .17, "PCA better", transform=_left.transAxes,
+                ha="center", va="center", rotation=90,
+                color="#63bc51", fontsize=7, clip_on=False,
+            )
         _left.grid(axis="y", alpha=.2)
         _left.spines[["top", "right"]].set_visible(False)
 
@@ -1743,8 +1674,29 @@ def language_decoding_aggregate_figure(
                 _slope, _intercept = np.polyfit(_pair_points[_x_name], _pair_points[_y_name], 1)
                 _line_x = np.linspace(_pair_points[_x_name].min(), _pair_points[_x_name].max(), 100)
                 _right.plot(_line_x, _slope * _line_x + _intercept, color="#111827", linewidth=2)
-            _r = _pair_points[_x_name].corr(_pair_points[_y_name])
-            _right.set_title(f"{_x_name} vs {_y_name}\nPearson r = {_r:.2f}, n = {len(_pair_points)}", fontsize=11)
+            if (
+                len(_pair_points) >= 2
+                and _pair_points[_x_name].nunique() > 1
+                and _pair_points[_y_name].nunique() > 1
+            ):
+                _correlation_result = _pearsonr(
+                    _pair_points[_x_name], _pair_points[_y_name]
+                )
+                _r = _correlation_result.statistic
+                _p_value = _correlation_result.pvalue
+            else:
+                _r = _pair_points[_x_name].corr(_pair_points[_y_name])
+                _p_value = np.nan
+            _p_text = (
+                "p<.001" if np.isfinite(_p_value) and _p_value < .001
+                else f"p={_p_value:.3f}" if np.isfinite(_p_value)
+                else "p=NA"
+            )
+            _right.set_title(
+                f"{_x_name} vs {_y_name}\nPearson r = {_r:.2f}, {_p_text}\n"
+                f"n = {len(_pair_points)}",
+                fontsize=11,
+            )
         else:
             _right.set_title(f"{_x_name} vs {_y_name}", fontsize=12)
             _right.text(.5, .5, "No selected model/layer pairs", ha="center", va="center", transform=_right.transAxes)
@@ -1755,7 +1707,18 @@ def language_decoding_aggregate_figure(
         _right.tick_params(axis="both", labelsize=8)
         _right.grid(alpha=.2)
         _right.spines[["top", "right"]].set_visible(False)
-    _fig.subplots_adjust(left=.07, right=.99, top=.88, bottom=.12)
+    _fig.text(
+        .19, .95, "A. Relative-Difference Curves",
+        ha="center", va="bottom", fontsize=15, weight="bold",
+    )
+    _fig.text(
+        .72, .95, "B. Cross-Dataset AUC Correlations",
+        ha="center", va="bottom", fontsize=15, weight="bold",
+    )
+    _fig.subplots_adjust(left=.07, right=.99, top=.82, bottom=.12)
+    for _artist in _fig.findobj():
+        if hasattr(_artist, "get_fontsize") and hasattr(_artist, "set_fontsize"):
+            _artist.set_fontsize(_artist.get_fontsize() * 1.45)
     mo.vstack([
         mo.md("## Language decoding aggregate figure"),
         _fig,
@@ -1769,79 +1732,23 @@ def language_decoding_aggregate_figure(
 
 
 @app.cell(hide_code=True)
-def normalized_performance_curve(np):
-    def normalized_performance_curve(ranks, performances):
-        """Return relative ranks and a monotonic performance curve in [0, 1]."""
-        ranks = np.asarray(ranks, dtype=float)
-        performances = np.asarray(performances, dtype=float)
-        usable = np.isfinite(ranks) & np.isfinite(performances)
-        ranks = ranks[usable]
-        performances = performances[usable]
-        if ranks.size < 2:
-            return np.array([], dtype=float), np.array([], dtype=float)
-
-        order = np.argsort(ranks)
-        ranks = ranks[order]
-        performances = performances[order]
-        unique_ranks, inverse = np.unique(ranks, return_inverse=True)
-        if unique_ranks.size != ranks.size:
-            rank_sums = np.bincount(inverse, weights=performances)
-            rank_counts = np.bincount(inverse)
-            performances = rank_sums / rank_counts
-            ranks = unique_ranks
-        if ranks.size < 2 or ranks[-1] == ranks[0]:
-            return np.array([], dtype=float), np.array([], dtype=float)
-
-        curve = np.maximum.accumulate(np.maximum(performances, 0))
-        maximum = np.nanmax(curve)
-        if not np.isfinite(maximum) or maximum <= 0:
-            return np.array([], dtype=float), np.array([], dtype=float)
-        relative_ranks = (ranks - ranks[0]) / (ranks[-1] - ranks[0])
-        return relative_ranks, curve / maximum
+def normalized_performance_curve(REPO_ROOT, np):
+    from src.utils.rrr.plot_metrics import (
+        monotonic_normalized_curve as normalized_performance_curve,
+    )
 
     return (normalized_performance_curve,)
 
 
 @app.cell(hide_code=True)
-def normalized_log_rank_auc(np):
-    def normalized_log_rank_auc(ranks, performances):
-        """Calculate monotonic normalized-performance AUC over normalized log rank."""
-        ranks = np.asarray(ranks, dtype=float)
-        performances = np.asarray(performances, dtype=float)
-        usable = np.isfinite(ranks) & np.isfinite(performances) & (ranks > 0)
-        ranks = ranks[usable]
-        performances = performances[usable]
-        if ranks.size < 2:
-            return np.nan
-
-        order = np.argsort(ranks)
-        ranks = ranks[order]
-        performances = performances[order]
-        unique_ranks, inverse = np.unique(ranks, return_inverse=True)
-        if unique_ranks.size != ranks.size:
-            performance_sums = np.bincount(inverse, weights=performances)
-            performance_counts = np.bincount(inverse)
-            performances = performance_sums / performance_counts
-            ranks = unique_ranks
-        if ranks.size < 2 or not np.isclose(ranks[0], 1.0):
-            raise ValueError(
-                f"Log-rank AUC requires every curve to begin at rank 1; got {ranks[0]:g}"
-            )
-
-        curve = np.maximum.accumulate(np.maximum(performances, 0))
-        maximum = np.nanmax(curve)
-        if not np.isfinite(maximum) or maximum <= 0:
-            return np.nan
-        normalized_curve = curve / maximum
-        log_ranks = np.log(ranks)
-        normalized_log_ranks = log_ranks / log_ranks[-1]
-        return float(np.trapezoid(normalized_curve, x=normalized_log_ranks))
+def normalized_log_rank_auc(REPO_ROOT, np):
+    from src.utils.rrr.plot_metrics import normalized_log_rank_auc
 
     return (normalized_log_rank_auc,)
 
 
 @app.cell(hide_code=True)
-def _(normalized_log_rank_auc, np, pd):
+def _(interpolated_saturation_rank, normalized_log_rank_auc, np, pd):
     def fisher_mean(values):
         """Average correlations in Fisher-z space and return a correlation."""
         values = np.asarray(values, dtype=float)
@@ -1859,16 +1766,11 @@ def _(normalized_log_rank_auc, np, pd):
 
 
     def saturation_rank(ranks, correlations, fraction=1.0):
-        """First tested rank reaching the requested fraction of peak correlation."""
-        if not 0 < fraction <= 1:
-            raise ValueError("Saturation fraction must be in (0, 1].")
+        """First interpolated rank reaching a fraction of peak correlation."""
         scores = mean_rank_correlations(pd.DataFrame({"rank": ranks, "correlation": correlations}))
-        scores = scores[np.isfinite(scores["correlation"]) & (scores["rank"] > 0)]
-        if scores.empty:
-            return np.nan
-        maximum = scores["correlation"].max()
-        reached = scores[scores["correlation"] >= fraction * maximum]
-        return float(reached.iloc[0]["rank"]) if not reached.empty else np.nan
+        return interpolated_saturation_rank(
+            scores["rank"], scores["correlation"], fraction
+        )
 
 
     def summarize_rank_curves(curves, keys, *, metric, fraction=1.0):
@@ -1882,20 +1784,384 @@ def _(normalized_log_rank_auc, np, pd):
                 rows.append(dict(zip(keys, identity)) | {metric: value})
         return pd.DataFrame(rows, columns=[*keys, metric])
 
-
     return fisher_mean, mean_rank_correlations, summarize_rank_curves
 
 
 @app.cell(hide_code=True)
-def calculate_saturation_ranks(summarize_rank_curves):
-    def calculate_saturation_ranks(correlations, fraction=1.0):
-        """First tested rank reaching a fraction of each method/layer's peak correlation."""
-        return summarize_rank_curves(
-            correlations, ["model", "layer", "method"], metric="rank", fraction=fraction
+def saturation_interpolation(np):
+    def interpolated_saturation_rank(ranks, correlations, fraction):
+        """Linearly interpolate the first threshold crossing in rank coordinates."""
+        if not 0 < fraction <= 1:
+            raise ValueError("Saturation fraction must be in (0, 1].")
+        ranks = np.asarray(ranks, dtype=float)
+        correlations = np.asarray(correlations, dtype=float)
+        finite = np.isfinite(ranks) & np.isfinite(correlations)
+        ranks, correlations = ranks[finite], correlations[finite]
+        if not len(ranks):
+            return np.nan
+        order = np.argsort(ranks)
+        ranks, correlations = ranks[order], correlations[order]
+        threshold = fraction * correlations.max()
+        reached = np.flatnonzero(correlations >= threshold)
+        if not len(reached):
+            return np.nan
+        index = int(reached[0])
+        if index == 0:
+            return float(ranks[0])
+        left, right = correlations[index - 1], correlations[index]
+        if right == left:
+            return float(ranks[index])
+        weight = (threshold - left) / (right - left)
+        return float(ranks[index - 1] + weight * (ranks[index] - ranks[index - 1]))
+
+
+    return (interpolated_saturation_rank,)
+
+
+@app.cell(hide_code=True)
+def quantile_saturation_helpers(
+    Artifact,
+    DATASET_ROOTS,
+    FMRI_INPUT_SCALING_VARIANT,
+    REPO_ROOT,
+    internal_rrr_artifact,
+    load_rrr_target_performances,
+    lru_cache,
+    np,
+    pd,
+):
+    QUANTILE_LEVELS = (0.05, 0.10, 0.25, 0.50, 0.75, 0.90, 0.95)
+    QUANTILE_PEAK_FLOOR = 0.005
+
+
+    def quantile_saturation_rank(rank_quantiles, fraction, min_peak=QUANTILE_PEAK_FLOOR):
+        """First rank where all quantiles above the peak floor crossed their threshold."""
+        from src.utils.rrr.plot_metrics import quantile_saturation_rank as calculate
+
+        return calculate(
+            rank_quantiles.index.to_numpy(dtype=float),
+            rank_quantiles.to_numpy(dtype=float), fraction, min_peak,
         )
 
 
-    return (calculate_saturation_ranks,)
+    def mean_target_correlations(frame, keys=("rank", "target")):
+        """Average repeated target observations in Fisher-z space."""
+        values = frame[[*keys, "correlation"]].copy()
+        values["fisher_z"] = np.arctanh(np.clip(
+            values.pop("correlation").to_numpy(dtype=float), -1 + 1e-7, 1 - 1e-7,
+        ))
+        result = values.groupby(list(keys), dropna=False, sort=False, as_index=False)[
+            "fisher_z"
+        ].mean()
+        result["correlation"] = np.tanh(result.pop("fisher_z"))
+        return result
+
+
+    def calculate_quantile_saturation_ranks(correlations, *, keys, fraction=1.0, quantiles=QUANTILE_LEVELS):
+        """Average each target over folds, then require every eligible quantile to saturate.
+
+        ``keys`` identify independent curves. A target is one electrode or voxel,
+        with LOSO subjects kept separate when ``subject`` is included in ``keys``.
+        """
+        if not quantiles or any(not 0 < q < 1 for q in quantiles):
+            raise ValueError("Quantiles must be a non-empty sequence in (0, 1).")
+        required = set(keys) | {"rank", "target", "correlation"}
+        missing = required.difference(correlations.columns)
+        if missing:
+            raise ValueError(f"Missing target correlation columns: {sorted(missing)}")
+        if correlations.empty:
+            return pd.DataFrame(columns=[*keys, "rank"])
+        target_means = mean_target_correlations(correlations, [*keys, "rank", "target"])
+        rows = []
+        groups = target_means.groupby(keys, dropna=False, sort=True) if keys else [((), target_means)]
+        for identity, frame in groups:
+            by_rank = frame.groupby("rank")["correlation"].quantile(quantiles).unstack()
+            rank = quantile_saturation_rank(by_rank, fraction)
+            if np.isfinite(rank):
+                identity = identity if isinstance(identity, tuple) else (identity,)
+                rows.append(dict(zip(keys, identity)) | {"rank": rank})
+        return pd.DataFrame(rows, columns=[*keys, "rank"])
+
+
+    def target_metric_frame(artifact, *, method, metric_name, dataset):
+        """Read one artifact method as electrode or voxel correlations by rank and fold."""
+        manifest = next(
+            (value for selector, value in artifact.target_manifest.items()
+             if dict(selector).get("method") == method),
+            artifact.target_manifest.get(()),
+        )
+        if manifest is None:
+            raise ValueError(f"Missing target manifest for {dataset}/{method}")
+        if dataset == "fmri":
+            groups = None
+            target_ids = np.arange(len(manifest))
+        else:
+            groups = manifest.groupby(["subject", "electrode"], sort=False).ngroup().to_numpy()
+            target_ids = np.arange(int(groups.max()) + 1)
+            counts = np.bincount(groups, minlength=len(target_ids))
+        frames = []
+        for selector, metrics in artifact.rank_metrics.items():
+            selector = dict(selector)
+            if selector.get("method") != method or "rank" not in selector or metric_name not in metrics:
+                continue
+            values = np.asarray(metrics[metric_name], dtype=float).reshape(-1)
+            if len(values) != len(manifest):
+                raise ValueError(f"Target metric and manifest length differ for {dataset}/{method}")
+            if groups is not None:
+                z = np.arctanh(np.clip(values, -1 + 1e-7, 1 - 1e-7))
+                values = np.tanh(np.bincount(groups, weights=z, minlength=len(target_ids)) / counts)
+            frames.append(pd.DataFrame({
+                "rank": int(selector["rank"]), "fold": selector.get("fold", 0),
+                "target": target_ids, "correlation": values,
+            }))
+        if not frames:
+            raise ValueError(f"No target correlations for {dataset}/{method}")
+        return pd.concat(frames, ignore_index=True)
+
+
+    def rank_quantiles_from_targets(frame, quantiles=QUANTILE_LEVELS):
+        """Compact target observations into one quantile curve per rank."""
+        means = mean_target_correlations(frame)
+        return means.groupby("rank")["correlation"].quantile(quantiles).unstack()
+
+
+    @lru_cache(maxsize=None)
+    def internal_rank_quantiles(dataset, model, layer, method):
+        frame = load_rrr_target_performances(
+            dataset=dataset, model=model, layer=layer, method=method,
+        )
+        return rank_quantiles_from_targets(frame)
+
+
+    def internal_quantile_saturation(dataset, selected_curves, fraction):
+        """Calculate quantile ranks for selected internal model/layer curves."""
+        rows = []
+        pairs = selected_curves[["model", "layer", "method"]].drop_duplicates()
+        for item in pairs.to_dict("records"):
+            model, layer, method = item["model"], item["layer"], item["method"]
+            layer = None if pd.isna(layer) else layer
+            if method not in ("rrr", "pca"):
+                continue
+            rank = quantile_saturation_rank(
+                internal_rank_quantiles(dataset, model, layer, method), fraction,
+            )
+            if np.isfinite(rank):
+                rows.append({"model": model, "layer": layer, "method": method,
+                             "rank": rank})
+        return pd.DataFrame(rows, columns=["model", "layer", "method", "rank"])
+
+
+    @lru_cache(maxsize=None)
+    def loso_rank_quantiles(dataset, model, layer, baseline_source):
+        """Reduce each LOSO artifact directly to subject/method quantile curves."""
+        artifact = Artifact(
+            mode="leave_one_subject_out", dataset=DATASET_ROOTS[dataset],
+            model=model, layer=layer, results_root=REPO_ROOT / "results",
+        ).load_artifacts(["rank_metrics", "target_manifest"])
+        labels = {
+            ("rrr", "baseline"): "RRR baseline",
+            ("rrr", "transfer"): "RRR transfer",
+            ("pca", "baseline"): "PCA baseline",
+        }
+        metrics = {
+            ("rrr", "baseline"): "corr_per_target" if dataset == "fmri" else "nr_orth_corr_per_target",
+            ("rrr", "transfer"): "corr_per_target" if dataset == "fmri" else "transfer_orth_corr_per_target",
+            ("pca", "baseline"): "corr_per_target" if dataset == "fmri" else "pca_corr_per_target",
+        }
+        manifests = {
+            (str(dict(selector).get("held_out_subject")),
+             dict(selector).get("method"), dict(selector).get("loso_phase")): value
+            for selector, value in artifact.target_manifest.items()
+        }
+        grouped_lags = {}
+        folded = {}
+        for selector, values in artifact.rank_metrics.items():
+            selector = dict(selector)
+            phase = (selector.get("method"), selector.get("loso_phase"))
+            if phase not in labels or "rank" not in selector:
+                continue
+            if baseline_source == "full" and phase == ("rrr", "baseline"):
+                continue
+            metric = metrics[phase]
+            if metric not in values:
+                continue
+            subject = str(selector["held_out_subject"])
+            manifest_key = (subject, *phase)
+            manifest = manifests.get(manifest_key)
+            if manifest is None:
+                raise ValueError(f"Missing LOSO target manifest for {dataset}/{model}/{layer}/{manifest_key}")
+            raw = np.asarray(values[metric], dtype=float).reshape(-1)
+            if len(raw) != len(manifest):
+                raise ValueError(f"LOSO target metric and manifest length differ for {dataset}/{model}/{layer}")
+            z = np.arctanh(np.clip(raw, -1 + 1e-7, 1 - 1e-7))
+            if "electrode" in manifest.columns:
+                if manifest_key not in grouped_lags:
+                    groups = manifest.groupby(["subject", "electrode"], sort=False).ngroup().to_numpy()
+                    counts = np.bincount(groups)
+                    grouped_lags[manifest_key] = (groups, counts)
+                groups, counts = grouped_lags[manifest_key]
+                z = np.bincount(groups, weights=z, minlength=len(counts)) / counts
+            folded.setdefault((subject, labels[phase], int(selector["rank"])), []).append(z)
+
+        rows = {}
+        for (subject, method, rank), fold_values in folded.items():
+            mean_z = np.nanmean(np.stack(fold_values), axis=0)
+            correlations = np.tanh(mean_z)
+            if np.isfinite(correlations).any():
+                rows.setdefault((subject, method), []).append(
+                    (rank, *np.nanquantile(correlations, QUANTILE_LEVELS))
+                )
+
+        if baseline_source == "full":
+            full = internal_rrr_artifact(
+                dataset=dataset, model=model, layer=layer,
+                results_root=REPO_ROOT / "results",
+            ).load_artifacts(["rank_metrics", "target_manifest"])
+            manifest = next(
+                (value for selector, value in full.target_manifest.items()
+                 if dict(selector).get("method") == "rrr"),
+                full.target_manifest.get(()),
+            )
+            if manifest is None:
+                raise ValueError(f"Missing internal RRR target manifest for {dataset}/{model}/{layer}")
+            if dataset == "fmri":
+                subjects = manifest["subject"].astype(str).to_numpy()
+                lag_groups = None
+            else:
+                lag_groups = manifest.groupby(["subject", "electrode"], sort=False).ngroup().to_numpy()
+                counts = np.bincount(lag_groups)
+                subjects = manifest.drop_duplicates(["subject", "electrode"])["subject"].astype(str).to_numpy()
+            metric = "corr_per_target" if dataset == "fmri" else "nr_orth_corr_per_target"
+            full_folds = {}
+            for selector, values in full.rank_metrics.items():
+                selector = dict(selector)
+                if selector.get("method") != "rrr" or "rank" not in selector or metric not in values:
+                    continue
+                raw = np.asarray(values[metric], dtype=float).reshape(-1)
+                if len(raw) != len(manifest):
+                    raise ValueError(f"Internal target metric and manifest length differ for {dataset}/{model}/{layer}")
+                z = np.arctanh(np.clip(raw, -1 + 1e-7, 1 - 1e-7))
+                if lag_groups is not None:
+                    z = np.bincount(lag_groups, weights=z, minlength=len(counts)) / counts
+                full_folds.setdefault(int(selector["rank"]), []).append(z)
+            for rank, fold_values in full_folds.items():
+                correlations = np.tanh(np.nanmean(np.stack(fold_values), axis=0))
+                for subject in np.unique(subjects):
+                    selected = correlations[subjects == subject]
+                    if np.isfinite(selected).any():
+                        rows.setdefault((subject, "RRR baseline"), []).append(
+                            (rank, *np.nanquantile(selected, QUANTILE_LEVELS))
+                        )
+
+        return {
+            key: pd.DataFrame(values, columns=["rank", *QUANTILE_LEVELS]).set_index("rank").sort_index()
+            for key, values in rows.items()
+        }
+
+
+    def loso_quantile_saturation(dataset, selected_curves, fraction, baseline_source="loso"):
+        """Calculate one saturation rank per held-out subject and method."""
+        rows = []
+        for (model, layer), _ in selected_curves.groupby(["model", "layer"], dropna=False):
+            layer = None if pd.isna(layer) else layer
+            for (subject, method), curve in loso_rank_quantiles(
+                dataset, model, layer, baseline_source,
+            ).items():
+                rank = quantile_saturation_rank(curve, fraction)
+                if np.isfinite(rank):
+                    rows.append({"model": model, "layer": layer, "subject": subject,
+                                 "method": method, "rank": rank})
+        if not rows:
+            return pd.DataFrame(columns=["model", "layer", "subject", "method", "rank"])
+        values = pd.DataFrame(rows)
+        count = values.groupby(["model", "layer", "subject"], dropna=False)["method"].transform("nunique")
+        return values[count == 3].reset_index(drop=True)
+
+
+    def cross_transfer_target_frame(*, target_dataset, source_dataset, model, layer, method):
+        """Read target-level transfer correlations for one directed pair and method."""
+        base = Artifact(
+            mode="cross_dataset", dataset=DATASET_ROOTS[target_dataset],
+            model=model, layer=layer, results_root=REPO_ROOT / "results",
+        )
+        index = base._read_json(base._leaf() / "manifest.json", default={})
+        variants = []
+        for variant in sorted(index.get("variants", {})):
+            parts = variant.split("/")
+            if target_dataset == "fmri" and FMRI_INPUT_SCALING_VARIANT not in parts:
+                continue
+            if len(parts) > 2 and parts[0] == "source" and parts[2] == DATASET_ROOTS[source_dataset]:
+                variants.append(variant)
+        if not variants:
+            raise ValueError(f"No {source_dataset} → {target_dataset} transfer variant for {model}/{layer}")
+        frames = []
+        for variant in variants:
+            artifact = Artifact(
+                mode="cross_dataset", dataset=DATASET_ROOTS[target_dataset],
+                model=model, layer=layer, variant=variant, results_root=REPO_ROOT / "results",
+            ).load_artifacts(["rank_metrics", "target_manifest"])
+            if target_dataset == "fmri":
+                metric_name = "corr_per_target"
+            elif method == "pca":
+                metric_name = "pca_corr_per_target"
+            else:
+                available = {name for _, metrics in artifact.rank_metrics.items() for name in metrics}
+                metric_name = ("nr_orth_corr_per_target" if "nr_orth_corr_per_target" in available
+                               else "nr_corr_per_target")
+            frames.append(target_metric_frame(
+                artifact, method=method, metric_name=metric_name, dataset=target_dataset,
+            ))
+        return pd.concat(frames, ignore_index=True)
+
+
+    @lru_cache(maxsize=None)
+    def cross_rank_quantiles(target, source, model, layer, display_method):
+        method = "rrr" if display_method.endswith("RRR") else "pca"
+        if display_method.startswith("Within"):
+            return internal_rank_quantiles(target, model, layer, method)
+        frame = cross_transfer_target_frame(
+            target_dataset=target, source_dataset=source,
+            model=model, layer=layer, method=method,
+        )
+        return rank_quantiles_from_targets(frame)
+
+
+    def cross_quantile_saturation(selected_curves, fraction):
+        """Calculate target-level quantile ranks for all selected transfer directions."""
+        rows = []
+        identities = selected_curves[[
+            "target_dataset", "source_dataset", "model", "layer", "method"
+        ]].drop_duplicates()
+        for item in identities.to_dict("records"):
+            target, source = item["target_dataset"], item["source_dataset"]
+            model, layer, display_method = item["model"], item["layer"], item["method"]
+            layer = None if pd.isna(layer) else layer
+            if display_method not in ("Within RRR", "Within PCA", "Transfer RRR", "Transfer PCA"):
+                continue
+            rank = quantile_saturation_rank(
+                cross_rank_quantiles(target, source, model, layer, display_method), fraction,
+            )
+            if np.isfinite(rank):
+                rows.append({
+                    "target_dataset": target, "source_dataset": source,
+                    "model": model, "layer": layer, "method": display_method,
+                    "rank": rank,
+                })
+        return pd.DataFrame(rows, columns=[
+            "target_dataset", "source_dataset", "model", "layer", "method", "rank",
+        ])
+
+
+    return (
+        QUANTILE_LEVELS,
+        QUANTILE_PEAK_FLOOR,
+        cross_quantile_saturation,
+        internal_quantile_saturation,
+        internal_rank_quantiles,
+        loso_quantile_saturation,
+        mean_target_correlations,
+        quantile_saturation_rank,
+    )
 
 
 @app.cell(hide_code=True)
@@ -1915,7 +2181,7 @@ def color_controls(mo):
 
 @app.cell(hide_code=True)
 def plot_saturation_distributions(np, plot_paired_distributions):
-    METHOD_COLORS = {"RRR": "#2563eb", "PCA": "#f97316"}
+    METHOD_COLORS = {"RRR": "#6ab2e2", "PCA": "#63bc51"}
 
 
     def plot_saturation_distributions(saturation_ranks, dataset_label):
@@ -2013,15 +2279,22 @@ def _(
             mean_value = float(paired[method].mean())
             height = np.log2(mean_value) if metric == "rank" else mean_value
             ax.scatter(position, height, marker="D", s=28, color="black", zorder=5)
-            ax.annotate(f"mean = {mean_value:.2f}", (position, height), xytext=(0, 8),
-                        textcoords="offset points", ha="center", fontsize=7)
+            ax.annotate(
+                rf"$\mu$ = {mean_value:.2f}",
+                (position, height),
+                xytext=(0, 8 + 12 * (position % 2)),
+                textcoords="offset points",
+                ha="center",
+                fontsize=7,
+            )
         if metric == "rank":
             maximum = int(np.ceil(np.log2(paired.to_numpy().max())))
             ticks = np.arange(maximum + 1)
             ax.set_yticks(ticks, [str(2**value) for value in ticks])
             if compact_annotations and _provided_ax:
                 _current_upper = ax.get_ylim()[1]
-                ax.set_ylim(-0.35, max(_current_upper, maximum + 1.0))
+                _annotation_headroom = 2.0 if tests and len(tests) > 1 else 1.0
+                ax.set_ylim(-0.35, max(_current_upper, maximum + _annotation_headroom))
             else:
                 ax.set_ylim(-0.35, maximum + 0.5)
             summary_label = f"{percentage:g}% saturation rank"
@@ -2042,6 +2315,7 @@ def _(
         return fig, ax
 
 
+
     return (plot_rank_summary_distributions,)
 
 
@@ -2057,8 +2331,8 @@ def plot_average_normalized_curves(
     ):
         """Plot model/layer curves and their equal-weighted interpolated means."""
         method_styles = {
-            "rrr": ("#2563eb", "RRR"),
-            "pca": ("#16a34a", "PCA"),
+            "rrr": ("#6ab2e2", "RRR"),
+            "pca": ("#63bc51", "PCA"),
         }
         curves = {}
         for (model, layer, method), frame in correlations.groupby(
@@ -2364,7 +2638,7 @@ def normalized_curve_filter_helpers():
 @app.cell(hide_code=True)
 def _(mo):
     internal_saturation_percent = mo.ui.slider(
-        start=1, stop=100, step=1, value=100, show_value=True,
+        start=1, stop=100, step=1, value=99, show_value=True,
         label="Internal: percent of maximum correlation", debounce=True,
     )
     internal_saturation_percent
@@ -2374,34 +2648,36 @@ def _(mo):
 @app.cell(hide_code=True)
 def rrr_saturation_plot(
     METHOD_COLORS,
-    calculate_saturation_ranks,
+    QUANTILE_PEAK_FLOOR,
     filter_normalized_curves,
     internal_curve_depth,
     internal_curve_mode,
     internal_curve_model,
+    internal_quantile_saturation,
     internal_saturation_percent,
     internal_summary_curves,
     mo,
     plot_rank_summary_distributions,
 ):
     def load_dataset_saturation(dataset, fraction=1.0):
-        """Summarize already-loaded internal curves without rereading artifacts."""
-        return calculate_saturation_ranks(internal_summary_curves[dataset], fraction)
+        """Summarize target quantiles for the selected internal curves."""
+        selected, _ = filter_normalized_curves(
+            internal_summary_curves[dataset], internal_curve_mode.value,
+            internal_curve_model.value, internal_curve_depth.value,
+        )
+        return internal_quantile_saturation(dataset, selected, fraction)
 
     internal_saturation_by_dataset = {}
     plots = []
     for _dataset, _label in (("podcast", "Podcast"), ("cars-2", "Cars 2"), ("fmri", "fMRI")):
         _values = load_dataset_saturation(_dataset, internal_saturation_percent.value / 100)
-        _values, _ = filter_normalized_curves(
-            _values, internal_curve_mode.value, internal_curve_model.value, internal_curve_depth.value
-        )
         internal_saturation_by_dataset[_dataset] = _values
         plots.append(plot_rank_summary_distributions(
             _values, _label + ": internal", {"RRR": "rrr", "PCA": "pca"}, METHOD_COLORS,
             metric="rank", percentage=internal_saturation_percent.value,
             tests=[{"first": "RRR", "second": "PCA", "alternative": "less"}],
         ))
-    mo.vstack([mo.md("First tested rank reaching the selected percentage of each curve's maximum correlation."), *[_plot[0] for _plot in plots]])
+    mo.vstack([mo.md(f"All target quantiles peaking above {QUANTILE_PEAK_FLOOR:g} must reach the selected percentage of their own maximum; the displayed rank is the latest interpolated crossing."), *[_plot[0] for _plot in plots]])
     return
 
 
@@ -2440,15 +2716,18 @@ def _(mo):
 
     Internal summaries retain mean Fisher-z scores per model/layer/method/rank.
     LOSO retains subject-level mean correlations; cross-dataset retains fold-level
-    mean correlations. Target arrays and Artifact objects are discarded after loading.
+    mean correlations. Saturation helpers cache compact target-quantile curves by
+    model/layer/method, while target arrays are discarded after aggregation.
     Convergence filters, model/layer selectors in LOSO and cross-dataset plots,
     saturation sliders, and the LOSO baseline selector operate on these loaded tables.
 
     To pick up newly written results, clear `load_loso_rank_correlations.cache_clear()`,
     `load_cross_dataset_rank_correlations.cache_clear()`, and
-    `load_internal_rrr_subject_correlations.cache_clear()`, then rerun the data-loading
-    cells (or restart the notebook). Target-level distribution plots still load the
-    selected artifact because their violins require individual target values.
+    `load_internal_rrr_subject_correlations.cache_clear()`, plus
+    `internal_rank_quantiles.cache_clear()`, `loso_rank_quantiles.cache_clear()`, and
+    `cross_rank_quantiles.cache_clear()`, then rerun the data-loading cells (or restart
+    the notebook). Target-level distribution plots still load the selected artifact
+    because their violins require individual target values.
     """)
     return
 
@@ -3050,6 +3329,7 @@ def target_difference_controls(
         cross_model_layer_selector,
         loso_model_layer_selector,
         model_layer_options,
+        model_layer_pairs,
         model_layer_selector,
     )
 
@@ -3080,8 +3360,8 @@ def plot_rank_full_target_differences(np, plt):
             showmeans=False,
         )
         for body in violin["bodies"]:
-            body.set_facecolor("#2563eb")
-            body.set_edgecolor("#1d4ed8")
+            body.set_facecolor("#6ab2e2")
+            body.set_edgecolor("#4b98cc")
             body.set_alpha(0.28)
             body.set_linewidth(0.8)
 
@@ -3135,21 +3415,39 @@ def plot_rank_full_target_differences(np, plt):
 
 @app.cell(hide_code=True)
 def rrr_target_difference_plot(
+    QUANTILE_LEVELS,
+    QUANTILE_PEAK_FLOOR,
+    internal_rank_quantiles,
+    internal_saturation_percent,
     load_rrr_target_differences,
     load_rrr_target_performances,
+    mean_target_correlations,
     mo,
+    model_layer_pairs,
     model_layer_selector,
+    np,
+    pd,
     plot_rank_full_target_differences,
     plot_rank_target_performances,
+    plt,
+    quantile_saturation_rank,
 ):
     selected_model, selected_layer = model_layer_selector.value
     selected_performance_plots = []
     selected_difference_plots = []
+    _selected_performances_by_dataset = {}
+    _selected_pca_performances_by_dataset = {}
     for _dataset, _label in (("podcast", "Podcast"), ("cars-2", "Cars 2"), ("fmri", "fMRI")):
         _performances = load_rrr_target_performances(
             dataset=_dataset,
             model=selected_model,
             layer=selected_layer,
+        )
+        _selected_performances_by_dataset[_dataset] = mean_target_correlations(_performances)
+        _selected_pca_performances_by_dataset[_dataset] = mean_target_correlations(
+            load_rrr_target_performances(
+                dataset=_dataset, model=selected_model, layer=selected_layer, method="pca",
+            )
         )
         selected_performance_plots.append(
             plot_rank_target_performances(
@@ -3172,10 +3470,297 @@ def rrr_target_difference_plot(
                 selected_layer,
             )
         )
-    mo.vstack(
-        [plot[0] for plot in selected_performance_plots]
-        + [plot[0] for plot in selected_difference_plots]
+    _quantile_levels = QUANTILE_LEVELS
+    _quantile_colors = plt.get_cmap("viridis")(np.linspace(0.08, 0.92, len(_quantile_levels)))
+    _quantile_figure, _quantile_axes = plt.subplots(1, 3, figsize=(15, 4.8), sharey=False)
+    for _ax, (_dataset, _label) in zip(
+        _quantile_axes,
+        (("podcast", "Podcast"), ("cars-2", "Cars 2"), ("fmri", "fMRI")),
+    ):
+        _performances = _selected_performances_by_dataset[_dataset]
+        _rank_quantiles = _performances.groupby("rank")["correlation"].quantile(
+            _quantile_levels
+        ).unstack()
+        _ranks = _rank_quantiles.index.to_numpy(dtype=int)
+        for _quantile, _color in zip(_quantile_levels, _quantile_colors):
+            _ax.plot(
+                _ranks,
+                _rank_quantiles[_quantile].to_numpy(),
+                marker="o",
+                linewidth=1.8,
+                markersize=3,
+                color=_color,
+                label=f"{_quantile:.0%}",
+            )
+        _ax.set_xscale("log", base=2)
+        _ax.set_xticks(_ranks, [str(_rank) for _rank in _ranks])
+        _ax.set_title(_label)
+        _ax.set_ylabel("Target correlation")
+        _ax.grid(axis="y", alpha=.22)
+        _ax.spines[["top", "right"]].set_visible(False)
+    _quantile_figure.supxlabel("RRR rank $k$")
+    _quantile_figure.suptitle(
+        f"Target-performance quantiles by RRR rank\n"
+        f"{selected_model} / {'layer ' + str(selected_layer) if selected_layer is not None else 'layerless'}"
     )
+    _quantile_figure.legend(
+        title="Target percentile", frameon=False, ncol=7,
+        loc="upper center", bbox_to_anchor=(.5, .90),
+    )
+    _quantile_figure.tight_layout(rect=(.04, .08, .99, .80))
+
+    _positive_fraction_figure, _positive_fraction_axes = plt.subplots(
+        1, 3, figsize=(15, 4.2), sharey=False
+    )
+    for _ax, (_dataset, _label) in zip(
+        _positive_fraction_axes,
+        (("podcast", "Podcast"), ("cars-2", "Cars 2"), ("fmri", "fMRI")),
+    ):
+        _positive_fraction = (
+            _selected_performances_by_dataset[_dataset]
+            .groupby("rank")["correlation"]
+            .apply(lambda _values: (_values.dropna() > 0).mean())
+        )
+        _ranks = _positive_fraction.index.to_numpy(dtype=int)
+        _ax.plot(
+            _ranks, _positive_fraction.to_numpy(),
+            color="#4b5563", marker="o", linewidth=1.8, markersize=3,
+        )
+        _ax.set_xscale("log", base=2)
+        _ax.set_xticks(_ranks, [str(_rank) for _rank in _ranks])
+        _ax.set_ylim(0, 1)
+        _ax.set_yticks([0, .25, .5, .75, 1], ["0%", "25%", "50%", "75%", "100%"])
+        _ax.set_title(_label)
+        _ax.set_xlabel("RRR rank $k$")
+        _ax.set_ylabel("Targets with positive correlation")
+        _ax.grid(axis="y", alpha=.22)
+        _ax.spines[["top", "right"]].set_visible(False)
+    _positive_fraction_figure.suptitle(
+        f"Fraction of targets above zero by RRR rank\n"
+        f"{selected_model} / {'layer ' + str(selected_layer) if selected_layer is not None else 'layerless'}"
+    )
+    _positive_fraction_figure.tight_layout(rect=(.02, .04, .99, .88))
+
+    _pca_quantile_figure, _pca_quantile_axes = plt.subplots(
+        1, 3, figsize=(15, 4.8), sharey=False
+    )
+    for _ax, (_dataset, _label) in zip(
+        _pca_quantile_axes,
+        (("podcast", "Podcast"), ("cars-2", "Cars 2"), ("fmri", "fMRI")),
+    ):
+        _performances = _selected_pca_performances_by_dataset[_dataset]
+        _rank_quantiles = _performances.groupby("rank")["correlation"].quantile(
+            _quantile_levels
+        ).unstack()
+        _ranks = _rank_quantiles.index.to_numpy(dtype=int)
+        for _quantile, _color in zip(_quantile_levels, _quantile_colors):
+            _ax.plot(
+                _ranks, _rank_quantiles[_quantile].to_numpy(),
+                marker="o", linewidth=1.8, markersize=3,
+                color=_color, label=f"{_quantile:.0%}",
+            )
+        _ax.set_xscale("log", base=2)
+        _ax.set_xticks(_ranks, [str(_rank) for _rank in _ranks])
+        _ax.set_title(_label)
+        _ax.set_ylabel("Target correlation")
+        _ax.grid(axis="y", alpha=.22)
+        _ax.spines[["top", "right"]].set_visible(False)
+    _pca_quantile_figure.supxlabel("PCA rank $k$")
+    _pca_quantile_figure.suptitle(
+        f"Target-performance quantiles by PCA rank\n"
+        f"{selected_model} / {'layer ' + str(selected_layer) if selected_layer is not None else 'layerless'}"
+    )
+    _pca_quantile_figure.legend(
+        title="Target percentile", frameon=False, ncol=7,
+        loc="upper center", bbox_to_anchor=(.5, .90),
+    )
+    _pca_quantile_figure.tight_layout(rect=(.04, .08, .99, .80))
+
+    _pca_positive_fraction_figure, _pca_positive_fraction_axes = plt.subplots(
+        1, 3, figsize=(15, 4.2), sharey=False
+    )
+    for _ax, (_dataset, _label) in zip(
+        _pca_positive_fraction_axes,
+        (("podcast", "Podcast"), ("cars-2", "Cars 2"), ("fmri", "fMRI")),
+    ):
+        _positive_fraction = (
+            _selected_pca_performances_by_dataset[_dataset]
+            .groupby("rank")["correlation"]
+            .apply(lambda _values: (_values.dropna() > 0).mean())
+        )
+        _ranks = _positive_fraction.index.to_numpy(dtype=int)
+        _ax.plot(
+            _ranks, _positive_fraction.to_numpy(),
+            color="#63bc51", marker="o", linewidth=1.8, markersize=3,
+        )
+        _ax.set_xscale("log", base=2)
+        _ax.set_xticks(_ranks, [str(_rank) for _rank in _ranks])
+        _ax.set_ylim(0, 1)
+        _ax.set_yticks([0, .25, .5, .75, 1], ["0%", "25%", "50%", "75%", "100%"])
+        _ax.set_title(_label)
+        _ax.set_xlabel("PCA rank $k$")
+        _ax.set_ylabel("Targets with positive correlation")
+        _ax.grid(axis="y", alpha=.22)
+        _ax.spines[["top", "right"]].set_visible(False)
+    _pca_positive_fraction_figure.suptitle(
+        f"Fraction of targets above zero by PCA rank\n"
+        f"{selected_model} / {'layer ' + str(selected_layer) if selected_layer is not None else 'layerless'}"
+    )
+    _pca_positive_fraction_figure.tight_layout(rect=(.02, .04, .99, .88))
+
+    _quantile_saturation_fraction = internal_saturation_percent.value / 100
+    _quantile_saturation_figure, _quantile_saturation_axes = plt.subplots(
+        2, 3, figsize=(16, 8), sharey=True
+    )
+    _quantile_saturation_handles = {}
+    for _method_row, (_method_label, _method_data) in enumerate((
+        ("RRR", _selected_performances_by_dataset),
+        ("PCA", _selected_pca_performances_by_dataset),
+    )):
+        for _column, (_dataset, _dataset_label) in enumerate((
+            ("podcast", "Podcast"), ("cars-2", "Cars 2"), ("fmri", "fMRI")
+        )):
+            _ax = _quantile_saturation_axes[_method_row, _column]
+            _performances = _method_data[_dataset]
+            _rank_quantiles = _performances.groupby("rank")["correlation"].quantile(
+                _quantile_levels
+            ).unstack()
+            _all_ranks = _rank_quantiles.index.to_numpy(dtype=float)
+            _all_hit_rank = quantile_saturation_rank(
+                _rank_quantiles, _quantile_saturation_fraction,
+            )
+            for _quantile, _color in zip(_quantile_levels, _quantile_colors):
+                _values = _rank_quantiles[_quantile].to_numpy(dtype=float)
+                _valid = np.isfinite(_all_ranks) & np.isfinite(_values)
+                _ranks, _values = _all_ranks[_valid], _values[_valid]
+                if not len(_values) or float(np.max(_values)) <= QUANTILE_PEAK_FLOOR:
+                    continue
+                _monotonic_values = np.maximum.accumulate(np.maximum(_values, 0.0))
+                _normalized_values = _monotonic_values / float(np.max(_monotonic_values))
+                _line, = _ax.plot(
+                    _ranks, _normalized_values,
+                    color=_color, linewidth=1.7, marker="o", markersize=2.8,
+                    label=f"{_quantile:.0%}",
+                )
+                _quantile_saturation_handles.setdefault(f"{_quantile:.0%}", _line)
+
+            _ax.axhline(
+                _quantile_saturation_fraction, color="#374151", linestyle="--",
+                linewidth=1.0, label=f"{internal_saturation_percent.value:g}% threshold",
+            )
+            if np.isfinite(_all_hit_rank):
+                _ax.axvline(
+                    _all_hit_rank, color="#111827", linestyle=":", linewidth=1.2,
+                    label="All-hit rank",
+                )
+                _panel_note = f"all-hit rank = {_all_hit_rank:g}"
+            else:
+                _panel_note = f"no quantile peaks above {QUANTILE_PEAK_FLOOR:g}"
+            _ax.set_xscale("log", base=2)
+            _ranks = _rank_quantiles.index.to_numpy(dtype=int)
+            _ax.set_xticks(_ranks, [str(_rank) for _rank in _ranks])
+            _ax.set_ylim(0, 1.05)
+            _ax.set_title(f"{_method_label} · {_dataset_label}\n{_panel_note}")
+            _ax.set_xlabel(f"{_method_label} rank $k$")
+            _ax.grid(axis="both", alpha=.2)
+            _ax.spines[["top", "right"]].set_visible(False)
+
+    _quantile_saturation_figure.supylabel("Normalized quantile performance")
+    _quantile_saturation_figure.suptitle(
+        f"Quantile convergence at {internal_saturation_percent.value:g}% of peak\n"
+        f"{selected_model} / {'layer ' + str(selected_layer) if selected_layer is not None else 'layerless'}"
+    )
+    _quantile_saturation_figure.legend(
+        list(_quantile_saturation_handles.values()),
+        list(_quantile_saturation_handles),
+        title="Quantile", frameon=False, ncol=7,
+        loc="upper center", bbox_to_anchor=(.5, .91),
+    )
+    _quantile_saturation_figure.tight_layout(rect=(.04, .05, .99, .80))
+    _quantile_saturation_figure.text(
+        .5, .01,
+        f"Only quantiles peaking above {QUANTILE_PEAK_FLOOR:g} are included; all-hit rank is the latest first crossing among them.",
+        ha="center", fontsize=9,
+    )
+
+
+
+    _quantile_summary_rows = []
+    _quantile_summary_missing = []
+    for _dataset, _dataset_label in (("podcast", "Podcast"), ("cars-2", "Cars 2"), ("fmri", "fMRI")):
+        for _pair_index, (_model, _layer) in enumerate(model_layer_pairs):
+            _pair_label = f"{_model} / {('layer ' + str(_layer)) if _layer is not None else 'layerless'}"
+            for _method_label, _method in (("RRR", "rrr"), ("PCA", "pca")):
+                try:
+                    _by_rank = internal_rank_quantiles(_dataset, _model, _layer, _method)
+                except (FileNotFoundError, ValueError, KeyError) as _error:
+                    _quantile_summary_missing.append((_dataset_label, _pair_label, _method_label, str(_error)))
+                    continue
+                _all_hit_rank = quantile_saturation_rank(
+                    _by_rank, _quantile_saturation_fraction,
+                )
+                if np.isfinite(_all_hit_rank):
+                    _quantile_summary_rows.append({
+                        "dataset": _dataset_label, "model": _model, "layer": _layer,
+                        "pair": _pair_label, "pair_index": _pair_index,
+                        "method": _method_label, "all_hit_rank": _all_hit_rank,
+                    })
+    _quantile_summary_data = pd.DataFrame(_quantile_summary_rows)
+    _quantile_summary_figure, _quantile_summary_axes = plt.subplots(1, 3, figsize=(15, 5), sharey=True)
+    for _ax, (_dataset, _dataset_label) in zip(
+        _quantile_summary_axes,
+        (("podcast", "Podcast"), ("cars-2", "Cars 2"), ("fmri", "fMRI")),
+    ):
+        _subset = _quantile_summary_data[_quantile_summary_data["dataset"] == _dataset_label]
+        _method_values = [_subset.loc[_subset["method"] == _method, "all_hit_rank"].to_numpy(dtype=float)
+                          for _method in ("RRR", "PCA")]
+        if any(len(_values) for _values in _method_values):
+            _violins = _ax.violinplot(_method_values, positions=[0, 1], widths=.72, showextrema=False, showmeans=False)
+            for _body, _color in zip(_violins["bodies"], ("#6ab2e2", "#63bc51")):
+                _body.set_facecolor(_color); _body.set_edgecolor(_color); _body.set_alpha(.22)
+            _boxes = _ax.boxplot(
+                _method_values, positions=[0, 1], widths=.12, patch_artist=True, showfliers=False,
+                medianprops={"color": "black", "linewidth": 1},
+                whiskerprops={"color": "#4b5563", "linewidth": .7},
+                capprops={"color": "#4b5563", "linewidth": .7},
+                boxprops={"color": "#4b5563", "linewidth": .7},
+            )
+            for _patch, _color in zip(_boxes["boxes"], ("#6ab2e2", "#63bc51")):
+                _patch.set_facecolor("white"); _patch.set_alpha(.85)
+        _rrr = _subset[_subset["method"] == "RRR"].set_index("pair")["all_hit_rank"]
+        _pca = _subset[_subset["method"] == "PCA"].set_index("pair")["all_hit_rank"]
+        for _pair in _rrr.index.intersection(_pca.index):
+            _i = int(_subset.loc[_subset["pair"] == _pair, "pair_index"].iloc[0])
+            _jitter = ((_i % 7) - 3) * .018
+            _y_rrr, _y_pca = float(_rrr[_pair]), float(_pca[_pair])
+            _ax.plot([-0.12 + _jitter, 1.12 + _jitter], [_y_rrr, _y_pca],
+                     color="#9ca3af", alpha=.55, linewidth=.7, zorder=2)
+            _ax.scatter(0 + _jitter, _y_rrr, s=24, color="#4b98cc", edgecolor="white", linewidth=.4, zorder=3)
+            _ax.scatter(1 + _jitter, _y_pca, s=24, color="#45963a", edgecolor="white", linewidth=.4, zorder=3)
+        _ax.set_xticks([0, 1], ["RRR", "PCA"])
+        _ax.set_title(_dataset_label)
+        _ax.set_ylabel("All-hit saturation rank")
+        _ax.set_yscale("log")
+        _ax.grid(axis="y", alpha=.22)
+        _ax.spines[["top", "right"]].set_visible(False)
+    _quantile_summary_figure.suptitle(f"Model-layer saturation rank comparison at {internal_saturation_percent.value:g}% of peak | {selected_model}")
+    _quantile_summary_figure.tight_layout(rect=(.03, .04, .99, .91))
+    mo.vstack([
+        mo.md("### Target-performance quantiles by rank"),
+        _quantile_figure,
+        mo.md("### PCA target-performance quantiles by rank"),
+        _pca_quantile_figure,
+        mo.md("### Fraction of target observations with positive correlation"),
+        _positive_fraction_figure,
+        mo.md("### PCA fraction of target observations with positive correlation"),
+        _pca_positive_fraction_figure,
+        mo.md("### Quantile saturation summary (all model layers)"),
+        _quantile_summary_figure,
+        mo.md("### Normalized quantile saturation convergence"),
+        _quantile_saturation_figure,
+        *[plot[0] for plot in selected_performance_plots],
+        *[plot[0] for plot in selected_difference_plots],
+    ])
     return
 
 
@@ -3279,8 +3864,8 @@ def plot_rank_target_performances(np, plt):
             showextrema=False, showmeans=False,
         )
         for body in violin["bodies"]:
-            body.set_facecolor("#16a34a")
-            body.set_edgecolor("#15803d")
+            body.set_facecolor("#63bc51")
+            body.set_edgecolor("#45963a")
             body.set_alpha(0.28)
             body.set_linewidth(0.8)
 
@@ -3421,6 +4006,77 @@ def _(
             .agg(fisher_mean)
         )
 
+    def load_loso_target_correlations(
+        *, results_root=REPO_ROOT / "results", dataset="podcast", model="gpt2", layer=None
+    ):
+        """Load LOSO per-target correlations, averaged across CV folds per target."""
+        artifact = Artifact(
+            mode="leave_one_subject_out", dataset=DATASET_ROOTS[dataset],
+            model=model, layer=layer, results_root=results_root,
+        ).load_artifacts(["rank_metrics", "target_manifest"])
+        metric_names = {
+            ("rrr", "baseline"): "corr_per_target" if dataset == "fmri" else "nr_orth_corr_per_target",
+            ("rrr", "transfer"): "corr_per_target" if dataset == "fmri" else "transfer_orth_corr_per_target",
+            ("pca", "baseline"): "corr_per_target" if dataset == "fmri" else "pca_corr_per_target",
+        }
+        method_labels = {
+            ("rrr", "baseline"): "RRR baseline",
+            ("rrr", "transfer"): "RRR transfer",
+            ("pca", "baseline"): "PCA baseline",
+        }
+        manifests = {
+            (str(dict(selector).get("held_out_subject")),
+             dict(selector).get("method"), dict(selector).get("loso_phase")): value
+            for selector, value in artifact.target_manifest.items()
+        }
+        rows = []
+        for selector, metrics in artifact.rank_metrics.items():
+            selector = dict(selector)
+            phase_key = (selector.get("method"), selector.get("loso_phase"))
+            metric_name = metric_names.get(phase_key)
+            if metric_name is None or metric_name not in metrics or "rank" not in selector:
+                continue
+            held_out = str(selector.get("held_out_subject"))
+            manifest = manifests.get((held_out, phase_key[0], phase_key[1]))
+            if manifest is None:
+                raise ValueError(f"Missing LOSO target manifest for {dataset}/{model}/layer-{layer}/{held_out}/{phase_key}")
+            values = np.asarray(metrics[metric_name], dtype=float).reshape(-1)
+            if len(values) != len(manifest):
+                raise ValueError(
+                    f"{dataset}/{model}/layer-{layer}: {metric_name} has {len(values)} targets, "
+                    f"but manifest has {len(manifest)} rows for held-out subject {held_out}"
+                )
+            clipped = np.arctanh(np.clip(values, -1 + 1e-7, 1 - 1e-7))
+            if "electrode" in manifest.columns:
+                target_keys = manifest.groupby(["subject", "electrode"], sort=False).ngroup().to_numpy()
+            elif "voxel_index" in manifest.columns:
+                target_keys = manifest.groupby(["subject", "voxel_index"], sort=False).ngroup().to_numpy()
+            else:
+                target_keys = np.arange(len(values))
+            _target_frame = pd.DataFrame({
+                "target": target_keys,
+                "fisher_z": clipped,
+            })
+            _target_frame = _target_frame.groupby("target", sort=False, as_index=False)["fisher_z"].mean()
+            _target_frame["correlation"] = np.tanh(_target_frame.pop("fisher_z"))
+            _target_frame["subject"] = held_out
+            _target_frame["method"] = method_labels[phase_key]
+            _target_frame["rank"] = int(selector["rank"])
+            _target_frame["fold"] = selector.get("fold")
+            rows.append(_target_frame)
+        if not rows:
+            raise ValueError(f"No per-target LOSO rank metrics for {dataset}/{model}/layer-{layer}")
+        frame = pd.concat(rows, ignore_index=True)
+        frame["fisher_z"] = np.arctanh(np.clip(
+            frame.pop("correlation").to_numpy(dtype=float), -1 + 1e-7, 1 - 1e-7,
+        ))
+        averaged = frame.groupby(
+            ["subject", "target", "method", "rank"], as_index=False
+        )["fisher_z"].mean()
+        averaged["correlation"] = np.tanh(averaged.pop("fisher_z"))
+        return averaged
+
+
 
     return find_loso_model_layers, load_loso_rank_correlations
 
@@ -3431,9 +4087,9 @@ def load_loso_rank_correlations(fisher_mean, plt):
         """Plot subject-level LOSO curves and across-subject means."""
         method_order = ["RRR baseline", "RRR transfer", "PCA baseline"]
         method_colors = {
-            "RRR baseline": "#2563eb",
-            "RRR transfer": "#f97316",
-            "PCA baseline": "#16a34a",
+            "RRR baseline": "#6ab2e2",
+            "RRR transfer": "#4b98cc",
+            "PCA baseline": "#63bc51",
         }
         ranks = sorted(frame["rank"].unique())
         fig, ax = plt.subplots(figsize=(7.0, 4.4))
@@ -3445,6 +4101,7 @@ def load_loso_rank_correlations(fisher_mean, plt):
                     subject_frame["rank"],
                     subject_frame["correlation"],
                     color=method_colors[method],
+                    linestyle="--" if "transfer" in method.lower() else "-",
                     alpha=0.18,
                     linewidth=0.8,
                     zorder=1,
@@ -3458,6 +4115,7 @@ def load_loso_rank_correlations(fisher_mean, plt):
                 mean_frame["rank"],
                 mean_frame["correlation"],
                 color=method_colors[method],
+                linestyle="--" if "transfer" in method.lower() else "-",
                 linewidth=2.2,
                 marker="o",
                 markersize=3.5,
@@ -3476,6 +4134,7 @@ def load_loso_rank_correlations(fisher_mean, plt):
             xticks=ranks,
             xticklabels=[str(rank) for rank in ranks],
         )
+        ax.tick_params(axis="x", labelrotation=90)
         ax.grid(axis="both", alpha=0.25)
         ax.spines[["top", "right"]].set_visible(False)
         ax.legend(frameon=False)
@@ -3750,9 +4409,9 @@ def load_loso_auc_values_and_plot(
         """Plot paired model-layer AUC distributions for the three LOSO conditions."""
         method_order = ["RRR baseline", "RRR transfer", "PCA baseline"]
         method_colors = {
-            "RRR baseline": "#2563eb",
-            "RRR transfer": "#f97316",
-            "PCA baseline": "#16a34a",
+            "RRR baseline": "#6ab2e2",
+            "RRR transfer": "#4b98cc",
+            "PCA baseline": "#63bc51",
         }
         means = auc_values.groupby(["model", "layer", "method"], as_index=False)["auc"].mean()
         paired = means.pivot_table(
@@ -3794,9 +4453,9 @@ def plot_average_loso_normalized_curves(normalized_performance_curve, np, plt):
     ):
         """Plot subject-averaged model/layer LOSO curves and their equal-weighted means."""
         method_styles = {
-            "RRR baseline": ("#2563eb", "RRR baseline"),
-            "RRR transfer": ("#f97316", "RRR transfer"),
-            "PCA baseline": ("#16a34a", "PCA baseline"),
+            "RRR baseline": ("#6ab2e2", "RRR baseline"),
+            "RRR transfer": ("#4b98cc", "RRR transfer"),
+            "PCA baseline": ("#63bc51", "PCA baseline"),
         }
         curves = {}
         for (model, layer, method), frame in correlations.groupby(
@@ -3823,12 +4482,14 @@ def plot_average_loso_normalized_curves(normalized_performance_curve, np, plt):
                 continue
             interpolated = np.empty((len(method_curves), grid.size))
             for index, (x, y) in enumerate(method_curves):
-                ax.plot(x, y, color=color, alpha=0.10, linewidth=0.8, zorder=1)
+                ax.plot(x, y, color=color, alpha=0.10, linewidth=0.8, zorder=1,
+                            linestyle="--" if "transfer" in method.lower() else "-")
                 interpolated[index] = np.interp(grid, x, y)
             ax.plot(
                 grid,
                 interpolated.mean(axis=0),
                 color=color,
+                linestyle="--" if "transfer" in method.lower() else "-",
                 linewidth=2.6,
                 label=label,
                 zorder=3,
@@ -3882,7 +4543,7 @@ def loso_auc_controls(mo):
 @app.cell
 def _(mo):
     loso_saturation_percent = mo.ui.slider(
-        start=1, stop=100, step=1, value=100, show_value=True,
+        start=1, stop=100, step=1, value=99, show_value=True,
         label="LOSO: percent of maximum correlation", debounce=True,
     )
     loso_saturation_percent
@@ -3942,11 +4603,13 @@ def _(loso_auc_rrr_baseline_source, loso_summary_curves_by_source):
 
 @app.cell(hide_code=True)
 def _(
-    calculate_loso_summary_values,
+    QUANTILE_PEAK_FLOOR,
     filter_normalized_curves,
+    loso_auc_rrr_baseline_source,
     loso_curve_depth,
     loso_curve_mode,
     loso_curve_model,
+    loso_quantile_saturation,
     loso_saturation_percent,
     loso_summary_curves_by_dataset,
     mo,
@@ -3955,24 +4618,26 @@ def _(
     loso_saturation_by_dataset = {}
     loso_saturation_plots = []
     for _dataset, _label in (("podcast", "Podcast"), ("cars-2", "Cars 2"), ("fmri", "fMRI")):
-        _values = calculate_loso_summary_values(
-            loso_summary_curves_by_dataset[_dataset], metric="rank", fraction=loso_saturation_percent.value / 100
+        _selected, _ = filter_normalized_curves(
+            loso_summary_curves_by_dataset[_dataset], loso_curve_mode.value,
+            loso_curve_model.value, loso_curve_depth.value,
         )
-        _values, _ = filter_normalized_curves(
-            _values, loso_curve_mode.value, loso_curve_model.value, loso_curve_depth.value
+        _values = loso_quantile_saturation(
+            _dataset, _selected, loso_saturation_percent.value / 100,
+            baseline_source=loso_auc_rrr_baseline_source.value,
         )
         loso_saturation_by_dataset[_dataset] = _values
         loso_saturation_plots.append(plot_rank_summary_distributions(
             _values, _label + ": LOSO",
             {"RRR baseline": "RRR baseline", "RRR transfer": "RRR transfer", "PCA baseline": "PCA baseline"},
-            {"RRR baseline": "#2563eb", "RRR transfer": "#f97316", "PCA baseline": "#16a34a"},
+            {"RRR baseline": "#6ab2e2", "RRR transfer": "#4b98cc", "PCA baseline": "#63bc51"},
             metric="rank", percentage=loso_saturation_percent.value,
             tests=[
                 {"first": "RRR transfer", "second": "PCA baseline", "alternative": "less"},
                 {"first": "RRR baseline", "second": "RRR transfer", "alternative": "less"},
             ],
         ))
-    mo.vstack([mo.md("LOSO saturation is calculated per subject, then ranks are averaged per model/layer. Holm-adjusted paired permutation tests compare the requested methods."), *[_plot[0] for _plot in loso_saturation_plots]])
+    mo.vstack([mo.md(f"LOSO target quantiles peaking above {QUANTILE_PEAK_FLOOR:g} are calculated per subject; saturation ranks are then averaged per model/layer. Holm-adjusted paired permutation tests compare the requested methods."), *[_plot[0] for _plot in loso_saturation_plots]])
     return
 
 
@@ -4364,15 +5029,11 @@ def load_cross_dataset_rank_correlations(fisher_mean, plt):
         ] + ["Within PCA"] + [
             method for method in transfer_methods if method.startswith("Transfer PCA:")
         ]
-        method_colors = {"Within RRR": "#2563eb", "Within PCA": "#16a34a"}
-        transfer_directions = sorted({method.split(": ", 1)[1] for method in transfer_methods})
-        direction_colors = {
-            direction: plt.get_cmap("tab10")(index % 10)
-            for index, direction in enumerate(transfer_directions)
-        }
+        method_colors = {"Within RRR": "#6ab2e2", "Within PCA": "#63bc51"}
         for method in transfer_methods:
-            direction = method.split(": ", 1)[1]
-            method_colors[method] = direction_colors[direction]
+            method_colors[method] = (
+                "#4b98cc" if method.startswith("Transfer RRR:") else "#45963a"
+            )
 
         ranks = sorted(frame["rank"].unique())
         fig, ax = plt.subplots(figsize=(8.5, 4.8))
@@ -4383,6 +5044,7 @@ def load_cross_dataset_rank_correlations(fisher_mean, plt):
                 ax.plot(
                     fold_frame["rank"], fold_frame["correlation"],
                     color=method_colors[method], alpha=0.18, linewidth=0.8, zorder=1,
+                        linestyle="--" if method.startswith("Transfer ") else "-",
                 )
             mean_frame = (
                 method_frame.groupby("rank", as_index=False)["correlation"]
@@ -4392,6 +5054,7 @@ def load_cross_dataset_rank_correlations(fisher_mean, plt):
                 mean_frame["rank"], mean_frame["correlation"],
                 color=method_colors[method], linewidth=2.2, marker="o", markersize=3.5,
                 label=method, zorder=3,
+                    linestyle="--" if method.startswith("Transfer ") else "-",
             )
         ax.set(
             xlabel="RRR rank $k$",
@@ -4404,6 +5067,7 @@ def load_cross_dataset_rank_correlations(fisher_mean, plt):
             xticks=ranks,
             xticklabels=[str(rank) for rank in ranks],
         )
+        ax.tick_params(axis="x", labelrotation=90)
         ax.grid(axis="both", alpha=0.25)
         ax.spines[["top", "right"]].set_visible(False)
         ax.legend(frameon=False, fontsize=8)
@@ -4416,10 +5080,10 @@ def load_cross_dataset_rank_correlations(fisher_mean, plt):
         dataset_labels = {"podcast": "Podcast", "cars-2": "Cars 2", "fmri": "fMRI"}
         dataset_order = ["podcast", "cars-2", "fmri"]
         method_colors = {
-            "Within RRR": "#2563eb",
-            "Transfer RRR": "#dc2626",
-            "Within PCA": "#16a34a",
-            "Transfer PCA": "#9333ea",
+            "Within RRR": "#6ab2e2",
+            "Transfer RRR": "#4b98cc",
+            "Within PCA": "#63bc51",
+            "Transfer PCA": "#45963a",
         }
         fig, axes = plt.subplots(3, 2, figsize=(13.0, 12.0), squeeze=False)
         legend_handles = []
@@ -4449,6 +5113,7 @@ def load_cross_dataset_rank_correlations(fisher_mean, plt):
                             fold_frame["rank"], fold_frame["correlation"],
                             color=method_colors[display_method], alpha=0.16,
                             linewidth=0.75, zorder=1,
+                            linestyle="--" if display_method.startswith("Transfer ") else "-",
                         )
                     mean_frame = (
                         method_frame.groupby("rank", as_index=False)["correlation"]
@@ -4458,6 +5123,7 @@ def load_cross_dataset_rank_correlations(fisher_mean, plt):
                         mean_frame["rank"], mean_frame["correlation"],
                         color=method_colors[display_method], linewidth=2.0,
                         marker="o", markersize=3.0, label=display_method, zorder=3,
+                        linestyle="--" if display_method.startswith("Transfer ") else "-",
                     )[0]
                     if display_method not in legend_labels:
                         legend_handles.append(mean_line)
@@ -4470,6 +5136,7 @@ def load_cross_dataset_rank_correlations(fisher_mean, plt):
                     xticks=ranks,
                     xticklabels=[str(rank) for rank in ranks],
                 )
+                ax.tick_params(axis="x", labelrotation=90)
                 ax.grid(axis="both", alpha=0.22)
                 ax.spines[["top", "right"]].set_visible(False)
         fig.suptitle(
@@ -4498,10 +5165,10 @@ def plot_cross_dataset_normalized_grid(normalized_performance_curve, np, plt):
         dataset_labels = {"podcast": "Podcast", "cars-2": "Cars 2", "fmri": "fMRI"}
         dataset_order = ["podcast", "cars-2", "fmri"]
         method_styles = {
-            "Within RRR": ("#2563eb", "RRR"),
-            "Within PCA": ("#16a34a", "PCA"),
-            "Transfer RRR": ("#dc2626", "RRR transfer"),
-            "Transfer PCA": ("#9333ea", "PCA transfer"),
+            "Within RRR": ("#6ab2e2", "RRR"),
+            "Within PCA": ("#63bc51", "PCA"),
+            "Transfer RRR": ("#4b98cc", "RRR transfer"),
+            "Transfer PCA": ("#45963a", "PCA transfer"),
         }
         linthresh = 0.01
         positive_grid = np.geomspace(linthresh / 100, 1.0, grid_size - 1)
@@ -4533,7 +5200,8 @@ def plot_cross_dataset_normalized_grid(normalized_performance_curve, np, plt):
                         continue
                     interpolated = np.empty((len(method_curves), grid.size))
                     for index, (x, y) in enumerate(method_curves):
-                        ax.plot(x, y, color=color, alpha=0.10, linewidth=0.8, zorder=1)
+                        ax.plot(x, y, color=color, alpha=0.10, linewidth=0.8, zorder=1,
+                                linestyle="--" if method.startswith("Transfer ") else "-")
                         interpolated[index] = np.interp(grid, x, y)
                     mean_line = ax.plot(
                         grid,
@@ -4542,6 +5210,7 @@ def plot_cross_dataset_normalized_grid(normalized_performance_curve, np, plt):
                         linewidth=2.4,
                         label=label,
                         zorder=3,
+                        linestyle="--" if method.startswith("Transfer ") else "-",
                     )[0]
                     counts.append(f"{label}: {len(method_curves)}")
                     if label not in legend_labels:
@@ -4636,10 +5305,10 @@ def cross_dataset_auc_helpers(
             "Transfer PCA": "PCA transfer",
         }
         method_colors = {
-            "RRR": "#2563eb",
-            "PCA": "#16a34a",
-            "RRR transfer": "#dc2626",
-            "PCA transfer": "#9333ea",
+            "RRR": "#6ab2e2",
+            "PCA": "#63bc51",
+            "RRR transfer": "#4b98cc",
+            "PCA transfer": "#45963a",
         }
         frame = auc_values.copy()
         frame["layer_key"] = frame["layer"].astype(object).where(
@@ -4970,7 +5639,7 @@ def cross_dataset_normalized_plot(
 @app.cell(hide_code=True)
 def _(mo):
     cross_dataset_saturation_percent = mo.ui.slider(
-        start=1, stop=100, step=1, value=100, show_value=True,
+        start=1, stop=100, step=1, value=99, show_value=True,
         label="Cross-dataset: percent of maximum correlation", debounce=True,
     )
     cross_dataset_saturation_percent
@@ -4979,24 +5648,23 @@ def _(mo):
 
 @app.cell(hide_code=True)
 def _(
+    QUANTILE_PEAK_FLOOR,
     cross_curve_depth,
     cross_curve_mode,
     cross_curve_model,
     cross_dataset_normalized_curves,
     cross_dataset_saturation_percent,
+    cross_quantile_saturation,
     filter_normalized_curves,
     mo,
     plot_rank_summary_distributions,
-    summarize_rank_curves,
 ):
     _selected_cross_curves, _ = filter_normalized_curves(
         cross_dataset_normalized_curves,
         cross_curve_mode.value, cross_curve_model.value, cross_curve_depth.value,
     )
-    cross_dataset_saturation_values = summarize_rank_curves(
-        _selected_cross_curves,
-        ["target_dataset", "source_dataset", "model", "layer", "method"],
-        metric="rank", fraction=cross_dataset_saturation_percent.value / 100,
+    cross_dataset_saturation_values = cross_quantile_saturation(
+        _selected_cross_curves, cross_dataset_saturation_percent.value / 100,
     )
     cross_dataset_saturation_plots = []
     _labels = {"podcast": "Podcast", "cars-2": "Cars 2", "fmri": "fMRI"}
@@ -5004,7 +5672,7 @@ def _(
         cross_dataset_saturation_plots.append(plot_rank_summary_distributions(
             _values, f"{_labels[_source]} to {_labels[_target]}",
             {"RRR": "Within RRR", "PCA": "Within PCA", "RRR transfer": "Transfer RRR", "PCA transfer": "Transfer PCA"},
-            {"RRR": "#2563eb", "PCA": "#16a34a", "RRR transfer": "#dc2626", "PCA transfer": "#9333ea"},
+            {"RRR": "#6ab2e2", "PCA": "#63bc51", "RRR transfer": "#4b98cc", "PCA transfer": "#45963a"},
             metric="rank", percentage=cross_dataset_saturation_percent.value,
             tests=[
                 {"first": "RRR transfer", "second": "PCA transfer", "alternative": "less"},
@@ -5013,7 +5681,7 @@ def _(
                 {"first": "PCA", "second": "RRR transfer", "alternative": "less"},
             ],
         ))
-    mo.vstack([mo.md("Cross-dataset saturation uses fold means computed in Fisher-z space and converted back before applying the threshold. Each direction pairs model layers across all four methods."), *[_plot[0] for _plot in cross_dataset_saturation_plots]])
+    mo.vstack([mo.md(f"Cross-dataset saturation uses per-target fold means and requires all quantiles peaking above {QUANTILE_PEAK_FLOOR:g} to cross their thresholds. Each direction pairs model layers across all four methods."), *[_plot[0] for _plot in cross_dataset_saturation_plots]])
     return
 
 
@@ -5709,12 +6377,12 @@ def language_decoding_selected_relative_curve(
         _ld_curve_ax.scatter(
             _ld_curve.loc[_ld_advantage, "k"],
             _ld_curve.loc[_ld_advantage, "Relative difference"],
-            color="#2563eb", s=55, zorder=3, label="RRR > PCA",
+            color="#6ab2e2", s=55, zorder=3, label="RRR > PCA",
         )
         _ld_curve_ax.scatter(
             _ld_curve.loc[~_ld_advantage, "k"],
             _ld_curve.loc[~_ld_advantage, "Relative difference"],
-            color="#dc2626", s=45, zorder=3, label="RRR ≤ PCA",
+            color="#63bc51", s=45, zorder=3, label="RRR ≤ PCA",
         )
         _ld_curve_ax.axhline(0, color="black", linewidth=0.8, linestyle="--")
         _ld_curve_ax.set_xscale("log", base=2)
@@ -5979,8 +6647,8 @@ def language_decoding_summary_helpers(
                 _ax.plot(_curve["k"], _curve["Member relative difference"], color=_color, alpha=0.16, linewidth=0.9)
             _ax.plot(_group_average["k"], _group_average["Average relative difference"], color=_color, linewidth=2.5, marker="o", label=str(_group_name))
             _advantage = _group_average["Average difference"] > 0
-            _ax.scatter(_group_average.loc[_advantage, "k"], _group_average.loc[_advantage, "Average relative difference"], color="#2563eb", edgecolors="white", linewidths=0.6, s=52, zorder=4)
-            _ax.scatter(_group_average.loc[~_advantage, "k"], _group_average.loc[~_advantage, "Average relative difference"], color="#dc2626", edgecolors="white", linewidths=0.6, s=48, zorder=4)
+            _ax.scatter(_group_average.loc[_advantage, "k"], _group_average.loc[_advantage, "Average relative difference"], color="#6ab2e2", edgecolors="white", linewidths=0.6, s=52, zorder=4)
+            _ax.scatter(_group_average.loc[~_advantage, "k"], _group_average.loc[~_advantage, "Average relative difference"], color="#63bc51", edgecolors="white", linewidths=0.6, s=48, zorder=4)
             _total = int(_group_members["Member"].nunique())
             _coverage = _group_members.groupby("k")["Member"].nunique()
             _partial = int((_coverage < _total).sum()) if _total else 0
@@ -5998,7 +6666,7 @@ def language_decoding_summary_helpers(
         _ax.spines[["top", "right"]].set_visible(False)
         if _groups:
             _ax.legend(frameon=False, title=_group_label)
-        _coverage_note = "Blue markers: average RRR > PCA; red markers: average RRR <= PCA. " + ("; ".join(_coverage_notes) if _coverage_notes else "No positive-RRR curves to show.")
+        _coverage_note = "Blue markers: average RRR > PCA; green markers: average RRR <= PCA. " + ("; ".join(_coverage_notes) if _coverage_notes else "No positive-RRR curves to show.")
         _fig.tight_layout()
         return _fig, _coverage_note
 
@@ -6428,7 +7096,7 @@ def language_decoding_internal_consensus_heading(mo):
     mo.md("""
     ## Within-dataset RRR–PCA feature agreement
 
-    For a selected model/layer and label offset, each tile shows the existing relative-difference AUC across decoding ranks. Blue means RRR decodes the feature better than PCA on average over log-rank; red means PCA does better. A check mark marks a feature with positive AUC in all three datasets. Only features available in all three are shown.
+    For a selected model/layer and label offset, each tile shows the existing relative-difference AUC across decoding ranks. Blue means RRR decodes the feature better than PCA on average over log-rank; green means PCA does better. A check mark marks a feature with positive AUC in all three datasets. Only features available in all three are shown.
     """)
     return
 
@@ -6549,7 +7217,7 @@ def language_decoding_internal_consensus_heatmap(
         y=_consensus_labels,
         zmin=-_consensus_limit,
         zmax=_consensus_limit,
-        colorscale=[[0, "#b91c1c"], [0.5, "#f8fafc"], [1, "#2563eb"]],
+        colorscale=[[0, "#63bc51"], [0.5, "#f8fafc"], [1, "#6ab2e2"]],
         colorbar={"title": "Relative AUC"},
         hovertemplate="Feature: %{y}<br>Dataset: %{x}<br>Relative AUC: %{z:.3f}<extra></extra>",
     ))
@@ -7042,7 +7710,7 @@ def paired_permutation_tests(np, pd):
                 if first not in positions or second not in positions:
                     raise ValueError(f"test label is not plotted: {first!r}, {second!r}")
                 left, right = sorted((positions[first], positions[second]))
-                y = top
+                y = top - offset * 0.12
                 ax.plot(
                     [left, left, right, right],
                     [y, y + tick, y + tick, y],

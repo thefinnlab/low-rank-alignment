@@ -123,12 +123,33 @@ HDF5 container while keeping plots as separately browsable PNG files.
 
 ## Source layout
 
+- `notebooks/final_plots.py` is the curated paper-figure notebook. It loads the
+  completed RRR, significance, and decoding results once at startup, reports
+  missing directed results, and draws the aggregate, encoding, significance,
+  quantile, and paired RRR/PCA saturation-sensitivity figures from compact
+  in-memory data. Its decoding aggregate includes a volume feature that aligns
+  Podcast and fMRI audio RMS with Cars 2 native intensity RMS.
+  Its leave-one-subject-out aggregate compares transfer and PCA with a
+  subject-matched RRR control from the full internal training run.
+  A fingerprinted cache under `results/` makes later starts fast while artifact
+  manifests and metric code are unchanged.
+  Shared artifact-independent rank calculations live in
+  `src/utils/rrr/plot_metrics.py`; reusable axis and figure functions live in
+  `src/utils/plotting/`.
 - `notebooks/plots.py` provides interactive RRR/PCA comparisons, including aggregate
   landscape figures for internal, leave-one-subject-out, and directed cross-dataset
   RRR. Internal and leave-one-subject-out views stack selected model/layer plots
   with dashed red full-model references (including full-embedding regression for LOSO)
-  and normalized convergence line plots by dataset, with shared x-axes and saturation
-  distributions in columns on the right that share a y-axis. Cross-dataset shows
+  and normalized convergence line plots by dataset, with shared
+  x-axes and saturation distributions in columns on the right that share a y-axis.
+  Saturation controls default to 99% of each eligible target quantile's maximum
+  correlation. They use the 5th, 10th, 25th, 50th, 75th, 90th, and 95th
+  percentiles, including only those whose peak correlation exceeds 0.005.
+  They average each target across folds, treat quantile progress as monotonic,
+  and linearly interpolate the first rank where every eligible quantile has
+  crossed its threshold. RRR is blue and PCA
+  is green; transfer curves use darker shades and dashed lines.
+  Cross-dataset shows
   all six directed normalized convergence panels alongside paired distributions
   of normalized AUC differences (internal RRR minus transfer RRR, transfer RRR minus
   transfer PCA, and internal PCA minus transfer PCA) for each directed pair. A
@@ -151,7 +172,7 @@ HDF5 container while keeping plots as separately browsable PNG files.
   views each provide paired AUC and saturation-rank distributions, with an independent
   percentage-of-maximum slider for each view. Correlations are averaged in Fisher-z
   space and converted back before normalization and thresholding. Saturation is the
-  first tested rank reaching the selected percentage; LOSO computes it per subject
+  first linearly interpolated rank reaching the selected percentage; LOSO computes it per subject
   before averaging ranks per model/layer, using the same baseline selector as AUC.
   Dedicated loading cells retain compact per-rank tables in memory: internal means,
   LOSO subject means (including both baseline choices), and cross-dataset fold means.

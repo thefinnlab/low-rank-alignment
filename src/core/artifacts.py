@@ -382,12 +382,43 @@ class ArtifactStore:
     def load_collection(self, field: str, filters: dict | None = None) -> dict:
         self._validate_field(field)
         filters = filters or {}
+        entries = self._manifest().get("entries", {}).get(field, {}).values()
+        selected = [
+            entry for entry in entries
+            if all(
+                entry["selector"].get(key) in (
+                    value if isinstance(value, (list, tuple, set)) else [value]
+                )
+                for key, value in filters.items()
+            )
+        ]
+        if not selected:
+            return {}
+
+        # Read the manifest once and keep each container open for the collection.
+        # A rank sweep can contain hundreds of entries in the same HDF5 file.
+        from contextlib import ExitStack
+
         result = {}
-        for entry in self._manifest().get("entries", {}).get(field, {}).values():
-            selector = entry["selector"]
-            if all(selector.get(key) in (value if isinstance(value, (list, tuple, set)) else [value])
-                   for key, value in filters.items()):
-                result[tuple(sorted(selector.items()))] = self.load_field(field, selector=selector)
+        with ExitStack() as stack:
+            containers = {}
+            for entry in selected:
+                selector = entry["selector"]
+                try:
+                    if "container" in entry:
+                        path = self._variant_dir() / entry["container"]
+                        if path not in containers:
+                            import h5py
+
+                            containers[path] = stack.enter_context(h5py.File(path, "r"))
+                        payload = containers[path][entry["object"]][...].tobytes()
+                    else:
+                        payload = (self._variant_dir() / entry["file"]).read_bytes()
+                    result[tuple(sorted(selector.items()))] = self._decode(entry, payload)
+                except Exception as error:
+                    raise ArtifactError(
+                        f"Could not decode field {field!r} selector {selector}"
+                    ) from error
         return result
 
     def mark_complete(self, required_selectors: dict[str, list[dict]] | None = None) -> None:
