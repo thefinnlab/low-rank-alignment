@@ -227,4 +227,14 @@ def _():
 
 
 if __name__ == "__main__":
-    app.run()
+    import sys
+
+    if len(sys.argv) > 1:
+        from pathlib import Path
+
+        sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+        from src.utils.plotting.final_export import main
+
+        main()
+    else:
+        app.run()

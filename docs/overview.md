@@ -133,6 +133,16 @@ HDF5 container while keeping plots as separately browsable PNG files.
   subject-matched RRR control from the full internal training run.
   A fingerprinted cache under `results/` makes later starts fast while artifact
   manifests and metric code are unchanged.
+  Run `uv run python notebooks/final_plots.py --output-dir figures` to export all
+  eleven figures as PDF and 300-DPI PNG, plus the significance LaTeX table and
+  a result-gap report. `--format pdf` or `--format png` selects one format.
+  `--example-model gpt2 --example-layer 6` selects the sample curves in both
+  RRR aggregates and the target-quantile figure (default: GPT-2 layer 0);
+  `--loso-example-model` and `--loso-example-layer` override the LOSO example.
+  Use layer `none` for layerless models. Examples must have the notebook's
+  required curves for all three datasets; invalid selections report available
+  pairs before writing figures. Existing export filenames are replaced.
+  Running without arguments retains interactive notebook execution.
   Shared artifact-independent rank calculations live in
   `src/utils/rrr/plot_metrics.py`; reusable axis and figure functions live in
   `src/utils/plotting/`.
