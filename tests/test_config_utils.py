@@ -9,6 +9,7 @@ import yaml
 from src.core.config import (
     EncodingConfig,
     FMRICrossDatasetRRRConfig,
+    FMRIDataConfig,
     FMRISignificanceConfig,
     RRRConfig,
     RRRTemporalWindowConfig,
@@ -29,10 +30,22 @@ from src.utils.shared.config import (
     expand_fmri_layer_configs,
     save_effective_config,
 )
+from scripts.run_rrr import Config as RRRClientConfig
 
 # ---------------------------------------------------------------------------
 # parse_override_args
 # ---------------------------------------------------------------------------
+
+
+def test_ieeg_encoding_defaults_to_glove_vocabulary():
+    assert EncodingConfig().limit_to_glove is True
+
+
+def test_fmri_glove_vocabulary_controls_are_opt_in_and_validated():
+    assert FMRIDataConfig().limit_to_glove is False
+    assert FMRIDataConfig().glove_dim == 300
+    with pytest.raises(ValueError, match="fmri.glove_dim"):
+        FMRISignificanceConfig(fmri=FMRIDataConfig(glove_dim=25))
 
 
 class TestParseOverrideArgs:
@@ -156,6 +169,7 @@ class TestDictToDataclass:
         config = dict_to_dataclass(
             {
                 "mode": "multi_view",
+                "multi_view_name": "language-model-multiview",
                 "views": [
                     {
                         "name": "layer_24",
@@ -169,6 +183,7 @@ class TestDictToDataclass:
             RRRConfig,
         )
         assert config.mode == ScriptMode.MULTI_VIEW
+        assert config.multi_view_name == "language-model-multiview"
         assert config.views == [
             RRRViewConfig(
                 name="layer_24",
@@ -181,12 +196,85 @@ class TestDictToDataclass:
 
     def test_rrr_multi_view_requires_views(self):
         with pytest.raises(ValueError, match="at least one view"):
-            RRRConfig(mode=ScriptMode.MULTI_VIEW)
+            RRRConfig(
+                mode=ScriptMode.MULTI_VIEW,
+                multi_view_name="language-model-multiview",
+            )
+
+    def test_rrr_multi_view_requires_name(self):
+        with pytest.raises(ValueError, match="requires multi_view_name"):
+            RRRConfig(
+                mode=ScriptMode.MULTI_VIEW,
+                views=[RRRViewConfig(
+                    name="view", rank=2,
+                    ieeg_rrr_source={"mode": "internal"},
+                )],
+            )
 
     def test_rrr_multi_view_rejects_duplicate_names(self):
         view = RRRViewConfig("same", "config.yml", "results/rrr", 2)
         with pytest.raises(ValueError, match="Duplicate RRR view"):
-            RRRConfig(mode=ScriptMode.MULTI_VIEW, views=[view, view])
+            RRRConfig(
+                mode=ScriptMode.MULTI_VIEW,
+                multi_view_name="language-model-multiview",
+                views=[view, view],
+            )
+
+    def test_multiview_fixture_uses_current_podcast_sources(self):
+        config = load_config("tests/fixtures/configs/multi_view_podcast.yml", {}, RRRClientConfig)
+        selected = config.selected_config()
+
+        assert selected.multi_view_name == "language-model-multiview"
+        assert len(selected.views) == 31
+        assert {view.rank for view in selected.views} == {64}
+        assert sum(view.rank for view in selected.views) == 1984
+        assert selected.rank_grid[-1] == 1984
+        sources = [
+            view.ieeg_rrr_source or view.fmri_rrr_source
+            for view in selected.views
+        ]
+        assert {source["dataset"] for source in sources} == {"podcast"}
+        assert all(source.get("significance_selection") for source in sources)
+
+    def test_cars_2_multiview_fixture_uses_laplacian_cars_sources(self):
+        config = load_config(
+            "tests/fixtures/configs/multi_view_cars-2.yml", {}, RRRClientConfig
+        )
+        selected = config.selected_config()
+
+        assert selected.encoding.dataset == "brain_treebank"
+        assert selected.encoding.subjects == [3, 7, 10]
+        assert selected.encoding.per_dataset_config == {
+            "movie": "cars-2", "rereference": "laplacian"
+        }
+        assert len(selected.views) == 31
+        assert {view.rank for view in selected.views} == {64}
+        assert sum(view.rank for view in selected.views) == 1984
+        sources = [
+            view.ieeg_rrr_source or view.fmri_rrr_source
+            for view in selected.views
+        ]
+        assert {source["dataset"] for source in sources} == {
+            "brain-treebank-cars-2"
+        }
+        assert {source["rereference"] for source in sources} == {"laplacian"}
+        assert all(source.get("significance_selection") for source in sources)
+
+    def test_fmri_multiview_fixture_uses_view_delay_bands(self):
+        config = load_config(
+            "tests/fixtures/configs/multi_view_fmri.yml", {}, RRRClientConfig
+        )
+        selected = config.selected_config()
+
+        assert selected.source_mode == "multi_view"
+        assert selected.multi_view_name == "language-model-multiview"
+        assert selected.subspace_aggregation == "prediction_weighted"
+        assert len(selected.views) == 31
+        assert {view.rank for view in selected.views} == {64}
+        assert sum(view.rank for view in selected.views) == 1984
+        assert selected.fmri.ndelays == 4
+        assert selected.banded_ridge_solver_params["n_iter"] == 1000
+        assert all(view.fmri_rrr_source for view in selected.views)
 
     def test_rrr_temporal_windows_roundtrip(self):
         config = dict_to_dataclass(
@@ -289,16 +377,17 @@ class TestDictToDataclass:
         config = dict_to_dataclass(
             {
                 "standardize_subspace_inputs": False,
-                "orthonormalize_a_per_rank": True,
             },
             RRRConfig,
         )
         assert config.standardize_subspace_inputs is False
-        assert config.orthonormalize_a_per_rank is True
 
     def test_rrr_subspace_standardization_defaults_false(self):
         assert RRRConfig().standardize_subspace_inputs is False
-        assert RRRConfig().orthonormalize_a_per_rank is False
+
+    def test_rrr_rejects_removed_orthonormalization_switch(self):
+        with pytest.raises(TypeError, match="orthonormalize_a_per_rank"):
+            RRRConfig(orthonormalize_a_per_rank=True)
 
     def test_rrr_b_matrices_default_false(self):
         assert RRRConfig().save_b_matrices is False
@@ -520,15 +609,34 @@ class TestApplyOverrides:
         assert config.refresh is False
 
     def test_subspace_aggregation_defaults_and_validation(self):
-        assert RRRConfig().subspace_aggregation == "extrinsic"
+        assert RRRConfig().subspace_aggregation is None
         fmri = FMRICrossDatasetRRRConfig(source_mode="within_fmri")
-        assert fmri.subspace_aggregation == "extrinsic"
+        assert fmri.subspace_aggregation == "prediction_weighted"
+        cross_dataset_fmri = FMRICrossDatasetRRRConfig(
+            source_mode="cross_dataset",
+            ieeg_rrr_source={"variant": "source"},
+        )
+        assert cross_dataset_fmri.subspace_aggregation is None
         assert fmri.rrr_svd_on_cpu is False
         assert fmri.rrr_use_low_rank_svd is False
         assert fmri.rrr_low_rank_svd_seed == 0
         assert fmri.rrr_save_b_matrix is False
         assert fmri.pca_svd_device == "auto"
-        assert fmri.prefetch_rank_designs is False
+        assert RRRConfig(subspace_aggregation="factor_weighted").subspace_aggregation == (
+            "factor_weighted"
+        )
+        assert FMRICrossDatasetRRRConfig(
+            source_mode="within_fmri",
+            subspace_aggregation="prediction_weighted",
+        ).subspace_aggregation == "prediction_weighted"
+        with pytest.raises(ValueError, match="subspace_aggregation"):
+            FMRICrossDatasetRRRConfig(
+                source_mode="cross_dataset",
+                subspace_aggregation="prediction_weighted",
+                ieeg_rrr_source={"variant": "source"},
+            )
+        with pytest.raises(ValueError, match="subspace_aggregation"):
+            RRRConfig(subspace_aggregation="unnormalized")
         with pytest.raises(ValueError, match="subspace_aggregation"):
             RRRConfig(subspace_aggregation="weighted")
         with pytest.raises(ValueError, match="pca_svd_device"):
@@ -537,6 +645,28 @@ class TestApplyOverrides:
     def test_within_fmri_does_not_require_cross_dataset_source(self):
         config = FMRICrossDatasetRRRConfig(source_mode="within_fmri")
         assert config.source_mode == "within_fmri"
+
+    def test_full_fit_is_available_only_for_ieeg(self):
+        ieeg = RRRClientConfig(mode=ScriptMode.FULL_FIT).selected_config()
+        assert ieeg.mode == ScriptMode.FULL_FIT
+
+        with pytest.raises(ValueError, match="unsupported for fMRI"):
+            RRRClientConfig(
+                dataset="deep-fmri",
+                mode=ScriptMode.FULL_FIT,
+                ieeg=None,
+                fmri={},
+            ).selected_config()
+
+    def test_fmri_loso_requires_multiple_subjects(self):
+        with pytest.raises(ValueError, match="at least two subjects"):
+            FMRICrossDatasetRRRConfig(source_mode="leave_one_subject_out")
+
+        config = FMRICrossDatasetRRRConfig(
+            source_mode="leave_one_subject_out",
+            fmri=FMRIDataConfig(subjects=["UTS01", "UTS02"]),
+        )
+        assert config.subspace_aggregation == "prediction_weighted"
 
 
 # ---------------------------------------------------------------------------

@@ -16,28 +16,20 @@ Deep-fMRI generation uses one document and artifact directory per story. Run
 Segment Any Text supplies sentence boundaries for the unpunctuated word tier, while PSST
 supplies audio-derived IU boundaries. Both are snapped back to the exact TextGrid words.
 The boundary and feature sweeps resume at the story-artifact level.
-`scripts/utilities/generate_surprisal.py` (or `make surprisal`) updates only the shared
+`scripts/utilities/generate_surprisal.py` updates only the shared
 GPT-2 surprisal and entropy columns in existing artifacts, and creates canonical minimal artifacts
 when a story has no completed full-provider output. It is resumable by model checksum
 and avoids rerunning unrelated audio and document-level providers.
-`scripts/utilities/generate_self_surprisal.py` (or `make self-surprisal`) creates
-separate model/dataset/stimulus artifacts under
-`processed_data/language_features/self_surprisal/`. Each target receives all available
-real preceding tokens up to the configured context limit. Left padding is excluded by
-the attention mask, real-context positions restart at zero, and the first target is
-missing because it has no linguistic context. Subtoken surprisal is summed within each
-word in bits, while word entropy is the first subtoken's predictive entropy in nats.
-Causal models use their configured tokenizer, final LM head, and initialization. Target
-windows are batched without changing their contexts, and the batch size halves
-automatically on CUDA OOM. The random GPT-2 XL uses its configured seed. RoBERTa uses
-the same procedure with GPT-2 small and records that fallback in `manifest.json`.
-Generate these model-specific values with `make self-surprisal` or invoke
-`scripts/utilities/generate_self_surprisal.py` directly with the desired config.
-`scripts/utilities/generate_fmri_iu_features.py` (or `make fmri-iu-features`) similarly
+`scripts/utilities/generate_fmri_iu_features.py` similarly
 populates IU position, onset, end, and length from the already aligned PSST boundaries
 without rerunning audio inference or unrelated providers.
-`scripts/utilities/generate_fmri_interpretable_features.py` (or
-`make fmri-interpretable-features`) adds the shared decoding subset from native timing
+`scripts/utilities/generate_audio_intensity.py` adds `intensity_rms` to Podcast and
+fMRI word artifacts from their WAV files. It resamples audio to 48 kHz and averages
+Librosa RMS frames (2,048 samples, 512-sample hop) in the fixed 500 ms after each
+word onset, matching the [Brain Treebank paper's auditory feature definition](https://www.proceedings.com/content/079/079017-3060open.pdf).
+Run it with repeated `--config` arguments for `configs/language_features/podcast.yml`
+and `configs/language_features/fmri.yml` after generating the base artifacts.
+`scripts/utilities/generate_fmri_interpretable_features.py` adds the shared decoding subset from native timing
 and sentence structure, Stanza UD syntax, and lexical norms without invoking the heavy
 diarization or document-level coreference providers.
 
@@ -78,37 +70,31 @@ For punctuation or contractions that yield multiple parser words per canonical w
 word-level label comes from the syntactic head component and the full crosswalk remains in
 `provider_tokens.tsv`.
 
-## Podcast decoding-task inventory
+## Decoding-task inventory
 
-All artifact-backed targets below are complete. Native labels preserve the Podcast
-source annotations, while standardized labels come from the shared generation pipeline
-(notably Stanza UD). Raw Lancaster dimensions remain separate from the aggregate
-sensorimotor strength and exclusivity composites. Categorical missing values are not a
-class: they remain missing and are excluded by the decoder's finite-target mask.
+Word decoding supports `label_offset`: embedding at word t decodes the label at
+t + offset, independently of neural `encoding.offset`. Labels are shifted on the
+full canonical transcript before row selection; out-of-range labels remain missing.
+fMRI shifts reset per story. Podcast, Cars 2, and fMRI batch manifests sweep
+`label_offsets: [-1, 0, 1]` for word decoding in the same per-model job.
+TR/pre-FIR remains at zero. To run only one offset, pass
+`OVERRIDES="--label_offset=1"` to Make.
+Artifact configuration variants distinguish label offsets while retaining the same
+upstream basis and fold selection.
 
-## Task-to-subspace reconstruction
+Except where a dataset-specific status is noted, the artifact-backed targets below are
+complete for Podcast. Native labels preserve source annotations, while standardized
+labels come from the shared generation pipeline (notably Stanza UD). Raw Lancaster
+dimensions remain separate from the aggregate sensorimotor strength and exclusivity
+composites. Categorical missing values are not a class: they remain missing and are
+excluded by the decoder's finite-target mask.
 
-`scripts/language-interpret/run_language_reconstruction.py` uses any configured subset of the same
-task registry as predictors of a saved RRR subspace and its automatically resolved PCA
-sibling. Unlike language decoding, missing task values are retained: continuous values
-receive fold-local median imputation plus missingness indicators, while categorical
-missingness is an explicit level. Requested tasks with no values in the selected dataset
-fail during preflight rather than silently changing the predictor set.
-
-A fold-local multi-output ridge model jointly predicts every coordinate at each
-configured rank. Both raw weighted factors and QR-orthonormalized spans are evaluated.
-Because source-fold axes can rotate in cross-dataset mode, its weighted factor is derived
-from the leading eigensystem of the mean source-fold `A A^T` operator. Predictor sets
-can evaluate the registered language tasks, same-word GloVe vectors, or their combined
-design. If a GloVe condition is requested, every condition is restricted to the same
-GloVe-covered words and the saved source folds are remapped without changing fold
-identity. Results include absolute metrics, RRR-minus-PCA comparisons, and paired
-GloVe/task/combined contrasts. See `configs/rrr/language_reconstruction.yml` for the
-complete interface.
+## Available feature labels
 
 | Task name | Kind | Measurement | Source | Status |
 |---|---|---|---|---|
 | `speaker_identity` | categorical | Anonymous within-episode speaker cluster | pyannote Community-1 | Complete |
+| `native_speaker` | categorical | Dataset-provided speaker identity | Dataset-native annotation | Cars 2 complete |
 | `native_part_of_speech` | categorical | Source POS tag | Podcast native | Complete |
 | `native_surprisal` | continuous | Source LM surprisal | Podcast native | Complete |
 | `native_entropy` | continuous | Source LM entropy | Podcast native | Complete |
@@ -134,6 +120,7 @@ complete interface.
 | `pre_word_pause` | continuous | Silence before word | Native provider | Complete |
 | `post_word_pause` | continuous | Silence after word | Native provider | Complete |
 | `word_duration` | continuous | Word duration | Native provider | Complete |
+| `intensity_rms` | continuous | Mean RMS over 500 ms after word onset | WAV audio | Podcast and fMRI complete |
 | `word_length` | continuous | Orthographic length | Native provider | Complete |
 | `word_zipf_frequency` | continuous | Zipf lexical frequency | wordfreq | Complete |
 | `concreteness` | continuous | Concreteness norm | Lexical norms | Complete |
@@ -221,16 +208,17 @@ the combined morphology string, and `aspect` are intentionally not decoding targ
 - Expanded prosody beyond word timing and pauses (F0/intensity, rate, lengthening,
   pitch reset, prominence, ToBI, and repair/false-start targets) is not yet implemented.
 - Brain Treebank artifacts can be loaded by the language decoder with dataset-specific
-  task manifests. The retained fMRI decoder trains on training-story words, tunes with
-  leave-one-session-out inner folds, and evaluates only on `wheretheressmoke`.
+  task manifests. The retained fMRI decoder loads factors from a normal internal fMRI
+  RRR Artifact, trains on training-story words, tunes with leave-one-session-out inner
+  folds, and evaluates only on `wheretheressmoke`.
 
 ## Resource staging
 
 Run:
 
 ```bash
-make stage-language-resources \
-  LANGUAGE_FEATURE_CONFIG=configs/language_features/podcast.yml
+uv run python scripts/utilities/generate_language_features.py \
+  --config configs/language_features/podcast.yml --stage-resources
 ```
 
 The Podcast speaker model is gated. Before staging, accept the conditions for
@@ -320,3 +308,21 @@ The first milestone implements the framework and high-feasibility native, lexica
 WordNet, and UD families. SRL, coreference, discourse, narrative, contextual LM, and
 expanded prosody remain later providers because they require further model and labeling
 decisions.
+# Focused recurrence updates
+
+Run `uv run python scripts/utilities/generate_recurrence_features.py` with repeated
+`--config` arguments for the language-feature dataset configs. This preserves other
+labels and uses the existing disfluency provider's surface-word recurrence rules,
+resetting history per stimulus. Decoding manifests include `word_in_previous_5`,
+`prior_word_count`, and `distance_from_previous_occurrence` (missing on first
+occurrence). Pause durations and word duration are included for all three datasets;
+IU end is included where aligned IUs exist (Podcast and fMRI), and native pitch/RMS
+intensity are included for Cars 2.
+
+fMRI decoding manifests additionally use `tr_tasks: [speaking_rate]`, included
+only when `fmri_tr_pre_fir` is true. This target is computed
+directly from transcript word starts on the acquisition grid, not stored per word
+or Lanczos-interpolated. Each centered TR interval is left-inclusive/right-exclusive;
+its word count is divided by the full TR duration, including silence. Raw words/sec
+are retained in the target audit trace; decoding uses the existing per-story
+standardization and TR trimming, with no FIR delay expansion of the target.

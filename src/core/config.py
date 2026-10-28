@@ -22,12 +22,12 @@ class ScriptMode(str, Enum):
     CROSS_SUBJECT = "cross_subject"
     CROSS_DATASET = "cross_dataset"
     PER_SUBJECT = "per_subject"
-    PER_REGION = "per_region"
     LEAVE_ONE_SUBJECT_OUT = "leave_one_subject_out"
     MULTI_VIEW = "multi_view"
     TEMPORAL_WINDOWS = "temporal_windows"
     CROSS_TEMPORAL_WINDOWS = "cross_temporal_windows"
     INTERNAL = "internal"
+    FULL_FIT = "full_fit"
 
 
 class LanguageDecodingMode(str, Enum):
@@ -35,11 +35,12 @@ class LanguageDecodingMode(str, Enum):
 
     WITHIN_DATASET = "within_dataset"
     CROSS_DATASET = "cross_dataset"
-    FMRI_WORD = "fmri_word"
-    FMRI_TR_PRE_FIR = "fmri_tr_pre_fir"
 
 
-SUBSPACE_AGGREGATION_METHODS = {"extrinsic", "unnormalized"}
+SUBSPACE_AGGREGATION_METHODS = {"extrinsic", "factor_weighted"}
+FMRI_FIR_SUBSPACE_AGGREGATION_METHODS = (
+    SUBSPACE_AGGREGATION_METHODS | {"prediction_weighted"}
+)
 
 
 def _validate_subspace_aggregation(value: str) -> None:
@@ -116,7 +117,7 @@ class EncodingConfig:
     arbitrary_seed: int = 42  # Seed used for generating arbitrary embedding baseline
     num_folds: int = 2  # Number of cross-validation folds
     limit_to_glove: bool = (
-        False  # If true, only run over words which have a glove embedding.
+        True  # Keep model comparisons on the shared GloVe-covered vocabulary.
     )
     shared_word_selection: bool = (
         False  # If true, use the intersection of cached word selections across subjects.
@@ -248,7 +249,7 @@ class RRRConfig:
         temporal_windows: {output_dir}/temporal_window_rrr/<window>/{rrr,pca}/
         cross_temporal_windows: directed, fold-matched transfer between saved windows
         per_subject   : {output_dir}/per_subject_rrr/
-        per_region    : {output_dir}/per_region_rrr/
+        leave_one_subject_out: factor transfer and baseline per held-out subject
     """
 
     encoding: EncodingConfig = field(default_factory=EncodingConfig)
@@ -262,11 +263,12 @@ class RRRConfig:
     fmri_rrr_source: dict | None = None
     cross_source_format: str = "fold_factors"
     views: list[RRRViewConfig] = field(default_factory=list)
+    multi_view_name: str | None = None
     temporal_windows: list[RRRTemporalWindowConfig] = field(default_factory=list)
     temporal_window_pairs: list[RRRCrossTemporalWindowPairConfig] = field(
         default_factory=list
     )
-    subspace_aggregation: str = "extrinsic"
+    subspace_aggregation: str | None = None
 
     # Full-model banded ridge used by mode=multi_view.
     banded_ridge_alphas: list[float] | None = None
@@ -294,10 +296,6 @@ class RRRConfig:
     standardize_subspace_inputs: bool = (
         False  # Preserve RRR/PCA subspace coordinate scales by default.
     )
-    orthonormalize_a_per_rank: bool = (
-        False  # QR-orthonormalize A[:, :k] before each projected ridge fit.
-    )
-
     # Arbitrary embedding seed for null baseline
     arbitrary_seed: int = 42
 
@@ -312,18 +310,13 @@ class RRRConfig:
     null_augmented_min_shift: int = 500
     null_augmented_seed: int = 42
 
-    # Per-region mode
-    atlas_path: str | None = (
-        None  # Path to Destrieux 2009 .nii.gz; None = download via nilearn
-    )
-    atlas_region_groups: dict | None = None  # Required when mode=per_region
-
     def __post_init__(self):
         self.validate()
 
     def validate(self):
         self.significance_selection.validate()
-        _validate_subspace_aggregation(self.subspace_aggregation)
+        if self.subspace_aggregation is not None:
+            _validate_subspace_aggregation(self.subspace_aggregation)
         if self.cross_source_format not in {"fold_factors", "rank_bases"}:
             raise ValueError(
                 "cross_source_format must be 'fold_factors' or 'rank_bases', "
@@ -342,6 +335,8 @@ class RRRConfig:
             raise ValueError("banded_ridge_alphas must contain non-negative values")
         if self.mode == ScriptMode.MULTI_VIEW and not self.views:
             raise ValueError("RRRConfig.views must contain at least one view")
+        if self.mode == ScriptMode.MULTI_VIEW and not self.multi_view_name:
+            raise ValueError("mode=multi_view requires multi_view_name")
         names = [view.name for view in self.views]
         duplicates = sorted({name for name in names if names.count(name) > 1})
         if duplicates:
@@ -419,6 +414,9 @@ class LanguageDecodingConfig:
 
     encoding: EncodingConfig = field(default_factory=EncodingConfig)
     rrr_source: dict | None = None
+    # For cross-dataset decoding onto fMRI, this internal fMRI artifact supplies
+    # the target story/data configuration while rrr_source supplies the basis.
+    fmri_target_artifact: dict | None = None
     rrr_selectors: dict = field(default_factory=dict)
     results_root: str = "results"
     variant_name: str | None = None
@@ -426,6 +424,10 @@ class LanguageDecodingConfig:
     rrr_run_path: str | None = None
     pca_run_path: str | None = None
     mode: LanguageDecodingMode = LanguageDecodingMode.WITHIN_DATASET
+    fmri_tr_pre_fir: bool = False
+    include_full_embeddings: bool = True
+    # Decode label at transcript word t + label_offset from embedding at t.
+    label_offset: int = 0
     source_name: str | None = None
     fold_results_dir: str | None = None
     output_dir: str | None = None
@@ -466,6 +468,14 @@ class LanguageDecodingConfig:
     def validate(self):
         if isinstance(self.mode, str):
             self.mode = LanguageDecodingMode(self.mode)
+        if isinstance(self.label_offset, bool) or not isinstance(self.label_offset, int):
+            raise ValueError("label_offset must be an integer")
+        if not isinstance(self.fmri_tr_pre_fir, bool):
+            raise ValueError("fmri_tr_pre_fir must be a boolean")
+        if not isinstance(self.include_full_embeddings, bool):
+            raise ValueError("include_full_embeddings must be a boolean")
+        if self.fmri_tr_pre_fir and self.label_offset != 0:
+            raise ValueError("label_offset is only supported for word decoding")
         _validate_subspace_aggregation(self.subspace_aggregation)
         if self.device not in {"auto", "cuda", "cpu"}:
             raise ValueError("device must be one of ['auto', 'cpu', 'cuda']")
@@ -481,15 +491,21 @@ class LanguageDecodingConfig:
             raise ValueError("tasks must not contain duplicate names")
         if not self.logistic_cs or any(float(value) <= 0 for value in self.logistic_cs):
             raise ValueError("logistic_cs must contain positive values")
-        if self.mode in {
-            LanguageDecodingMode.FMRI_WORD,
-            LanguageDecodingMode.FMRI_TR_PRE_FIR,
-        }:
+        if self.encoding.dataset in {"fmri", "deep_fmri", "deep-fmri"}:
             source_dataset = str((self.rrr_source or {}).get("dataset", ""))
-            if source_dataset not in {"fmri", "deep_fmri", "deep-fmri"}:
+            target_dataset = str((self.fmri_target_artifact or {}).get("dataset", ""))
+            fmri_names = {"fmri", "deep_fmri", "deep-fmri"}
+            if source_dataset not in fmri_names and target_dataset not in fmri_names:
                 raise ValueError(
-                    f"mode={self.mode.value} requires a deep-fmri rrr_source"
+                    "fMRI decoding requires a deep-fmri rrr_source or "
+                    "fmri_target_artifact"
                 )
+            if self.mode == LanguageDecodingMode.CROSS_DATASET and target_dataset not in fmri_names:
+                raise ValueError("Cross-dataset fMRI decoding requires fmri_target_artifact")
+            if self.mode == LanguageDecodingMode.WITHIN_DATASET and self.fmri_target_artifact is not None:
+                raise ValueError("Within-dataset fMRI decoding cannot use fmri_target_artifact")
+        elif self.fmri_tr_pre_fir:
+            raise ValueError("fmri_tr_pre_fir is only available for fMRI targets")
 
 
 @dataclass
@@ -501,12 +517,7 @@ class LanguageReconstructionConfig:
     rrr_selectors: dict = field(default_factory=dict)
     results_root: str = "results"
     variant_name: str | None = None
-    # Deprecated compatibility input; executable clients require rrr_source.
-    rrr_run_path: str | None = None
     mode: LanguageDecodingMode = LanguageDecodingMode.WITHIN_DATASET
-    source_name: str | None = None
-    fold_results_dir: str | None = None
-    output_dir: str | None = None
     subspace_aggregation: str = "extrinsic"
     rank_grid: list[int] = field(default_factory=lambda: [1, 2, 4, 8, 16, 32])
     tasks: list[str] = field(default_factory=lambda: [
@@ -539,7 +550,7 @@ class LanguageReconstructionConfig:
             raise ValueError(
                 f"Language reconstruction does not support mode={self.mode.value}"
             )
-        if not self.rrr_source and not self.rrr_run_path:
+        if not self.rrr_source:
             raise ValueError("LanguageReconstructionConfig.rrr_source is required")
         if not self.rank_grid or any(int(rank) < 1 for rank in self.rank_grid):
             raise ValueError("rank_grid must contain positive integers")
@@ -894,10 +905,17 @@ class FMRIDataConfig:
 
     fmri_repo_root: str = "data/deep-fMRI-dataset"
     embedding_root: str = "data/fmri/stimuli"
+    glove_data_root: str = "data"
+    limit_to_glove: bool = False
+    glove_dim: int = 300
     sessions: list[int] = field(default_factory=lambda: [1, 2, 3, 4, 5])
     subjects: list[str] = field(default_factory=lambda: ["UTS03"])
     trim: int = 5
     ndelays: int = 4
+
+    def validate(self):
+        if self.glove_dim not in {50, 100, 200, 300}:
+            raise ValueError("fmri.glove_dim must be one of [50, 100, 200, 300]")
 
 
 @dataclass
@@ -928,7 +946,7 @@ class FMRISignificanceConfig:
     fmri: FMRIDataConfig = field(default_factory=FMRIDataConfig)
     ridge: FMRIRidgeConfig = field(default_factory=FMRIRidgeConfig)
     model_dir: str = "gpt2-xl"
-    layer: int | list[int] = 24
+    layer: int | list[int] | None = 24
     pooling: str = "mean"
     results_root: str = "results"
     plot: bool = True
@@ -941,6 +959,10 @@ class FMRISignificanceConfig:
     refresh: bool = False
 
     def validate(self):
+        self.fmri.validate()
+        is_glove = self.model_dir == "glove" or self.model_dir.startswith("glove-")
+        if is_glove and self.layer is not None:
+            raise ValueError("fMRI GloVe configurations require layer=null")
         if len(self.fmri.sessions) < 2:
             raise ValueError("fMRI significance requires at least two sessions")
         if not self.fmri.subjects:
@@ -958,12 +980,12 @@ class FMRISignificanceConfig:
 
 @dataclass
 class FMRICrossDatasetRRRConfig:
-    """Evaluate saved iEEG RRR/PCA input spaces on fMRI responses."""
+    """Configuration for internal, cross-dataset, and LOSO fMRI RRR."""
 
     fmri: FMRIDataConfig = field(default_factory=FMRIDataConfig)
     ridge: FMRIRidgeConfig = field(default_factory=FMRIRidgeConfig)
     model_dir: str = "gpt2-xl"
-    layer: int | list[int] = 24
+    layer: int | list[int] | None = 24
     pooling: str = "mean"
     results_root: str = "results"
     plot: bool = True
@@ -971,26 +993,55 @@ class FMRICrossDatasetRRRConfig:
         default_factory=SignificanceSelectionConfig
     )
     ieeg_rrr_source: dict | None = None
+    views: list[RRRViewConfig] = field(default_factory=list)
+    multi_view_name: str | None = None
+    banded_ridge_alphas: list[float] | None = None
+    banded_ridge_solver_params: dict = field(
+        default_factory=lambda: {"n_iter": 100, "random_state": 42}
+    )
     source_mode: str = "cross_dataset"
-    subspace_aggregation: str = "extrinsic"
+    subspace_aggregation: str | None = None
     rrr_svd_on_cpu: bool = False
     rrr_use_low_rank_svd: bool = False
     rrr_low_rank_svd_seed: int = 0
     rrr_save_b_matrix: bool = False
     pca_svd_device: str = "auto"
-    prefetch_rank_designs: bool = False
     rank_grid: list[int] = field(
         default_factory=lambda: [1, 2, 4, 8, 16, 32, 64, 128]
     )
     refresh: bool = False
 
     def validate(self):
+        self.fmri.validate()
         self.significance_selection.validate()
-        _validate_subspace_aggregation(self.subspace_aggregation)
-        if self.source_mode not in {"cross_dataset", "within_fmri"}:
+        is_glove = self.model_dir == "glove" or self.model_dir.startswith("glove-")
+        if is_glove and self.layer is not None:
+            raise ValueError("fMRI GloVe configurations require layer=null")
+        if self.source_mode not in {
+            "cross_dataset", "within_fmri", "leave_one_subject_out", "multi_view"
+        }:
             raise ValueError(
-                "source_mode must be 'cross_dataset' or 'within_fmri', "
+                "source_mode must be 'cross_dataset', 'within_fmri', "
+                "'leave_one_subject_out', or 'multi_view', "
                 f"got {self.source_mode!r}"
+            )
+        if self.subspace_aggregation is None and self.source_mode in {
+            "within_fmri", "leave_one_subject_out", "multi_view"
+        }:
+            self.subspace_aggregation = "prediction_weighted"
+        allowed_aggregation = (
+            FMRI_FIR_SUBSPACE_AGGREGATION_METHODS
+            if self.source_mode in {"within_fmri", "leave_one_subject_out", "multi_view"}
+            else SUBSPACE_AGGREGATION_METHODS
+        )
+        if (
+            self.subspace_aggregation is not None
+            and self.subspace_aggregation not in allowed_aggregation
+        ):
+            raise ValueError(
+                "subspace_aggregation must be one of "
+                f"{sorted(allowed_aggregation)} for source_mode={self.source_mode!r}, "
+                f"got {self.subspace_aggregation!r}"
             )
         if not self.fmri.subjects:
             raise ValueError("At least one fMRI subject is required")
@@ -1002,6 +1053,34 @@ class FMRICrossDatasetRRRConfig:
             raise ValueError("pca_svd_device must be one of ['auto', 'cpu', 'cuda']")
         if self.source_mode == "cross_dataset" and not self.ieeg_rrr_source:
             raise ValueError("ieeg_rrr_source is required")
+        if self.source_mode == "leave_one_subject_out" and len(self.fmri.subjects) < 2:
+            raise ValueError(
+                "fMRI leave_one_subject_out requires at least two subjects"
+            )
+        if self.banded_ridge_alphas is not None and (
+            not self.banded_ridge_alphas
+            or any(float(alpha) < 0 for alpha in self.banded_ridge_alphas)
+        ):
+            raise ValueError("banded_ridge_alphas must contain non-negative values")
+        if self.source_mode == "multi_view":
+            if not self.multi_view_name:
+                raise ValueError("source_mode=multi_view requires multi_view_name")
+            if not self.views:
+                raise ValueError("source_mode=multi_view requires at least one view")
+            names = [view.name for view in self.views]
+            if any(not name for name in names):
+                raise ValueError("Every RRR view name must be non-empty")
+            duplicates = sorted({name for name in names if names.count(name) > 1})
+            if duplicates:
+                raise ValueError(f"Duplicate RRR view name(s): {duplicates}")
+            for view in self.views:
+                if int(view.rank) < 1:
+                    raise ValueError("Every RRR view rank must be positive")
+                if bool(view.ieeg_rrr_source) == bool(view.fmri_rrr_source):
+                    raise ValueError(
+                        f"RRR view {view.name!r} must define exactly one of "
+                        "ieeg_rrr_source or fmri_rrr_source"
+                    )
 
     def __post_init__(self):
         self.validate()

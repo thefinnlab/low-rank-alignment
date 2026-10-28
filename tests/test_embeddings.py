@@ -49,6 +49,104 @@ class TestLoadEmbeddings:
         _, df_word = load_embeddings(data_root, layer=24)
         assert {"word", "start", "end"} <= set(df_word.columns)
 
+    def test_limit_to_glove_annotates_words_without_filtering_embeddings(
+        self, tmp_hdf5_and_transcript, monkeypatch
+    ):
+        data_root, _ = tmp_hdf5_and_transcript
+        calls = []
+
+        def fake_glove(root, word_df, dim):
+            calls.append((root, dim, word_df["word"].tolist()))
+            annotated = word_df.copy()
+            annotated["in_glove"] = [True, False, True]
+            return np.zeros((3, dim), dtype=np.float32), annotated
+
+        monkeypatch.setattr(
+            "src.utils.shared.embeddings.get_glove_embeddings", fake_glove
+        )
+        embeddings, word_df = load_embeddings(
+            data_root, layer=24, limit_to_glove=True, glove_dim=300
+        )
+
+        assert embeddings.shape == (3, 4)
+        assert word_df["in_glove"].tolist() == [True, False, True]
+        assert calls == [(data_root, 300, ["hello", "world", "foo"])]
+
+    def test_glove_is_loaded_as_primary_embedding(
+        self, tmp_hdf5_and_transcript, monkeypatch
+    ):
+        data_root, _ = tmp_hdf5_and_transcript
+        calls = []
+
+        def fake_glove(root, transcript_df, dim):
+            calls.append((root, dim))
+            word_df = transcript_df.groupby("word_idx").first()
+            word_df = word_df[["word", "start", "end"]].copy()
+            word_df["in_glove"] = True
+            return np.ones((len(word_df), dim), dtype=np.float32), word_df
+
+        monkeypatch.setattr(
+            "src.utils.shared.embeddings.get_glove_embeddings", fake_glove
+        )
+        embeddings, word_df = load_embeddings(
+            data_root, embedding_getter_name="glove", glove_dim=300
+        )
+
+        assert embeddings.shape == (3, 300)
+        assert word_df["in_glove"].all()
+        assert calls == [(data_root, 300)]
+
+    def test_dataset_root_falls_back_to_shared_glove_cache(self, tmp_path, monkeypatch):
+        from src.utils.shared import embeddings as embedding_utils
+
+        shared_glove = tmp_path / "glove" / "glove.6B.300d.txt"
+        shared_glove.parent.mkdir()
+        shared_glove.touch()
+        loaded = []
+
+        monkeypatch.setattr(
+            embedding_utils.KeyedVectors,
+            "load_word2vec_format",
+            lambda path, **kwargs: loaded.append(path) or object(),
+        )
+        embedding_utils._load_glove_vectors.cache_clear()
+        embedding_utils._load_glove_vectors(str(tmp_path / "brain-treebank"), 300)
+
+        assert loaded == [str(shared_glove)]
+
+    def test_glove_treats_null_words_as_out_of_vocabulary(self, monkeypatch):
+        from src.utils.shared import embeddings as embedding_utils
+
+        class FakeVectors:
+            vector_size = 2
+
+            def __contains__(self, word):
+                return word == "known"
+
+            def __getitem__(self, word):
+                return np.array([1.0, 2.0], dtype=np.float32)
+
+        monkeypatch.setattr(
+            embedding_utils,
+            "_load_glove_vectors",
+            lambda data_root, dim: FakeVectors(),
+        )
+        transcript = pd.DataFrame(
+            {
+                "word_idx": [0, 1],
+                "word": ["known", None],
+                "start": [0.0, 1.0],
+                "end": [0.5, 1.5],
+            }
+        )
+
+        vectors, word_df = embedding_utils.get_glove_embeddings(
+            "data", transcript, dim=300
+        )
+
+        np.testing.assert_array_equal(vectors, [[1.0, 2.0], [0.0, 0.0]])
+        assert word_df["in_glove"].tolist() == [True, False]
+
     def test_single_token_words(self, tmp_path):
         """When each token is its own word, output equals raw embedding rows."""
         rng = np.random.default_rng(1)

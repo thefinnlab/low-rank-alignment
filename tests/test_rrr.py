@@ -7,13 +7,35 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from src.utils.rrr.core import save_rrr_factors, save_rrr_result, load_rrr_result
-from src.utils.rrr.rrr_ieeg import _load_cross_dataset_A_by_rank
+from src.utils.rrr.core import (
+    fit_dense_rrr,
+    load_rrr_result,
+    save_rrr_factors,
+    save_rrr_result,
+)
+from src.utils.rrr.rrr_ieeg import load_cross_dataset_A_by_rank
 from src.core.config import RRRTemporalWindowConfig
 
 # ---------------------------------------------------------------------------
 # Shared fixtures
 # ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("use_low_rank_svd", [False, True])
+def test_fit_dense_rrr_returns_prediction_singular_values(use_low_rank_svd):
+    prediction = np.diag([3.0, 2.0]).astype(np.float32)
+    result = fit_dense_rrr(
+        np.eye(2, dtype=np.float32),
+        prediction,
+        k=3,
+        selected_idx=np.arange(2),
+        precomputed_Y_hat_ols=prediction,
+        precomputed_beta_full=np.eye(2, dtype=np.float32),
+        device="cpu",
+        use_low_rank_svd=use_low_rank_svd,
+    )
+
+    np.testing.assert_allclose(result["singular_values"], [3.0, 2.0, 0.0])
 
 
 @pytest.fixture
@@ -134,6 +156,127 @@ class TestSaveLoadRRRResult:
 
 
 class TestCrossDatasetRankBasisLoading:
+    def test_whole_stimulus_source_bases_are_rank_specific_and_orthonormal(
+        self, monkeypatch, rng
+    ):
+        from types import SimpleNamespace
+        from src.utils.rrr import ieeg_source_bases
+
+        X = rng.standard_normal((20, 5)).astype(np.float32)
+        Y = rng.standard_normal((20, 4)).astype(np.float32)
+        beta = rng.standard_normal((5, 4)).astype(np.float32)
+        def fake_baseline(*args, **kwargs):
+            absorb = kwargs.get("absorb_input_scaler", True)
+            coefficient = beta if absorb else X.std(axis=0)[:, None] * beta
+            return {
+                "Y_train": Y,
+                "Y_hat_full_train": X @ beta,
+                "beta_full_input_coordinates": coefficient,
+                "beta_full_raw": beta,
+            }
+
+        monkeypatch.setattr(ieeg_source_bases, "fit_encoding_baseline", fake_baseline)
+        enc = SimpleNamespace(
+            ridge_alphas=None, ridge_cv_folds=2, ridge_solver_params=None,
+            ridge_y_in_cpu=None, ridge_force_cpu=None, alpha_grid={},
+            model="test", per_model_config={}, offset=0,
+        )
+
+        bases = ieeg_source_bases._fit_bases(X, Y, enc, [1, 3])
+
+        assert bases["rrr"][1].shape == (5, 1)
+        assert bases["rrr"][3].shape == (5, 3)
+        np.testing.assert_allclose(
+            bases["rrr"][3].T @ bases["rrr"][3], np.eye(3), atol=1e-5
+        )
+        np.testing.assert_allclose(
+            bases["pca"][3].T @ bases["pca"][3], np.eye(3), atol=1e-5
+        )
+
+        standardized = ieeg_source_bases._fit_bases(
+            X,
+            Y,
+            enc,
+            [1, 3],
+            standardized_input_coordinates=True,
+            standardized_rrr_coordinates=True,
+        )
+        scale = X.std(axis=0)
+        expected, _ = np.linalg.qr(scale[:, None] * bases["rrr"][3])
+        np.testing.assert_allclose(
+            standardized["rrr"][3] @ standardized["rrr"][3].T,
+            expected @ expected.T,
+            atol=1e-5,
+        )
+        X_standardized = (X - X.mean(axis=0)) / X.std(axis=0)
+        expected_pca = ieeg_source_bases.fit_pca_input_basis(
+            X_standardized, max_rank=3
+        )
+        np.testing.assert_allclose(
+            standardized["pca"][3] @ standardized["pca"][3].T,
+            expected_pca @ expected_pca.T,
+            atol=1e-5,
+        )
+
+        standardized_pca_only = ieeg_source_bases._fit_bases(
+            X,
+            Y,
+            enc,
+            [3],
+            standardized_input_coordinates=True,
+            standardized_rrr_coordinates=False,
+        )
+        np.testing.assert_allclose(
+            standardized_pca_only["rrr"][3] @ standardized_pca_only["rrr"][3].T,
+            bases["rrr"][3] @ bases["rrr"][3].T,
+            atol=1e-5,
+        )
+        np.testing.assert_allclose(
+            standardized_pca_only["pca"][3]
+            @ standardized_pca_only["pca"][3].T,
+            expected_pca @ expected_pca.T,
+            atol=1e-5,
+        )
+
+        standardized_rrr_only = ieeg_source_bases._fit_bases(
+            X,
+            Y,
+            enc,
+            [3],
+            standardized_input_coordinates=False,
+            standardized_rrr_coordinates=True,
+        )
+        np.testing.assert_allclose(
+            standardized_rrr_only["rrr"][3] @ standardized_rrr_only["rrr"][3].T,
+            standardized["rrr"][3] @ standardized["rrr"][3].T,
+            atol=1e-5,
+        )
+        np.testing.assert_allclose(
+            standardized_rrr_only["pca"][3] @ standardized_rrr_only["pca"][3].T,
+            bases["pca"][3] @ bases["pca"][3].T,
+            atol=1e-5,
+        )
+
+    def test_cross_dataset_loads_the_source_factor_scaler(self, tmp_path):
+        from scripts.run_rrr import Artifact
+        from src.utils.rrr.ieeg_rrr_mode.cross_dataset_helpers import (
+            load_cross_dataset_scaler,
+        )
+
+        source = Artifact(mode="full_fit", results_root=tmp_path).begin(config={})
+        scaler = {
+            "mean": np.array([1.0, 10.0], dtype=np.float32),
+            "scale": np.array([2.0, 7.0], dtype=np.float32),
+            "coordinates": "standardized-v1",
+        }
+        source.save_factors(method="rrr", input_factors=np.eye(2))
+        source.save_field("input_scalers", scaler)
+
+        loaded = load_cross_dataset_scaler(source, "rrr", rank=1)
+
+        np.testing.assert_array_equal(loaded["mean"], scaler["mean"])
+        np.testing.assert_array_equal(loaded["scale"], scaler["scale"])
+
     def test_cross_temporal_loader_preserves_fold_specific_factors(
         self, tmp_path, rng
     ):
@@ -151,6 +294,10 @@ class TestCrossDatasetRankBasisLoading:
                 unit=UnitSelector(method="rrr", temporal_window="pre"),
                 fold=fold,
                 input_factors=matrix,
+                input_scaler={
+                    "mean": np.zeros(6), "scale": np.ones(6),
+                    "coordinates": "standardized-v1",
+                },
             )
 
         loaded = _load_cross_temporal_A_by_fold(
@@ -167,7 +314,7 @@ class TestCrossDatasetRankBasisLoading:
         source.save_field("input_factors", expected,
                           selector={"method": "rrr", "rank": 4})
 
-        loaded = _load_cross_dataset_A_by_rank(
+        loaded = load_cross_dataset_A_by_rank(
             source, "rrr", [4], source_format="rank_bases"
         )
 
@@ -177,7 +324,7 @@ class TestCrossDatasetRankBasisLoading:
         from scripts.run_rrr import Artifact
         source = Artifact(results_root=tmp_path).begin(config={"source": 1})
         with pytest.raises(ValueError, match="no rrr factors"):
-            _load_cross_dataset_A_by_rank(
+            load_cross_dataset_A_by_rank(
                 source, "rrr", [4], source_format="rank_bases"
             )
 
@@ -246,7 +393,8 @@ class TestRunRRRForUnit:
     def test_rank_specific_a_is_orthonormalized_before_ridge(
         self, tmp_path, small_data, monkeypatch
     ):
-        import run_rrr
+        from scripts.run_rrr import Artifact, UnitSelector
+        from src.utils.rrr.ieeg_rrr_mode import common as run_rrr
 
         X, Y = small_data
         A_full = np.array(
@@ -258,19 +406,21 @@ class TestRunRRRForUnit:
         def capture_evaluation(X_train, X_test, *args, **kwargs):
             captured.append((X_train.copy(), X_test.copy()))
             n_targets = args[1].shape[1]
+            label = kwargs["subspace_name"]
             return {
-                "nr_corr": 0.0,
-                "nr_r2": 0.0,
-                "nr_corr_per_target": np.zeros(n_targets),
-                "nr_r2_per_target": np.zeros(n_targets),
-                "nr_best_alphas": np.ones(n_targets),
+                f"{label}_corr": 0.0,
+                f"{label}_r2": 0.0,
+                f"{label}_corr_per_target": np.zeros(n_targets),
+                f"{label}_r2_per_target": np.zeros(n_targets),
+                f"{label}_best_alphas": np.ones(n_targets),
             }
 
         monkeypatch.setattr(run_rrr, "evaluate_input_space", capture_evaluation)
         monkeypatch.setattr(
             run_rrr, "resolve_ridge_alphas", lambda *a, **k: np.array([1.0])
         )
-        monkeypatch.setattr(run_rrr, "save_alpha_diagnostics", lambda *a, **k: None)
+        artifact = Artifact(results_root=tmp_path).begin(config={"test": True})
+        unit = UnitSelector(method="rrr")
 
         train_idx = np.arange(0, X.shape[0] // 2)
         test_idx = np.arange(X.shape[0] // 2, X.shape[0])
@@ -291,14 +441,22 @@ class TestRunRRRForUnit:
             None,
             None,
             "cpu",
-            str(tmp_path),
+            artifact,
+            unit,
             "nr",
-            orthonormalize_a_per_rank=True,
+            evaluate_orthonormalized=True,
         )
 
         Q = np.linalg.qr(A_full[:, :2], mode="reduced")[0]
-        np.testing.assert_allclose(captured[0][0], X[train_idx] @ Q)
+        np.testing.assert_allclose(captured[0][0], X[train_idx] @ A_full[:, :2])
+        np.testing.assert_allclose(captured[1][0], X[train_idx] @ Q)
         np.testing.assert_allclose(Q.T @ Q, np.eye(2), atol=1e-6)
+        metrics = artifact.load_rank_metrics(unit=unit, rank=2, fold=0)
+        assert {"nr_corr", "nr_orth_corr", "nr_orth_best_alphas"}.issubset(metrics)
+        assert artifact.has_field(
+            "diagnostics",
+            selector=artifact._selector(unit, rank=2, fold=0, name="nr_orth"),
+        )
 
     def test_b_matrices_and_raw_rrr_metrics_disabled_by_default(
         self, tmp_path, small_data
@@ -431,6 +589,7 @@ class TestRunRRRForUnit:
 
     def test_pca_baseline_saves_fold_a_factors(self, tmp_path, small_data):
         from run_rrr import _run_rrr_for_unit
+        from src.utils.rrr.evaluation import fit_pca_input_basis
 
         X, Y = small_data
         n = X.shape[0]
@@ -450,6 +609,14 @@ class TestRunRRRForUnit:
         n_train = n - len(test_idxs[0])
         assert A_pca.shape[0] == X.shape[1]
         assert A_pca.shape[1] <= min(n_train, X.shape[1])
+        train_idx = np.setdiff1d(np.arange(n), test_idxs[0])
+        X_train = X[train_idx]
+        scale = X_train.std(axis=0)
+        X_train = (X_train - X_train.mean(axis=0)) / scale
+        expected = fit_pca_input_basis(X_train) / scale[:, None]
+        np.testing.assert_allclose(
+            A_pca @ A_pca.T, expected @ expected.T, atol=1e-5
+        )
         assert not (tmp_path / "pca" / "fold_0" / "B.npy").exists()
 
     def test_cross_dataset_subspace_writes_nr_metrics_without_factors(

@@ -4,18 +4,20 @@ import numpy as np
 
 from scripts.run_rrr import Artifact, UnitSelector
 from src.core.config import RRRConfig
-from src.core.registry import resolve_dataset_context
-from src.utils.rrr.multiview import fit_banded_ridge_baseline, project_view_bands
+from src.utils.rrr.multiview import (
+    fit_banded_ridge_baseline,
+    load_view_bases,
+    load_view_embeddings,
+    project_view_bands,
+    resolve_rrr_views,
+    target_dataset_key,
+)
 from src.utils.rrr.significance import PreparedSignificance
 from src.utils.shared.alpha_grids import resolve_ridge_alphas
-from src.utils.shared.embeddings import get_glove_embeddings, load_embeddings
-from src.utils.shared.tensors import to_numpy
-from src.utils.subspace_comparison.metrics import aggregate_subspace_basis
 
 from .common import (_build_rrr_decomposition_inputs,
                      _load_shared_word_selection_metadata,
-                     _reference_encoding_results, _rrr_output_resume_plan,
-                     _run_rrr_for_unit)
+                     _reference_encoding_results, _run_rrr_for_unit)
 
 
 def run_multi_view(
@@ -27,17 +29,7 @@ def run_multi_view(
     """Fit banded ridge over saved RRR views, then run the standard RRR sweep."""
     from sklearn.preprocessing import StandardScaler
 
-    sources = {}
-    source_configs = {}
-    for view in config.views:
-        kwargs = dict(view.ieeg_rrr_source or view.fmri_rrr_source or {})
-        kwargs.setdefault("results_root", config.results_root)
-        source = Artifact(**kwargs)
-        loaded = source.load_artifacts(
-            fields=["effective_config", "upstream_identities", "target_manifest"]
-        )
-        sources[view.name] = loaded
-        source_configs[view.name] = loaded.effective_config
+    resolved_views = resolve_rrr_views(config)
 
     sig_frame = significance.significant_electrodes
     union = {
@@ -48,39 +40,19 @@ def run_multi_view(
     for identity in significance.source_identities:
         if identity not in significance_sources:
             significance_sources.append(identity)
-    target_context = resolve_dataset_context(
-        dataset=config.encoding.dataset, subject_ids=subject_ids,
-        per_dataset_config=config.encoding.per_dataset_config,
-        data_root=config.encoding.data_root,
-    )
-    embeddings = {}
-    word_df = None
     for view in config.views:
-        view_enc = source_configs[view.name]["encoding"]
-        if int(view_enc.get("offset", 0)) != int(config.encoding.offset):
+        view_enc = resolved_views[view.name].config.encoding
+        if int(view_enc.offset) != int(config.encoding.offset):
             raise ValueError(
-                f"View {view.name} uses offset {view_enc.get('offset')}; "
+                f"View {view.name} uses offset {view_enc.offset}; "
                 f"target uses {config.encoding.offset}"
             )
-        values, words = load_embeddings(
-            config.encoding.data_root, view_enc["model"],
-            dataset=config.encoding.dataset,
-            per_dataset_config=config.encoding.per_dataset_config,
-            dataset_context=target_context, **view_enc.get("per_model_config", {}),
-        )
-        if word_df is not None and not np.array_equal(
-            word_df["word"].astype(str).to_numpy(), words["word"].astype(str).to_numpy()
-        ):
-            raise ValueError(f"Embedding transcript differs for view {view.name}")
-        word_df = words
-        embeddings[view.name] = np.asarray(values)
+    embeddings, word_df = load_view_embeddings(config, resolved_views, subject_ids)
 
     enc = config.encoding
     word_in_glove = None
     if enc.limit_to_glove or enc.model == "glove":
-        word_in_glove = get_glove_embeddings(
-            enc.data_root, word_df, **enc.per_model_config
-        )[1]["in_glove"]
+        word_in_glove = word_df["in_glove"]
     shared_selection_metadata = None
     if enc.shared_word_selection:
         shared_selection_metadata = _load_shared_word_selection_metadata(
@@ -94,38 +66,30 @@ def run_multi_view(
         reference,
         significance.detailed_significance,
         enc,
-        embeddings[config.views[0].name],
+        embeddings,
         word_df,
         compute_sig_nonsig=config.compute_sig_nonsig,
         word_in_glove=word_in_glove,
         shared_selection_metadata=shared_selection_metadata,
+        return_aligned_embeddings=True,
     )
     if prepared_values is None:
         return []
-    _, prepared_baselines, test_idxs, sig_mask_flat, target_manifest = prepared_values
+    (
+        X_aligned, prepared_baselines, test_idxs, sig_mask_flat,
+        target_manifest, aligned_embeddings,
+    ) = prepared_values
     selection = np.asarray(reference["selection"])
-    bases, basis_modes = {}, {}
-    for view in config.views:
-        source = sources[view.name]
-        rank = int(view.rank)
-        factor_items = source.load_collection("input_factors", {"method": "rrr"})
-        fold_factors = {int(dict(key)["fold"]): value for key, value in factor_items.items()
-                        if "fold" in dict(key)}
-        if source.dataset == artifact.dataset:
-            if len(fold_factors) != len(test_idxs):
-                raise ValueError(f"View {view.name} does not provide all target folds")
-            bases[view.name] = {fold: np.asarray(value)[:, :rank]
-                                for fold, value in fold_factors.items()}
-            basis_modes[view.name] = "matching_target_fold_raw"
-        else:
-            mean_basis = aggregate_subspace_basis(
-                list(fold_factors.values()), rank=rank,
-                method=config.subspace_aggregation,
-            )
-            bases[view.name] = {fold: mean_basis for fold in range(len(test_idxs))}
-            basis_modes[view.name] = f"cross_dataset_fold_{config.subspace_aggregation}"
+    bases, basis_modes, view_scalers = load_view_bases(
+        config,
+        resolved_views,
+        target_dataset_key(config, subject_ids),
+        selection,
+        test_idxs,
+        return_scalers=True,
+    )
     view_names = [view.name for view in config.views]
-    n_words = len(selection)
+    n_words = X_aligned.shape[0]
     all_rows = np.arange(n_words, dtype=int)
     widths = [int(view.rank) for view in config.views]
     stops = np.cumsum(widths)
@@ -136,10 +100,26 @@ def run_multi_view(
     unit = UnitSelector(method="rrr")
     artifact.save_target_manifest(unit=unit, target_manifest=target_manifest,
                                   overwrite=config.refresh)
-    resume_plan = _rrr_output_resume_plan(
-        artifact, unit, config, len(test_idxs)
+    rrr_plan = artifact.resume_plan(
+        unit=unit, ranks=config.rank_grid, folds=range(len(test_idxs)),
+        refresh=config.refresh, require_target_factors=config.save_b_matrices,
+        required_metric_keys={
+            "nr_orth_corr", "nr_orth_r2_per_target",
+        } | ({"nr_orth_best_alphas"} if config.log_alphas else set()) | (
+            {"null_aug_corr_per_target", "null_aug_r2_per_target"}
+            if config.run_null_augmented else set()
+        ),
     )
-    folds_to_build = resume_plan["folds_to_build"]
+    pca_plan = (
+        artifact.resume_plan(
+            unit=UnitSelector(method="pca"), ranks=config.rank_grid,
+            folds=range(len(test_idxs)), refresh=config.refresh,
+        )
+        if config.run_pca_baseline else None
+    )
+    folds_to_build = set(rrr_plan["folds_to_build"])
+    if pca_plan is not None:
+        folds_to_build |= pca_plan["folds_to_build"]
     explicit_banded_alphas = (
         np.asarray(config.banded_ridge_alphas, dtype=float)
         if config.banded_ridge_alphas is not None
@@ -152,7 +132,7 @@ def run_multi_view(
         test_idx = np.asarray(test_idx, dtype=int)
         train_idx = np.setdiff1d(all_rows, test_idx, assume_unique=False)
         bands, boundaries = project_view_bands(
-            embeddings, bases, view_names, fold_f
+            aligned_embeddings, bases, view_names, fold_f, view_scalers
         )
         if band_boundaries != boundaries:
             raise ValueError("Multiview band boundaries differ across folds")
@@ -194,12 +174,13 @@ def run_multi_view(
             y_in_cpu=enc.ridge_y_in_cpu,
             force_cpu=enc.ridge_force_cpu,
         )
-        artifact.save_diagnostics(unit=unit, fold=fold_f, diagnostics={
-            "view_names": view_names, "band_boundaries": boundaries,
-            "alphas": banded_alphas, "deltas": fitted.deltas,
-            "kernel_weights": np.exp(fitted.deltas),
-            "best_alphas": fitted.best_alphas, "intercept": fitted.intercept,
-        }, overwrite=config.refresh)
+        if config.log_alphas:
+            artifact.save_diagnostics(unit=unit, fold=fold_f, diagnostics={
+                "view_names": view_names, "band_boundaries": boundaries,
+                "alphas": banded_alphas, "deltas": fitted.deltas,
+                "kernel_weights": np.exp(fitted.deltas),
+                "best_alphas": fitted.best_alphas, "intercept": fitted.intercept,
+            }, overwrite=config.refresh)
         baselines[fold_f] = {
             "train_idx": train_idx,
             "test_idx": test_idx,
@@ -207,7 +188,13 @@ def run_multi_view(
             "Y_test": Y_test,
             "Y_hat_full_train": fitted.Y_hat_train,
             "Y_hat_full_test": fitted.Y_hat_test,
-            "beta_full_raw": fitted.beta_full_raw,
+            # The banded model and final RRR both operate directly on the
+            # concatenated projected bands. Persist an explicit identity scaler
+            # so these factors satisfy the standard Artifact coordinate contract.
+            "input_coordinates": "standardized",
+            "input_mean": np.zeros((1, X_full.shape[1]), dtype=np.float32),
+            "input_scale": np.ones((1, X_full.shape[1]), dtype=np.float32),
+            "beta_full_input_coordinates": fitted.beta_full_raw,
         }
 
     metadata = {
@@ -231,14 +218,14 @@ def run_multi_view(
         artifact=artifact,
         unit=unit,
         X_raw=fold_designs,
-        test_idxs=prepared.test_idxs,
+        test_idxs=test_idxs,
         per_fold_baselines=baselines,
         config=config,
         sig_mask_flat=sig_mask_flat,
-        ranks_by_fold=resume_plan["rrr_ranks_by_fold"],
-        completed_pairs=resume_plan["rrr_completed_pairs"],
-        pca_ranks_by_fold=resume_plan["pca_ranks_by_fold"],
-        pca_completed_pairs=resume_plan["pca_completed_pairs"],
+        ranks_by_fold=rrr_plan["ranks_by_fold"],
+        completed_pairs=rrr_plan["completed_pairs"],
+        pca_ranks_by_fold=(pca_plan["ranks_by_fold"] if pca_plan else None),
+        pca_completed_pairs=(pca_plan["completed_pairs"] if pca_plan else None),
     )
     return [(unit, len(test_idxs))]
 

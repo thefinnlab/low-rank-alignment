@@ -19,9 +19,9 @@ from src.utils.shared.config import (
     load_config,
     expand_per_model_layer_configs,
 )
-from src.utils.shared.embeddings import get_glove_embeddings
 from src.utils.shared.encoding import build_per_fold_baselines
 from src.utils.rrr.core import (
+    canonical_qr,
     fit_dense_rrr,
 )
 from src.utils.rrr.results import (
@@ -30,6 +30,9 @@ from src.utils.rrr.results import (
 )
 from src.utils.rrr.evaluation import (
     evaluate_input_space,
+    evaluate_projected_input_space,
+    fit_pca_input_basis,
+    standardize_embeddings_with_baseline,
 )
 from src.utils.shared.alpha_grids import resolve_ridge_alphas
 from src.utils.rrr.inputs import _get_decomposition_inputs
@@ -167,45 +170,12 @@ def _X_for_fold(X_raw, fold_f: int) -> np.ndarray:
     return np.asarray(X_raw[fold_f] if isinstance(X_raw, list) else X_raw)
 
 
-def _rrr_output_resume_plan(
-    artifact: Artifact,
-    unit: UnitSelector,
-    config: RRRConfig,
-    n_folds: int,
-) -> dict:
-    rrr_plan = artifact.resume_plan(
-        unit=unit,
-        ranks=config.rank_grid,
-        folds=range(n_folds),
-        refresh=config.refresh,
-        require_target_factors=config.save_b_matrices,
-        required_metric_keys=(
-            {"null_aug_corr_per_target", "null_aug_r2_per_target"}
-            if config.run_null_augmented
-            else None
-        ),
-    )
-    folds_needed = set(rrr_plan["folds_to_build"])
-    pca_ranks_by_fold = None
-    pca_completed_pairs = None
-
-    if config.run_pca_baseline:
-        pca_plan = artifact.resume_plan(
-            unit=UnitSelector(**{**unit.mapping(), "method": "pca"}),
-            ranks=config.rank_grid,
-            folds=range(n_folds),
-            refresh=config.refresh,
-        )
-        pca_ranks_by_fold = pca_plan["ranks_by_fold"]
-        pca_completed_pairs = pca_plan["completed_pairs"]
-        folds_needed |= pca_plan["folds_to_build"]
-
+def _input_scaler_payload(baseline: dict) -> dict:
+    """Return the persisted scaler for a standardized-coordinate factor."""
     return {
-        "folds_to_build": folds_needed,
-        "rrr_ranks_by_fold": rrr_plan["ranks_by_fold"],
-        "rrr_completed_pairs": rrr_plan["completed_pairs"],
-        "pca_ranks_by_fold": pca_ranks_by_fold,
-        "pca_completed_pairs": pca_completed_pairs,
+        "mean": np.asarray(baseline["input_mean"], dtype=np.float32),
+        "scale": np.asarray(baseline["input_scale"], dtype=np.float32),
+        "coordinates": "standardized-v1",
     }
 
 
@@ -251,6 +221,8 @@ def _row_from_metrics(
         "full_r2",
         f"{primary_label}_corr",
         f"{primary_label}_r2",
+        f"{primary_label}_orth_corr",
+        f"{primary_label}_orth_r2",
         "null_aug_corr",
         "null_aug_r2",
         "null_aug_corr_q05",
@@ -375,7 +347,9 @@ def _run_common_subspace_fold_k(
     full_corr_per_target: "np.ndarray | None" = None,
     null_augmented_config: "RRRConfig | None" = None,
     save_primary_corr_per_target: bool = True,
-    orthonormalize_a_per_rank: bool = False,
+    evaluate_orthonormalized: bool = False,
+    orthogonal_only: bool = False,
+    log_alphas: bool = False,
 ) -> dict:
     """Shared evaluation for one (fold, k) projected subspace.
 
@@ -388,61 +362,71 @@ def _run_common_subspace_fold_k(
     Returns a metrics dict with per-target arrays stripped (for grid_results.csv).
     """
     A_k = A_full[:, :k]
-    if orthonormalize_a_per_rank:
-        A_k = np.linalg.qr(A_k, mode="reduced")[0]
-
-    X_proj_train = X_train @ A_k
-    X_proj_test = X_test @ A_k
-    context = {
-        "script": "run_rrr",
-        "role": primary_label,
-        "fold": int(fold_f),
-        "k": int(k),
-        "n_features": int(X_proj_train.shape[1]),
-        "standardize": bool(standardize_subspace_inputs),
-    }
-    diagnostic_selector = artifact._selector(unit, rank=int(k), fold=int(fold_f))
-    if artifact.has_field("diagnostics", selector=diagnostic_selector):
-        resolved_alphas = np.asarray(
-            artifact.load_field("diagnostics", selector=diagnostic_selector)["alpha_grid"]
+    evaluations = [] if orthogonal_only else [(primary_label, A_k, None)]
+    if evaluate_orthonormalized or orthogonal_only:
+        evaluations.append(
+            (f"{primary_label}_orth", canonical_qr(A_k)[0],
+             f"{primary_label}_orth")
         )
-    else:
-        resolved_alphas = resolve_ridge_alphas(
-            alphas, X_proj_train, standardize=standardize_subspace_inputs,
-            context=context, cache_dir=None, policy=alpha_policy,
-        )
-    result = evaluate_input_space(
-        X_proj_train,
-        X_proj_test,
-        Y_train,
-        Y_test,
-        subspace_name=primary_label,
-        alphas=resolved_alphas,
-        ridge_cv_folds=ridge_cv_folds,
-        standardize=standardize_subspace_inputs,
-        ridge_solver_params=ridge_solver_params,
-        ridge_y_in_cpu=ridge_y_in_cpu,
-        ridge_force_cpu=ridge_force_cpu,
-        return_alphas=True,
-        device=device,
-    )
-    artifact.save_diagnostics(
-        unit=unit, rank=k, fold=fold_f,
-        diagnostics={"alpha_grid": resolved_alphas,
-                     "best_alphas": result[f"{primary_label}_best_alphas"],
-                     "context": context, "policy": alpha_policy or {}},
-    )
 
-    metrics = {
-        f"{primary_label}_corr": result[f"{primary_label}_corr"],
-        f"{primary_label}_r2": result[f"{primary_label}_r2"],
-        f"{primary_label}_r2_per_target": result[f"{primary_label}_r2_per_target"],
-        f"{primary_label}_best_alphas": result[f"{primary_label}_best_alphas"],
-    }
-    if save_primary_corr_per_target:
-        metrics[f"{primary_label}_corr_per_target"] = result[
-            f"{primary_label}_corr_per_target"
-        ]
+    metrics = {}
+    results = {}
+    for label, factor, diagnostic_name in evaluations:
+        context = {
+            "script": "run_rrr",
+            "role": label,
+            "fold": int(fold_f),
+            "k": int(k),
+            "n_features": int(factor.shape[1]),
+            "standardize": bool(standardize_subspace_inputs),
+        }
+        diagnostic_selector = artifact._selector(
+            unit, rank=int(k), fold=int(fold_f), name=diagnostic_name
+        )
+        if log_alphas and artifact.has_field("diagnostics", selector=diagnostic_selector):
+            resolved_alphas = np.asarray(
+                artifact.load_field(
+                    "diagnostics", selector=diagnostic_selector
+                )["alpha_grid"]
+            )
+        else:
+            resolved_alphas = alphas
+        result, resolved_alphas = evaluate_projected_input_space(
+            factor,
+            X_train,
+            X_test,
+            Y_train,
+            Y_test,
+            alphas=resolved_alphas,
+            alpha_policy=alpha_policy,
+            alpha_context=context,
+            ridge_cv_folds=ridge_cv_folds,
+            standardize=standardize_subspace_inputs,
+            ridge_solver_params=ridge_solver_params,
+            ridge_y_in_cpu=ridge_y_in_cpu,
+            ridge_force_cpu=ridge_force_cpu,
+            device=device,
+            subspace_name=label,
+        )
+        results[label] = result
+        if log_alphas:
+            artifact.save_diagnostics(
+                unit=unit, rank=k, fold=fold_f, name=diagnostic_name,
+                diagnostics={"alpha_grid": resolved_alphas,
+                             "best_alphas": result[f"{label}_best_alphas"],
+                             "context": context, "policy": alpha_policy or {}},
+            )
+        metrics.update({
+            f"{label}_corr": result[f"{label}_corr"],
+            f"{label}_r2": result[f"{label}_r2"],
+            f"{label}_r2_per_target": result[f"{label}_r2_per_target"],
+        })
+        if log_alphas:
+            metrics[f"{label}_best_alphas"] = result[f"{label}_best_alphas"]
+        if save_primary_corr_per_target:
+            metrics[f"{label}_corr_per_target"] = result[
+                f"{label}_corr_per_target"
+            ]
     if null_augmented_config is not None and null_augmented_config.run_null_augmented:
         if full_corr_per_target is None:
             raise ValueError(
@@ -457,7 +441,9 @@ def _run_common_subspace_fold_k(
                 Y_train,
                 Y_test,
                 full_corr_per_target=full_corr_per_target,
-                primary_corr_per_target=result[f"{primary_label}_corr_per_target"],
+                primary_corr_per_target=results[primary_label][
+                    f"{primary_label}_corr_per_target"
+                ],
                 fold_f=fold_f,
                 alphas=alphas,
                 alpha_policy=alpha_policy,
@@ -473,7 +459,9 @@ def _run_common_subspace_fold_k(
             )
         )
 
-    artifact.save_rank_metrics(unit=unit, rank=k, fold=fold_f, metrics=metrics)
+    artifact.save_rank_metrics(
+        unit=unit, rank=k, fold=fold_f, metrics=metrics, overwrite=True
+    )
     _strip_per_target_and_add_sig_nonsig(metrics, sig_mask_flat)
     for artifact_key in (
         "null_aug_shifts_train",
@@ -508,7 +496,9 @@ def _run_subspace_rank_loop_for_fold(
     null_augmented_config: "RRRConfig | None" = None,
     save_primary_corr_per_target: bool = True,
     save_rrr_corr_per_target: bool = False,
-    orthonormalize_a_per_rank: bool = False,
+    evaluate_orthonormalized: bool = False,
+    orthogonal_only: bool = False,
+    log_alphas: bool = False,
     refresh: bool = False,
 ) -> list[dict]:
     """Evaluate rank-k projected ridge models for one fold from a known A matrix.
@@ -568,7 +558,9 @@ def _run_subspace_rank_loop_for_fold(
             full_corr_per_target=full_corr_per_target,
             null_augmented_config=null_augmented_config,
             save_primary_corr_per_target=save_primary_corr_per_target,
-            orthonormalize_a_per_rank=orthonormalize_a_per_rank,
+            evaluate_orthonormalized=evaluate_orthonormalized,
+            orthogonal_only=orthogonal_only,
+            log_alphas=log_alphas,
         )
 
         existing = artifact.load_rank_metrics(unit=unit, rank=k, fold=fold_f)
@@ -836,6 +828,8 @@ def _build_results(
         "full_r2",
         f"{primary_label}_corr",
         f"{primary_label}_r2",
+        f"{primary_label}_orth_corr",
+        f"{primary_label}_orth_r2",
         "effective_rank",
         "null_aug_corr",
         "null_aug_r2",
@@ -885,8 +879,12 @@ def _build_results(
         figure = plot_rrr_rank_results(
             summary, grid_df=df, title=title_base, primary_label=primary_label,
         )
-        artifact.save_plot(unit=unit, name="rank_analysis", figure=figure,
-                           overwrite=True)
+        try:
+            artifact.save_plot(unit=unit, name="rank_analysis", figure=figure,
+                               overwrite=True)
+        finally:
+            import matplotlib.pyplot as plt
+            plt.close(figure)
     if plot and sig_mask_flat is not None:
         for split in ("sig", "nonsig"):
             figure = plot_rrr_rank_results(
@@ -895,14 +893,60 @@ def _build_results(
                 title=f"{title_base} ({split} targets)",
                 primary_label=primary_label,
             )
-            artifact.save_plot(unit=unit, name=f"rank_analysis_{split}",
-                               figure=figure, overwrite=True)
+            try:
+                artifact.save_plot(unit=unit, name=f"rank_analysis_{split}",
+                                   figure=figure, overwrite=True)
+            finally:
+                import matplotlib.pyplot as plt
+                plt.close(figure)
     return summary
 
 
 # ---------------------------------------------------------------------------
 # Core per-unit loops
 # ---------------------------------------------------------------------------
+
+
+def _fit_rrr_input_factors_for_unit(
+    artifact: Artifact,
+    unit: UnitSelector,
+    X_raw: "np.ndarray | list[np.ndarray]",
+    per_fold_baselines: list,
+    folds_to_fit: set[int],
+    *,
+    refresh: bool = False,
+) -> None:
+    """Fit and save only the fold-specific RRR input factors."""
+    if not folds_to_fit:
+        return
+
+    n_embed = _X_for_fold(X_raw, 0).shape[1]
+    selected_idx = np.arange(n_embed)
+    for fold_f in sorted(folds_to_fit):
+        baseline = per_fold_baselines[fold_f]
+        X_fold = _X_for_fold(X_raw, fold_f)
+        X_train = standardize_embeddings_with_baseline(
+            X_fold[baseline["train_idx"]], baseline
+        )
+        Y_train = baseline["Y_train"]
+        max_k = min(X_train.shape[1], Y_train.shape[1])
+        rrr_result = fit_dense_rrr(
+            X_train,
+            Y_train,
+            k=max_k,
+            selected_idx=selected_idx,
+            precomputed_Y_hat_ols=baseline["Y_hat_full_train"],
+            precomputed_beta_full=baseline["beta_full_input_coordinates"],
+            return_b=False,
+        )
+        artifact.save_factors(
+            unit=unit,
+            fold=fold_f,
+            input_factors=rrr_result["A_dense"],
+            target_factors=None,
+            input_scaler=_input_scaler_payload(baseline),
+            overwrite=True,
+        )
 
 
 def _run_rrr_for_unit(
@@ -917,12 +961,15 @@ def _run_rrr_for_unit(
     completed_pairs: "set[tuple[int, int]] | None" = None,
     pca_ranks_by_fold: "dict[int, list[int]] | None" = None,
     pca_completed_pairs: "set[tuple[int, int]] | None" = None,
+    orthogonal_only: bool = False,
 ) -> pd.DataFrame:
-    """Core RRR loop for one analysis unit (cross-subject, per-subject, or per-region).
+    """Core RRR loop for one cross-subject or per-subject analysis unit.
 
     Fits RRR once at max rank per fold, sweeps the rank grid, and evaluates:
         - Raw RRR predictions (via B matrix projection)
         - NR ridge from k-dim RRR subspace (via A matrix projection)
+
+    With ``orthogonal_only=True``, only ridge on the reduced-QR A basis is evaluated.
 
     Args:
         artifact: Producing script's result abstraction.
@@ -953,10 +1000,11 @@ def _run_rrr_for_unit(
         plan = artifact.resume_plan(
             unit=unit, ranks=config.rank_grid, folds=range(n_folds),
             refresh=config.refresh, require_target_factors=config.save_b_matrices,
-            required_metric_keys=(
+            required_metric_keys={
+                "nr_orth_corr", "nr_orth_r2_per_target",
+            } | ({"nr_orth_best_alphas"} if config.log_alphas else set()) | (
                 {"null_aug_corr_per_target", "null_aug_r2_per_target"}
-                if config.run_null_augmented
-                else None
+                if config.run_null_augmented and not orthogonal_only else set()
             ),
         )
         ranks_by_fold, completed_pairs = plan["ranks_by_fold"], plan["completed_pairs"]
@@ -1006,6 +1054,7 @@ def _run_rrr_for_unit(
                 ridge_y_in_cpu=config.encoding.ridge_y_in_cpu,
                 ridge_force_cpu=config.encoding.ridge_force_cpu,
                 device=device,
+                log_alphas=config.log_alphas,
                 refresh=config.refresh,
                 ranks_by_fold=pca_ranks_by_fold,
                 completed_pairs=pca_completed_pairs,
@@ -1026,14 +1075,17 @@ def _run_rrr_for_unit(
         baseline = per_fold_baselines[fold_f]
         train_idx = baseline["train_idx"]
         X_fold = _X_for_fold(X_raw, fold_f)
-        X_train = X_fold[train_idx]
+        X_train = standardize_embeddings_with_baseline(X_fold[train_idx], baseline)
         Y_train = baseline["Y_train"]
         Y_hat_ols_train = baseline["Y_hat_full_train"]
 
         # Fit or load RRR once per fold; truncate to each k below.
         max_k = min(X_train.shape[1], Y_train.shape[1])
         factor_selector = artifact._selector(unit, fold=int(fold_f))
-        required_factors_exist = artifact.has_field("input_factors", selector=factor_selector)
+        required_factors_exist = (
+            artifact.has_field("input_factors", selector=factor_selector)
+            and artifact.has_field("input_scalers", selector=factor_selector)
+        )
         if config.save_b_matrices:
             required_factors_exist &= artifact.has_field("target_factors", selector=factor_selector)
         if not config.refresh and required_factors_exist:
@@ -1051,7 +1103,7 @@ def _run_rrr_for_unit(
                     k=max_k,
                     selected_idx=selected_idx,
                     precomputed_Y_hat_ols=Y_hat_ols_train,
-                    precomputed_beta_full=baseline["beta_full_raw"],
+                    precomputed_beta_full=baseline["beta_full_input_coordinates"],
                     return_b=config.save_b_matrices,
                 )
                 A_full = rrr_result["A_dense"]
@@ -1060,6 +1112,7 @@ def _run_rrr_for_unit(
                 )
                 artifact.save_factors(unit=unit, fold=fold_f,
                                       input_factors=A_full, target_factors=B_full,
+                                      input_scaler=_input_scaler_payload(baseline),
                                       overwrite=True)
             else:
                 print("  Loaded existing fold factors")
@@ -1070,22 +1123,24 @@ def _run_rrr_for_unit(
                 k=max_k,
                 selected_idx=selected_idx,
                 precomputed_Y_hat_ols=Y_hat_ols_train,
-                precomputed_beta_full=baseline["beta_full_raw"],
+                precomputed_beta_full=baseline["beta_full_input_coordinates"],
                 return_b=config.save_b_matrices,
             )
             A_full = rrr_result["A_dense"]
             B_full = rrr_result["B_dense"] if config.save_b_matrices else None
             artifact.save_factors(unit=unit, fold=fold_f, input_factors=A_full,
-                                  target_factors=B_full, overwrite=config.refresh)
+                                  target_factors=B_full,
+                                  input_scaler=_input_scaler_payload(baseline),
+                                  overwrite=True)
 
         all_rows.extend(
             _run_subspace_rank_loop_for_fold(
                 artifact=artifact,
                 unit=unit,
                 A_full=A_full,
-                B_full=B_full,
+                B_full=None if orthogonal_only else B_full,
                 ranks_to_run=ranks_to_run,
-                X_raw=X_fold,
+                X_raw=standardize_embeddings_with_baseline(X_fold, baseline),
                 baseline=baseline,
                 sig_mask_flat=sig_mask_flat,
                 fold_f=fold_f,
@@ -1099,10 +1154,12 @@ def _run_rrr_for_unit(
                 device=device,
                 primary_label="nr",
                 progress_desc=f"  fold {fold_f}",
-                null_augmented_config=config,
+                null_augmented_config=None if orthogonal_only else config,
                 save_primary_corr_per_target=config.save_nr_corr_per_target,
                 save_rrr_corr_per_target=config.save_rrr_corr_per_target,
-                orthonormalize_a_per_rank=config.orthonormalize_a_per_rank,
+                evaluate_orthonormalized=not orthogonal_only,
+                orthogonal_only=orthogonal_only,
+                log_alphas=config.log_alphas,
                 refresh=config.refresh,
             )
         )
@@ -1150,6 +1207,7 @@ def _run_rrr_for_unit(
             ridge_y_in_cpu=config.encoding.ridge_y_in_cpu,
             ridge_force_cpu=config.encoding.ridge_force_cpu,
             device=device,
+            log_alphas=config.log_alphas,
             refresh=config.refresh,
             ranks_by_fold=pca_ranks_by_fold,
             completed_pairs=pca_completed_pairs,
@@ -1175,6 +1233,7 @@ def _run_pca_for_unit(
     ridge_y_in_cpu: bool | None = None,
     ridge_force_cpu: bool | None = None,
     device: str = "cpu",
+    log_alphas: bool = False,
     refresh: bool = False,
     ranks_by_fold: "dict[int, list[int]] | None" = None,
     completed_pairs: "set[tuple[int, int]] | None" = None,
@@ -1243,8 +1302,10 @@ def _run_pca_for_unit(
         X_fold = _X_for_fold(X_raw, fold_f)
         train_idx = baseline["train_idx"]
         test_idx = baseline["test_idx"]
-        X_train = X_fold[train_idx]
-        X_test = X_fold[test_idx]
+        X_train_raw = X_fold[train_idx]
+        X_test_raw = X_fold[test_idx]
+        X_train = standardize_embeddings_with_baseline(X_train_raw, baseline)
+        X_test = standardize_embeddings_with_baseline(X_test_raw, baseline)
         Y_train = baseline["Y_train"]
         Y_test = baseline["Y_test"]
         Y_hat_full = baseline["Y_hat_full_test"]
@@ -1258,12 +1319,13 @@ def _run_pca_for_unit(
         )
         full_r2 = float(to_numpy(r2_score(Y_test, Y_hat_full)).mean())
 
-        # Compute PCA on training data only (proper CV)
-        X_mean = X_train.mean(axis=0)
-        _, _, Vt = np.linalg.svd(X_train - X_mean, full_matrices=False)
-        A_full = Vt.T  # (n_embed, min(n_train, n_embed))
-        artifact.save_factors(unit=unit, fold=fold_f, input_factors=A_full,
-                              overwrite=refresh)
+        # Compute PCA on fold-standardized training data only (proper CV).
+        A_standardized = fit_pca_input_basis(X_train)
+        A_full = A_standardized
+        artifact.save_factors(
+            unit=unit, fold=fold_f, input_factors=A_full,
+            input_scaler=_input_scaler_payload(baseline), overwrite=True,
+        )
         max_components = A_full.shape[1]
 
         valid_ranks = [k for k in ranks_to_run if k <= max_components]
@@ -1298,6 +1360,7 @@ def _run_pca_for_unit(
                 artifact,
                 unit,
                 primary_label="pca",
+                log_alphas=log_alphas,
             )
             existing = artifact.load_rank_metrics(unit=unit, rank=k, fold=fold_f)
             existing["full_corr"] = full_corr
@@ -1349,6 +1412,8 @@ def _build_rrr_decomposition_inputs(
     word_in_glove=None,
     folds_to_build: "set[int] | None" = None,
     shared_selection_metadata: "dict | None" = None,
+    target_pca_dim: "int | None" = None,
+    return_aligned_embeddings: bool = False,
 ):
     prepared = _get_decomposition_inputs(
         subject_ids,
@@ -1387,10 +1452,22 @@ def _build_rrr_decomposition_inputs(
             "offset": encoding_config.offset,
         },
         folds_to_build=folds_to_build,
+        target_pca_dim=target_pca_dim,
     )
 
-    return (X_raw, per_fold_baselines, prepared.test_idxs,
-            prepared.sig_mask_flat, prepared.target_manifest)
+    target_manifest = prepared.target_manifest
+    sig_mask_flat = prepared.sig_mask_flat
+    if target_pca_dim is not None:
+        target_manifest = pd.DataFrame({
+            "target_id": [f"pc-{index + 1}" for index in range(int(target_pca_dim))],
+            "target_kind": "target_pca_component",
+            "component": np.arange(1, int(target_pca_dim) + 1, dtype=int),
+        })
+        sig_mask_flat = None
+
+    result = (X_raw, per_fold_baselines, prepared.test_idxs,
+              sig_mask_flat, target_manifest)
+    return (*result, prepared.embeddings) if return_aligned_embeddings else result
 
 
 def _temporal_window_target_mask(target_manifest, window) -> np.ndarray:
@@ -1417,8 +1494,10 @@ def _temporal_window_target_mask(target_manifest, window) -> np.ndarray:
 # ---------------------------------------------------------------------------
 
 
-def run_ieeg(config: RRRConfig):
+def run_ieeg(config: RRRConfig, target_pca_dim: int | None = None):
     enc = config.encoding
+    if target_pca_dim is not None and config.mode != ScriptMode.CROSS_SUBJECT:
+        raise ValueError("target_pca_dim is supported only for internal iEEG RRR")
 
     import torch
     from himalaya.backend import set_backend
@@ -1484,7 +1563,14 @@ def run_ieeg(config: RRRConfig):
         if upstream.variant is None:
             upstream._resolve_variant()
         upstreams.append(upstream.identity_record())
-    artifact = Artifact.from_ieeg_config(config, dataset_context)
+    artifact_cls = Artifact
+    if target_pca_dim is not None:
+        from src.utils.rrr.target_dimensionality_artifact import Artifact as TargetDimArtifact
+        artifact_cls = TargetDimArtifact
+    artifact = artifact_cls.from_ieeg_config(config, dataset_context)
+    if target_pca_dim is not None:
+        artifact.target_pca_dim = int(target_pca_dim)
+        artifact.variant_extras["target_pca_dim"] = int(target_pca_dim)
     artifact.begin(
         config=config, upstreams=upstreams, refresh=config.refresh,
         variant_extras=getattr(artifact, "variant_extras", {}),
@@ -1506,8 +1592,8 @@ def run_ieeg(config: RRRConfig):
             significance=significance,
             subject_ids=subject_ids,
         )
-        required = {"target_manifest": [], "input_factors": [], "full_metrics": [],
-                    "rank_metrics": [], "mean_results": []}
+        required = {"target_manifest": [], "input_factors": [], "input_scalers": [],
+                    "full_metrics": [], "rank_metrics": [], "mean_results": []}
         if config.save_b_matrices:
             required["target_factors"] = []
         for unit, n_folds in units:
@@ -1516,6 +1602,7 @@ def run_ieeg(config: RRRConfig):
             for fold in range(n_folds):
                 selector = artifact._selector(unit, fold=fold)
                 required["input_factors"].append(selector)
+                required["input_scalers"].append(selector)
                 required["full_metrics"].append(selector)
                 if config.save_b_matrices:
                     required["target_factors"].append(selector)
@@ -1552,14 +1639,14 @@ def run_ieeg(config: RRRConfig):
         dataset=enc.dataset,
         per_dataset_config=enc.per_dataset_config,
         dataset_context=dataset_context,
+        limit_to_glove=enc.limit_to_glove or enc.model == "glove",
+        glove_dim=enc.per_model_config.get("dim", 300),
         **enc.per_model_config,
     )
 
     word_in_glove = None
     if enc.limit_to_glove or enc.model == "glove":
-        word_in_glove = get_glove_embeddings(
-            enc.data_root, word_df, **enc.per_model_config
-        )[1]["in_glove"]
+        word_in_glove = word_df["in_glove"]
 
     branch_kwargs = dict(
         config=config,
@@ -1573,11 +1660,16 @@ def run_ieeg(config: RRRConfig):
         word_in_glove=word_in_glove,
         shared_selection_metadata=shared_selection_metadata,
     )
+    if target_pca_dim is not None:
+        branch_kwargs["target_pca_dim"] = int(target_pca_dim)
 
-    if config.mode == ScriptMode.PER_REGION:
-        from .per_region import run_per_region
-        units = run_per_region(**branch_kwargs)
-    elif config.mode == ScriptMode.PER_SUBJECT:
+    if config.mode == ScriptMode.FULL_FIT:
+        from .full_fit import run_full_fit
+
+        artifact = run_full_fit(**branch_kwargs)
+        print("\nDone.")
+        return artifact
+    if config.mode == ScriptMode.PER_SUBJECT:
         from .per_subject import run_per_subject
         units = run_per_subject(**branch_kwargs)
     elif config.mode == ScriptMode.LEAVE_ONE_SUBJECT_OUT:
@@ -1597,7 +1689,8 @@ def run_ieeg(config: RRRConfig):
         units = run_cross_subject(**branch_kwargs)
 
     required = {field: [] for field in (
-        "target_manifest", "input_factors", "full_metrics", "rank_metrics", "mean_results"
+        "target_manifest", "input_factors", "input_scalers", "full_metrics",
+        "rank_metrics", "mean_results"
     )}
     if config.save_b_matrices:
         required["target_factors"] = []
@@ -1611,6 +1704,7 @@ def run_ieeg(config: RRRConfig):
             fold_selector = artifact._selector(unit, fold=fold)
             if require_factors:
                 required["input_factors"].append(fold_selector)
+                required["input_scalers"].append(fold_selector)
             if require_full:
                 required["full_metrics"].append(fold_selector)
             if require_factors and config.save_b_matrices and unit.method == "rrr":

@@ -12,13 +12,13 @@ import numpy as np
 
 from src.utils.shared.constants import check_alpha_grid_boundaries, refine_alpha_grid
 
-ALPHA_POLICY_VERSION = 1
+ALPHA_POLICY_VERSION = 2
 
 DEFAULT_ALPHA_GRID_POLICY = {
     "strategy": "auto",
     "points_per_decade": 4,
-    "min_points": 21,
-    "max_points": 49,
+    "min_points": 25,
+    "max_points": 25,
     "cache": True,
     "floor": 1e-4,
     "ceiling": 1e12,
@@ -29,7 +29,7 @@ DEFAULT_ALPHA_GRID_POLICY = {
     "low_dim_threshold": 50,
     "high_dim_threshold": 500,
     "boundary_fraction_threshold": 0.05,
-    "refined_points": 31,
+    "refined_points": 25,
     "refined_margin_decades": 1.0,
 }
 

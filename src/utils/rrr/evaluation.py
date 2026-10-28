@@ -16,6 +16,71 @@ from himalaya.scoring import r2_score
 from himalaya.scoring import correlation_score
 
 
+def score_predictions(Y_test: np.ndarray, Y_hat: np.ndarray) -> dict:
+    """Score predictions with the common aggregate and per-target metrics."""
+    corr_arr = to_numpy(correlation_score(Y_test, Y_hat))
+    r2_arr = to_numpy(r2_score(Y_test, Y_hat))
+    return {
+        "corr": float(fisher_z_mean(corr_arr)),
+        "r2": float(r2_arr.mean()),
+        "corr_per_target": corr_arr,
+        "r2_per_target": r2_arr,
+    }
+
+
+def fit_pca_input_basis(X_train: np.ndarray, max_rank: int | None = None) -> np.ndarray:
+    """Return right singular vectors of centered inputs as column factors."""
+    _, _, vh = np.linalg.svd(
+        X_train - X_train.mean(axis=0, keepdims=True), full_matrices=False
+    )
+    if max_rank is not None:
+        vh = vh[:int(max_rank)]
+    return vh.T.astype(np.float32)
+
+
+def standardize_embedding_train_test(
+    X_train: np.ndarray,
+    X_test: np.ndarray | None = None,
+) -> tuple[np.ndarray, np.ndarray | None]:
+    """Z-score embeddings using training-row statistics only."""
+    X_train = np.asarray(X_train)
+    mean, scale = embedding_standardization_stats(X_train)
+    standardized_train = ((X_train - mean) / scale).astype(np.float32)
+    standardized_test = (
+        None
+        if X_test is None
+        else ((np.asarray(X_test) - mean) / scale).astype(np.float32)
+    )
+    return standardized_train, standardized_test
+
+
+def embedding_standardization_stats(
+    X_train: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Return row-shaped mean and safe population scale for embedding columns."""
+    X_train = np.asarray(X_train)
+    mean = X_train.mean(axis=0, dtype=np.float64).astype(np.float32)[None, :]
+    scale = X_train.std(axis=0, dtype=np.float64).astype(np.float32)[None, :]
+    scale[scale == 0] = 1.0
+    return mean, scale
+
+
+def standardize_embeddings_with_baseline(
+    X: np.ndarray, baseline: dict
+) -> np.ndarray:
+    """Apply the input scaler stored by a fold's full encoding baseline."""
+    if baseline.get("input_coordinates") != "standardized":
+        raise ValueError(
+            "RRR factors require a full baseline in standardized input coordinates"
+        )
+    try:
+        mean = np.asarray(baseline["input_mean"], dtype=np.float32)
+        scale = np.asarray(baseline["input_scale"], dtype=np.float32)
+    except KeyError as exc:
+        raise ValueError("Full baseline is missing its input scaler") from exc
+    return ((np.asarray(X, dtype=np.float32) - mean) / scale).astype(np.float32)
+
+
 def evaluate_input_space(
     X_train: np.ndarray,
     X_test: np.ndarray,
@@ -81,15 +146,14 @@ def evaluate_input_space(
     X_test_t = torch.as_tensor(X_test, dtype=torch.float32, device=device)
     Y_hat = to_numpy(X_test_t @ W + b)
 
-    corr_arr = to_numpy(correlation_score(Y_test, Y_hat))
-    r2_arr = to_numpy(r2_score(Y_test, Y_hat))
+    scores = score_predictions(Y_test, Y_hat)
 
     prefix = f"{subspace_name}_" if subspace_name else ""
     result = {
-        f"{prefix}corr": float(fisher_z_mean(corr_arr)),
-        f"{prefix}r2": float(r2_arr.mean()),
-        f"{prefix}corr_per_target": corr_arr,
-        f"{prefix}r2_per_target": r2_arr,
+        f"{prefix}corr": scores["corr"],
+        f"{prefix}r2": scores["r2"],
+        f"{prefix}corr_per_target": scores["corr_per_target"],
+        f"{prefix}r2_per_target": scores["r2_per_target"],
         f"{prefix}Y_hat": Y_hat,
     }
     if return_alphas:
@@ -98,6 +162,48 @@ def evaluate_input_space(
         result[f"{prefix}weights"] = to_numpy(W)
         result[f"{prefix}intercept"] = to_numpy(b)
     return result
+
+
+def evaluate_projected_input_space(
+    factor: np.ndarray,
+    X_train: np.ndarray,
+    X_test: np.ndarray,
+    Y_train: np.ndarray,
+    Y_test: np.ndarray,
+    *,
+    alphas: np.ndarray | None = None,
+    alpha_policy: dict | None = None,
+    alpha_context: dict | None = None,
+    standardize: bool = False,
+    ridge_cv_folds: int = 5,
+    ridge_solver_params: dict | None = None,
+    ridge_y_in_cpu: bool | None = None,
+    ridge_force_cpu: bool | None = None,
+    device: str = "cpu",
+    subspace_name: str = "",
+) -> tuple[dict, np.ndarray]:
+    """Project through one factor and run the shared ridge evaluation."""
+    from src.utils.shared.alpha_grids import resolve_ridge_alphas
+
+    X_projected_train = X_train @ factor
+    X_projected_test = X_test @ factor
+    context = {
+        "n_features": int(X_projected_train.shape[1]),
+        "standardize": bool(standardize), **(alpha_context or {}),
+    }
+    resolved_alphas = resolve_ridge_alphas(
+        alphas, X_projected_train, standardize=standardize, context=context,
+        cache_dir=None, policy=alpha_policy,
+    )
+    result = evaluate_input_space(
+        X_projected_train, X_projected_test, Y_train, Y_test,
+        device=device, alphas=resolved_alphas,
+        ridge_cv_folds=ridge_cv_folds, standardize=standardize,
+        ridge_solver_params=ridge_solver_params,
+        ridge_y_in_cpu=ridge_y_in_cpu, ridge_force_cpu=ridge_force_cpu,
+        return_alphas=True, subspace_name=subspace_name,
+    )
+    return result, np.asarray(resolved_alphas)
 
 
 def evaluate_complement(
@@ -466,4 +572,3 @@ def compute_stacked_joint_ridge_means(
         "corr": float(fisher_z_mean(fold_corrs)),
         "r2": float(np.mean(fold_r2s)),
     }
-

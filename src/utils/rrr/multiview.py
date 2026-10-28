@@ -10,10 +10,15 @@ import numpy as np
 import pandas as pd
 from sklearn.model_selection import KFold
 
+from src.core.artifacts import normalize_dataset
 from src.core.registry import resolve_dataset_context
+from src.utils.rrr.ieeg_rrr_mode.cross_dataset_helpers import (
+    load_cross_dataset_A_by_rank,
+    load_cross_dataset_scaler,
+)
+from src.utils.rrr.core import canonical_qr
 from src.utils.shared.embeddings import load_embeddings
 from src.utils.shared.tensors import to_numpy
-from src.utils.subspace_comparison.metrics import aggregate_subspace_basis
 from src.utils.rrr.subspace_io import ResolvedSubspaceRun
 
 @dataclass
@@ -36,14 +41,64 @@ def resolve_rrr_views(config):
         source = view.ieeg_rrr_source or view.fmri_rrr_source
         kwargs = dict(source or {})
         kwargs.setdefault("results_root", config.results_root)
-        artifact = Artifact(**kwargs).load_artifacts(["effective_config"])
+        artifact = Artifact(**kwargs)
+        if artifact.variant is None:
+            artifact._resolve_variant()
+        if artifact.mode not in {"internal", "full_fit"}:
+            raise ValueError(
+                f"Multiview source {view.name!r} must be an internal or full_fit "
+                "RRR Artifact; "
+                f"got mode={artifact.mode!r}"
+            )
+        manifest = artifact.manifest()
+        if not manifest.get("complete"):
+            raise ValueError(f"Multiview source {view.name!r} is incomplete")
+        artifact.load_artifacts(["effective_config"])
         effective = artifact.effective_config
-        enc = effective.get("encoding", {})
+        enc = effective.get("encoding")
+        if enc is None:
+            is_glove = artifact.model.startswith("glove-")
+            enc = {
+                "model": "glove" if is_glove else "transformer",
+                "offset": artifact.offset,
+                "limit_to_glove": bool(
+                    effective.get("fmri", {}).get("limit_to_glove", False)
+                ),
+                "per_model_config": {
+                    "model_dir": artifact.model,
+                    "layer": artifact.layer,
+                    **(
+                        {"dim": int(artifact.model.split("-", 1)[1])}
+                        if is_glove
+                        else {}
+                    ),
+                },
+            }
+        embedding_spec = (
+            {
+                "model_dir": effective.get("model_dir", artifact.model),
+                "layer": effective.get("layer", artifact.layer),
+                "pooling": effective.get("pooling", "mean"),
+            }
+            if artifact.dataset == "deep-fmri"
+            else {
+                "model_dir": enc.get("per_model_config", {}).get(
+                    "model_dir", artifact.model
+                ),
+                "layer": enc.get("per_model_config", {}).get(
+                    "layer", artifact.layer
+                ),
+                "pooling": enc.get("per_model_config", {}).get("pooling", "mean"),
+            }
+        )
         dataset = artifact.dataset
         stimulus = dataset.removeprefix("brain-treebank-")
         resolved[view.name] = ResolvedSubspaceRun(
             view.name, view.kind or "rrr", artifact, SimpleNamespace(
-                encoding=SimpleNamespace(**enc)), (dataset, stimulus),
+                encoding=SimpleNamespace(**enc),
+                effective=effective,
+                embedding_spec=SimpleNamespace(**embedding_spec),
+            ), (dataset, stimulus),
             list(enc.get("subjects") or range(1, 10)),
         )
     return resolved
@@ -53,7 +108,7 @@ def target_dataset_key(config, subject_ids):
     enc = config.encoding
     context = resolve_dataset_context(enc.dataset, subject_ids,
                                       enc.per_dataset_config, enc.data_root)
-    return (getattr(context, "dataset", enc.dataset),
+    return (normalize_dataset(enc.dataset, context.stimulus_id),
             str(getattr(context, "stimulus_id", enc.dataset)))
 
 
@@ -67,7 +122,11 @@ def load_view_embeddings(config, resolved, subject_ids):
         values, words = load_embeddings(
             target.data_root, enc.model, dataset=target.dataset,
             per_dataset_config=target.per_dataset_config,
-            dataset_context=context, **enc.per_model_config)
+            dataset_context=context,
+            limit_to_glove=target.limit_to_glove or enc.model == "glove",
+            glove_dim=enc.per_model_config.get("dim", 300),
+            **enc.per_model_config,
+        )
         if reference is not None and not np.array_equal(
                 reference["word"].astype(str).to_numpy(),
                 words["word"].astype(str).to_numpy()):
@@ -79,32 +138,128 @@ def load_view_embeddings(config, resolved, subject_ids):
     return loaded, reference
 
 
-def load_view_bases(config, resolved, target_key, selection, test_idxs):
-    bases, modes = {}, {}
+def load_view_bases(
+    config, resolved, target_key, selection, test_idxs, *,
+    return_scalers=False, orthonormalize=True,
+):
+    bases, modes, scalers = {}, {}, {}
     for view in config.views:
         run = resolved[view.name]
         rank = int(view.rank)
-        entries = run.artifact.load_collection("input_factors", {"method": "rrr"})
-        fold_values = {int(dict(selector)["fold"]): np.asarray(value)[:, :rank]
-                       for selector, value in entries.items()
-                       if "fold" in dict(selector)}
         if run.dataset_key == target_key:
+            if run.artifact.mode != "internal":
+                raise ValueError(
+                    f"Matching-dataset multiview source {view.name!r} must use an "
+                    "internal RRR Artifact"
+                )
+            entries = run.artifact.load_collection(
+                "input_factors", {"method": "rrr"}
+            )
+            fold_values, fold_scalers = {}, {}
+            for selector, value in entries.items():
+                mapping = dict(selector)
+                if "fold" not in mapping:
+                    continue
+                scaler = run.artifact.load_input_scaler(mapping)
+                factor = np.asarray(value)[:, :rank]
+                if orthonormalize:
+                    factor = canonical_qr(factor)[0]
+                fold_values[int(mapping["fold"])] = _factor_with_scaler_in_raw_coordinates(
+                    scaler, factor, view.name
+                )
+                fold_scalers[int(mapping["fold"])] = scaler
             if set(fold_values) != set(range(len(test_idxs))):
                 raise ValueError(f"View {view.name} does not provide every target fold")
             bases[view.name] = fold_values
-            modes[view.name] = "matching_target_fold_raw"
+            scalers[view.name] = fold_scalers
+            modes[view.name] = (
+                "matching_target_fold_standardized_qr"
+                if orthonormalize else "matching_target_fold_raw"
+            )
         else:
-            mean = aggregate_subspace_basis(list(fold_values.values()), rank=rank,
-                                            method=config.subspace_aggregation)
-            bases[view.name] = {fold: mean for fold in range(len(test_idxs))}
-            modes[view.name] = f"cross_dataset_fold_{config.subspace_aggregation}"
-    return bases, modes
+            is_fmri = run.artifact.dataset == "deep-fmri"
+            expected_mode = "internal" if is_fmri else "full_fit"
+            if run.artifact.mode != expected_mode:
+                raise ValueError(
+                    f"Cross-dataset multiview source {view.name!r} must use a "
+                    f"{expected_mode} RRR Artifact; got mode={run.artifact.mode!r}"
+                )
+            factor = load_cross_dataset_A_by_rank(
+                run.artifact,
+                kind="rrr",
+                ranks=[rank],
+                source_format="rank_bases",
+                orthonormalize=orthonormalize,
+            )[rank]
+            scaler = load_cross_dataset_scaler(
+                run.artifact, "rrr", rank
+            )
+            factor = _factor_with_scaler_in_raw_coordinates(
+                scaler, factor, view.name
+            )
+            bases[view.name] = {fold: factor for fold in range(len(test_idxs))}
+            scalers[view.name] = {fold: scaler for fold in range(len(test_idxs))}
+            modes[view.name] = (
+                ("cross_dataset_fmri_standardized_qr" if orthonormalize
+                 else "cross_dataset_fmri_rank_basis_raw")
+                if is_fmri
+                else ("cross_dataset_full_fit_standardized_qr" if orthonormalize
+                      else "cross_dataset_full_fit_raw")
+            )
+    return (bases, modes, scalers) if return_scalers else (bases, modes)
+
+
+def load_global_view_transforms(config, resolved):
+    """Load whole-dataset factors and scalers suitable for an fMRI target."""
+    factors, scalers, modes = {}, {}, {}
+    for view in config.views:
+        run = resolved[view.name]
+        is_fmri = run.artifact.dataset == "deep-fmri"
+        expected_mode = "internal" if is_fmri else "full_fit"
+        if run.artifact.mode != expected_mode:
+            raise ValueError(
+                f"fMRI multiview source {view.name!r} must use a {expected_mode} "
+                f"Artifact; got mode={run.artifact.mode!r}"
+            )
+        rank = int(view.rank)
+        kind = view.kind or "rrr"
+        factors[view.name] = load_cross_dataset_A_by_rank(
+            run.artifact,
+            kind=kind,
+            ranks=[rank],
+            source_format="rank_bases",
+            orthonormalize=True,
+        )[rank]
+        scalers[view.name] = load_cross_dataset_scaler(
+            run.artifact, kind, rank
+        )
+        modes[view.name] = (
+            "fmri_internal_whole_training" if is_fmri else "ieeg_full_fit"
+        )
+    return factors, scalers, modes
+
+
+def _factor_with_scaler_in_raw_coordinates(scaler, factor, view_name):
+    if scaler.get("coordinates") != "standardized-v1":
+        raise ValueError(
+            f"Multiview source {view_name!r} uses unsupported coordinates "
+            f"{scaler.get('coordinates')!r}"
+        )
+    scale = np.asarray(scaler["scale"])
+    value = np.asarray(factor)
+    if value.ndim != 2 or value.shape[0] != scale.shape[0]:
+        raise ValueError(
+            f"Multiview source {view_name!r} factor/scaler dimensions differ: "
+            f"{value.shape} vs {scale.shape}"
+        )
+    return value / scale[:, np.newaxis]
 
 def project_view_bands(
     embeddings: dict[str, np.ndarray],
     bases: dict[str, dict[int, np.ndarray]],
     view_names: list[str],
     fold: int,
+    scalers: dict[str, dict[int, dict]] | None = None,
 ) -> tuple[list[np.ndarray], list[tuple[int, int]]]:
     """Project aligned embeddings and return bands plus concatenated boundaries."""
     bands = []
@@ -117,7 +272,14 @@ def project_view_bands(
             raise ValueError(
                 f"View {name} embedding/A dimensions differ: {X.shape[1]} vs {A.shape[0]}"
             )
-        band = X @ A
+        if scalers is None:
+            band = X @ A
+        else:
+            scaler = scalers[name][fold]
+            scale = np.asarray(scaler["scale"])
+            mean = np.asarray(scaler["mean"])
+            standardized = (X - mean) / scale
+            band = standardized @ (scale.reshape(-1, 1) * A)
         bands.append(np.asarray(band, dtype=np.float32))
         boundaries.append((start, start + band.shape[1]))
         start += band.shape[1]
@@ -130,8 +292,9 @@ def fit_banded_ridge_baseline(
     Y_train: np.ndarray,
     *,
     alphas: np.ndarray,
-    ridge_cv_folds: int,
     solver_params: dict,
+    ridge_cv_folds: int | None = None,
+    cv=None,
     y_in_cpu: bool | None = None,
     force_cpu: bool | None = None,
 ) -> BandedRidgeBaseline:
@@ -146,10 +309,14 @@ def fit_banded_ridge_baseline(
     resolved_solver_params = dict(solver_params)
     random_state = resolved_solver_params.pop("random_state", 42)
     resolved_solver_params["alphas"] = np.asarray(alphas, dtype=float)
+    if cv is None:
+        if ridge_cv_folds is None:
+            raise ValueError("Banded ridge requires cv or ridge_cv_folds")
+        cv = KFold(n_splits=ridge_cv_folds, shuffle=False)
     kwargs = {
         "groups": "input",
         "solver": "random_search",
-        "cv": KFold(n_splits=ridge_cv_folds, shuffle=False),
+        "cv": cv,
         "random_state": random_state,
         "fit_intercept": True,
         "solver_params": resolved_solver_params,

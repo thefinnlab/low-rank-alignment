@@ -5,6 +5,11 @@ import pandas as pd
 import pytest
 
 from src.core.registry import get_dataset_adapter, resolve_dataset_context
+from src.utils.shared.ieeg import (
+    get_precomputed_epochs_path,
+    load_precomputed_epochs,
+    save_precomputed_epochs,
+)
 
 h5py = pytest.importorskip("h5py")
 
@@ -101,6 +106,64 @@ class TestDatasetRegistry:
         )
 
         assert path == str(tmp_path / "stimuli" / "roberta-base" / "movie-coraline")
+
+    def test_brain_treebank_rereference_is_validated_and_normalized(self, tmp_path):
+        context = resolve_dataset_context(
+            dataset="brain_treebank",
+            per_dataset_config={"movie": "coraline", "rereference": "LAPLACIAN"},
+            data_root=str(tmp_path),
+        )
+
+        assert context.rereference == "laplacian"
+
+        with pytest.raises(ValueError, match="rereference must be one of"):
+            resolve_dataset_context(
+                dataset="brain_treebank",
+                per_dataset_config={"movie": "coraline", "rereference": "bipolar"},
+                data_root=str(tmp_path),
+            )
+
+    def test_brain_treebank_laplacian_cache_path_is_distinct(self, tmp_path):
+        _write_btb_metadata(tmp_path, 3, 0, "coraline")
+        common = get_precomputed_epochs_path(
+            3,
+            str(tmp_path),
+            dataset="brain_treebank",
+            per_dataset_config={"movie": "coraline"},
+        )
+        laplacian = get_precomputed_epochs_path(
+            3,
+            str(tmp_path),
+            dataset="brain_treebank",
+            per_dataset_config={"movie": "coraline", "rereference": "laplacian"},
+        )
+
+        assert common.endswith("movie-coraline_desc-epochs32hz_ieeg.h5")
+        assert laplacian.endswith(
+            "movie-coraline_desc-epochs32hz_ref-laplacian_ieeg.h5"
+        )
+
+    def test_brain_treebank_cache_records_requested_rereference(self, tmp_path):
+        _write_btb_metadata(tmp_path, 3, 0, "coraline")
+        per_dataset_config = {"movie": "coraline", "rereference": "laplacian"}
+        save_precomputed_epochs(
+            3,
+            str(tmp_path),
+            np.zeros((2, 1, 4), dtype=np.float32),
+            np.asarray([0, 1]),
+            ["A2"],
+            dataset="brain_treebank",
+            per_dataset_config=per_dataset_config,
+        )
+
+        cache = load_precomputed_epochs(
+            3,
+            str(tmp_path),
+            dataset="brain_treebank",
+            per_dataset_config=per_dataset_config,
+        )
+
+        assert cache["rereference"] == "laplacian"
 
     def test_brain_treebank_transcript_is_normalized(self, tmp_path):
         _write_btb_transcript(
@@ -478,8 +541,9 @@ class TestDatasetRegistry:
         adapter = get_dataset_adapter("brain_treebank")
         called = {"value": False}
 
-        def _fake_high_gamma(raw):
+        def _fake_high_gamma(raw, rereference):
             called["value"] = True
+            called["rereference"] = rereference
             return raw
 
         monkeypatch.setattr(adapter, "_apply_high_gamma", _fake_high_gamma)
@@ -492,6 +556,7 @@ class TestDatasetRegistry:
         )
 
         assert called["value"] is True
+        assert called["rereference"] == "common_average"
         assert raw.get_channel_types() == ["seeg"]
 
     def test_brain_treebank_high_gamma_preprocessing_order(self, monkeypatch):
@@ -543,6 +608,96 @@ class TestDatasetRegistry:
             ("filter", 70.0, 200.0),
             ("hilbert",),
         ]
+
+    def test_brain_treebank_high_gamma_batches_channels(self, monkeypatch):
+        adapter = get_dataset_adapter("brain_treebank")
+
+        class FakeRaw:
+            def __init__(self):
+                self.info = {"sfreq": 512.0}
+                self.ch_names = ["A1", "A2", "A3", "A4", "A5"]
+                self.calls = []
+
+            def set_eeg_reference(self, ref_channels, ch_type, verbose=False):
+                self.calls.append(("reference", ref_channels, ch_type))
+                return self
+
+            def notch_filter(self, freqs, picks, **kwargs):
+                self.calls.append(("notch", list(picks)))
+                return self
+
+            def filter(self, l_freq, h_freq, picks, **kwargs):
+                self.calls.append(("filter", l_freq, h_freq, list(picks)))
+                return self
+
+            def apply_hilbert(self, picks, **kwargs):
+                self.calls.append(("hilbert", list(picks)))
+                return self
+
+        raw = FakeRaw()
+        monkeypatch.setattr(
+            adapter,
+            "_despike",
+            lambda inst, channel_batch_size: inst,
+        )
+
+        processed = adapter._apply_high_gamma(raw, channel_batch_size=2)
+
+        assert processed is raw
+        assert raw.calls == [
+            ("reference", "average", "seeg"),
+            ("notch", [0, 1]),
+            ("filter", 70.0, 200.0, [0, 1]),
+            ("hilbert", [0, 1]),
+            ("notch", [2, 3]),
+            ("filter", 70.0, 200.0, [2, 3]),
+            ("hilbert", [2, 3]),
+            ("notch", [4]),
+            ("filter", 70.0, 200.0, [4]),
+            ("hilbert", [4]),
+        ]
+
+    def test_brain_treebank_laplacian_keeps_only_two_neighbor_contacts(self):
+        mne = pytest.importorskip("mne")
+        adapter = get_dataset_adapter("brain_treebank")
+        data = np.asarray(
+            [
+                [0.0, 1.0],
+                [2.0, 4.0],
+                [8.0, 10.0],
+                [14.0, 20.0],
+                [1.0, 1.0],
+                [3.0, 3.0],
+                [7.0, 7.0],
+            ]
+        )
+        raw = mne.io.RawArray(
+            data,
+            mne.create_info(
+                ["A1", "A2", "A3", "A4", "B1", "B3", "B4"],
+                sfreq=512.0,
+                ch_types=["seeg"] * 7,
+            ),
+            verbose=False,
+        )
+
+        referenced = adapter._apply_laplacian_reference(raw)
+
+        assert referenced.ch_names == ["A2", "A3"]
+        np.testing.assert_allclose(
+            referenced.get_data(),
+            [
+                data[1] - 0.5 * (data[0] + data[2]),
+                data[2] - 0.5 * (data[1] + data[3]),
+            ],
+        )
+
+    def test_brain_treebank_laplacian_treats_marked_labels_as_same_shaft(self):
+        adapter = get_dataset_adapter("brain_treebank")
+
+        assert adapter._contact_identity("RT2aA11#") == ("RT2aA", 11)
+        assert adapter._contact_identity("RF2I*14") == ("RF2I", 14)
+        assert adapter._contact_identity("TRIG") is None
 
     def test_brain_treebank_despiking_interpolates_large_transient(self):
         mne = pytest.importorskip("mne")

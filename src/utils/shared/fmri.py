@@ -122,32 +122,77 @@ def load_story_embeddings(
     embedding_root: str,
     model_dir: str,
     stories: list[str],
-    layer: int,
+    layer: int | None,
     pooling: str = "mean",
+    *,
+    fmri_repo_root: str | None = None,
+    glove_data_root: str = "data",
+    limit_to_glove: bool = False,
+    glove_dim: int = 300,
 ) -> dict[str, np.ndarray]:
-    """Load token HDF5 files and pool them into one vector per fMRI word."""
-    reducers = {
-        "mean": lambda values: values.mean(axis=0),
-        "first": lambda values: values[0],
-        "last": lambda values: values[-1],
-    }
-    if pooling not in reducers:
-        raise ValueError(f"Unknown pooling strategy: {pooling}")
-    result = {}
-    for story in stories:
-        story_dir = Path(embedding_root) / model_dir / story
-        transcript = pd.read_csv(story_dir / "transcript.tsv", sep="\t")
-        transcript = transcript.loc[:, ~transcript.columns.astype(str).str.startswith("Unnamed:")]
-        with h5py.File(story_dir / "features.hdf5", "r") as handle:
-            token_values = handle[f"layer-{int(layer)}"]
-            pooled = []
-            for _, group in transcript.groupby("word_idx", sort=True):
-                indices = group.index.to_numpy()
-                # Pool one word at a time so long stories do not require a
-                # second in-memory copy of the complete token-level layer.
-                values = token_values[indices]
-                pooled.append(reducers[pooling](values))
-        result[story] = np.asarray(pooled, dtype=np.float32)
+    """Load story embeddings and optionally zero words outside GloVe coverage.
+
+    Zero masking preserves every word timestamp for fMRI interpolation while making
+    the represented word set identical across embedding models.
+    """
+    frames = None
+    if model_dir == "glove" or model_dir.startswith("glove-"):
+        if layer is not None:
+            raise ValueError("fMRI GloVe embeddings require layer=None")
+        if fmri_repo_root is None:
+            raise ValueError("fmri_repo_root is required for fMRI GloVe embeddings")
+        dim = int(model_dir.split("-", 1)[1]) if "-" in model_dir else 300
+        from src.utils.shared.embeddings import get_glove_embeddings
+
+        frames, _ = load_story_word_data(fmri_repo_root, stories)
+        result = {
+            story: get_glove_embeddings(glove_data_root, frames[story], dim)[0]
+            .astype(np.float32, copy=False)
+            for story in stories
+        }
+    else:
+        reducers = {
+            "mean": lambda values: values.mean(axis=0),
+            "first": lambda values: values[0],
+            "last": lambda values: values[-1],
+        }
+        if pooling not in reducers:
+            raise ValueError(f"Unknown pooling strategy: {pooling}")
+        result = {}
+        for story in stories:
+            story_dir = Path(embedding_root) / model_dir / story
+            transcript = pd.read_csv(story_dir / "transcript.tsv", sep="\t")
+            transcript = transcript.loc[:, ~transcript.columns.astype(str).str.startswith("Unnamed:")]
+            with h5py.File(story_dir / "features.hdf5", "r") as handle:
+                token_values = handle[f"layer-{int(layer)}"]
+                pooled = []
+                for _, group in transcript.groupby("word_idx", sort=True):
+                    indices = group.index.to_numpy()
+                    # Pool one word at a time so long stories do not require a
+                    # second in-memory copy of the complete token-level layer.
+                    values = token_values[indices]
+                    pooled.append(reducers[pooling](values))
+            result[story] = np.asarray(pooled, dtype=np.float32)
+
+    if limit_to_glove:
+        if fmri_repo_root is None:
+            raise ValueError("fmri_repo_root is required when limit_to_glove=True")
+        if frames is None:
+            frames, _ = load_story_word_data(fmri_repo_root, stories)
+        from src.utils.shared.embeddings import get_glove_embeddings
+
+        for story in stories:
+            _, coverage = get_glove_embeddings(
+                glove_data_root, frames[story], int(glove_dim)
+            )
+            mask = coverage["in_glove"].to_numpy(dtype=bool)
+            if len(result[story]) != len(mask):
+                raise ValueError(
+                    f"Story {story} has {len(result[story])} embeddings for "
+                    f"{len(mask)} GloVe coverage rows"
+                )
+            result[story] = result[story].copy()
+            result[story][~mask] = 0.0
     return result
 
 
@@ -247,17 +292,32 @@ def build_fmri_stimulus(
     *,
     ndelays: int = 4,
     basis: np.ndarray | None = None,
+    input_scaler: dict | None = None,
+    projected_scaler: dict | None = None,
 ) -> PreparedFMRI:
-    """Build a story-z-scored FIR design, optionally in a projected space."""
+    """Build an FIR design, optionally in explicitly standardized coordinates.
+
+    With no scaler, the compatibility behavior z-scores each story independently.
+    RRR and decoding callers pass a scaler fitted on source training stories so
+    that projection occurs in the factor's saved coordinate system.  An optional
+    projected scaler is applied before FIR expansion.
+    """
     stimulus_parts = []
     pre_fir_parts = []
     story_slices = {}
     cursor = 0
     for story in stories:
-        values = aligned.stories[story]
+        values = np.asarray(aligned.stories[story], dtype=np.float32)
+        values = (
+            _zscore_columns(values).astype(np.float32)
+            if input_scaler is None
+            else apply_embedding_scaler(values, input_scaler)
+        )
         if basis is not None:
             values = np.asarray(values @ basis, dtype=np.float32)
-        pre_fir = _zscore_columns(values).astype(np.float32)
+        if projected_scaler is not None:
+            values = apply_embedding_scaler(values, projected_scaler)
+        pre_fir = values
         delayed = make_delayed(pre_fir, ndelays).astype(np.float32)
         pre_fir_parts.append(pre_fir)
         stimulus_parts.append(delayed)
@@ -269,6 +329,72 @@ def build_fmri_stimulus(
         responses=None,
         story_slices=story_slices,
     )
+
+
+def fit_pooled_embedding_scaler(
+    aligned: AlignedFMRIStimuli,
+    stories: list[str],
+    *,
+    input_scaler: dict | None = None,
+    basis: np.ndarray | None = None,
+) -> dict:
+    """Fit population moments over every row of the selected stories."""
+    if not stories:
+        raise ValueError("Cannot fit an embedding scaler without stories")
+
+    def transformed_story(story):
+        values = np.asarray(aligned.stories[story], dtype=np.float64)
+        if input_scaler is not None:
+            values = apply_embedding_scaler(values, input_scaler).astype(np.float64)
+        if basis is not None:
+            values = values @ np.asarray(basis, dtype=np.float64)
+        return values
+
+    # Use two passes instead of E[X^2] - E[X]^2. The latter can lose precision
+    # when a feature's mean is large relative to its variance.
+    count = 0
+    total = None
+    for story in stories:
+        values = transformed_story(story)
+        if total is None:
+            total = np.zeros(values.shape[1], dtype=np.float64)
+        total += values.sum(axis=0, dtype=np.float64)
+        count += len(values)
+    if count == 0:
+        raise ValueError("Cannot fit an embedding scaler on zero rows")
+    mean = total / count
+    squared_deviation_sum = np.zeros_like(mean)
+    for story in stories:
+        deviations = transformed_story(story) - mean
+        squared_deviation_sum += np.square(deviations).sum(
+            axis=0, dtype=np.float64
+        )
+    variance = squared_deviation_sum / count
+    scale = np.sqrt(variance)
+    scale[scale == 0] = 1.0
+    return {
+        "mean": mean.astype(np.float32),
+        "scale": scale.astype(np.float32),
+        "coordinates": "standardized-v1",
+    }
+
+
+def apply_embedding_scaler(values: np.ndarray, scaler: dict) -> np.ndarray:
+    """Apply a persisted embedding scaler and validate its coordinate contract."""
+    coordinates = scaler.get("coordinates", "standardized-v1")
+    if coordinates != "standardized-v1":
+        raise ValueError(f"Unsupported embedding scaler coordinates: {coordinates!r}")
+    mean = np.asarray(scaler["mean"], dtype=np.float32).reshape(1, -1)
+    scale = np.asarray(scaler["scale"], dtype=np.float32).reshape(1, -1)
+    values = np.asarray(values, dtype=np.float32)
+    if mean.shape[1] != values.shape[1] or scale.shape != mean.shape:
+        raise ValueError(
+            "Embedding scaler width does not match values: "
+            f"mean={mean.shape}, scale={scale.shape}, values={values.shape}"
+        )
+    if not np.isfinite(mean).all() or not np.isfinite(scale).all() or np.any(scale <= 0):
+        raise ValueError("Embedding scaler contains invalid mean or scale values")
+    return ((values - mean) / scale).astype(np.float32)
 
 
 def _read_response_columns(

@@ -2,7 +2,7 @@ dataset: brain_treebank
 mode: sig_lags
 results_root: results
 plot: true
-refresh: true
+refresh: false
 num_null_shifts: 10000
 null_seed: 42
 null_batch_size: 16
@@ -13,6 +13,7 @@ ieeg:
     data_root: data/brain-treebank
     per_dataset_config:
       movie: cars-2
+      rereference: laplacian
     model: glove
     offset: 0
     subjects:
@@ -21,6 +22,7 @@ ieeg:
     - 10
     batch: true
     num_folds: 5
+    limit_to_glove: true
     shared_word_selection: true
     per_model_config:
       dim: 300

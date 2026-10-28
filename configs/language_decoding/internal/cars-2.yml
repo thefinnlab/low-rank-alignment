@@ -1,14 +1,18 @@
-dataset: cars-2
+target_dataset: cars-2
+num_folds: 5
+label_offsets: [-1, 0, 1]
 device: auto
 refresh: false
 
-# Cars 2 has no IU labels or expanded emotion norms. These tasks are the
-# discussed interpretable features present across its completed token artifact.
 tasks:
+  - word_in_previous_5
+  - prior_word_count
+  - distance_from_previous_occurrence
+  - native_pitch
+  - native_intensity_rms
+  - native_speaker
   - surprisal
   - standardized_entropy
-  - self_surprisal
-  - self_entropy
   - word_zipf_frequency
   - word_length
   - content_word
@@ -25,27 +29,3 @@ tasks:
 
 task_data:
   language_features: processed_data/language_features/brain_treebank/cars-2/tokens.tsv
-
-self_surprisal_root: processed_data/language_features/self_surprisal
-self_surprisal_dataset: brain_treebank
-self_surprisal_stimulus: cars-2
-
-models:
-  gpt-j-6b:
-    rrr_config: configs/brain_treebank/cars_2/rrr/gpt-j-6b/cross_subject.yml
-    result_template: results/gpt-j-6b_layer{layer}_offset0/movie-cars-2
-  gpt2-xl-batch:
-    rrr_config: configs/brain_treebank/cars_2/rrr/gpt2-xl/cross_subject.yml
-    result_template: results/gpt2-xl-batch_layer{layer}_offset0/movie-cars-2
-  llama3-8b:
-    rrr_config: configs/brain_treebank/cars_2/rrr/llama3-8b/cross_subject.yml
-    result_template: results/llama3-8b_layer{layer}_offset0/movie-cars-2
-  roberta-large:
-    rrr_config: configs/brain_treebank/cars_2/rrr/roberta-large/cross_subject.yml
-    result_template: results/roberta-large_layer{layer}_offset0/movie-cars-2
-  random-gpt2-xl:
-    rrr_config: configs/brain_treebank/cars_2/rrr/random-gpt2-xl/cross_subject.yml
-    result_template: results/random-gpt2-xl_layer{layer}_offset0/movie-cars-2
-  gpt2:
-    rrr_config: configs/brain_treebank/cars_2/rrr/gpt2/cross_subject.yml
-    result_template: results/gpt2_layer{layer}_offset0/movie-cars-2

@@ -21,7 +21,6 @@ from src.utils.shared.ieeg import selection_after_offset
 from src.utils.shared.embeddings import load_embeddings
 from src.utils.shared.encoding import apply_offset, load_encoding_results
 from src.utils.shared.fmri import load_story_embeddings, resolve_fmri_stories
-from src.utils.language_interpret.reconstruction import orthonormal_factor
 from src.utils.subspace_comparison.metrics import aggregate_subspace_basis
 from src.core.artifacts import normalize_dataset
 from scripts.run_rrr import Artifact as RRRArtifact
@@ -47,6 +46,20 @@ SYMMETRIC_METRICS = (
 )
 ALL_METRICS = DIRECTED_METRICS + SYMMETRIC_METRICS
 METRIC_IMPLEMENTATION = "torch_cuda_himalaya_shared_alpha_5fold_v2"
+
+
+def orthonormal_factor(factor: np.ndarray, rank: int) -> np.ndarray:
+    """Return a deterministic orthonormal basis for the leading factor span."""
+    block = np.asarray(factor, dtype=np.float64)[:, : int(rank)]
+    if block.shape[1] != int(rank):
+        raise ValueError(f"Factor has insufficient width for rank {rank}")
+    q, r = np.linalg.qr(block, mode="reduced")
+    tolerance = np.finfo(r.dtype).eps * max(block.shape) * np.linalg.norm(r, ord=2)
+    if np.count_nonzero(np.abs(np.diag(r)) > tolerance) != int(rank):
+        raise ValueError(f"Factor is rank deficient at rank {rank}")
+    signs = np.sign(np.diag(r))
+    signs[signs == 0] = 1
+    return (q * signs).astype(np.float32)
 
 
 def configured_models(config):
@@ -512,16 +525,88 @@ def _load_raw_factor(space: ComparisonSpace, rank: int, fold: int | None):
             return np.asarray(np.load(root / f"fold_{fold}" / "A.npy"), dtype=np.float32)
         matrices = [np.load(path) for path in sorted(root.glob("fold_*/A.npy"))]
         return aggregate_subspace_basis(matrices, rank=rank, method="extrinsic")
-    factors = space.artifact.load_input_factors(space.kind, rank)
+    entries = space.artifact.load_collection(
+        "input_factors", {"method": space.kind}
+    )
+    factors = []
+    for selector_items, value in entries.items():
+        selector = dict(selector_items)
+        if "rank" in selector and int(selector["rank"]) != int(rank):
+            continue
+        if "rank" not in selector and "fold" not in selector:
+            continue
+        factor = np.asarray(value)
+        if "rank" not in selector:
+            factor = factor[:, : int(rank)]
+        factors.append((selector, factor))
     if not factors:
         raise FileNotFoundError(f"No {space.kind} factors in {space.label}")
     if fold is not None:
-        if fold >= len(factors):
+        by_fold = {
+            int(selector["fold"]): factor
+            for selector, factor in factors if "fold" in selector
+        }
+        if fold not in by_fold:
             raise IndexError(f"{space.label} has no factor for fold {fold}")
-        return np.asarray(factors[fold], dtype=np.float32)
+        return np.asarray(by_fold[fold], dtype=np.float32)
     if len(factors) == 1:
-        return np.asarray(factors[0], dtype=np.float32)
-    return aggregate_subspace_basis(factors, rank=rank, method="extrinsic")
+        return np.asarray(factors[0][1], dtype=np.float32)
+    return aggregate_subspace_basis(
+        [factor for _, factor in factors], rank=rank, method="extrinsic"
+    )
+
+
+def standardize_evaluation_values(
+    space: ComparisonSpace,
+    values: np.ndarray,
+    train_idx: np.ndarray,
+    *,
+    fold: int | None = None,
+    evaluation_dataset: str | None = None,
+) -> np.ndarray:
+    """Put evaluation embeddings in an iEEG factor's standardized coordinates."""
+    values = np.asarray(values, dtype=np.float32)
+    if space.artifact is None or space.artifact.dataset == "deep-fmri":
+        return values
+    fold_matched = (
+        fold is not None
+        and space.dataset == evaluation_dataset
+        and space.source_format == "fold_factors"
+    )
+    if fold_matched:
+        selector = {"method": space.kind, "fold": int(fold)}
+        try:
+            scaler = space.artifact.load_field("input_scalers", selector=selector)
+            mean = np.asarray(scaler["mean"], dtype=np.float32)
+            scale = np.asarray(scaler["scale"], dtype=np.float32)
+        except (FileNotFoundError, KeyError) as exc:
+            raise ValueError(
+                f"{space.label} is missing the saved input scaler for fold {fold}"
+            ) from exc
+        if scaler.get("coordinates") != "standardized-v1":
+            raise ValueError(
+                f"{space.label} fold {fold} has unsupported input-scaler "
+                f"coordinates {scaler.get('coordinates')!r}"
+            )
+        if mean.shape != (values.shape[1],) or scale.shape != (values.shape[1],):
+            raise ValueError(
+                f"{space.label} fold {fold} input scaler has mean/scale shapes "
+                f"{mean.shape}/{scale.shape}; expected {(values.shape[1],)}"
+            )
+        if (
+            not np.isfinite(mean).all()
+            or not np.isfinite(scale).all()
+            or np.any(scale <= 0)
+        ):
+            raise ValueError(
+                f"{space.label} fold {fold} input scaler contains invalid values"
+            )
+        return ((values - mean) / scale).astype(np.float32)
+    train = values[np.asarray(train_idx, dtype=int)]
+    mean = train.mean(axis=0, dtype=np.float64)
+    scale = train.std(axis=0, dtype=np.float64)
+    scale[scale == 0] = 1.0
+    return ((values - mean) / scale).astype(np.float32)
 
 
 def factor_for(

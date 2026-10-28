@@ -7,27 +7,45 @@ import pandas as pd
 
 from scripts.run_rrr import Artifact, UnitSelector
 from src.core.config import RRRConfig
+from src.utils.rrr.core import canonical_qr
 from src.utils.subspace_comparison.metrics import aggregate_subspace_basis
 
-from .common import (_build_results, _load_existing_grid, _merge_grid_rows,
-                     _run_subspace_rank_loop_for_fold)
+from .common import (_X_for_fold, _build_results, _load_existing_grid,
+                     _merge_grid_rows, _run_subspace_rank_loop_for_fold)
 
 
-def _load_cross_dataset_A_by_rank(
+def load_cross_dataset_A_by_rank(
     source,
     kind: str,
     ranks: list[int],
     aggregation: str = "extrinsic",
     source_format: str = "fold_factors",
+    orthonormalize: bool = False,
 ) -> dict[int, np.ndarray]:
     """Load rank-specific source factors through its producing Artifact."""
     averaged = {}
     for rank in sorted(set(int(k) for k in ranks)):
         if source_format == "rank_bases":
             selector = {"method": kind, "rank": rank}
-            if not source.has_field("input_factors", selector=selector):
+            if source.has_field("input_factors", selector=selector):
+                value = source.load_field("input_factors", selector=selector)
+                averaged[rank] = (
+                    canonical_qr(np.asarray(value))[0] if orthonormalize else value
+                )
+                continue
+            full_selector = {"method": kind}
+            if not source.has_field("input_factors", selector=full_selector):
                 raise ValueError(f"Source Artifact has no {kind} factors for rank {rank}")
-            averaged[rank] = source.load_field("input_factors", selector=selector)
+            full = np.asarray(
+                source.load_field("input_factors", selector=full_selector)
+            )
+            if full.ndim != 2 or full.shape[1] < rank:
+                raise ValueError(
+                    f"Source Artifact {kind} factor cannot provide rank {rank}; "
+                    f"shape={full.shape}"
+                )
+            value = full[:, :rank]
+            averaged[rank] = canonical_qr(value)[0] if orthonormalize else value
             continue
         if source_format != "fold_factors":
             raise ValueError(f"Unsupported cross-dataset source format: {source_format}")
@@ -37,6 +55,26 @@ def _load_cross_dataset_A_by_rank(
             raise ValueError(f"Source Artifact has no {kind} fold factors")
         averaged[rank] = aggregate_subspace_basis(matrices, rank, aggregation)
     return averaged
+
+
+def load_cross_dataset_scaler(source, kind: str, rank: int | None = None) -> dict:
+    """Load the scaler paired with a transferable source factor."""
+    selector = {"method": kind}
+    if rank is not None:
+        selector["rank"] = int(rank)
+    try:
+        scaler = source.load_input_scaler(selector)
+    except KeyError as error:
+        raise ValueError(
+            f"Source Artifact has no input scaler paired with {kind}"
+            + ("" if rank is None else f" rank {rank}")
+        ) from error
+    if scaler.get("coordinates") != "standardized-v1":
+        raise ValueError(
+            f"Source {kind} scaler has unsupported coordinates "
+            f"{scaler.get('coordinates')!r}"
+        )
+    return scaler
 
 
 def _run_cross_dataset_subspace_for_unit(
@@ -51,8 +89,16 @@ def _run_cross_dataset_subspace_for_unit(
     sig_mask_flat: "np.ndarray | None" = None,
     ranks_by_fold: "dict[int, list[int]] | None" = None,
     completed_pairs: "set[tuple[int, int]] | None" = None,
+    evaluate_orthonormalized: bool = False,
+    standardize_subspace_inputs: bool | None = None,
 ) -> pd.DataFrame:
     """Evaluate rank-specific source subspaces on target dataset folds."""
+    target_ambient_dim = _X_for_fold(X_raw, 0).shape[1]
+    if any(
+        _X_for_fold(X_raw, fold).shape[1] != target_ambient_dim
+        for fold in range(len(test_idxs))
+    ):
+        raise ValueError("All fold-specific target designs must share feature width")
     for rank, A_value in A_by_rank.items():
         matrices = A_value.values() if isinstance(A_value, dict) else [A_value]
         for A_rank in matrices:
@@ -60,10 +106,11 @@ def _run_cross_dataset_subspace_for_unit(
                 raise ValueError(
                     f"Expected 2D A matrix for rank {rank}, got {A_rank.shape}"
                 )
-            if A_rank.shape[0] != X_raw.shape[1]:
+            if A_rank.shape[0] != target_ambient_dim:
                 raise ValueError(
                     "Cross-dataset source A ambient dimension does not match target "
-                    f"embeddings: {A_rank.shape[0]} vs {X_raw.shape[1]} for rank {rank}"
+                    f"embeddings: {A_rank.shape[0]} vs {target_ambient_dim} "
+                    f"for rank {rank}"
                 )
             if A_rank.shape[1] < rank:
                 raise ValueError(
@@ -80,9 +127,19 @@ def _run_cross_dataset_subspace_for_unit(
 
     existing_grid = _load_existing_grid(artifact, unit)
     if ranks_by_fold is None or completed_pairs is None:
+        required_metric_keys = (
+            {
+                f"{primary_label}_orth_corr",
+                f"{primary_label}_orth_r2_per_target",
+            } | ({f"{primary_label}_orth_best_alphas"}
+                 if config.log_alphas else set())
+            if evaluate_orthonormalized
+            else None
+        )
         plan = artifact.resume_plan(
             unit=unit, ranks=config.rank_grid, folds=range(n_folds),
             refresh=config.refresh, require_input_factors=False,
+            required_metric_keys=required_metric_keys,
         )
         ranks_by_fold, completed_pairs = plan["ranks_by_fold"], plan["completed_pairs"]
     missing_ranks = sorted({
@@ -131,13 +188,17 @@ def _run_cross_dataset_subspace_for_unit(
                         if isinstance(A_by_rank[int(rank)], dict)
                         else A_by_rank[int(rank)]),
                 ranks_to_run=[int(rank)],
-                X_raw=X_raw,
+                X_raw=_X_for_fold(X_raw, fold_f),
                 baseline=per_fold_baselines[fold_f],
                 sig_mask_flat=sig_mask_flat,
                 fold_f=fold_f,
                 alphas=alphas,
                 alpha_policy=config.encoding.alpha_grid,
-                standardize_subspace_inputs=config.standardize_subspace_inputs,
+                standardize_subspace_inputs=(
+                    config.standardize_subspace_inputs
+                    if standardize_subspace_inputs is None
+                    else standardize_subspace_inputs
+                ),
                 ridge_cv_folds=config.encoding.ridge_cv_folds,
                 ridge_solver_params=config.encoding.ridge_solver_params,
                 ridge_y_in_cpu=config.encoding.ridge_y_in_cpu,
@@ -145,7 +206,8 @@ def _run_cross_dataset_subspace_for_unit(
                 device=device,
                 primary_label=primary_label,
                 progress_desc=f"  cross-dataset fold {fold_f}",
-                orthonormalize_a_per_rank=config.orthonormalize_a_per_rank,
+                evaluate_orthonormalized=evaluate_orthonormalized,
+                log_alphas=config.log_alphas,
                 refresh=config.refresh and rank == ranks_to_run[0],
             ))
         print(f"  Cross-dataset fold {fold_f} done in {time.time() - fold_start:.1f}s")
@@ -174,6 +236,12 @@ def _load_cross_temporal_A_by_fold(source, kind, source_window, ranks, n_folds):
                     f"Source Artifact has no {kind} factors for temporal window "
                     f"{source_window!r}, fold {fold}"
                 )
+            if not source.has_field("input_scalers", selector=selector):
+                raise ValueError(
+                    f"Source {kind} factors for temporal window {source_window!r}, "
+                    f"fold {fold} use the legacy raw-coordinate contract; rerun "
+                    "the source RRR analysis first"
+                )
             matrix = source.load_field("input_factors", selector=selector)
             if matrix.ndim != 2 or matrix.shape[1] < rank:
                 raise ValueError(
@@ -185,5 +253,5 @@ def _load_cross_temporal_A_by_fold(source, kind, source_window, ranks, n_folds):
     return result
 
 
-__all__ = ["_load_cross_dataset_A_by_rank", "_load_cross_temporal_A_by_fold",
+__all__ = ["load_cross_dataset_A_by_rank", "_load_cross_temporal_A_by_fold",
            "_run_cross_dataset_subspace_for_unit"]

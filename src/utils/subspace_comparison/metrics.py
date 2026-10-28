@@ -105,16 +105,16 @@ def extrinsic_mean_basis(
     return left_vectors[:, :rank].astype(np.float32, copy=False)
 
 
-def unnormalized_mean_basis(
+def factor_weighted_mean_basis(
     matrices: list[np.ndarray],
     rank: int,
 ) -> np.ndarray:
-    """Aggregate leading factors without normalizing their column spaces.
+    """Aggregate leading factors with their raw magnitudes as weights.
 
     The returned basis contains the leading left singular vectors of the raw
     ``matrix[:, :rank]`` blocks concatenated across inputs.  Consequently both
     between-matrix scale and within-matrix singular-value structure contribute
-    to the result.
+    to the selected subspace, while the returned basis itself is orthonormal.
     """
     if not matrices:
         raise ValueError("At least one subspace matrix is required")
@@ -156,18 +156,120 @@ def unnormalized_mean_basis(
     return left_vectors[:, :rank].astype(np.float32, copy=False)
 
 
+def prediction_weighted_mean_basis(
+    matrices: list[np.ndarray],
+    rank: int,
+    prediction_singular_values: np.ndarray,
+) -> np.ndarray:
+    """Aggregate FIR factors using fitted-prediction energy.
+
+    For prediction component ``j``, the complete factor across all FIR delays is
+    normalized before its delay blocks are scaled by the corresponding prediction
+    singular value. Thus the component contributes total squared energy ``S_j^2``
+    without retaining arbitrary coefficient scale, while relative strength across
+    its delay blocks is preserved.
+    """
+    if not matrices:
+        raise ValueError("At least one subspace matrix is required")
+    rank = int(rank)
+    if rank < 1:
+        raise ValueError("rank must be at least 1")
+
+    singular_values = np.asarray(prediction_singular_values, dtype=np.float64)
+    if singular_values.ndim != 1:
+        raise ValueError(
+            "prediction_singular_values must be one-dimensional, got shape "
+            f"{singular_values.shape}"
+        )
+    if len(singular_values) < rank:
+        raise ValueError(
+            f"rank {rank} exceeds prediction singular-value count "
+            f"{len(singular_values)}"
+        )
+    selected_singular_values = singular_values[:rank]
+    if not np.isfinite(selected_singular_values).all():
+        raise ValueError("prediction singular values must be finite")
+    if np.any(selected_singular_values < 0):
+        raise ValueError("prediction singular values must be non-negative")
+
+    first = np.asarray(matrices[0], dtype=np.float64)
+    if first.ndim != 2:
+        raise ValueError(f"Expected 2D matrices, got shape {first.shape}")
+    ambient_dim = first.shape[0]
+    blocks = []
+    for i, matrix in enumerate(matrices):
+        arr = np.asarray(matrix, dtype=np.float64)
+        if arr.ndim != 2:
+            raise ValueError(f"Expected 2D matrix at index {i}, got shape {arr.shape}")
+        if arr.shape[0] != ambient_dim:
+            raise ValueError(
+                "All subspace matrices must share ambient dimension, got "
+                f"{ambient_dim} and {arr.shape[0]} at index {i}"
+            )
+        if rank > arr.shape[1]:
+            raise ValueError(
+                f"rank {rank} exceeds source matrix width {arr.shape[1]} at index {i}"
+            )
+        blocks.append(arr[:, :rank])
+
+    full_components = np.concatenate(blocks, axis=0)
+    component_norms = np.linalg.norm(full_components, axis=0)
+    scale = np.zeros(rank, dtype=np.float64)
+    nonzero = component_norms > np.finfo(np.float64).eps * max(full_components.shape)
+    inconsistent = (~nonzero) & (selected_singular_values > 0)
+    if np.any(inconsistent):
+        indices = np.flatnonzero(inconsistent).tolist()
+        raise ValueError(
+            "Prediction components have positive singular values but zero FIR "
+            f"factor norm at indices {indices}"
+        )
+    scale[nonzero] = selected_singular_values[nonzero] / component_norms[nonzero]
+    weighted = np.concatenate(
+        [block * scale[np.newaxis, :] for block in blocks], axis=1
+    )
+    left_vectors, aggregate_singular_values, _ = np.linalg.svd(
+        weighted, full_matrices=False
+    )
+    tolerance = (
+        np.finfo(aggregate_singular_values.dtype).eps
+        * max(weighted.shape)
+        * aggregate_singular_values[0]
+        if aggregate_singular_values.size
+        else 0.0
+    )
+    if np.count_nonzero(aggregate_singular_values > tolerance) < rank:
+        raise ValueError(
+            f"Prediction-weighted source matrices are rank deficient for rank {rank}"
+        )
+    return left_vectors[:, :rank].astype(np.float32, copy=False)
+
+
 def aggregate_subspace_basis(
     matrices: list[np.ndarray],
     rank: int,
     method: str = "extrinsic",
+    *,
+    prediction_singular_values: np.ndarray | None = None,
 ) -> np.ndarray:
     """Aggregate matrices into a rank-k basis using the requested method."""
     if method == "extrinsic":
         return extrinsic_mean_basis(matrices, rank=rank)
-    if method == "unnormalized":
-        return unnormalized_mean_basis(matrices, rank=rank)
+    if method == "factor_weighted":
+        return factor_weighted_mean_basis(matrices, rank=rank)
+    if method == "prediction_weighted":
+        if prediction_singular_values is None:
+            raise ValueError(
+                "prediction_weighted aggregation requires "
+                "prediction_singular_values"
+            )
+        return prediction_weighted_mean_basis(
+            matrices,
+            rank=rank,
+            prediction_singular_values=prediction_singular_values,
+        )
     raise ValueError(
-        "method must be 'extrinsic' or 'unnormalized', " f"got {method!r}"
+        "method must be 'extrinsic', 'factor_weighted', or "
+        f"'prediction_weighted', got {method!r}"
     )
 
 
@@ -189,7 +291,7 @@ def validate_aggregation_cache(
     refresh: bool = False,
 ) -> None:
     """Record aggregation provenance and reject incompatible cached outputs."""
-    if method not in {"extrinsic", "unnormalized"}:
+    if method not in {"extrinsic", "factor_weighted"}:
         raise ValueError(f"Unsupported subspace aggregation method: {method!r}")
     root = Path(output_dir)
     marker = root / "subspace_aggregation.json"

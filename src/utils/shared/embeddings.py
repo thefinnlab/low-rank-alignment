@@ -2,6 +2,7 @@
 
 import os
 import re
+from functools import lru_cache
 from gensim.models import KeyedVectors
 import h5py
 import numpy as np
@@ -21,8 +22,17 @@ def load_embeddings(
     dataset: str = "podcast",
     per_dataset_config: dict | None = None,
     dataset_context=None,
+    limit_to_glove: bool = False,
+    glove_dim: int = 300,
     **kwargs,
 ) -> tuple:
+    """Load model embeddings and optionally annotate shared GloVe coverage.
+
+    The embedding matrix is deliberately left at its original row count so its
+    rows remain compatible with cached word selections. When ``limit_to_glove``
+    is true, the returned word table contains an ``in_glove`` boolean column
+    for downstream alignment to apply.
+    """
     if isinstance(embedding_getter_name, int):
         kwargs.setdefault("layer", embedding_getter_name)
         embedding_getter_name = "gpt2xl"
@@ -63,9 +73,27 @@ def load_embeddings(
             **kwargs,
         )
 
-    return embedding_getter_registry[embedding_getter_name](
-        data_root, transcript_df, **kwargs
-    )
+    if embedding_getter_name == "glove":
+        # GloVe is a static word-level embedding and therefore does not use the
+        # registry of contextual/token embedding getters below.
+        embeddings, word_df = get_glove_embeddings(
+            data_root, transcript_df, dim=int(kwargs.get("dim", glove_dim))
+        )
+    else:
+        embeddings, word_df = embedding_getter_registry[embedding_getter_name](
+            data_root, transcript_df, **kwargs
+        )
+    if limit_to_glove and "in_glove" not in word_df.columns:
+        _, glove_word_df = get_glove_embeddings(
+            data_root, word_df, dim=int(glove_dim)
+        )
+        if len(glove_word_df) != len(word_df):
+            raise ValueError(
+                "GloVe coverage rows do not align with the loaded embeddings"
+            )
+        word_df = word_df.copy()
+        word_df["in_glove"] = glove_word_df["in_glove"].to_numpy(dtype=bool)
+    return embeddings, word_df
 
 
 def _to_word_level_df(transcript_df: pd.DataFrame) -> pd.DataFrame:
@@ -80,6 +108,21 @@ def _to_word_level_df(transcript_df: pd.DataFrame) -> pd.DataFrame:
         df.index = pd.Index(range(len(df)), name="word_idx")
         return df
     raise ValueError("Transcript DataFrame must contain word/start/end information.")
+
+
+@lru_cache(maxsize=None)
+def _load_glove_vectors(data_root: str, dim: int):
+    glove_file = os.path.join(data_root, f"glove/glove.6B.{dim}d.txt")
+    # Dataset-specific iEEG roots (for example ``data/brain-treebank``) share
+    # the repository-level GloVe cache in their parent data directory.
+    if not os.path.exists(glove_file):
+        parent_root = os.path.dirname(os.path.normpath(data_root))
+        parent_file = os.path.join(parent_root, f"glove/glove.6B.{dim}d.txt")
+        if os.path.exists(parent_file):
+            glove_file = parent_file
+    return KeyedVectors.load_word2vec_format(
+        glove_file, binary=False, no_header=True
+    )
 
 
 def get_glove_embeddings(data_root, transcript_df, dim):
@@ -101,12 +144,11 @@ def get_glove_embeddings(data_root, transcript_df, dim):
     Returns:
 
     """
-    glove_file = os.path.join(data_root, f"glove/glove.6B.{dim}d.txt")
-    glove_vectors = KeyedVectors.load_word2vec_format(
-        glove_file, binary=False, no_header=True
-    )
+    glove_vectors = _load_glove_vectors(str(data_root), int(dim))
 
     def preprocess_word(word):
+        if not isinstance(word, str):
+            return ""
         # Convert to lowercase
         word = word.lower()
         # Remove punctuation outside of words. i.e. keep apostrophes

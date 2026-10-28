@@ -30,23 +30,64 @@ class PreparedSignificance:
         return self.reference.identity_record()
 
 
+def ieeg_target_dimension_summary(
+    significance: PreparedSignificance,
+    subjects,
+) -> tuple[int, int]:
+    """Return original target count and fold-estimable PCA cap from saved artifacts."""
+    subject_keys = [str(subject) for subject in subjects]
+    missing = [
+        subject for subject in subject_keys
+        if subject not in significance.encoding_results
+    ]
+    if missing:
+        raise ValueError(
+            f"Significance Artifact lacks encoding results for subjects {missing}"
+        )
+
+    reference = significance.encoding_results[subject_keys[0]]
+    required = {"lags", "selection", "train_idxs"}
+    absent = sorted(required - set(reference))
+    if absent:
+        raise ValueError(
+            f"Significance encoding results lack dimension metadata {absent}"
+        )
+    for subject in subject_keys[1:]:
+        current = significance.encoding_results[subject]
+        for field in required:
+            if field not in current or not _values_equal(reference[field], current[field]):
+                raise ValueError(
+                    "Significance subjects do not share saved encoding dimension "
+                    f"metadata field {field!r}"
+                )
+
+    selected_targets = sum(
+        int(frame["significant"].astype(bool).sum())
+        for frame in significance.target_significance.values()
+    )
+    original_target_count = selected_targets * len(reference["lags"])
+    train_rows = [len(np.asarray(index)) for index in reference["train_idxs"]]
+    if not train_rows or min(train_rows) < 1:
+        raise ValueError("Significance Artifact contains no non-empty training folds")
+    return int(original_target_count), int(min(original_target_count, min(train_rows)))
+
+
 def validate_cross_dataset_significance_alignment(
     target_selection,
     target_identity: dict,
     source_selection,
     source_identity: dict,
 ) -> None:
-    """Require source and target RRR runs to use corresponding within-layer targets."""
+    """Require source and target RRR runs to use corresponding target selections."""
     if source_selection is None:
         raise ValueError(
             "Cross-dataset RRR sources must define significance_selection"
         )
     target = canonical_significance_selection(target_selection)
     source = canonical_significance_selection(source_selection)
-    if target["mode"] != "within-layer" or source["mode"] != "within-layer":
+    if target["mode"] != source["mode"]:
         raise ValueError(
-            "Cross-dataset RRR currently requires within-layer significance "
-            "selections for both source and target"
+            "Cross-dataset source and target significance selection modes must match"
         )
 
     def validate_reference(label: str, selection: dict, identity: dict) -> dict:
@@ -79,6 +120,25 @@ def validate_cross_dataset_significance_alignment(
             "Cross-dataset source and target significance selections must use "
             f"the same model and layer: {mismatches}"
         )
+    if target["mode"] == "cross-model-layer":
+
+        def union_signature(selection: dict) -> list[tuple]:
+            return sorted(
+                (
+                    int(item.get("offset", 0)),
+                    item.get("model"),
+                    item.get("layer"),
+                )
+                for item in selection["artifacts"]
+            )
+
+        target_union = union_signature(target)
+        source_union = union_signature(source)
+        if target_union != source_union:
+            raise ValueError(
+                "Cross-dataset cross-model-layer significance selections must "
+                "contain the same model/layer union"
+            )
 
 
 def expand_significance_artifact_specs(specs: list[dict]) -> list[dict]:

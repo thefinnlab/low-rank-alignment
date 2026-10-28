@@ -44,6 +44,7 @@ class DatasetContext:
     stimulus_id: str
     stimulus_label: str
     subject_metadata: dict[int, dict] = field(default_factory=dict)
+    rereference: str | None = None
 
 
 dataset_registry = {}
@@ -288,6 +289,19 @@ class BrainTreebankDatasetAdapter:
     sfreq = 2048.0
     hdf5_unit_scale_to_volts = 1e-6
     preprocessing_sfreq = 512.0
+    default_rereference = "common_average"
+    supported_rereferences = frozenset({"common_average", "laplacian"})
+
+    def _resolve_rereference(self, per_dataset_config: dict) -> str:
+        rereference = str(
+            per_dataset_config.get("rereference", self.default_rereference)
+        ).strip().lower()
+        if rereference not in self.supported_rereferences:
+            raise ValueError(
+                "Brain Treebank per_dataset_config.rereference must be one of "
+                f"{sorted(self.supported_rereferences)}, got {rereference!r}."
+            )
+        return rereference
 
     def _metadata_records(self, data_root: str, subject_id: int) -> list[dict]:
         pattern = os.path.join(
@@ -349,6 +363,7 @@ class BrainTreebankDatasetAdapter:
                 "Brain Treebank runs require per_dataset_config.movie to identify the movie stimulus."
             )
 
+        rereference = self._resolve_rereference(per_dataset_config)
         subject_metadata = {}
         for subject_id in subject_ids:
             subject_metadata[subject_id] = self._select_subject_movie_record(
@@ -360,6 +375,7 @@ class BrainTreebankDatasetAdapter:
             stimulus_id=movie,
             stimulus_label=movie,
             subject_metadata=subject_metadata,
+            rereference=rereference,
         )
 
     def load_word_table(
@@ -925,59 +941,161 @@ class BrainTreebankDatasetAdapter:
         )
         return raw
 
-    def _despike(self, raw, iqr_mult: float = 4.0, dil_len: float = 0.10):
+    def _despike(
+        self,
+        raw,
+        iqr_mult: float = 4.0,
+        dil_len: float = 0.10,
+        channel_batch_size: int | None = None,
+    ):
         """Match the Podcast derivative's per-channel spike interpolation."""
         from scipy import interpolate, signal, stats
 
         raw.load_data()
         data = raw._data
-        medians = np.median(data, axis=-1, keepdims=True)
-        iqrs = stats.iqr(data, axis=-1)
-        spike_mask = np.abs(data - medians) > (iqrs[:, np.newaxis] * iqr_mult)
+        if channel_batch_size is None:
+            channel_batch_size = len(raw.ch_names)
+        if channel_batch_size < 1:
+            raise ValueError("channel_batch_size must be positive")
+        dilation_filter = (
+            np.ones(int(dil_len * raw.info["sfreq"])) if dil_len > 0 else None
+        )
+        for batch_start in range(0, len(raw.ch_names), channel_batch_size):
+            batch_stop = min(batch_start + channel_batch_size, len(raw.ch_names))
+            batch = data[batch_start:batch_stop]
+            medians = np.median(batch, axis=-1, keepdims=True)
+            iqrs = stats.iqr(batch, axis=-1)
+            spike_mask = np.abs(batch - medians) > (iqrs[:, np.newaxis] * iqr_mult)
+            if dilation_filter is not None:
+                spike_mask = signal.filtfilt(dilation_filter, 1, spike_mask) > 0
 
-        if dil_len > 0:
-            dilation_filter = np.ones(int(dil_len * raw.info["sfreq"]))
-            spike_mask = signal.filtfilt(dilation_filter, 1, spike_mask) > 0
-
-        for channel_idx, spikes in enumerate(spike_mask):
-            if not np.any(spikes):
-                continue
-            good_indices = np.flatnonzero(~spikes)
-            if good_indices.size < 2:
-                raise ValueError(
-                    f"Cannot interpolate spikes for {raw.ch_names[channel_idx]}: "
-                    "fewer than two clean samples remain."
+            for local_idx, spikes in enumerate(spike_mask):
+                if not np.any(spikes):
+                    continue
+                good_indices = np.flatnonzero(~spikes)
+                channel_idx = batch_start + local_idx
+                if good_indices.size < 2:
+                    raise ValueError(
+                        f"Cannot interpolate spikes for {raw.ch_names[channel_idx]}: "
+                        "fewer than two clean samples remain."
+                    )
+                spike_indices = np.flatnonzero(spikes)
+                data[channel_idx, spikes] = interpolate.pchip_interpolate(
+                    good_indices,
+                    data[channel_idx, ~spikes],
+                    spike_indices,
                 )
-            spike_indices = np.flatnonzero(spikes)
-            raw._data[channel_idx, spikes] = interpolate.pchip_interpolate(
-                good_indices,
-                raw._data[channel_idx, ~spikes],
-                spike_indices,
-            )
         return raw
 
-    def _apply_high_gamma(self, raw):
-        raw = raw.copy()
+    @staticmethod
+    def _contact_identity(channel_name: str) -> tuple[str, int] | None:
+        """Return the shaft and numbered contact encoded by a BTB channel label."""
+        normalized = re.sub(r"[#*]", "", str(channel_name))
+        match = re.fullmatch(r"(.+?)(\d+)", normalized)
+        if match is None:
+            return None
+        return match.group(1), int(match.group(2))
+
+    def _apply_laplacian_reference(self, raw):
+        """Reference each retained contact to two consecutive shaft neighbors."""
+        raw.load_data()
+        contacts: dict[tuple[str, int], int] = {}
+        identities: list[tuple[str, int] | None] = []
+        for channel_idx, channel_name in enumerate(raw.ch_names):
+            identity = self._contact_identity(channel_name)
+            identities.append(identity)
+            if identity is None:
+                continue
+            if identity in contacts:
+                raise ValueError(
+                    "Brain Treebank channel labels do not uniquely identify shaft "
+                    f"contacts after normalization: {channel_name!r}."
+                )
+            contacts[identity] = channel_idx
+
+        center_indices = []
+        neighbor_indices = []
+        for channel_idx, identity in enumerate(identities):
+            if identity is None:
+                continue
+            shaft, contact_number = identity
+            previous_idx = contacts.get((shaft, contact_number - 1))
+            next_idx = contacts.get((shaft, contact_number + 1))
+            if previous_idx is None or next_idx is None:
+                continue
+            center_indices.append(channel_idx)
+            neighbor_indices.append((previous_idx, next_idx))
+
+        if not center_indices:
+            raise ValueError(
+                "Brain Treebank Laplacian reference found no contacts with two "
+                "valid consecutive neighbors."
+            )
+
+        center_indices_array = np.asarray(center_indices, dtype=int)
+        neighbor_indices_array = np.asarray(neighbor_indices, dtype=int)
+        referenced = raw._data[center_indices_array] - np.mean(
+            raw._data[neighbor_indices_array], axis=1
+        )
+        retained_names = [raw.ch_names[idx] for idx in center_indices]
+        dropped_count = len(raw.ch_names) - len(retained_names)
+        raw.pick(retained_names)
+        raw._data[:] = referenced
+        print(
+            "  - [Config] Applied shaft Laplacian reference to "
+            f"{len(retained_names)} contacts; excluded {dropped_count} without two "
+            "valid consecutive neighbors"
+        )
+        return raw
+
+    def _apply_high_gamma(
+        self,
+        raw,
+        rereference: str = "common_average",
+        channel_batch_size: int | None = None,
+    ):
         if int(raw.info["sfreq"]) != int(self.preprocessing_sfreq):
             raw.resample(sfreq=self.preprocessing_sfreq)
-        raw = self._despike(raw)
-        raw.set_eeg_reference(ref_channels="average", ch_type="seeg", verbose=False)
-        raw.notch_filter(
-            freqs=[60, 120, 180],
-            notch_widths=2,
-            picks="data",
-            n_jobs=1,
-            verbose=False,
-        )
-        raw.filter(
-            l_freq=70.0,
-            h_freq=200.0,
-            method="iir",
-            iir_params={"order": 4, "ftype": "butter"},
-            picks="data",
-            verbose=False,
-        )
-        raw.apply_hilbert(picks="data", envelope=True, verbose=False)
+        if channel_batch_size is None:
+            raw = self._despike(raw)
+        else:
+            raw = self._despike(raw, channel_batch_size=channel_batch_size)
+        if rereference == "common_average":
+            raw.set_eeg_reference(
+                ref_channels="average", ch_type="seeg", verbose=False
+            )
+        elif rereference == "laplacian":
+            raw = self._apply_laplacian_reference(raw)
+        else:
+            raise ValueError(
+                f"Unsupported Brain Treebank rereference mode: {rereference!r}."
+            )
+        if channel_batch_size is None:
+            channel_picks = ["data"]
+        else:
+            if channel_batch_size < 1:
+                raise ValueError("channel_batch_size must be positive")
+            channel_picks = [
+                np.arange(start, min(start + channel_batch_size, len(raw.ch_names)))
+                for start in range(0, len(raw.ch_names), channel_batch_size)
+            ]
+        for picks in channel_picks:
+            raw.notch_filter(
+                freqs=[60, 120, 180],
+                notch_widths=2,
+                picks=picks,
+                n_jobs=1,
+                verbose=False,
+            )
+            raw.filter(
+                l_freq=70.0,
+                h_freq=200.0,
+                method="iir",
+                iir_params={"order": 4, "ftype": "butter"},
+                picks=picks,
+                verbose=False,
+            )
+            raw.apply_hilbert(picks=picks, envelope=True, verbose=False)
         return raw
 
     def load_raw_recording(
@@ -1017,7 +1135,16 @@ class BrainTreebankDatasetAdapter:
 
         if load_options.get("use_high_gamma", False):
             print("  - [Config] Computing high-gamma envelope (70-200 Hz)")
-            raw = self._apply_high_gamma(raw)
+            high_gamma_kwargs = {
+                "rereference": load_options.get(
+                    "rereference", context.rereference or self.default_rereference
+                ),
+            }
+            if load_options.get("high_gamma_channel_batch_size") is not None:
+                high_gamma_kwargs["channel_batch_size"] = load_options[
+                    "high_gamma_channel_batch_size"
+                ]
+            raw = self._apply_high_gamma(raw, **high_gamma_kwargs)
 
         signal_unit = load_options.get("signal_unit")
         if signal_unit == "uV":
@@ -1040,11 +1167,17 @@ class BrainTreebankDatasetAdapter:
     def get_precomputed_epochs_path(
         self, subject_id: int, data_root: str, context: DatasetContext
     ) -> str:
+        reference_suffix = (
+            ""
+            if context.rereference in (None, self.default_rereference)
+            else f"_ref-{context.rereference}"
+        )
         return os.path.join(
             data_root,
             "precomputed_epochs",
             f"sub_{subject_id}",
-            f"sub_{subject_id}_movie-{context.stimulus_id}_desc-epochs32hz_ieeg.h5",
+            f"sub_{subject_id}_movie-{context.stimulus_id}"
+            f"_desc-epochs32hz{reference_suffix}_ieeg.h5",
         )
 
     def load_significance(

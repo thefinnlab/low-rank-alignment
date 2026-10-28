@@ -5,7 +5,7 @@ import pandas as pd
 import pytest
 import yaml
 
-from src.core.config import LanguageDecodingConfig, LanguageDecodingMode
+from src.core.config import EncodingConfig, LanguageDecodingConfig, LanguageDecodingMode
 from scripts.run_language_decoding import Artifact as DecodingArtifact, run_config
 from scripts.run_rrr import Artifact as RRRArtifact
 from src.utils.shared.config import dict_to_dataclass
@@ -13,6 +13,7 @@ from src.utils.language_interpret.decoding import (
     _configure_decoder_backend,
     _decoder_metrics,
     _fit_decoder,
+    _pool_speaker_labels,
     _matched_score_correlation,
     _run_subspace_decoding,
     _run_task_decoding,
@@ -36,6 +37,47 @@ from src.utils.language_interpret.fmri_decoding import (
     build_tr_targets,
 )
 from src.utils.shared.fmri import AlignedFMRIStimuli
+
+
+def test_speaker_labels_pool_speakers_missing_from_outer_partitions():
+    target = np.array([0, 1, 2, np.nan, 0, 1, 3, np.nan])
+    folds = [(np.arange(4, 8), np.arange(4)),
+             (np.arange(4), np.arange(4, 8))]
+    mapped, metadata = _pool_speaker_labels(target, folds)
+    np.testing.assert_equal(mapped, [0, 1, 4, np.nan, 0, 1, 4, np.nan])
+    assert metadata["retained_class_ids"] == [0, 1]
+    assert metadata["pooled_class_ids"] == [2, 3]
+    assert metadata["other_class_id"] == 4
+    np.testing.assert_equal(target, [0, 1, 2, np.nan, 0, 1, 3, np.nan])
+
+
+def test_categorical_decoder_uses_all_available_cpus():
+    config = LanguageDecodingConfig(rrr_run_path="unused", rank_grid=[2])
+    X = np.arange(24, dtype=float).reshape(12, 2)
+    y = np.tile([0, 1], 6)
+
+    pipeline = _fit_decoder(X, y, "categorical", config)
+
+    assert pipeline[-1].n_jobs == -1
+
+
+def test_speaker_labels_require_presence_in_training_as_well_as_test():
+    target = np.array([0., 1., 0., 1.])
+    mapped, metadata = _pool_speaker_labels(
+        target, [(np.array([0, 2]), np.array([1, 3])),
+                 (np.arange(4), np.arange(4))]
+    )
+    np.testing.assert_equal(mapped, [2, 2, 2, 2])
+    assert metadata["retained_class_ids"] == []
+
+
+def test_speaker_labels_do_not_add_other_when_all_speakers_are_shared():
+    target = np.array([0., 1., 0., 1., np.nan])
+    mapped, metadata = _pool_speaker_labels(
+        target, [(np.array([0, 1]), np.array([2, 3, 4]))]
+    )
+    np.testing.assert_equal(mapped, target)
+    assert metadata["other_class_id"] is None
 
 
 def _task_context(tmp_path):
@@ -80,6 +122,7 @@ def _task_context(tmp_path):
         )
     features["part_of_speech"] = ["INTJ", "ADJ", "NOUN", "VERB", "ADV", "ADV"]
     features["fine_part_of_speech"] = ["UH", "JJ", "NN", "VB", "RB", "RB"]
+    features["native_speaker"] = ["A", "A", "B", "B", "A", "B"]
     features["content_word"] = [True, True, True, True, False, True]
     features["sentence_position"] = [np.nan, 0, 1, 0, 0, 1]
     features["sentence_onset"] = [np.nan, True, False, True, False, False]
@@ -118,9 +161,9 @@ def _task_context(tmp_path):
 def test_configured_task_getters_are_registered_aligned_and_nonempty(tmp_path):
     context = _task_context(tmp_path)
     configured = yaml.safe_load(
-        open("configs/rrr/language_decoding.yml", encoding="utf-8")
+        open("tests/fixtures/configs/language_decoding_legacy.yml", encoding="utf-8")
     )["tasks"]
-    assert set(configured) == set(TASK_REGISTRY)
+    assert set(configured) <= set(TASK_REGISTRY)
 
     for name in configured:
         target = get_language_task(name).getter(context)
@@ -131,6 +174,10 @@ def test_configured_task_getters_are_registered_aligned_and_nonempty(tmp_path):
         get_language_task("sentence_position").getter(context),
         [np.nan, 0.0, 1.0, 0.0, 0.0, 1.0],
         equal_nan=True,
+    )
+    np.testing.assert_array_equal(
+        get_language_task("native_speaker").getter(context),
+        [0, 0, 1, 1, 0, 1],
     )
     np.testing.assert_allclose(
         get_language_task("story_position").getter(context),
@@ -242,6 +289,24 @@ def test_saved_raw_weights_reproduce_continuous_pipeline_decisions():
     assert metrics["correlation"] > 0.99
 
 
+def test_unscaled_decoder_has_identity_feature_transform():
+    rng = np.random.default_rng(14)
+    X = rng.normal(size=(80, 3)) * np.array([1.0, 5.0, 20.0])
+    y = X @ np.array([1.0, -0.2, 0.05])
+    config = LanguageDecodingConfig(rrr_run_path="unused", rank_grid=[2])
+
+    pipeline = _fit_decoder(
+        X, y, "continuous", config, standardize_inputs=False
+    )
+    payload = _weight_payload(pipeline, None)
+
+    assert len(pipeline.steps) == 1
+    np.testing.assert_array_equal(payload["feature_mean"], np.zeros(3))
+    np.testing.assert_array_equal(payload["feature_scale"], np.ones(3))
+    reconstructed = X @ payload["embedding_weights"] + payload["intercept"]
+    np.testing.assert_allclose(reconstructed[:, 0], pipeline.predict(X), atol=1e-5)
+
+
 def test_saved_raw_weights_reproduce_binary_logistic_decisions():
     rng = np.random.default_rng(8)
     X = rng.normal(size=(120, 4))
@@ -299,29 +364,62 @@ def test_nested_language_decoding_config_roundtrip():
     assert config.tasks == ["surprisal"]
 
 
-@pytest.mark.parametrize("mode", ["fmri_word", "fmri_tr_pre_fir"])
-def test_fmri_modes_require_fmri_rrr_source(mode):
+@pytest.mark.parametrize("tr_enabled", [False, True])
+def test_fmri_decoding_requires_fmri_rrr_source(tr_enabled):
     config = dict_to_dataclass(
         {
-            "mode": mode,
+            "mode": "within_dataset",
+            "fmri_tr_pre_fir": tr_enabled,
+            "encoding": {"dataset": "deep-fmri"},
             "rrr_source": {"dataset": "deep-fmri"},
             "rank_grid": [2],
             "tasks": ["concreteness"],
         },
         LanguageDecodingConfig,
     )
-    assert config.mode.value == mode
+    assert config.fmri_tr_pre_fir is tr_enabled
 
     with pytest.raises(ValueError, match="requires a deep-fmri rrr_source"):
         dict_to_dataclass(
             {
-                "mode": mode,
+                "mode": "within_dataset",
+                "fmri_tr_pre_fir": tr_enabled,
+                "encoding": {"dataset": "deep-fmri"},
                 "rrr_source": {"dataset": "podcast"},
                 "rank_grid": [2],
                 "tasks": ["concreteness"],
             },
             LanguageDecodingConfig,
         )
+
+    cross = dict_to_dataclass(
+        {
+            "mode": "cross_dataset",
+            "fmri_tr_pre_fir": tr_enabled,
+            "encoding": {"dataset": "deep-fmri"},
+            "rrr_source": {"dataset": "podcast", "mode": "full_fit"},
+            "fmri_target_artifact": {"dataset": "deep-fmri", "mode": "internal"},
+            "rank_grid": [2],
+            "tasks": ["concreteness"],
+        },
+        LanguageDecodingConfig,
+    )
+    assert cross.fmri_target_artifact["dataset"] == "deep-fmri"
+
+
+@pytest.mark.parametrize("tr_enabled", [False, True])
+def test_fmri_decoding_requires_internal_rrr_artifacts(tr_enabled, tmp_path):
+    config = LanguageDecodingConfig(
+        mode="within_dataset", fmri_tr_pre_fir=tr_enabled,
+        encoding=EncodingConfig(dataset="deep-fmri"),
+        rrr_source={"mode": "full_fit", "dataset": "deep-fmri"},
+        results_root=str(tmp_path),
+        rank_grid=[2],
+        tasks=["concreteness"],
+    )
+
+    with pytest.raises(ValueError, match="normal internal RRR source Artifact"):
+        run_config(config)
 
 
 def test_fmri_word_targets_preserve_raw_values_and_missing_rows(tmp_path):
@@ -423,6 +521,64 @@ def test_fmri_targets_lanczos_filter_mean_filled_and_one_hot_channels(
     )
 
 
+def test_speaking_rate_counts_onsets_including_silent_trs(monkeypatch):
+    monkeypatch.setattr(
+        "src.utils.language_interpret.fmri_decoding._toolbox_modules",
+        lambda _: (None, None, None),
+    )
+    # Two-second TRs. Word midpoints deliberately disagree with starts.
+    sequence = type("Sequence", (), {
+        "tr_times": np.arange(1, 17, 2, dtype=float),
+        "data_times": np.array([11.9, 12.5, 15.9, 17.0]),
+    })()
+    frame = pd.DataFrame({"start": [10.0, 10.5, 14.0, 16.0]})
+    target = build_tr_targets(
+        stories=["story"], frames={"story": frame},
+        sequences={"story": sequence}, tasks=["speaking_rate"],
+        task_data={}, model_dir="unused", fmri_repo_root="unused", trim=0,
+    )["speaking_rate"]
+    np.testing.assert_array_equal(target.filtered["story"][:, 0], [1.0, 0.0, 0.5])
+    np.testing.assert_array_equal(target.availability["story"], [1, 1, 1])
+    assert target.standardized["story"].mean() == pytest.approx(0, abs=1e-6)
+
+
+@pytest.mark.parametrize("offset,expected", [
+    (-1, [np.nan, 10, 20]), (0, [10, 20, 30]),
+    (1, [20, 30, np.nan]), (4, [np.nan, np.nan, np.nan]),
+])
+def test_word_label_offsets_direction_and_boundaries(offset, expected):
+    from src.utils.language_interpret.tasks import offset_word_labels
+    np.testing.assert_allclose(
+        offset_word_labels(np.array([10, 20, 30]), offset), expected, equal_nan=True,
+    )
+
+
+def test_fmri_label_offsets_reset_per_story(monkeypatch):
+    tables = {
+        "a": pd.DataFrame({"word": ["a", "b"], "concreteness": [1, 2]}),
+        "b": pd.DataFrame({"word": ["c", "d"], "concreteness": [3, 4]}),
+    }
+    monkeypatch.setattr(
+        "src.utils.language_interpret.fmri_decoding._task_table",
+        lambda story, *args: tables[story],
+    )
+    target = build_word_targets(
+        stories=["a", "b"], frames=tables, tasks=["concreteness"],
+        task_data={}, model_dir="unused", label_offset=1,
+    )["concreteness"]
+    np.testing.assert_allclose(target.values["a"], [2, np.nan], equal_nan=True)
+    np.testing.assert_allclose(target.values["b"], [4, np.nan], equal_nan=True)
+    np.testing.assert_array_equal(target.availability["a"], [True, False])
+
+
+def test_speaking_rate_rejected_for_word_targets():
+    with pytest.raises(ValueError, match="requires fmri_tr_pre_fir=true"):
+        build_word_targets(
+            stories=[], frames={}, tasks=["speaking_rate"],
+            task_data={}, model_dir="unused",
+        )
+
+
 def test_fmri_categorical_metrics_and_stable_classifier_classes():
     y_train = np.array([
         [1.0, 0.0, 0.0],
@@ -451,27 +607,61 @@ def test_fmri_categorical_metrics_and_stable_classifier_classes():
     assert all(train.max() < len(rows) for train, _ in remapped)
 
 
-def test_fmri_pre_fir_rank_design_projects_and_story_zscores():
+def test_fmri_pre_fir_rank_design_uses_saved_source_scaler():
     aligned = AlignedFMRIStimuli(stories={
         "train": np.arange(24, dtype=np.float32).reshape(8, 3),
         "test": np.arange(30, 54, dtype=np.float32).reshape(8, 3),
     })
     factor = np.array([[1.0, 0.0], [0.0, 1.0], [0.5, -0.5]], dtype=np.float32)
+    source_scaler = {
+        "mean": aligned.stories["train"].mean(axis=0),
+        "scale": aligned.stories["train"].std(axis=0),
+        "coordinates": "standardized-v1",
+    }
 
     prepared = _prepare_rank_design(
         aligned=aligned, train_stories=["train"], test_stories=["test"],
-        factor=factor, rank=2, ndelays=2,
+        factor=factor, source_scaler=source_scaler, rank=2, ndelays=2,
     )
 
     np.testing.assert_allclose(prepared[2], prepared[0].pre_fir_stimulus)
     np.testing.assert_allclose(prepared[3], prepared[1].pre_fir_stimulus)
     assert prepared[2].shape == (8, 2)
     np.testing.assert_allclose(prepared[2].mean(axis=0), 0, atol=1e-6)
+    assert not np.allclose(prepared[3].mean(axis=0), 0)
     np.testing.assert_array_equal(prepared[4], factor)
 
 
-@pytest.mark.parametrize("mode", ["fmri_word", "fmri_tr_pre_fir"])
-def test_primary_client_publishes_fmri_results(tmp_path, monkeypatch, mode):
+def test_global_fmri_multiview_rank_factors_apply_to_combined_design(tmp_path):
+    from src.utils.language_interpret.decoding import (
+        _prepare_global_multiview_subspaces,
+    )
+
+    factor_dir = tmp_path / "rank_2"
+    factor_dir.mkdir()
+    factor = np.array([[1.0, 0.0], [0.0, 1.0], [1.0, 1.0]], dtype=np.float32)
+    np.save(factor_dir / "A.npy", factor)
+    design = np.arange(18, dtype=np.float32).reshape(6, 3)
+    config = LanguageDecodingConfig(
+        rank_grid=[2], rrr_source={"mode": "multi_view"}
+    )
+    folds = [(np.array([0, 1, 2]), np.array([3, 4, 5]))]
+
+    prepared = _prepare_global_multiview_subspaces(
+        subspace="rrr",
+        final_factor_paths=[factor_dir / "A.npy"],
+        combined_design=design,
+        selection=np.arange(6),
+        folds=folds,
+        config=config,
+    )
+
+    np.testing.assert_array_equal(prepared[(0, 2)][0], design @ factor)
+    np.testing.assert_array_equal(prepared[(0, 2)][1], factor)
+
+
+@pytest.mark.parametrize("tr_enabled", [False, True])
+def test_primary_client_publishes_fmri_results(tmp_path, monkeypatch, tr_enabled):
     source = RRRArtifact(
         mode="internal", dataset="deep-fmri", offset=0,
         model="gpt2-xl-batch", layer=24, variant="source",
@@ -486,47 +676,56 @@ def test_primary_client_publishes_fmri_results(tmp_path, monkeypatch, mode):
     })
     source.save_field("input_factors", np.eye(2, 1),
                       selector={"method": "rrr", "rank": 1})
+    source.save_field(
+        "input_scalers",
+        {"mean": np.zeros(2), "scale": np.ones(2),
+         "coordinates": "standardized-v1"},
+    )
 
-    def fake_run(config, source_config, factors, output):
-        assert config.mode.value == mode
+    def fake_run(
+        config, source_config, factors, source_scaler, output, artifact=None
+    ):
+        from src.utils.language_interpret.output import DecodingOutput
+        assert config.mode.value == "within_dataset"
+        assert config.fmri_tr_pre_fir is tr_enabled
         assert source_config["fmri"]["ndelays"] == 2
         np.testing.assert_array_equal(factors[("rrr", 1)], np.eye(2, 1))
-        output.mkdir(parents=True)
-        pd.DataFrame({
+        np.testing.assert_array_equal(source_scaler["scale"], np.ones(2))
+        assert artifact is not None
+        writer = DecodingOutput(output, artifact)
+        writer.save("sample_selection", pd.DataFrame({
             "analysis_row": [0], "split": ["test"], "story": ["heldout"],
             "story_tr_index": [0], "tr_time": [1.0],
-        }).to_csv(output / "sample_selection.csv", index=False)
-        (output / "run_metadata.json").write_text(json.dumps({"mode": mode}))
-        metrics = pd.DataFrame([{
+        }))
+        writer.save("run_metadata", {"mode": config.mode.value})
+        metrics = {
             "task": "concreteness", "kind": "continuous", "fold": 0,
             "space": "rank", "subspace": "rrr", "k": 1,
             "primary_score": 0.5, "correlation": 0.5, "r2": 0.1,
-        }])
-        metrics.to_csv(output / "grid_results.csv", index=False)
-        metrics.to_csv(output / "summary.csv", index=False)
-        fit = output / "tasks/concreteness/rrr/k1/fold_0"
-        fit.mkdir(parents=True)
-        (fit / "metrics.json").write_text(metrics.iloc[0].to_json())
-        np.savez(fit / "weights.npz", reduced_weights=np.ones((1, 1)))
-        np.savez(fit / "heldout_predictions.npz", y_true=[0.0], y_pred=[0.0])
-        diagnostics = output / "target_diagnostics/concreteness"
-        diagnostics.mkdir(parents=True)
-        (diagnostics / "metadata.json").write_text(
-            '{"task":"concreteness","normalization":"per_story_zscore"}'
-        )
-        np.savez(diagnostics / "availability.npz", heldout=np.ones(1))
-        np.savez(
-            diagnostics / "targets.npz",
-            filtered__heldout=np.ones((1, 1)),
-            standardized__heldout=np.zeros((1, 1)),
-        )
+        }
+        writer.save("grid_results", pd.DataFrame([metrics]))
+        writer.save("summary", pd.DataFrame([metrics]))
+        writer.save_fit(metrics, {"reduced_weights": np.ones((1, 1))},
+                        {"y_true": np.array([0.0]), "y_pred": np.array([0.0])})
+        writer.save("target_diagnostics", {
+            "task": "concreteness", "normalization": "per_story_zscore",
+        }, {"task": "concreteness", "name": "metadata"})
+        writer.save("target_diagnostics", {"heldout": np.ones(1)},
+                    {"task": "concreteness", "name": "availability"})
+        writer.save("target_diagnostics", {
+            "filtered__heldout": np.ones((1, 1)),
+            "standardized__heldout": np.zeros((1, 1)),
+        }, {"task": "concreteness", "name": "targets"})
+        assert not output.exists()  # No intermediate result files.
         return output
 
     monkeypatch.setattr(
         "src.utils.language_interpret.fmri_decoding.run_fmri_decoding", fake_run
     )
     config = LanguageDecodingConfig(
-        mode=LanguageDecodingMode(mode),
+        mode=LanguageDecodingMode.WITHIN_DATASET,
+        fmri_tr_pre_fir=tr_enabled,
+        encoding=EncodingConfig(dataset="deep-fmri"),
         rrr_source={
             "mode": "internal", "dataset": "deep-fmri", "offset": 0,
             "model": "gpt2-xl-batch", "layer": 24, "variant": "source",
@@ -537,8 +736,12 @@ def test_primary_client_publishes_fmri_results(tmp_path, monkeypatch, mode):
     artifact = run_config(config)
 
     assert isinstance(artifact, DecodingArtifact)
-    assert artifact.identity["mode"] == mode
+    assert artifact.identity["mode"] == "within_dataset"
+    assert ("fmri_tr_pre_fir" in artifact._variant_dir().parts) is tr_enabled
     assert artifact.complete
+    assert (artifact._variant_dir() / "artifact.h5").is_file()
+    assert not list(artifact._variant_dir().rglob("*.npz"))
+    assert not list(artifact._variant_dir().rglob("*.csv"))
     loaded = artifact.load_field("sample_selection")
     assert loaded.loc[0, "story"] == "heldout"
     diagnostics = artifact.load_collection(
@@ -783,7 +986,7 @@ def test_run_subspace_decoding_loads_paths_and_validates_fold_set(
     )
     seen_shapes = []
 
-    def capture_fit(*args):
+    def capture_fit(*args, **kwargs):
         seen_shapes.append((args[4], args[5].shape, args[-1]))
         return {"fold": args[3], "k": args[4], "subspace": args[-1]}
 
@@ -825,6 +1028,48 @@ def test_run_subspace_decoding_loads_paths_and_validates_fold_set(
         )
 
 
+def test_cross_dataset_single_full_fit_factor_is_applied_without_aggregation(
+    tmp_path, monkeypatch
+):
+    unit = tmp_path / "rrr"
+    fold = unit / "fold_0"
+    fold.mkdir(parents=True)
+    factor = np.array([[2.0], [0.5]], dtype=np.float32)
+    np.save(fold / "A.npy", factor)
+    source_mean = np.array([10.0, -2.0], dtype=np.float32)
+    source_scale = np.array([4.0, 2.0], dtype=np.float32)
+    np.savez(fold / "input_scaler.npz", mean=source_mean, scale=source_scale)
+    X = np.array([[1.0, 3.0], [3.0, 7.0], [5.0, 11.0]], dtype=np.float32)
+    folds = [(np.array([0, 1]), np.array([2]))]
+    config = LanguageDecodingConfig(
+        rrr_run_path="unused",
+        mode="cross_dataset",
+        rank_grid=[1],
+        tasks=["surprisal"],
+    )
+    monkeypatch.setattr(
+        "src.utils.language_interpret.decoding.aggregate_subspace_basis",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("a single full-fit factor must not be aggregated")
+        ),
+    )
+
+    prepared = _prepare_single_view_subspaces(
+        subspace="rrr", factor_paths=[fold / "A.npy"], folds=folds, X=X,
+        config=config,
+    )
+
+    q = np.linalg.qr(factor, mode="reduced")[0]
+    if q[0, 0] < 0:
+        q *= -1
+    expected = ((X - source_mean) / source_scale) @ q
+    np.testing.assert_allclose(prepared[(0, 1)][0], expected)
+    np.testing.assert_allclose(prepared[(0, 1)][1], q)
+    np.testing.assert_allclose(
+        prepared[(0, 1)][1].T @ prepared[(0, 1)][1], np.eye(1), atol=1e-6
+    )
+
+
 def test_compose_multiview_factor_preserves_separate_raw_blocks():
     view_a = np.array([[1.0, 0.0], [0.0, 1.0]])
     view_b = np.array([[2.0], [3.0], [4.0]])
@@ -861,8 +1106,10 @@ def test_cross_multiview_decoding_composes_before_aggregation(tmp_path, monkeypa
     }
     captured = []
 
-    def capture_fit(*args):
-        captured.append((args[5].copy(), args[-2].copy()))
+    def capture_fit(*args, **kwargs):
+        captured.append(
+            (args[5].copy(), args[-2].copy(), kwargs["standardize_inputs"])
+        )
         return {"fold": args[3], "k": args[4], "subspace": args[-1]}
 
     monkeypatch.setattr("src.utils.language_interpret.decoding._run_one_fit", capture_fit)
@@ -893,6 +1140,7 @@ def test_cross_multiview_decoding_composes_before_aggregation(tmp_path, monkeypa
         config=config,
     )
     assert len(rows) == 2
-    for design, factor in captured:
+    for design, factor, standardize_inputs in captured:
         np.testing.assert_allclose(np.abs(factor), [[1.0], [0.0]], atol=1e-6)
         np.testing.assert_allclose(np.abs(design[:, 0]), [1.0, 3.0], atol=1e-6)
+        assert standardize_inputs is False

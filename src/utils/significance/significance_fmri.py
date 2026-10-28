@@ -133,6 +133,10 @@ def run_fmri(config: FMRISignificanceConfig):
         train_stories,
         config.layer,
         config.pooling,
+        fmri_repo_root=config.fmri.fmri_repo_root,
+        glove_data_root=config.fmri.glove_data_root,
+        limit_to_glove=config.fmri.limit_to_glove,
+        glove_dim=config.fmri.glove_dim,
     )
     voxel_masks, excluded_by_story = finite_response_voxel_masks(
         config.fmri.fmri_repo_root, config.fmri.subjects, train_stories
@@ -269,6 +273,12 @@ def run_fmri(config: FMRISignificanceConfig):
         "effective_start_trim": 5 + config.fmri.trim,
         "effective_end_trim": config.fmri.trim,
         "ndelays": config.fmri.ndelays,
+        "limit_to_glove": config.fmri.limit_to_glove,
+        "glove_dim": config.fmri.glove_dim,
+        "glove_oov_handling": (
+            "zero_before_lanczos_interpolation"
+            if config.fmri.limit_to_glove else None
+        ),
         "null_method": "independent_within_story_circular_shift",
         "num_null_shifts": config.num_null_shifts,
         "minimal_shift": config.minimal_shift,

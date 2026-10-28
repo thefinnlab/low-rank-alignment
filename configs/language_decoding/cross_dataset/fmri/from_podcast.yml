@@ -1,0 +1,11 @@
+target_dataset: fmri
+num_folds: 5
+# fMRI targets decode words by default; set fmri_tr_pre_fir=true for TR decoding.
+label_offsets: [-1, 0, 1]
+tr_tasks: [speaking_rate]
+source_dataset: podcast
+device: auto
+refresh: false
+tasks: [intensity_rms, surprisal, standardized_entropy, iu_onset, iu_position, sentence_position, part_of_speech, concreteness, content_word, sentence_onset, sentence_end, word_zipf_frequency, word_length, word_duration, pre_word_pause, post_word_pause, dependency_depth, dependency_length, valence, arousal, word_in_previous_5, prior_word_count, distance_from_previous_occurrence, iu_end]
+task_data:
+  language_features: processed_data/language_features/fmri

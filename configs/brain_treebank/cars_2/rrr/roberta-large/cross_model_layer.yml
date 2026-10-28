@@ -2,7 +2,7 @@ dataset: brain_treebank
 mode: internal
 results_root: results
 plot: true
-refresh: true
+refresh: false
 rank_grid:
 - 1
 - 2
@@ -23,42 +23,86 @@ significance_selection:
     offset: 0
     model: roberta-large
     layer: '{layer}'
+    variant: rereference-laplacian
   artifacts:
   - mode: sig_lags
     dataset: brain-treebank-cars-2
     offset: 0
-    model: gpt-j-6b
-    layer: [0, 7, 14, 21, 28]
+    model: gpt2
+    layer:
+    - 0
+    - 3
+    - 6
+    - 9
+    - 12
+    variant: rereference-laplacian
   - mode: sig_lags
     dataset: brain-treebank-cars-2
     offset: 0
     model: gpt2-xl-batch
-    layer: [0, 12, 24, 36, 48]
+    layer:
+    - 0
+    - 12
+    - 24
+    - 36
+    - 48
+    variant: rereference-laplacian
   - mode: sig_lags
     dataset: brain-treebank-cars-2
     offset: 0
-    model: llama3-8b
-    layer: [0, 8, 16, 24, 32]
+    model: gpt-j-6b
+    layer:
+    - 0
+    - 7
+    - 14
+    - 21
+    - 28
+    variant: rereference-laplacian
   - mode: sig_lags
     dataset: brain-treebank-cars-2
     offset: 0
     model: roberta-large
-    layer: [0, 6, 12, 18, 24]
+    layer:
+    - 0
+    - 6
+    - 12
+    - 18
+    - 24
+    variant: rereference-laplacian
   - mode: sig_lags
     dataset: brain-treebank-cars-2
     offset: 0
-    model: random-gpt2-xl
-    layer: [0, 12, 24, 36, 48]
+    model: llama3-8b
+    layer:
+    - 0
+    - 8
+    - 16
+    - 24
+    - 32
+    variant: rereference-laplacian
   - mode: sig_lags
     dataset: brain-treebank-cars-2
     offset: 0
-    model: gpt2
-    layer: [0, 3, 6, 9, 12]
+    model: random-gpt2
+    layer:
+    - 0
+    - 3
+    - 6
+    - 9
+    - 12
+    variant: rereference-laplacian
+  - mode: sig_lags
+    dataset: brain-treebank-cars-2
+    offset: 0
+    model: glove-300
+    layer: null
+    variant: rereference-laplacian
 ieeg:
   encoding:
     data_root: data/brain-treebank
     per_dataset_config:
       movie: cars-2
+      rereference: laplacian
     model: transformer
     offset: 0
     subjects:

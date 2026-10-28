@@ -302,6 +302,35 @@ def select_directions(
 # ---------------------------------------------------------------------------
 
 
+def canonical_qr(A: np.ndarray, B: np.ndarray | None = None):
+    """Orthonormalize A with deterministic signs and optionally preserve A @ B.T."""
+    Q, R = np.linalg.qr(np.asarray(A), mode="reduced")
+    diagonal = np.diag(R)
+    signs = np.where(diagonal < 0, -1.0, 1.0).astype(Q.dtype)
+    Q = Q * signs[np.newaxis, :]
+    R = signs[:, np.newaxis] * R
+    adjusted = None if B is None else np.asarray(B) @ R.T
+    return Q.astype(np.float32), R.astype(np.float32), (
+        None if adjusted is None else adjusted.astype(np.float32)
+    )
+
+
+def orthogonal_rank_factors(A: np.ndarray, B: np.ndarray, rank: int) -> dict:
+    """Truncate ordered RRR factors first, then QR exactly that rank's A."""
+    rank = int(rank)
+    if rank < 1 or rank > min(A.shape[1], B.shape[1]):
+        raise ValueError(
+            f"rank={rank} is unavailable for A={A.shape}, B={B.shape}"
+        )
+    A_k = np.asarray(A)[:, :rank]
+    B_k = np.asarray(B)[:, :rank]
+    Q_k, R_k, B_orth_k = canonical_qr(A_k, B_k)
+    return {
+        "Q": Q_k, "R": R_k, "B_raw": B_k.astype(np.float32),
+        "B_orth": B_orth_k,
+    }
+
+
 def fit_dense_rrr(
     X_proj_train: np.ndarray,
     Y_train: np.ndarray,
@@ -345,9 +374,9 @@ def fit_dense_rrr(
         precomputed_Y_hat_ols: Optional (n_train, n_targets) array of OLS predictions
             on the training set from a saved encoding model. When provided together
             with precomputed_beta_full, the ridge_model path is skipped entirely.
-        precomputed_beta_full: Optional (n_dirs, n_targets) array of unscaled
-            coefficients in the input feature space. Rows are indexed by direction;
-            selected_idx is applied to slice the relevant subset.
+        precomputed_beta_full: Optional (n_dirs, n_targets) coefficient array in
+            the same input coordinates as ``X_proj_train``. Rows are indexed by
+            direction; selected_idx is applied to slice the relevant subset.
         svd_on_cpu: If True, run the SVD on CPU in float64 for improved numerical
             robustness. The resulting singular vectors are converted back to the
             coefficient tensor's device and dtype before constructing the factors.
@@ -363,6 +392,7 @@ def fit_dense_rrr(
         dict with keys:
             A_dense: (n_selected, k)
             B_dense: (n_targets, k), present only when return_b is True
+            singular_values: (k,) singular values of the fitted training predictions
             selected_idx: the input selected_idx
     """
     if device is None:
@@ -373,6 +403,7 @@ def fit_dense_rrr(
     if n_selected == 0:
         result = {
             "A_dense": np.zeros((0, k), dtype=np.float32),
+            "singular_values": np.zeros(k, dtype=np.float32),
             "selected_idx": selected_idx,
         }
         if return_b:
@@ -434,14 +465,17 @@ def fit_dense_rrr(
         fork_devices = [svd_input.device] if svd_input.device.type == "cuda" else []
         with torch.random.fork_rng(devices=fork_devices):
             torch.manual_seed(low_rank_svd_seed)
-            _, _, V = torch.svd_lowrank(svd_input, q=q, niter=2)
+            _, singular_values, V = torch.svd_lowrank(svd_input, q=q, niter=2)
         Vh = V.T
     else:
-        _, _, Vh = torch.linalg.svd(svd_input, full_matrices=False)
+        _, singular_values, Vh = torch.linalg.svd(svd_input, full_matrices=False)
 
     print("Vh:", Vh.shape)
     actual_k = min(k, Vh.shape[0])
     Vh_k = Vh[:actual_k, :].to(device=beta_ols.device, dtype=beta_ols.dtype)
+    retained_singular_values = singular_values[:actual_k].to(
+        device=beta_ols.device, dtype=beta_ols.dtype
+    )
 
     # Step 3: Factor matrices
     # A = beta_ols @ Vh_k^T  (n_selected, actual_k)
@@ -459,14 +493,76 @@ def fit_dense_rrr(
             B_dense = torch.cat(
                 [B_dense, torch.zeros(n_targets, pad, device=device)], dim=1
             )
+        retained_singular_values = torch.cat(
+            [
+                retained_singular_values,
+                torch.zeros(pad, dtype=beta_ols.dtype, device=beta_ols.device),
+            ]
+        )
 
     result = {
         "A_dense": to_numpy(A_dense),
+        "singular_values": to_numpy(retained_singular_values),
         "selected_idx": selected_idx,
     }
     if B_dense is not None:
         result["B_dense"] = to_numpy(B_dense)
     return result
+
+
+def fit_full_rrr(
+    X: np.ndarray,
+    Y: np.ndarray,
+    max_rank: int,
+    *,
+    X_test=None,
+    Y_test=None,
+    alphas=None,
+    alpha_policy=None,
+    ridge_cv_folds: int = 5,
+    ridge_solver_params=None,
+    ridge_y_in_cpu=None,
+    ridge_force_cpu=None,
+    use_low_rank_svd: bool = True,
+    low_rank_svd_seed: int = 0,
+    alpha_context: dict | None = None,
+) -> dict:
+    """Fit the shared full ridge baseline and its maximum-rank RRR factors."""
+    from src.utils.shared.encoding import fit_encoding_baseline
+
+    baseline = fit_encoding_baseline(
+        X, Y, X_test, Y_test,
+        alphas=(None if alphas is None else np.asarray(alphas, dtype=float)),
+        ridge_cv_folds=ridge_cv_folds,
+        ridge_solver_params=ridge_solver_params,
+        ridge_y_in_cpu=ridge_y_in_cpu,
+        ridge_force_cpu=ridge_force_cpu,
+        alpha_policy=alpha_policy,
+        alpha_context=alpha_context,
+    )
+    fitted = fit_dense_rrr(
+        X, baseline["Y_train"], k=max_rank,
+        selected_idx=np.arange(X.shape[1]),
+        precomputed_Y_hat_ols=baseline["Y_hat_full_train"],
+        precomputed_beta_full=baseline["beta_full_raw"],
+        use_low_rank_svd=use_low_rank_svd,
+        low_rank_svd_seed=low_rank_svd_seed,
+        return_b=True,
+    )
+    return {
+        "A_raw": np.asarray(fitted["A_dense"], dtype=np.float32),
+        "B_raw": np.asarray(fitted["B_dense"], dtype=np.float32),
+        "ridge_weights": baseline["beta_full_raw"],
+        "ridge_intercept": baseline["ridge_intercept"],
+        "full_prediction": baseline["Y_hat_full_train"],
+        "full_prediction_test": baseline["Y_hat_full_test"],
+        "Y_train": baseline["Y_train"],
+        "Y_test": baseline["Y_test"],
+        "target_mean": baseline["target_mean"],
+        "target_scale": baseline["target_scale"],
+        "alpha_grid": baseline["alpha_grid"],
+        "best_alphas": baseline["best_alphas"],
+    }
 
 
 def predict_from_factors(
@@ -861,4 +957,3 @@ def find_knee_lambda(
         )
 
     return float(lambdas[int(np.argmax(r2))])
-

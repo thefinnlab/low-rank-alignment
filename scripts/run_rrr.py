@@ -66,7 +66,8 @@ class Config:
     )
     rrr_source: dict | None = None
     views: list[dict] = field(default_factory=list)
-    subspace_aggregation: str = "extrinsic"
+    multi_view_name: str | None = None
+    subspace_aggregation: str | None = None
     ieeg: dict | None = field(default_factory=dict)
     fmri: dict | None = None
 
@@ -83,13 +84,20 @@ class Config:
             raise ValueError(f"dataset={self.dataset!r} requires a {self.modality} block")
         if inactive not in (None, {}):
             raise ValueError("Only the dataset-selected modality block may be configured")
-        shared = {ScriptMode.INTERNAL, ScriptMode.CROSS_DATASET}
+        shared = {
+            ScriptMode.INTERNAL,
+            ScriptMode.CROSS_DATASET,
+            ScriptMode.LEAVE_ONE_SUBJECT_OUT,
+            ScriptMode.MULTI_VIEW,
+        }
         if self.modality == "fmri" and self.mode not in shared:
             raise ValueError(f"RRR mode {self.mode.value!r} is unsupported for fMRI")
         if self.mode in {
             ScriptMode.CROSS_DATASET, ScriptMode.CROSS_TEMPORAL_WINDOWS
         } and not self.rrr_source:
             raise ValueError(f"mode={self.mode.value} requires rrr_source")
+        if self.mode == ScriptMode.MULTI_VIEW and not self.multi_view_name:
+            raise ValueError("mode=multi_view requires multi_view_name")
         if not self.rank_grid or any(int(rank) < 1 for rank in self.rank_grid):
             raise ValueError("rank_grid must contain positive integers")
 
@@ -102,34 +110,21 @@ class Config:
         payload = deepcopy(self.fmri if self.modality == "fmri" else self.ieeg) or {}
         if self.modality == "fmri" and "data" in payload:
             payload["fmri"] = payload.pop("data")
+        aggregation = self.subspace_aggregation
+        if (
+            aggregation is None
+            and self.modality == "fmri"
+            and self.mode in {ScriptMode.INTERNAL, ScriptMode.MULTI_VIEW}
+        ):
+            aggregation = "prediction_weighted"
         payload.update({
             "results_root": self.results_root,
             "plot": self.plot,
             "refresh": self.refresh,
             "rank_grid": self.rank_grid,
             "significance_selection": deepcopy(self.significance_selection),
-            "subspace_aggregation": self.subspace_aggregation,
+            "subspace_aggregation": aggregation,
         })
-        if self.modality == "fmri":
-            payload["source_mode"] = (
-                "within_fmri" if self.mode == ScriptMode.INTERNAL else "cross_dataset"
-            )
-            if self.rrr_source:
-                if _is_fmri(self.rrr_source.get("dataset")):
-                    raise ValueError("fMRI cross-dataset RRR requires an iEEG rrr_source")
-                payload["ieeg_rrr_source"] = self._legacy_source(self.rrr_source)
-            return _strict_branch(payload, FMRICrossDatasetRRRConfig)
-
-        payload.setdefault("encoding", {})["dataset"] = self.dataset
-        payload["mode"] = (
-            ScriptMode.CROSS_SUBJECT if self.mode == ScriptMode.INTERNAL else self.mode
-        )
-        if self.rrr_source:
-            key = "fmri_rrr_source" if _is_fmri(self.rrr_source.get("dataset")) else "ieeg_rrr_source"
-            payload[key] = self._legacy_source(self.rrr_source)
-            payload["cross_source_format"] = (
-                "rank_bases" if key == "fmri_rrr_source" else "fold_factors"
-            )
         converted_views = []
         for view in self.views:
             item = {key: deepcopy(value) for key, value in view.items() if key != "source"}
@@ -140,6 +135,36 @@ class Config:
                  else "ieeg_rrr_source"] = deepcopy(source)
             converted_views.append(item)
         payload["views"] = converted_views
+        payload["multi_view_name"] = self.multi_view_name
+        if self.modality == "fmri":
+            payload["source_mode"] = {
+                ScriptMode.INTERNAL: "within_fmri",
+                ScriptMode.CROSS_DATASET: "cross_dataset",
+                ScriptMode.LEAVE_ONE_SUBJECT_OUT: "leave_one_subject_out",
+                ScriptMode.MULTI_VIEW: "multi_view",
+            }[self.mode]
+            if self.rrr_source:
+                if _is_fmri(self.rrr_source.get("dataset")):
+                    raise ValueError("fMRI cross-dataset RRR requires an iEEG rrr_source")
+                payload["ieeg_rrr_source"] = self._legacy_source(self.rrr_source)
+            return _strict_branch(payload, FMRICrossDatasetRRRConfig)
+
+        payload.setdefault("encoding", {})["dataset"] = self.dataset
+        payload["multi_view_name"] = self.multi_view_name
+        payload["mode"] = (
+            ScriptMode.CROSS_SUBJECT if self.mode == ScriptMode.INTERNAL else self.mode
+        )
+        if self.rrr_source:
+            key = "fmri_rrr_source" if _is_fmri(self.rrr_source.get("dataset")) else "ieeg_rrr_source"
+            payload[key] = self._legacy_source(self.rrr_source)
+            if (
+                key == "fmri_rrr_source"
+                and payload[key].get("subspace_aggregation") is None
+            ):
+                payload[key]["subspace_aggregation"] = "prediction_weighted"
+            payload["cross_source_format"] = (
+                "rank_bases" if key == "fmri_rrr_source" else "fold_factors"
+            )
         return _strict_branch(payload, RRRConfig)
 
 
@@ -163,15 +188,18 @@ class Artifact(ArtifactStore):
     """Unified storage and loading contract for iEEG and fMRI RRR results."""
 
     SCRIPT = "run_rrr"
+    COMPACT_STORAGE = True
     SELECTOR_ORDER = (
         "subject", "method", "region", "temporal_window", "source_temporal_window",
-        "target_temporal_window", "held_out_subject",
-        "loso_phase", "cross_dataset_source", "basis", "delay", "rank", "fold",
+        "target_temporal_window", "held_out_subject", "loso_phase",
+        "cross_dataset_source", "basis", "delay",
+        "rank", "fold",
         "name",
     )
     FIELD_CONTRACT = {
         "effective_config": True, "upstream_identities": True,
         "target_manifest": True, "input_factors": False,
+        "input_scalers": False,
         "target_factors": False, "full_metrics": True,
         "rank_metrics": True, "fold_results": False, "mean_results": True,
         "metadata": False, "unit_metadata": False, "diagnostics": False,
@@ -180,18 +208,52 @@ class Artifact(ArtifactStore):
 
     def __init__(self, *, mode="internal", dataset="podcast", offset=0,
                  model="gpt2-xl", layer=24, variant=None,
-                 significance_selection=None, results_root="results"):
-        if variant is not None and significance_selection is not None:
+                 significance_selection=None, subspace_aggregation=None,
+                 rereference=None, results_root="results"):
+        if variant is not None and (
+            significance_selection is not None
+            or subspace_aggregation is not None
+            or rereference is not None
+        ):
             raise ValueError(
-                "RRR Artifact variant and significance_selection are mutually exclusive"
+                "RRR Artifact variant is mutually exclusive with "
+                "significance_selection, subspace_aggregation, and rereference"
             )
-        if significance_selection is not None:
+        if (
+            significance_selection is not None
+            or subspace_aggregation is not None
+            or rereference is not None
+        ):
+            extras = {}
+            if rereference not in (None, "common_average"):
+                extras["rereference"] = rereference
+            if dataset == "deep-fmri":
+                extras["input_scaling"] = "pooled-training-stories-v1"
+            if mode == "cross_dataset":
+                extras["transfer_scaling"] = (
+                    "source-then-target-reduced-pre-fir-v1"
+                    if dataset == "deep-fmri"
+                    else "source-then-target-reduced-v1"
+                )
             variant = readable_variant(
-                {"significance_selection": significance_selection}
+                {
+                    "significance_selection": significance_selection,
+                    "subspace_aggregation": subspace_aggregation,
+                },
+                extras=extras or None,
             )
         self._init_store(mode=mode, dataset=dataset, offset=offset, model=model,
                          layer=layer, variant=variant, results_root=results_root)
+        if mode == "full_fit":
+            self.FIELD_CONTRACT = {
+                **type(self).FIELD_CONTRACT,
+                "full_metrics": False,
+                "rank_metrics": False,
+                "mean_results": False,
+            }
         self.requested_significance_selection = significance_selection
+        self.requested_subspace_aggregation = subspace_aggregation
+        self.requested_rereference = rereference
 
     def _manifest(self):
         manifest = super()._manifest()
@@ -209,33 +271,96 @@ class Artifact(ArtifactStore):
                     "Selected RRR Artifact significance_selection does not match "
                     "the requested selection"
                 )
+        if self.requested_subspace_aggregation is not None:
+            saved = manifest.get("configuration", {}).get(
+                "subspace_aggregation", "extrinsic"
+            )
+            if saved != self.requested_subspace_aggregation:
+                raise ArtifactError(
+                    "Selected RRR Artifact subspace_aggregation does not match "
+                    "the requested method"
+                )
+        if self.requested_rereference is not None:
+            saved = (
+                manifest.get("configuration", {})
+                .get("encoding", {})
+                .get("per_dataset_config", {})
+                .get("rereference", "common_average")
+            )
+            if saved != self.requested_rereference:
+                raise ArtifactError(
+                    "Selected RRR Artifact rereference does not match the "
+                    "requested mode"
+                )
         return manifest
 
     @classmethod
     def from_ieeg_config(cls, config, dataset_context):
         enc = config.encoding
-        model = enc.per_model_config.get("model_dir", enc.model)
+        is_multi_view = config.mode == ScriptMode.MULTI_VIEW
+        model = (
+            config.multi_view_name
+            if is_multi_view
+            else enc.per_model_config.get("model_dir", enc.model)
+        )
         mode = "internal" if config.mode == ScriptMode.CROSS_SUBJECT else config.mode.value
+        selected_rereference = getattr(dataset_context, "rereference", None)
         artifact = cls(
             mode=mode,
             dataset=normalize_dataset(enc.dataset, dataset_context.stimulus_id),
             offset=enc.offset,
             model=normalize_model(model, glove_dim=enc.per_model_config.get("dim")),
-            layer=None if enc.model == "glove" else enc.per_model_config.get("layer"),
+            layer=(
+                None
+                if is_multi_view or enc.model == "glove"
+                else enc.per_model_config.get("layer")
+            ),
+            significance_selection=(
+                config.significance_selection if is_multi_view else None
+            ),
+            subspace_aggregation=(
+                config.subspace_aggregation if is_multi_view else None
+            ),
+            rereference=(selected_rereference if is_multi_view else None),
             results_root=config.results_root,
         )
-        artifact.variant_extras = (
-            {"atlas": config.atlas_path.rsplit("/", 1)[-1].rsplit(".", 1)[0]}
-            if config.atlas_path else {}
-        )
+        artifact.variant_extras = {}
+        rereference = selected_rereference
+        if rereference not in (None, "common_average"):
+            artifact.variant_extras["rereference"] = rereference
+        if config.mode == ScriptMode.LEAVE_ONE_SUBJECT_OUT:
+            artifact.variant_extras["loso_contract"] = "orthogonal-held-out-v2"
+        if config.mode == ScriptMode.CROSS_DATASET:
+            artifact.variant_extras["transfer_scaling"] = "source-then-target-reduced-v1"
         return artifact
 
     @classmethod
     def from_fmri_config(cls, config):
         mode = "internal" if config.source_mode == "within_fmri" else config.source_mode
-        return cls(mode=mode, dataset="deep-fmri", offset=0,
-                   model=normalize_model(config.model_dir), layer=config.layer,
-                   results_root=config.results_root)
+        is_multi_view = config.source_mode == "multi_view"
+        artifact = cls(
+            mode=mode,
+            dataset="deep-fmri",
+            offset=0,
+            model=(config.multi_view_name if is_multi_view
+                   else normalize_model(config.model_dir)),
+            layer=None if is_multi_view else config.layer,
+            significance_selection=(config.significance_selection if is_multi_view else None),
+            subspace_aggregation=(config.subspace_aggregation if is_multi_view else None),
+            results_root=config.results_root,
+        )
+        artifact.variant_extras = {
+            "input_scaling": "pooled-training-stories-v1",
+        }
+        if is_multi_view:
+            artifact.variant_extras["multiview-fir"] = "view-delay-v1"
+        if config.source_mode == "cross_dataset":
+            artifact.variant_extras["transfer_scaling"] = (
+                "source-then-target-reduced-pre-fir-v1"
+            )
+        if config.source_mode == "leave_one_subject_out":
+            artifact.variant_extras["loso_contract"] = "orthogonal-held-out-fmri-v1"
+        return artifact
 
     @staticmethod
     def _selector(unit=None, **extra):
@@ -245,15 +370,51 @@ class Artifact(ArtifactStore):
 
     def save_factors(self, *, unit=None, fold=None, method=None, rank=None,
                      input_factors=None, factors=None, target_factors=None,
-                     delay=None, basis=None, overwrite=False):
+                     input_scaler=None, delay=None, basis=None, overwrite=False):
         value = input_factors if input_factors is not None else factors
         selector = self._selector(
             unit, fold=fold, method=method, rank=rank, delay=delay, basis=basis
         )
         self.save_field("input_factors", value, selector=selector, overwrite=overwrite)
+        if input_scaler is not None:
+            self.save_field(
+                "input_scalers", input_scaler, selector=selector, overwrite=overwrite
+            )
         if target_factors is not None:
             self.save_field("target_factors", target_factors, selector=selector,
                             overwrite=overwrite)
+
+    @staticmethod
+    def _input_scaler_selectors(factor_selector):
+        """Resolve legacy factor-local scalers before the shared source scaler."""
+        selector = dict(factor_selector or {})
+        candidates = [selector]
+        if "rank" in selector:
+            # Old rank-producing artifacts sometimes stored one scaler per method.
+            candidates.append({key: value for key, value in selector.items()
+                               if key != "rank"})
+        # Current full-fit/fMRI artifacts store the one ambient scaler globally:
+        # rank and method branch only after this transformation has been applied.
+        candidates.append({})
+        unique = []
+        for candidate in candidates:
+            if candidate not in unique:
+                unique.append(candidate)
+        return unique
+
+    def has_input_scaler(self, factor_selector=None):
+        return any(
+            self.has_field("input_scalers", selector=selector)
+            for selector in self._input_scaler_selectors(factor_selector)
+        )
+
+    def load_input_scaler(self, factor_selector=None):
+        for selector in self._input_scaler_selectors(factor_selector):
+            if self.has_field("input_scalers", selector=selector):
+                return self.load_field("input_scalers", selector=selector)
+        raise KeyError(
+            f"Artifact has no input scaler for factor selector {factor_selector or {}}"
+        )
 
     def load_input_factors(self, method="rrr", rank=None, selectors=None):
         filters = dict(selectors or {})
@@ -286,6 +447,8 @@ class Artifact(ArtifactStore):
     def load_factors(self, *, unit, fold):
         selector = self._selector(unit, fold=int(fold))
         result = {"input_factors": self.load_field("input_factors", selector=selector)}
+        if self.has_input_scaler(selector):
+            result["input_scaler"] = self.load_input_scaler(selector)
         if self.has_field("target_factors", selector=selector):
             result["target_factors"] = self.load_field("target_factors", selector=selector)
         return result
@@ -304,8 +467,12 @@ class Artifact(ArtifactStore):
         primary = "pca" if method == "pca" else "nr"
         if "corr" not in frame and f"{primary}_corr" in frame:
             frame["corr"] = frame[f"{primary}_corr"]
+        if "corr" not in frame and f"{primary}_orth_corr" in frame:
+            frame["corr"] = frame[f"{primary}_orth_corr"]
         if "r2" not in frame and f"{primary}_r2" in frame:
             frame["r2"] = frame[f"{primary}_r2"]
+        if "r2" not in frame and f"{primary}_orth_r2" in frame:
+            frame["r2"] = frame[f"{primary}_orth_r2"]
         self.save_mean_results(results=frame, unit=unit, overwrite=overwrite)
 
     def save_fold_results(self, *, results, unit=None, overwrite=False):
@@ -348,6 +515,8 @@ class Artifact(ArtifactStore):
             factor_selector = self._selector(unit, fold=int(fold))
             factors = (not require_input_factors or
                        self.has_field("input_factors", selector=factor_selector))
+            if factors and require_input_factors:
+                factors = self.has_input_scaler(factor_selector)
             targets = (not require_target_factors or
                        self.has_field("target_factors", selector=factor_selector))
             for rank in ranks:

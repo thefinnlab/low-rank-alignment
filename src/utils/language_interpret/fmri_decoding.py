@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
@@ -14,7 +13,7 @@ from sklearn.metrics import r2_score
 from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import StandardScaler
 
-from src.core.config import LanguageDecodingConfig, LanguageDecodingMode
+from src.core.config import FMRICrossDatasetRRRConfig, LanguageDecodingConfig
 from src.utils.language_interpret.decoding import (
     _configure_decoder_backend,
     _decoder_metrics,
@@ -24,11 +23,14 @@ from src.utils.language_interpret.decoding import (
     plot_language_decoding,
     summarize_language_decoding,
 )
-from src.utils.language_interpret.tasks import get_language_task
+from src.utils.language_interpret.tasks import get_language_task, offset_word_labels
+from src.utils.language_interpret.output import DecodingOutput, fit_selector
+from src.utils.rrr.core import canonical_qr
 from src.utils.shared.correlation import fisher_z_mean_sem
 from src.utils.shared.constants import RIDGE_ALPHAS
 from src.utils.shared.fmri import (
     _toolbox_modules,
+    apply_embedding_scaler,
     align_fmri_stimuli,
     build_fmri_stimulus,
     load_story_embeddings,
@@ -37,6 +39,31 @@ from src.utils.shared.fmri import (
     session_cv_splits,
 )
 from src.utils.shared.tensors import to_numpy
+from src.utils.shared.config import dict_to_dataclass
+
+
+def _is_multiview_source(source_config: dict) -> bool:
+    return source_config.get("source_mode") == "multi_view"
+
+
+def _task_model_dir(config: LanguageDecodingConfig, source_config: dict) -> str:
+    return str(
+        config.encoding.per_model_config.get(
+            "model_dir", source_config.get("model_dir", "gpt2-xl")
+        )
+    )
+
+
+def _multiview_components(source_config: dict):
+    from src.utils.rrr.multiview import (
+        load_global_view_transforms,
+        resolve_rrr_views,
+    )
+
+    selected = dict_to_dataclass(source_config, FMRICrossDatasetRRRConfig)
+    resolved = resolve_rrr_views(selected)
+    factors, scalers, _ = load_global_view_transforms(selected, resolved)
+    return selected, resolved, factors, scalers
 
 
 @dataclass
@@ -131,6 +158,31 @@ def build_tr_targets(
     result = {}
     for task in tasks:
         spec = get_language_task(task)
+        if task == "speaking_rate":
+            filtered = {}
+            standardized = {}
+            availability = {}
+            for story in stories:
+                centers = np.asarray(sequences[story].tr_times, dtype=float)
+                intervals = np.diff(centers)
+                if len(intervals) == 0 or not np.all(intervals > 0) or not np.allclose(intervals, intervals[0]):
+                    raise ValueError("Speaking rate requires a regular increasing TR grid")
+                duration = float(intervals[0])
+                # TR times are acquisition-interval centers. Count actual word
+                # onsets, not the midpoint timestamps used for interpolation.
+                edges = np.r_[centers - duration / 2, centers[-1] + duration / 2]
+                onsets = pd.to_numeric(frames[story]["start"], errors="coerce").to_numpy(float)
+                if not np.isfinite(onsets).all():
+                    raise ValueError(f"Speaking rate requires finite word onsets in {story}")
+                # All bins are left-inclusive/right-exclusive, including the last.
+                counts, _ = np.histogram(onsets[(onsets >= edges[0]) & (onsets < edges[-1])], bins=edges)
+                stop = -int(trim) if trim else None
+                values = (counts / duration)[5 + int(trim):stop, None].astype(np.float32)
+                filtered[story] = values
+                standardized[story] = _story_zscore(values)
+                availability[story] = np.ones(len(values), dtype=np.float32)
+            result[task] = TRTarget(standardized, filtered, availability, np.array([], dtype=str))
+            continue
         tables = {}
         for story in stories:
             table = _task_table(story, task, task_data, model_dir)
@@ -209,10 +261,13 @@ def build_word_targets(
     tasks: list[str],
     task_data: dict,
     model_dir: str,
+    label_offset: int = 0,
 ) -> dict[str, WordTarget]:
     """Load word-aligned targets while preserving task-specific missing rows."""
     result = {}
     for task in tasks:
+        if task == "speaking_rate":
+            raise ValueError("speaking_rate requires fmri_tr_pre_fir=true")
         spec = get_language_task(task)
         tables = {}
         for story in stories:
@@ -243,8 +298,9 @@ def build_word_targets(
                 available = labels != ""
                 values = np.full(len(labels), np.nan, dtype=float)
                 values[available] = [class_index[label] for label in labels[available]]
+            values = offset_word_labels(values, label_offset)
             values_by_story[story] = values
-            availability_by_story[story] = available
+            availability_by_story[story] = np.isfinite(values)
         result[task] = WordTarget(
             values=values_by_story,
             availability=availability_by_story,
@@ -410,6 +466,7 @@ def _fit_fmri_continuous_decoder(
     y_train: np.ndarray,
     config: LanguageDecodingConfig,
     cv: list[tuple[np.ndarray, np.ndarray]],
+    standardize_inputs: bool = True,
 ):
     """Fit primal ridge CV without materializing sample-by-sample kernels."""
     model = SklearnRidgeCV(
@@ -418,7 +475,11 @@ def _fit_fmri_continuous_decoder(
         fit_intercept=True,
         scoring="neg_mean_squared_error",
     )
-    pipeline = make_pipeline(StandardScaler(), model)
+    pipeline = (
+        make_pipeline(StandardScaler(), model)
+        if standardize_inputs
+        else make_pipeline(model)
+    )
     pipeline.fit(X_train, np.asarray(y_train).reshape(-1))
     # Normalize sklearn's scalar selection to the shared decoder payload contract.
     model.best_alphas_ = np.atleast_1d(model.alpha_)
@@ -431,6 +492,7 @@ def _prepare_rank_design(
     train_stories: list[str],
     test_stories: list[str],
     factor: np.ndarray,
+    source_scaler: dict,
     rank: int,
     ndelays: int,
 ):
@@ -443,10 +505,12 @@ def _prepare_rank_design(
             f"expected {(ambient_dim, int(rank))}"
         )
     train = build_fmri_stimulus(
-        aligned, train_stories, ndelays=int(ndelays), basis=factor
+        aligned, train_stories, ndelays=int(ndelays), basis=factor,
+        input_scaler=source_scaler,
     )
     test = build_fmri_stimulus(
-        aligned, test_stories, ndelays=int(ndelays), basis=factor
+        aligned, test_stories, ndelays=int(ndelays), basis=factor,
+        input_scaler=source_scaler,
     )
     return train, test, train.pre_fir_stimulus, test.pre_fir_stimulus, factor
 
@@ -455,11 +519,13 @@ def run_fmri_word_decoding(
     config: LanguageDecodingConfig,
     source_config: dict,
     factors: dict[tuple[str, int], np.ndarray],
+    source_scaler: dict,
     output_dir: Path,
+    artifact=None,
 ) -> Path:
     """Decode held-out fMRI transcript words from projected word embeddings."""
-    if config.mode != LanguageDecodingMode.FMRI_WORD:
-        raise ValueError(f"Unsupported fMRI word decoding mode: {config.mode}")
+    if config.fmri_tr_pre_fir:
+        raise ValueError("Word decoding requires fmri_tr_pre_fir=false")
     _configure_decoder_backend(config.device)
     fmri = source_config["fmri"]
     train_stories, test_stories, groups = resolve_fmri_stories(
@@ -472,14 +538,34 @@ def run_fmri_word_decoding(
     embedding_cache = tempfile.TemporaryDirectory(prefix="fmri-word-embeddings-")
     embedding_paths = {}
     ambient_dim = None
+    multiview_words = None
+    if _is_multiview_source(source_config):
+        from src.utils.rrr.fmri_rrr_mode.multi_view import (
+            load_projected_fmri_word_views,
+        )
+
+        selected, resolved, components, component_scalers = _multiview_components(
+            source_config
+        )
+        multiview_words = load_projected_fmri_word_views(
+            selected, resolved, components, component_scalers, stories
+        )
     for story in stories:
-        embedding = load_story_embeddings(
-            fmri["embedding_root"],
-            source_config["model_dir"],
-            [story],
-            source_config["layer"],
-            source_config.get("pooling", "mean"),
-        )[story]
+        embedding = (
+            multiview_words[story]
+            if multiview_words is not None
+            else load_story_embeddings(
+                fmri["embedding_root"],
+                source_config["model_dir"],
+                [story],
+                source_config["layer"],
+                source_config.get("pooling", "mean"),
+                fmri_repo_root=fmri["fmri_repo_root"],
+                glove_data_root=fmri.get("glove_data_root", "data"),
+                limit_to_glove=bool(fmri.get("limit_to_glove", False)),
+                glove_dim=int(fmri.get("glove_dim", 300)),
+            )[story]
+        )
         if len(embedding) != len(frames[story]):
             raise ValueError(f"Embedding/transcript alignment failed for {story}")
         if ambient_dim is None:
@@ -497,35 +583,25 @@ def run_fmri_word_decoding(
         frames=frames,
         tasks=config.tasks,
         task_data=config.task_data,
-        model_dir=source_config["model_dir"],
+        model_dir=_task_model_dir(config, source_config),
+        label_offset=config.label_offset,
     )
 
     output_dir.mkdir(parents=True, exist_ok=True)
-    _word_sample_selection(stories, train_stories, frames).to_csv(
-        output_dir / "sample_selection.csv", index=False
-    )
+    writer = DecodingOutput(output_dir, artifact, config.refresh)
+    writer.save("sample_selection", _word_sample_selection(stories, train_stories, frames))
     for task, target in targets.items():
-        target_dir = output_dir / "target_diagnostics" / task
-        target_dir.mkdir(parents=True, exist_ok=True)
-        np.savez_compressed(
-            target_dir / "availability.npz",
-            **{
-                story: values.astype(np.uint8)
-                for story, values in target.availability.items()
-            },
-        )
-        np.savez_compressed(
-            target_dir / "targets.npz",
-            **{story: values for story, values in target.values.items()},
-        )
-        (target_dir / "metadata.json").write_text(json.dumps({
-            "task": task,
-            "kind": get_language_task(task).kind,
-            "classes": target.classes.tolist(),
-            "normalization": "none",
+        writer.save("target_diagnostics", {
+            story: values.astype(np.uint8) for story, values in target.availability.items()
+        }, {"task": task, "name": "availability"})
+        writer.save("target_diagnostics", target.values, {"task": task, "name": "targets"})
+        writer.save("target_diagnostics", {
+            "task": task, "kind": get_language_task(task).kind,
+            "classes": target.classes.tolist(), "normalization": "none",
             "missing_values": "drop_per_task",
-        }, indent=2))
+        }, {"task": task, "name": "metadata"})
 
+    directed = config.fmri_target_artifact is not None
     rows = []
     for (method, rank), factor in sorted(factors.items()):
         factor = np.asarray(factor, dtype=np.float32)
@@ -534,17 +610,26 @@ def run_fmri_word_decoding(
                 f"{method.upper()} rank {rank} factor has shape {factor.shape}; "
                 f"expected {(ambient_dim, int(rank))}"
             )
+        if directed:
+            factor = canonical_qr(factor)[0].astype(np.float32, copy=False)
         # Project before stacking to avoid a second full ambient-dimensional copy
         # of every training story.
         X_train = np.vstack([
             np.asarray(
-                np.load(embedding_paths[story], mmap_mode="r") @ factor,
+                apply_embedding_scaler(
+                    np.load(embedding_paths[story], mmap_mode="r"), source_scaler
+                )
+                @ factor,
                 dtype=np.float32,
             )
             for story in train_stories
         ])
         X_test = np.asarray(
-            np.load(embedding_paths[test_stories[0]], mmap_mode="r") @ factor,
+            apply_embedding_scaler(
+                np.load(embedding_paths[test_stories[0]], mmap_mode="r"),
+                source_scaler,
+            )
+            @ factor,
             dtype=np.float32,
         )
         for task in config.tasks:
@@ -559,12 +644,13 @@ def run_fmri_word_decoding(
             cv = _word_session_cv(train_stories, frames, groups, train_valid)
             if spec.kind == "continuous":
                 pipeline = _fit_fmri_continuous_decoder(
-                    X_train[train_valid], y_train[train_valid], config, cv
+                    X_train[train_valid], y_train[train_valid], config, cv,
+                    standardize_inputs=not directed,
                 )
             else:
                 pipeline = _fit_decoder(
                     X_train[train_valid], y_train[train_valid], spec.kind,
-                    config, cv=cv,
+                    config, cv=cv, standardize_inputs=not directed,
                 )
             prediction = np.asarray(to_numpy(pipeline.predict(X_test[test_valid])))
             metrics = {
@@ -582,41 +668,40 @@ def run_fmri_word_decoding(
                 ),
                 **_decoder_metrics(spec.kind, y_test[test_valid], prediction),
             }
-            artifact_dir = (
-                output_dir / "tasks" / task / method / f"k{rank}" / "fold_0"
-            )
-            artifact_dir.mkdir(parents=True, exist_ok=True)
-            np.savez(
-                artifact_dir / "weights.npz", **_weight_payload(pipeline, factor)
-            )
-            np.savez_compressed(
-                artifact_dir / "heldout_predictions.npz",
-                y_true=np.asarray(y_test[test_valid]),
-                y_pred=prediction,
-                row_index=np.flatnonzero(test_valid),
-                block_id=np.repeat(test_stories[0], int(test_valid.sum())),
-                classes=target.classes,
-            )
-            (artifact_dir / "metrics.json").write_text(
-                json.dumps(metrics, indent=2, allow_nan=True)
-            )
+            writer.save_fit(metrics, _weight_payload(pipeline, factor), {
+                "y_true": np.asarray(y_test[test_valid]), "y_pred": prediction,
+                "row_index": np.flatnonzero(test_valid),
+                "block_id": np.repeat(test_stories[0], int(test_valid.sum())),
+                "classes": target.classes,
+            })
             rows.append(metrics)
     embedding_cache.cleanup()
 
     results = pd.DataFrame(rows)
-    results.to_csv(output_dir / "grid_results.csv", index=False)
+    writer.save("grid_results", results)
     summary = summarize_language_decoding(results)
-    summary.to_csv(output_dir / "summary.csv", index=False)
+    writer.save("summary", summary)
     plot_language_decoding(summary, output_dir / "rank_analysis.png")
-    (output_dir / "run_metadata.json").write_text(json.dumps({
+    metadata = {
         "mode": config.mode.value,
         "train_stories": train_stories,
         "test_story": test_stories[0],
         "analysis_unit": "word",
-        "input_representation": "pooled_word_embeddings_projected_to_saved_basis",
+        "input_representation": (
+            "pooled_word_embeddings_source_standardized_qr_projected_unscaled"
+            if directed
+            else "pooled_word_embeddings_source_standardized_then_projected"
+        ),
         "target_representation": "raw_word_aligned_feature",
         "continuous_decoder": "primal_ridge_cv_neg_mean_squared_error",
-    }, indent=2))
+    }
+    if artifact is not None:
+        upstreams = artifact.load_field("upstream_identities")
+        metadata["rrr_source"] = upstreams[0]
+        if len(upstreams) > 1:
+            metadata["fmri_target_artifact"] = upstreams[1]
+    writer.save("run_metadata", metadata)
+    writer.save_plot(output_dir / "rank_analysis.png")
     return output_dir
 
 
@@ -624,25 +709,31 @@ def run_fmri_decoding(
     config: LanguageDecodingConfig,
     source_config: dict,
     factors: dict[tuple[str, int], np.ndarray],
+    source_scaler: dict,
     output_dir: Path,
+    artifact=None,
 ) -> Path:
     """Dispatch one primary fMRI language-decoding mode."""
-    if config.mode == LanguageDecodingMode.FMRI_WORD:
-        return run_fmri_word_decoding(config, source_config, factors, output_dir)
-    if config.mode == LanguageDecodingMode.FMRI_TR_PRE_FIR:
-        return run_fmri_tr_decoding(config, source_config, factors, output_dir)
-    raise ValueError(f"Unsupported fMRI language-decoding mode: {config.mode}")
+    if config.fmri_tr_pre_fir:
+        return run_fmri_tr_decoding(
+            config, source_config, factors, source_scaler, output_dir, artifact
+        )
+    return run_fmri_word_decoding(
+        config, source_config, factors, source_scaler, output_dir, artifact
+    )
 
 
 def run_fmri_tr_decoding(
     config: LanguageDecodingConfig,
     source_config: dict,
     factors: dict[tuple[str, int], np.ndarray],
+    source_scaler: dict,
     output_dir: Path,
+    artifact=None,
 ) -> Path:
     """Run one held-out-story fMRI TR decoding sweep into a staging directory."""
-    if config.mode != LanguageDecodingMode.FMRI_TR_PRE_FIR:
-        raise ValueError(f"Unsupported fMRI TR decoding mode: {config.mode}")
+    if not config.fmri_tr_pre_fir:
+        raise ValueError("TR decoding requires fmri_tr_pre_fir=true")
     _configure_decoder_backend(config.device)
     fmri = source_config["fmri"]
     train_stories, test_stories, groups = resolve_fmri_stories(
@@ -651,27 +742,41 @@ def run_fmri_tr_decoding(
     if len(test_stories) != 1:
         raise ValueError(f"Expected one held-out fMRI story, got {test_stories}")
     stories = train_stories + test_stories
-    embeddings = load_story_embeddings(
-        fmri["embedding_root"],
-        source_config["model_dir"],
-        stories,
-        source_config["layer"],
-        source_config.get("pooling", "mean"),
-    )
     frames, sequences = load_story_word_data(fmri["fmri_repo_root"], stories)
-    for story in stories:
-        if len(embeddings[story]) != len(frames[story]):
-            raise ValueError(f"Embedding/transcript alignment failed for {story}")
-    aligned = align_fmri_stimuli(
-        fmri["fmri_repo_root"], stories, embeddings, trim=int(fmri["trim"])
-    )
+    if _is_multiview_source(source_config):
+        from src.utils.rrr.fmri_rrr_mode.multi_view import load_projected_fmri_views
+
+        selected, resolved, components, component_scalers = _multiview_components(
+            source_config
+        )
+        aligned = load_projected_fmri_views(
+            selected, resolved, components, component_scalers, stories
+        )
+    else:
+        embeddings = load_story_embeddings(
+            fmri["embedding_root"],
+            source_config["model_dir"],
+            stories,
+            source_config["layer"],
+            source_config.get("pooling", "mean"),
+            fmri_repo_root=fmri["fmri_repo_root"],
+            glove_data_root=fmri.get("glove_data_root", "data"),
+            limit_to_glove=bool(fmri.get("limit_to_glove", False)),
+            glove_dim=int(fmri.get("glove_dim", 300)),
+        )
+        for story in stories:
+            if len(embeddings[story]) != len(frames[story]):
+                raise ValueError(f"Embedding/transcript alignment failed for {story}")
+        aligned = align_fmri_stimuli(
+            fmri["fmri_repo_root"], stories, embeddings, trim=int(fmri["trim"])
+        )
     targets = build_tr_targets(
         stories=stories,
         frames=frames,
         sequences=sequences,
         tasks=config.tasks,
         task_data=config.task_data,
-        model_dir=source_config["model_dir"],
+        model_dir=_task_model_dir(config, source_config),
         fmri_repo_root=fmri["fmri_repo_root"],
         trim=int(fmri["trim"]),
     )
@@ -684,38 +789,28 @@ def run_fmri_tr_decoding(
                 )
 
     output_dir.mkdir(parents=True, exist_ok=True)
+    writer = DecodingOutput(output_dir, artifact, config.refresh)
     selection = _sample_selection(stories, train_stories, sequences, int(fmri["trim"]))
-    selection.to_csv(output_dir / "sample_selection.csv", index=False)
+    writer.save("sample_selection", selection)
+    directed = config.fmri_target_artifact is not None
     rows = []
     for task, target in targets.items():
-        target_dir = output_dir / "target_diagnostics" / task
-        target_dir.mkdir(parents=True, exist_ok=True)
-        np.savez_compressed(
-            target_dir / "availability.npz",
-            **{story: values for story, values in target.availability.items()},
-        )
-        np.savez_compressed(
-            target_dir / "targets.npz",
-            **{
-                **{
-                    f"filtered__{story}": values
-                    for story, values in target.filtered.items()
-                },
-                **{
-                    f"standardized__{story}": values
-                    for story, values in target.standardized.items()
-                },
-            },
-        )
-        (target_dir / "metadata.json").write_text(json.dumps({
-            "task": task,
-            "kind": get_language_task(task).kind,
-            "classes": target.classes.tolist(),
-            "normalization": "per_story_zscore",
+        writer.save("target_diagnostics", target.availability, {"task": task, "name": "availability"})
+        writer.save("target_diagnostics", {
+            **{f"filtered__{story}": values for story, values in target.filtered.items()},
+            **{f"standardized__{story}": values for story, values in target.standardized.items()},
+        }, {"task": task, "name": "targets"})
+        writer.save("target_diagnostics", {
+            "task": task, "kind": get_language_task(task).kind,
+            "classes": target.classes.tolist(), "normalization": "per_story_zscore",
             "missing_fill": "within_story_finite_mean_or_class_prevalence",
-        }, indent=2))
+        }, {"task": task, "name": "metadata"})
 
     for (method, rank), factor in sorted(factors.items()):
+        if directed:
+            factor = canonical_qr(np.asarray(factor))[0].astype(
+                np.float32, copy=False
+            )
         try:
             (
                 train_prepared,
@@ -728,6 +823,7 @@ def run_fmri_tr_decoding(
                 train_stories=train_stories,
                 test_stories=test_stories,
                 factor=factor,
+                source_scaler=source_scaler,
                 rank=rank,
                 ndelays=int(fmri["ndelays"]),
             )
@@ -740,17 +836,15 @@ def run_fmri_tr_decoding(
             target = targets[task]
             y_train = _stack(train_stories, target.standardized)
             y_test = _stack(test_stories, target.standardized)
-            artifact_dir = output_dir / "tasks" / task / method / f"k{rank}" / "fold_0"
-            artifact_dir.mkdir(parents=True, exist_ok=True)
+            selector = fit_selector(task, method, rank, 0)
             if spec.kind == "continuous":
                 pipeline = _fit_fmri_continuous_decoder(
-                    X_train, y_train[:, 0], config, cv
+                    X_train, y_train[:, 0], config, cv,
+                    standardize_inputs=not directed,
                 )
                 prediction = np.asarray(to_numpy(pipeline.predict(X_test)))
                 metrics = _decoder_metrics("continuous", y_test[:, 0], prediction)
-                np.savez(artifact_dir / "weights.npz", **_weight_payload(
-                    pipeline, ambient_factor
-                ))
+                weights = _weight_payload(pipeline, ambient_factor)
                 prediction_payload = {
                     "y_true": y_test[:, 0],
                     "y_pred": prediction,
@@ -769,6 +863,7 @@ def run_fmri_tr_decoding(
                     "continuous",
                     config,
                     cv=cv,
+                    standardize_inputs=not directed,
                 )
                 variable_prediction = np.asarray(to_numpy(ridge.predict(X_test)))
                 if variable_prediction.ndim == 1:
@@ -807,6 +902,7 @@ def run_fmri_tr_decoding(
                         "categorical",
                         config,
                         cv=classifier_cv,
+                        standardize_inputs=not directed,
                     )
                     if label_valid.any():
                         label_prediction = np.asarray(
@@ -833,15 +929,13 @@ def run_fmri_tr_decoding(
                     ],
                     "classifier_available": classifier_available,
                 }
-                channel_metrics.to_csv(artifact_dir / "channel_metrics.csv", index=False)
+                writer.save("channel_metrics", channel_metrics, selector)
                 ridge_weights = _weight_payload(ridge, ambient_factor)
                 ridge_weights["target_channels"] = np.flatnonzero(train_variable)
-                np.savez(artifact_dir / "weights.npz", **ridge_weights)
+                weights = ridge_weights
                 if classifier is not None:
-                    np.savez(
-                        artifact_dir / "classifier_weights.npz",
-                        **_weight_payload(classifier, ambient_factor),
-                    )
+                    writer.save("decoder_weights", _weight_payload(classifier, ambient_factor),
+                                {**selector, "name": "dominant_label_classifier"})
                 prediction_payload = {
                     "y_true": y_test,
                     "y_pred": prediction,
@@ -866,20 +960,15 @@ def run_fmri_tr_decoding(
                 "primary_metric": "correlation",
                 **metrics,
             }
-            np.savez_compressed(
-                artifact_dir / "heldout_predictions.npz", **prediction_payload
-            )
-            (artifact_dir / "metrics.json").write_text(
-                json.dumps(full_metrics, indent=2, allow_nan=True)
-            )
+            writer.save_fit(full_metrics, weights, prediction_payload)
             rows.append(full_metrics)
 
     results = pd.DataFrame(rows)
-    results.to_csv(output_dir / "grid_results.csv", index=False)
+    writer.save("grid_results", results)
     summary = summarize_language_decoding(results)
-    summary.to_csv(output_dir / "summary.csv", index=False)
+    writer.save("summary", summary)
     plot_language_decoding(summary, output_dir / "rank_analysis.png")
-    (output_dir / "run_metadata.json").write_text(json.dumps({
+    metadata = {
         "mode": config.mode.value,
         "train_stories": train_stories,
         "test_story": test_stories[0],
@@ -888,8 +977,17 @@ def run_fmri_tr_decoding(
         "ndelays": int(fmri["ndelays"]),
         "target_alignment": "lanczos_window_3_current_tr",
         "input_representation": (
-            "tr_aligned_trimmed_projected_story_zscored_pre_fir"
+            "tr_aligned_trimmed_source_standardized_qr_projected_unscaled_pre_fir"
+            if directed
+            else "tr_aligned_trimmed_source_standardized_projected_pre_fir"
         ),
         "continuous_decoder": "primal_ridge_cv_neg_mean_squared_error",
-    }, indent=2))
+    }
+    if artifact is not None:
+        upstreams = artifact.load_field("upstream_identities")
+        metadata["rrr_source"] = upstreams[0]
+        if len(upstreams) > 1:
+            metadata["fmri_target_artifact"] = upstreams[1]
+    writer.save("run_metadata", metadata)
+    writer.save_plot(output_dir / "rank_analysis.png")
     return output_dir

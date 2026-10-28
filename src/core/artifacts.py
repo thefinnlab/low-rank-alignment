@@ -12,13 +12,15 @@ import json
 import os
 import re
 import tempfile
+import uuid
 from dataclasses import asdict, is_dataclass
 from pathlib import Path
 from typing import Any, ClassVar
 
 
 SCHEMA_VERSION = 2
-_OPERATIONAL_KEYS = {"refresh", "plot", "results_root"}
+COMPACT_SCHEMA_VERSION = 3
+_OPERATIONAL_KEYS = {"refresh", "plot", "results_root", "prefetch_rank_designs"}
 
 
 class ArtifactError(RuntimeError):
@@ -61,6 +63,8 @@ def normalized_config(value: Any, *, drop_paths: bool = True) -> dict:
             for key, child in item.items():
                 if key in _OPERATIONAL_KEYS:
                     continue
+                if key == "fmri_tr_pre_fir" and child is False:
+                    continue
                 if drop_paths and (key.endswith("_root") or key.endswith("_dir") or key.endswith("_path")):
                     continue
                 result[key] = clean(child)
@@ -93,12 +97,28 @@ def readable_variant(config: Any, upstreams: list[dict] | None = None,
                 f"offset-{int(source.get('offset', 0))}", str(source["model"]),
                 f"layer-{'none' if source.get('layer') is None else int(source['layer'])}",
             ))
-    elif normalized.get("orthonormalize_a_per_rank"):
-        parts.append("orthonormalized")
-    elif extras:
+            source_variant = str(source.get("variant") or "")
+            for prefix in ("rereference-", "aggregation-"):
+                source_component = next(
+                    (
+                        component
+                        for component in source_variant.split("/")
+                        if component.startswith(prefix)
+                    ),
+                    None,
+                )
+                if source_component is not None:
+                    parts.append(f"source-{source_component}")
+    if extras:
         parts.extend(
             f"{key}-{value}" for key, value in sorted(_primitive(extras).items())
         )
+
+    aggregation = normalized.get("subspace_aggregation")
+    if aggregation is not None:
+        parts.append(f"aggregation-{aggregation}")
+    if "label_offset" in normalized and not normalized.get("fmri_tr_pre_fir", False):
+        parts.append(f"label-offset-{int(normalized['label_offset'])}")
 
     selection = normalized.get("significance_selection")
     if isinstance(selection, dict) and selection.get("reference_artifact"):
@@ -185,6 +205,8 @@ class ArtifactStore:
     SCRIPT: ClassVar[str]
     FIELD_CONTRACT: ClassVar[dict[str, bool]]
     SELECTOR_ORDER: ClassVar[tuple[str, ...]] = ()
+    COMPACT_STORAGE: ClassVar[bool] = False
+    CONTAINER_NAME: ClassVar[str] = "artifact.h5"
 
     def _init_store(
         self,
@@ -264,8 +286,14 @@ class ArtifactStore:
             manifest = self._read_json(path)
             expected_config = normalized_config(config)
             expected_upstreams = _primitive(upstreams or [])
-            if (manifest.get("configuration") != expected_config
-                    or manifest.get("upstreams") != expected_upstreams):
+            stored_upstreams = manifest.get("upstreams")
+            if stored_upstreams is None:
+                stored_upstreams = []
+            stored_config = normalized_config(
+                manifest.get("configuration", {}), drop_paths=False
+            )
+            if (stored_config != expected_config
+                    or stored_upstreams != expected_upstreams):
                 raise ArtifactAmbiguityError(
                     f"Readable variant {selected!r} already represents a different "
                     "configuration; set an explicit variant_name"
@@ -273,7 +301,9 @@ class ArtifactStore:
             self.complete = bool(manifest.get("complete"))
             return self
         manifest = {
-            "schema_version": SCHEMA_VERSION,
+            "schema_version": (
+                COMPACT_SCHEMA_VERSION if self.COMPACT_STORAGE else SCHEMA_VERSION
+            ),
             "identity": self.identity,
             "variant": selected,
             "configuration": normalized_config(config),
@@ -284,6 +314,8 @@ class ArtifactStore:
             "entries": {},
             "complete": False,
         }
+        if self.COMPACT_STORAGE:
+            manifest["storage"] = "hdf5"
         self._write_json(path, manifest)
         self._update_index(selected, complete=False)
         return self
@@ -298,19 +330,32 @@ class ArtifactStore:
             return
         codec, suffix, payload, codec_metadata = self._encode(field, value)
         relative = self._field_path(field, selector or {}, suffix)
-        destination = self._variant_dir() / relative
-        self._atomic_bytes(destination, payload)
-        entry = {
-            "selector": _primitive(selector or {}),
-            "codec": codec,
-            "file": relative.as_posix(),
-            "size": len(payload),
-            **codec_metadata,
-        }
+        if manifest.get("storage") == "hdf5" and field != "plots":
+            object_path = self._write_container_payload(relative, payload)
+            entry = {
+                "selector": _primitive(selector or {}),
+                "codec": codec,
+                "container": self.CONTAINER_NAME,
+                "object": object_path,
+                "size": len(payload),
+                **codec_metadata,
+            }
+        else:
+            destination = self._variant_dir() / relative
+            self._atomic_bytes(destination, payload)
+            entry = {
+                "selector": _primitive(selector or {}),
+                "codec": codec,
+                "file": relative.as_posix(),
+                "size": len(payload),
+                **codec_metadata,
+            }
         manifest["entries"].setdefault(field, {})[key] = entry
         manifest["complete"] = False
         self._write_json(self._manifest_path(), manifest)
         self._update_index(str(self.variant), complete=False)
+        if existing and existing.get("container") and existing.get("object"):
+            self._delete_container_object(existing["object"])
 
     def has_field(self, field: str, *, selector: dict | None = None) -> bool:
         self._validate_field(field)
@@ -323,7 +368,10 @@ class ArtifactStore:
         )
         if entry is None:
             raise KeyError(f"Artifact field {field!r} selector {selector or {}} is not saved")
-        payload = (self._variant_dir() / entry["file"]).read_bytes()
+        if "container" in entry:
+            payload = self._read_container_payload(entry)
+        else:
+            payload = (self._variant_dir() / entry["file"]).read_bytes()
         try:
             return self._decode(entry, payload)
         except Exception as error:
@@ -334,12 +382,43 @@ class ArtifactStore:
     def load_collection(self, field: str, filters: dict | None = None) -> dict:
         self._validate_field(field)
         filters = filters or {}
+        entries = self._manifest().get("entries", {}).get(field, {}).values()
+        selected = [
+            entry for entry in entries
+            if all(
+                entry["selector"].get(key) in (
+                    value if isinstance(value, (list, tuple, set)) else [value]
+                )
+                for key, value in filters.items()
+            )
+        ]
+        if not selected:
+            return {}
+
+        # Read the manifest once and keep each container open for the collection.
+        # A rank sweep can contain hundreds of entries in the same HDF5 file.
+        from contextlib import ExitStack
+
         result = {}
-        for entry in self._manifest().get("entries", {}).get(field, {}).values():
-            selector = entry["selector"]
-            if all(selector.get(key) in (value if isinstance(value, (list, tuple, set)) else [value])
-                   for key, value in filters.items()):
-                result[tuple(sorted(selector.items()))] = self.load_field(field, selector=selector)
+        with ExitStack() as stack:
+            containers = {}
+            for entry in selected:
+                selector = entry["selector"]
+                try:
+                    if "container" in entry:
+                        path = self._variant_dir() / entry["container"]
+                        if path not in containers:
+                            import h5py
+
+                            containers[path] = stack.enter_context(h5py.File(path, "r"))
+                        payload = containers[path][entry["object"]][...].tobytes()
+                    else:
+                        payload = (self._variant_dir() / entry["file"]).read_bytes()
+                    result[tuple(sorted(selector.items()))] = self._decode(entry, payload)
+                except Exception as error:
+                    raise ArtifactError(
+                        f"Could not decode field {field!r} selector {selector}"
+                    ) from error
         return result
 
     def mark_complete(self, required_selectors: dict[str, list[dict]] | None = None) -> None:
@@ -414,6 +493,44 @@ class ArtifactStore:
         })
         index["variants"][variant] = {"complete": bool(complete)}
         self._write_json(path, index)
+
+    def _write_container_payload(self, relative: Path, payload: bytes) -> str:
+        """Write one versioned payload into the variant's HDF5 container."""
+        import h5py
+        import numpy as np
+
+        logical = relative.with_suffix("").as_posix()
+        object_path = f"/entries/{logical}/versions/{uuid.uuid4().hex}"
+        container = self._variant_dir() / self.CONTAINER_NAME
+        container.parent.mkdir(parents=True, exist_ok=True)
+        with h5py.File(container, "a") as handle:
+            handle.create_dataset(
+                object_path,
+                data=np.frombuffer(payload, dtype=np.uint8),
+                compression="gzip",
+                shuffle=True,
+            )
+            handle.flush()
+        return object_path
+
+    def _read_container_payload(self, entry: dict) -> bytes:
+        import h5py
+
+        container = self._variant_dir() / entry["container"]
+        with h5py.File(container, "r") as handle:
+            return handle[entry["object"]][...].tobytes()
+
+    def _delete_container_object(self, object_path: str) -> None:
+        """Remove a superseded payload after its replacement is manifested."""
+        import h5py
+
+        container = self._variant_dir() / self.CONTAINER_NAME
+        if not container.exists():
+            return
+        with h5py.File(container, "a") as handle:
+            if object_path in handle:
+                del handle[object_path]
+                handle.flush()
 
     @staticmethod
     def _read_json(path: Path, default: Any = None) -> Any:
@@ -493,13 +610,21 @@ class ArtifactStore:
             try:
                 import numpy as np
                 buffer = io.BytesIO()
-                np.savez(buffer, **value)
+                packed = {}
+                npz_types = {}
+                for key, item in value.items():
+                    key = str(key)
+                    if isinstance(item, np.ndarray):
+                        packed[key] = item
+                        npz_types[key] = "ndarray"
+                    else:
+                        wrapped = np.empty((), dtype=object)
+                        wrapped[()] = item
+                        packed[key] = wrapped
+                        npz_types[key] = "python"
+                np.savez(buffer, **packed)
                 return "npz", ".npz", buffer.getvalue(), {
-                    "npz_types": {
-                        str(key): "ndarray" if isinstance(item, np.ndarray)
-                        else "python"
-                        for key, item in value.items()
-                    }
+                    "npz_types": npz_types
                 }
             except (TypeError, ValueError):
                 pass

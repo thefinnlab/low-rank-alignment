@@ -18,6 +18,7 @@ def solve_regression(
     y_in_cpu: bool | None = None,
     force_cpu: bool | None = None,
     return_alphas: bool = False,
+    absorb_scaler: bool = True,
 ) -> tuple[torch.Tensor, torch.Tensor] | tuple[torch.Tensor, torch.Tensor, np.ndarray]:
     """Solve regression (OLS or Ridge) and return (W, b) tensors.
 
@@ -39,6 +40,9 @@ def solve_regression(
             3-tuple ``(W, b, best_alphas)`` where *best_alphas* is a 1-D
             numpy array of per-target selected alphas. Default False preserves
             the original 2-tuple return.
+        absorb_scaler: When standardizing ridge inputs, absorb the fitted scaler
+            into W and b so they operate on raw inputs. When False, W and b
+            operate on standardized inputs.
 
     Returns:
         reg_W: (hidden_dim, n_targets) weight tensor.
@@ -73,8 +77,12 @@ def solve_regression(
             sc_mean = model[0].mean_  # (n_features,)
             sc_scale = model[0].scale_  # (n_features,)
             intercept = to_numpy(model[-1].intercept_)  # (n_targets,)
-            W = (coef_raw / sc_scale[np.newaxis, :]).T  # (n_features, n_targets)
-            b = intercept - (sc_mean / sc_scale) @ coef_raw.T  # (n_targets,)
+            if absorb_scaler:
+                W = (coef_raw / sc_scale[np.newaxis, :]).T
+                b = intercept - (sc_mean / sc_scale) @ coef_raw.T
+            else:
+                W = coef_raw.T
+                b = intercept
             best_alphas_out = (
                 to_numpy(model[-1].best_alphas_) if return_alphas else None
             )

@@ -104,7 +104,7 @@ def resolve_rrr_source_dir(
     """Resolve the RRR source directory given the mode.
 
     Args:
-        mode: ScriptMode (cross_subject, per_subject, per_region).
+        mode: ScriptMode (cross_subject or per_subject).
         output_dir: Root results directory.
         override: Explicit override; returned as-is if not None.
 
@@ -113,9 +113,6 @@ def resolve_rrr_source_dir(
     """
     if override:
         return override
-    if mode == ScriptMode.PER_REGION:
-        return os.path.join(output_dir, "per_region_rrr")
     if mode == ScriptMode.PER_SUBJECT:
         return os.path.join(output_dir, "per_subject_rrr")
     return os.path.join(output_dir, "rrr")
-

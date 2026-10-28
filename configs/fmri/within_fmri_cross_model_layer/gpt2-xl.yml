@@ -3,7 +3,19 @@ mode: internal
 results_root: results
 plot: true
 refresh: false
-rank_grid: [1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 1600]
+rank_grid:
+- 1
+- 2
+- 4
+- 8
+- 16
+- 32
+- 64
+- 128
+- 256
+- 512
+- 1024
+- 1600
 significance_selection:
   mode: cross-model-layer
   reference_artifact:
@@ -16,42 +28,99 @@ significance_selection:
   - mode: held_out_session
     dataset: deep-fmri
     offset: 0
-    model: gpt-j-6b
-    layer: [0, 7, 14, 21, 28]
+    model: gpt2
+    layer:
+    - 0
+    - 3
+    - 6
+    - 9
+    - 12
   - mode: held_out_session
     dataset: deep-fmri
     offset: 0
     model: gpt2-xl-batch
-    layer: [0, 12, 24, 36, 48]
+    layer:
+    - 0
+    - 12
+    - 24
+    - 36
+    - 48
   - mode: held_out_session
     dataset: deep-fmri
     offset: 0
-    model: llama3-8b
-    layer: [0, 8, 16, 24, 32]
+    model: gpt-j-6b
+    layer:
+    - 0
+    - 7
+    - 14
+    - 21
+    - 28
   - mode: held_out_session
     dataset: deep-fmri
     offset: 0
     model: roberta-large
-    layer: [0, 6, 12, 18, 24]
+    layer:
+    - 0
+    - 6
+    - 12
+    - 18
+    - 24
   - mode: held_out_session
     dataset: deep-fmri
     offset: 0
-    model: random-gpt2-xl
-    layer: [0, 12, 24, 36, 48]
+    model: llama3-8b
+    layer:
+    - 0
+    - 8
+    - 16
+    - 24
+    - 32
   - mode: held_out_session
     dataset: deep-fmri
     offset: 0
-    model: gpt2
-    layer: [0, 3, 6, 9, 12]
+    model: random-gpt2
+    layer:
+    - 0
+    - 3
+    - 6
+    - 9
+    - 12
+  - mode: held_out_session
+    dataset: deep-fmri
+    offset: 0
+    model: glove-300
+    layer: null
 fmri:
   model_dir: gpt2-xl-batch
-  layer: [0, 12, 24, 36, 48]
+  layer:
+  - 0
+  - 12
+  - 24
+  - 36
+  - 48
   pooling: mean
+  rrr_use_low_rank_svd: true
   data:
     fmri_repo_root: data/deep-fMRI-dataset
     embedding_root: data/fmri/stimuli
-    sessions: [1, 2, 3, 4, 5]
-    subjects: [UTS01, UTS02, UTS03, UTS04, UTS05, UTS06, UTS07, UTS08, UTS09]
+    limit_to_glove: true
+    glove_dim: 300
+    sessions:
+    - 1
+    - 2
+    - 3
+    - 4
+    - 5
+    subjects:
+    - UTS01
+    - UTS02
+    - UTS03
+    - UTS04
+    - UTS05
+    - UTS06
+    - UTS07
+    - UTS08
+    - UTS09
     trim: 5
     ndelays: 4
   ridge:
@@ -64,4 +133,3 @@ fmri:
     force_cpu: false
     log_alphas: true
 ieeg: null
-

@@ -12,6 +12,13 @@ from src.utils.shared.ieeg import get_arbitrary_embeddings
 from src.utils.shared.tensors import to_numpy
 
 
+def contiguous_folds(n_rows: int, n_splits: int):
+    """Return unshuffled K-fold indices in sample order."""
+    if n_rows < n_splits:
+        raise ValueError(f"Cannot make {n_splits} folds from {n_rows} rows")
+    return list(KFold(n_splits=n_splits, shuffle=False).split(np.arange(n_rows)))
+
+
 def train_encoding(
     X,
     Y,
@@ -61,8 +68,7 @@ def train_encoding(
     scalers = []
     tr_idxs, test_idxs = [], []
     if provided_idxs is None:
-        kfold = KFold(num_folds, shuffle=False)
-        folds = list(kfold.split(X[0]))
+        folds = contiguous_folds(len(X[0]), num_folds)
     else:
         folds = provided_idxs
 
@@ -209,6 +215,124 @@ def load_encoding_results(filepath: str, location=None) -> dict:
         return joblib.load(filepath)
 
 
+def fit_transform_target_pca(
+    train_targets: np.ndarray,
+    test_targets: np.ndarray,
+    target_pca_dim: int,
+    *,
+    context: str = "target PCA",
+) -> tuple[np.ndarray, np.ndarray]:
+    """Fit exact PCA on training targets and transform train/test targets."""
+    from sklearn.decomposition import PCA
+
+    available = min(train_targets.shape)
+    if int(target_pca_dim) > available:
+        raise ValueError(
+            f"target_pca_dim={target_pca_dim} exceeds {context} estimable rank "
+            f"{available}"
+        )
+    target_pca = PCA(n_components=int(target_pca_dim), svd_solver="full")
+    return (
+        target_pca.fit_transform(train_targets).astype(np.float32),
+        target_pca.transform(test_targets).astype(np.float32),
+    )
+
+
+def fit_encoding_baseline(
+    X_train: np.ndarray,
+    raw_Y_train: np.ndarray,
+    X_test: np.ndarray | None = None,
+    raw_Y_test: np.ndarray | None = None,
+    *,
+    alphas: np.ndarray | None = None,
+    ridge_cv_folds: int = 5,
+    ridge_solver_params: dict | None = None,
+    ridge_y_in_cpu: bool | None = None,
+    ridge_force_cpu: bool | None = None,
+    alpha_policy: dict | None = None,
+    alpha_cache_dir: str | None = None,
+    alpha_context: dict | None = None,
+    absorb_input_scaler: bool = True,
+) -> dict:
+    """Fit the standardized-target full ridge baseline used by RRR workflows.
+
+    When ``absorb_input_scaler`` is false, coefficients remain in standardized
+    input coordinates while predictions retain the same fitted-model semantics.
+    """
+    from sklearn.preprocessing import StandardScaler
+    from src.utils.shared.alpha_grids import resolve_ridge_alphas, save_alpha_diagnostics
+    from src.utils.shared.regression import solve_regression
+
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    y_scaler = StandardScaler().fit(raw_Y_train)
+    Y_train = y_scaler.transform(raw_Y_train).astype(np.float32)
+    Y_test = (
+        None if raw_Y_test is None
+        else y_scaler.transform(raw_Y_test).astype(np.float32)
+    )
+    context = {
+        "role": "full_baseline", "n_features": int(X_train.shape[1]),
+        "standardize": True, **(alpha_context or {}),
+    }
+    resolved_alphas = resolve_ridge_alphas(
+        alphas, X_train, standardize=True, context=context,
+        cache_dir=alpha_cache_dir, policy=alpha_policy,
+    )
+    W, b, best_alphas = solve_regression(
+        X_train, Y_train, "ridge", device, alphas=resolved_alphas,
+        ridge_cv_folds=ridge_cv_folds, solver_params=ridge_solver_params,
+        y_in_cpu=ridge_y_in_cpu, force_cpu=ridge_force_cpu,
+        return_alphas=True,
+        absorb_scaler=absorb_input_scaler,
+    )
+    if alpha_cache_dir is not None:
+        save_alpha_diagnostics(
+            alpha_cache_dir, resolved_alphas, best_alphas=best_alphas,
+            context=context, policy=alpha_policy,
+        )
+    W, b = to_numpy(W), to_numpy(b)
+    if absorb_input_scaler:
+        prediction_X_train = X_train
+        prediction_X_test = X_test
+        input_coordinates = "raw"
+        input_mean = None
+        input_scale = None
+    else:
+        input_scaler = StandardScaler().fit(X_train)
+        prediction_X_train = input_scaler.transform(X_train).astype(np.float32)
+        prediction_X_test = (
+            None
+            if X_test is None
+            else input_scaler.transform(X_test).astype(np.float32)
+        )
+        input_coordinates = "standardized"
+        input_mean = input_scaler.mean_.astype(np.float32)
+        input_scale = input_scaler.scale_.astype(np.float32)
+    result = {
+        "Y_train": Y_train,
+        "Y_test": Y_test,
+        "Y_hat_full_train": (prediction_X_train @ W + b).astype(np.float32),
+        "Y_hat_full_test": (
+            None
+            if prediction_X_test is None
+            else (prediction_X_test @ W + b).astype(np.float32)
+        ),
+        "beta_full_input_coordinates": W.astype(np.float32),
+        "input_coordinates": input_coordinates,
+        "ridge_intercept": b.astype(np.float32),
+        "target_mean": y_scaler.mean_.astype(np.float32),
+        "target_scale": y_scaler.scale_.astype(np.float32),
+        "alpha_grid": np.asarray(resolved_alphas),
+        "best_alphas": np.asarray(best_alphas),
+    }
+    if input_mean is not None:
+        result["input_mean"] = input_mean
+        result["input_scale"] = input_scale
+    if absorb_input_scaler:
+        result["beta_full_raw"] = result["beta_full_input_coordinates"]
+    return result
+
+
 def build_per_fold_baselines(
     X_raw: np.ndarray,
     Y_full: np.ndarray,
@@ -222,12 +346,13 @@ def build_per_fold_baselines(
     alpha_cache_dir: str | None = None,
     alpha_context: dict | None = None,
     folds_to_build: set[int] | None = None,
+    target_pca_dim: int | None = None,
 ) -> list:
     """Train a fresh ridge encoding model per fold and pre-compute baselines.
 
-    For each fold, fits a StandardScaler on Y_train, then trains a ridge model
-    via solve_regression (which absorbs the X-scaler into W, b). Returns the
-    dict structure consumed by RRR evaluation.
+    For each fold, fits StandardScalers on X_train and Y_train, then trains a ridge
+    model whose coefficients remain in standardized-X coordinates. Returns the dict
+    structure consumed by RRR evaluation, including the fold input scaler.
 
     Args:
         X_raw: (n_words, n_embed) raw embedding matrix.
@@ -253,15 +378,10 @@ def build_per_fold_baselines(
             Y_test:          (n_test, n_targets) scaled neural responses
             Y_hat_full_train:(n_train, n_targets) baseline model predictions on train
             Y_hat_full_test: (n_test, n_targets) baseline model predictions on test
-            beta_full_raw:   (n_embed, n_targets) coefficients mapping raw X → scaled Y
+            beta_full_input_coordinates: standardized-X ridge coefficients
+            input_mean/input_scale: training-fold embedding scaler state
     """
-    from sklearn.preprocessing import StandardScaler
-    from src.utils.shared.alpha_grids import resolve_ridge_alphas, save_alpha_diagnostics
-    from src.utils.shared.regression import solve_regression
-    import torch
-
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-    n_words, n_embed = X_raw.shape
+    n_words = X_raw.shape[0]
     baselines = []
 
     for fold_f, test_idx in enumerate(test_idxs):
@@ -273,15 +393,15 @@ def build_per_fold_baselines(
         train_mask[test_idx] = False
         train_idx = np.where(train_mask)[0]
 
-        y_scaler = StandardScaler()
-        Y_train = y_scaler.fit_transform(Y_full[train_idx]).astype(np.float32)
-        Y_test = y_scaler.transform(Y_full[test_idx]).astype(np.float32)
+        raw_train = Y_full[train_idx]
+        raw_test = Y_full[test_idx]
+        if target_pca_dim is not None:
+            raw_train, raw_test = fit_transform_target_pca(
+                raw_train, raw_test, int(target_pca_dim), context=f"fold {fold_f}"
+            )
 
         fold_context = {
-            "role": "full_baseline",
             "fold": int(fold_f),
-            "n_features": int(n_embed),
-            "standardize": True,
             **(alpha_context or {}),
         }
         fold_cache_dir = (
@@ -289,49 +409,23 @@ def build_per_fold_baselines(
             if alpha_cache_dir is not None
             else None
         )
-        fold_alphas = resolve_ridge_alphas(
-            alphas,
-            X_raw[train_idx],
-            standardize=True,
-            context=fold_context,
-            cache_dir=fold_cache_dir,
-            policy=alpha_policy,
-        )
-        W, b, best_alphas = solve_regression(
-            X_raw[train_idx],
-            Y_train,
-            "ridge",
-            device,
-            alphas=fold_alphas,
+        fitted = fit_encoding_baseline(
+            X_raw[train_idx], raw_train, X_raw[test_idx], raw_test,
+            alphas=alphas,
             ridge_cv_folds=ridge_cv_folds,
-            solver_params=ridge_solver_params,
-            y_in_cpu=ridge_y_in_cpu,
-            force_cpu=ridge_force_cpu,
-            return_alphas=True,
+            ridge_solver_params=ridge_solver_params,
+            ridge_y_in_cpu=ridge_y_in_cpu,
+            ridge_force_cpu=ridge_force_cpu,
+            alpha_policy=alpha_policy,
+            alpha_cache_dir=fold_cache_dir,
+            alpha_context=fold_context,
+            absorb_input_scaler=False,
         )
-        if fold_cache_dir is not None:
-            save_alpha_diagnostics(
-                fold_cache_dir,
-                fold_alphas,
-                best_alphas=best_alphas,
-                context=fold_context,
-                policy=alpha_policy,
-            )
-        W = to_numpy(W)
-        b = to_numpy(b)
-
-        Y_hat_train = (X_raw[train_idx] @ W + b).astype(np.float32)
-        Y_hat_test = (X_raw[test_idx] @ W + b).astype(np.float32)
-
         baselines.append(
             {
                 "train_idx": train_idx,
                 "test_idx": test_idx,
-                "Y_train": Y_train,
-                "Y_test": Y_test,
-                "Y_hat_full_train": Y_hat_train,
-                "Y_hat_full_test": Y_hat_test,
-                "beta_full_raw": W.astype(np.float32),
+                **fitted,
             }
         )
 

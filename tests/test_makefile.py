@@ -1,4 +1,4 @@
-"""Tests for Makefile job-submission workflows."""
+"""Tests for the compact Makefile workflow interface."""
 
 from __future__ import annotations
 
@@ -6,34 +6,34 @@ import os
 from pathlib import Path
 import subprocess
 
+import pytest
+import yaml
+
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
 def _fake_sbatch(tmp_path: Path) -> tuple[Path, Path]:
     executable = tmp_path / "sbatch"
     log_path = tmp_path / "sbatch.log"
-    executable.write_text("""#!/bin/sh
+    executable.write_text(
+        """#!/bin/sh
 set -eu
 printf '%s\n' "$*" >> "$SBATCH_LOG"
-count_file="${SBATCH_LOG}.count"
-if [ -f "$count_file" ]; then
-    count=$(sed -n '1p' "$count_file")
-else
-    count=0
-fi
-count=$((count + 1))
-printf '%s\n' "$count" > "$count_file"
-if [ "${SBATCH_FAIL_ON_CALL:-}" = "$count" ]; then
-    exit 1
-fi
-printf '%s\n' "$((1000 + count))"
-""")
+counter_path="$SBATCH_LOG.counter"
+counter=0
+[ ! -f "$counter_path" ] || counter=$(cat "$counter_path")
+counter=$((counter + 1))
+printf '%s' "$counter" > "$counter_path"
+printf '%s\n' "$counter"
+"""
+    )
     executable.chmod(0o755)
     return executable, log_path
 
 
 def _run_make(
-    tmp_path: Path, *args: str, target: str = "sig-rrr-batch"
+    tmp_path: Path, target: str, *args: str
 ) -> tuple[subprocess.CompletedProcess[str], list[str]]:
     sbatch, log_path = _fake_sbatch(tmp_path)
     env = os.environ.copy()
@@ -46,58 +46,276 @@ def _run_make(
         text=True,
         check=False,
     )
-    lines = log_path.read_text().splitlines() if log_path.exists() else []
-    return result, lines
+    submissions = log_path.read_text().splitlines() if log_path.exists() else []
+    return result, submissions
 
 
-def test_sig_rrr_batch_submits_independent_model_dependencies(tmp_path: Path):
+def _fake_significance_check(tmp_path: Path, rows: list[tuple[str, str, str]]) -> Path:
+    executable = tmp_path / "check-significance"
+    output = "".join("\t".join(row) + "\n" for row in rows)
+    executable.write_text(f"#!/bin/sh\nprintf %s '{output}'\n")
+    executable.chmod(0o755)
+    return executable
+
+
+def _fake_decoding_check(tmp_path: Path, rows: list[tuple[str, ...]]) -> Path:
+    executable = tmp_path / "check-decoding"
+    output = "".join("\t".join(row) + "\n" for row in rows)
+    executable.write_text(f"#!/bin/sh\nprintf %s '{output}'\n")
+    executable.chmod(0o755)
+    return executable
+
+
+def test_significance_uses_shared_dataset_and_models(tmp_path: Path):
     result, submissions = _run_make(
-        tmp_path,
-        "PIPELINE_MODELS=gpt2 gpt2-xl",
-        "DATASET=podcast",
-        "SIG_OVERRIDES=--num_null_shifts=100",
-        "RRR_OVERRIDES=--refresh=false",
+        tmp_path, "significance", "DATASET=podcast", "MODELS=gpt2 glove"
     )
-
-    assert result.returncode == 0, result.stderr
-    assert len(submissions) == 4
-    assert "scripts/run_significance.py" in submissions[0]
-    assert "configs/significance/gpt2/significance.yml" in submissions[0]
-    assert "--num_null_shifts=100" in submissions[0]
-    assert "--refresh=false" not in submissions[0]
-    assert "--dependency=afterok:1001" in submissions[1]
-    assert "configs/rrr/gpt2/cross_subject.yml" in submissions[1]
-    assert "--refresh=false" in submissions[1]
-    assert "--num_null_shifts=100" not in submissions[1]
-    assert "configs/significance/gpt2-xl/significance.yml" in submissions[2]
-    assert "--dependency=afterok:1003" in submissions[3]
-    assert "configs/rrr/gpt2-xl/cross_subject.yml" in submissions[3]
-
-
-def test_sig_rrr_batch_resolves_cars_2_configs(tmp_path: Path):
-    result, submissions = _run_make(tmp_path, "PIPELINE_MODELS=glove", "DATASET=cars-2")
 
     assert result.returncode == 0, result.stderr
     assert len(submissions) == 2
-    assert (
-        "configs/brain_treebank/cars_2/significance/glove/significance.yml"
-        in submissions[0]
+    assert "configs/significance/gpt2/significance.yml" in submissions[0]
+    assert "configs/significance/glove/significance.yml" in submissions[1]
+    assert all("scripts/run_significance.py" in item for item in submissions)
+
+
+def test_language_decoding_submits_one_job_per_model_for_directed_pair(tmp_path: Path):
+    result, submissions = _run_make(
+        tmp_path,
+        "language-decoding",
+        "DATASET=fmri",
+        "SOURCE_DATASET=podcast",
+        "MODELS=gpt2 gpt2-xl",
+        "LANGUAGE_DECODING_CPUS=8",
     )
-    assert "configs/brain_treebank/cars_2/rrr/glove/cross_subject.yml" in submissions[1]
-    assert "--dependency=afterok:1001" in submissions[1]
+
+    assert result.returncode == 0, result.stderr
+    assert len(submissions) == 2
+    assert all("--cpus-per-task=8" in submission for submission in submissions)
+    assert all(
+        "scripts/run_language_decoding_batch.py" in submission
+        and "configs/language_decoding/cross_dataset/fmri/from_podcast.yml" in submission
+        for submission in submissions
+    )
+    assert submissions[0].endswith("--model gpt2")
+    assert submissions[1].endswith("--model gpt2-xl")
 
 
-def test_sig_rrr_batch_rejects_unsupported_dataset_before_submission(tmp_path: Path):
-    result, submissions = _run_make(tmp_path, "PIPELINE_MODELS=gpt2", "DATASET=unknown")
+def test_language_decoding_missing_submits_per_layer_with_refresh_false(
+    tmp_path: Path,
+):
+    check = _fake_decoding_check(tmp_path, [
+        (
+            "configs/language_decoding/internal/podcast.yml",
+            "podcast",
+            "podcast",
+            "gpt2",
+            "3",
+        ),
+        (
+            "configs/language_decoding/cross_dataset/fmri/from_podcast.yml",
+            "podcast",
+            "fmri",
+            "glove",
+            "none",
+        ),
+    ])
+    result, submissions = _run_make(
+        tmp_path,
+        "language-decoding-missing",
+        f"LANGUAGE_DECODING_CHECK={check}",
+        "MODELS=gpt2 glove",
+        "OVERRIDES=--refresh=true",
+    )
 
+    assert result.returncode == 0, result.stderr
+    assert len(submissions) == 2
+    assert "--model gpt2 --layer 3" in submissions[0]
+    assert "--model glove --layer" not in submissions[1]
+    assert all(item.endswith("--refresh=true --refresh=false") for item in submissions)
+
+
+def test_fmri_significance_supports_glove(tmp_path: Path):
+    result, submissions = _run_make(
+        tmp_path, "significance", "DATASET=fmri", "MODELS=gpt2 glove"
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert len(submissions) == 2
+    assert "configs/cross_dataset/fmri/significance/gpt2.yml" in submissions[0]
+    assert "configs/cross_dataset/fmri/significance/glove.yml" in submissions[1]
+
+
+def test_rrr_resolves_dataset_and_mode(tmp_path: Path):
+    result, submissions = _run_make(
+        tmp_path,
+        "rrr",
+        "DATASET=cars-2",
+        "RRR_MODE=cross_model_layer",
+        "MODELS=gpt2 gpt2-xl",
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert len(submissions) == 2
+    assert "configs/brain_treebank/cars_2/rrr/gpt2/cross_model_layer.yml" in submissions[0]
+    assert "configs/brain_treebank/cars_2/rrr/gpt2-xl/cross_model_layer.yml" in submissions[1]
+
+
+def test_rrr_resolves_full_fit_configs(tmp_path: Path):
+    cases = (
+        ("podcast", "configs/rrr/gpt2/full_fit.yml"),
+        ("cars-2", "configs/brain_treebank/cars_2/rrr/gpt2/full_fit.yml"),
+    )
+    for index, (dataset, expected) in enumerate(cases):
+        case_path = tmp_path / str(index)
+        case_path.mkdir()
+        result, submissions = _run_make(
+            case_path,
+            "rrr",
+            f"DATASET={dataset}",
+            "RRR_MODE=full_fit",
+            "MODELS=gpt2",
+        )
+
+        assert result.returncode == 0, result.stderr
+        assert len(submissions) == 1
+        assert expected in submissions[0]
+
+    fmri_path = tmp_path / "fmri"
+    fmri_path.mkdir()
+    result, submissions = _run_make(
+        fmri_path,
+        "rrr",
+        "DATASET=fmri",
+        "RRR_MODE=full_fit",
+        "MODELS=gpt2",
+    )
+    assert result.returncode == 2
+    assert not submissions
+    assert "unsupported for fmri" in result.stderr
+
+
+def test_fmri_leave_one_subject_out_submits_one_job_per_model_layer(tmp_path: Path):
+    result, submissions = _run_make(
+        tmp_path,
+        "rrr",
+        "DATASET=fmri",
+        "RRR_MODE=leave_one_subject_out",
+        "MODELS=gpt2",
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert len(submissions) == 5
+    assert all(
+        "configs/fmri/leave_one_subject_out/gpt2.yml" in submission
+        for submission in submissions
+    )
+    assert [
+        submission.rsplit("--fmri.layer=", 1)[-1]
+        for submission in submissions
+    ] == ["[0]", "[3]", "[6]", "[9]", "[12]"]
+
+
+def test_leave_one_subject_out_submits_one_job_per_model_layer(tmp_path: Path):
+    result, submissions = _run_make(
+        tmp_path,
+        "rrr",
+        "DATASET=podcast",
+        "RRR_MODE=leave_one_subject_out",
+        "MODELS=gpt2 glove",
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert len(submissions) == 6
+    assert all(
+        "configs/rrr/gpt2/leave_one_subject_out.yml" in submission
+        for submission in submissions[:5]
+    )
+    assert [
+        submission.rsplit("--ieeg.encoding.per_model_config.layer=", 1)[-1]
+        for submission in submissions[:5]
+    ] == ["[0]", "[3]", "[6]", "[9]", "[12]"]
+    assert "configs/rrr/glove/leave_one_subject_out.yml" in submissions[-1]
+    assert "--ieeg.encoding.per_model_config.layer=" not in submissions[-1]
+
+
+def test_fmri_cross_model_layer_per_layer_submits_one_job_per_layer(tmp_path: Path):
+    result, submissions = _run_make(
+        tmp_path,
+        "rrr",
+        "DATASET=fmri",
+        "RRR_MODE=cross_model_layer_per_layer",
+        "MODELS=gpt2 glove",
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert len(submissions) == 6
+    assert all(
+        "configs/fmri/within_fmri_cross_model_layer/gpt2.yml" in submission
+        for submission in submissions[:5]
+    )
+    assert [
+        submission.rsplit("--fmri.layer=", 1)[-1]
+        for submission in submissions[:5]
+    ] == ["[0]", "[3]", "[6]", "[9]", "[12]"]
+    assert (
+        "configs/fmri/within_fmri_cross_model_layer/glove.yml"
+        in submissions[-1]
+    )
+    assert "--fmri.layer=" not in submissions[-1]
+
+
+def test_cross_dataset_rrr_requires_and_uses_source_dataset(tmp_path: Path):
+    missing, submissions = _run_make(
+        tmp_path, "rrr", "DATASET=fmri", "RRR_MODE=cross_dataset", "MODELS=gpt2"
+    )
+    assert missing.returncode != 0
+    assert "SOURCE_DATASET is required" in missing.stderr
+    assert submissions == []
+
+    result, submissions = _run_make(
+        tmp_path,
+        "rrr",
+        "DATASET=fmri",
+        "RRR_MODE=cross_dataset",
+        "SOURCE_DATASET=podcast",
+        "MODELS=gpt2",
+    )
+    assert result.returncode == 0, result.stderr
+    assert "configs/cross_dataset/fmri/from_podcast/gpt2.yml" in submissions[0]
+
+
+@pytest.mark.parametrize("target", ["multi-view", "target-dimensionality", "cross-condition"])
+def test_excluded_targets_are_removed(tmp_path: Path, target: str):
+    result, submissions = _run_make(tmp_path, target)
     assert result.returncode != 0
-    assert "Unsupported DATASET 'unknown'" in result.stderr
+    assert "No rule to make target" in result.stderr
     assert submissions == []
 
 
-def test_sig_rrr_batch_validates_all_configs_before_submission(tmp_path: Path):
+@pytest.mark.parametrize("dataset", ["podcast", "cars-2", "fmri"])
+@pytest.mark.parametrize("mode", [None, "internal"])
+def test_internal_rrr_uses_retained_configs(tmp_path: Path, dataset: str, mode):
+    args = [f"DATASET={dataset}", "MODELS=gpt2"]
+    if mode is not None:
+        args.append(f"RRR_MODE={mode}")
+    result, submissions = _run_make(tmp_path, "rrr", *args)
+    assert result.returncode == 0, result.stderr
+    assert len(submissions) == 1
+    assert "cross_model_layer" in submissions[0]
+    assert "cross_subject" not in submissions[0]
+
+
+@pytest.mark.parametrize("mode", ["cross_subject", "temporal_windows", "cross_temporal_windows"])
+def test_excluded_rrr_modes_do_not_submit_jobs(tmp_path: Path, mode: str):
+    result, submissions = _run_make(tmp_path, "rrr", f"RRR_MODE={mode}")
+    assert result.returncode != 0
+    assert "Unsupported RRR_MODE" in result.stderr
+    assert submissions == []
+
+
+def test_makefile_validates_every_config_before_submission(tmp_path: Path):
     result, submissions = _run_make(
-        tmp_path, "PIPELINE_MODELS=gpt2 missing-model", "DATASET=podcast"
+        tmp_path, "significance", "MODELS=gpt2 missing-model"
     )
 
     assert result.returncode != 0
@@ -105,60 +323,141 @@ def test_sig_rrr_batch_validates_all_configs_before_submission(tmp_path: Path):
     assert submissions == []
 
 
-def test_sig_rrr_batch_stops_when_significance_submission_fails(
-    tmp_path: Path, monkeypatch
-):
-    monkeypatch.setenv("SBATCH_FAIL_ON_CALL", "1")
-
-    result, submissions = _run_make(
-        tmp_path, "PIPELINE_MODELS=gpt2 gpt2-xl", "DATASET=podcast"
-    )
-
-    assert result.returncode != 0
-    assert len(submissions) == 1
-    assert "scripts/run_significance.py" in submissions[0]
-
-
-def test_cross_temporal_pipeline_submits_complete_dependency_chain(tmp_path: Path):
+def test_significance_missing_groups_missing_layers_by_dataset_and_model(tmp_path: Path):
+    check = _fake_significance_check(tmp_path, [
+        ("podcast", "gpt2", "0"),
+        ("podcast", "gpt2", "6"),
+        ("deep-fmri", "gpt2", "3"),
+        ("podcast", "glove", "none"),
+    ])
     result, submissions = _run_make(
         tmp_path,
-        "CROSS_TEMPORAL_MODELS=gpt2 gpt2-xl",
-        "RRR_OVERRIDES=--refresh=false",
-        target="cross-temporal-pipeline",
+        "significance-missing",
+        f"SIGNIFICANCE_CHECK={check}",
+        "SIGNIFICANCE_MODELS=gpt2 glove",
     )
 
     assert result.returncode == 0, result.stderr
-    assert len(submissions) == 8
-
-    assert "configs/rrr/gpt2/temporal_windows.yml" in submissions[0]
-    assert "--dependency" not in submissions[0]
-    assert "--dependency=afterok:1001" in submissions[1]
-    assert "configs/rrr/gpt2/cross_temporal_windows.yml" in submissions[1]
-    assert "--refresh=false" in submissions[1]
-    assert "configs/rrr/gpt2-xl/temporal_windows.yml" in submissions[2]
-    assert "--dependency" not in submissions[2]
-    assert "configs/rrr/gpt2-xl/cross_temporal_windows.yml" in submissions[3]
-    assert "--dependency=afterok:1003" in submissions[3]
-
-    cars_root = "configs/brain_treebank/cars_2/rrr"
-    assert f"{cars_root}/gpt2/temporal_windows.yml" in submissions[4]
-    assert "--dependency" not in submissions[4]
-    assert f"{cars_root}/gpt2/cross_temporal_windows.yml" in submissions[5]
-    assert "--dependency=afterok:1005" in submissions[5]
-    assert f"{cars_root}/gpt2-xl/temporal_windows.yml" in submissions[6]
-    assert f"{cars_root}/gpt2-xl/cross_temporal_windows.yml" in submissions[7]
-    assert "--dependency=afterok:1007" in submissions[7]
+    assert len(submissions) == 3
+    assert "configs/significance/gpt2/significance.yml" in submissions[0]
+    assert "--ieeg.encoding.per_model_config.layer=[0,6]" in submissions[0]
+    assert "configs/cross_dataset/fmri/significance/gpt2.yml" in submissions[1]
+    assert "--fmri.layer=[3]" in submissions[1]
+    assert "configs/significance/glove/significance.yml" in submissions[2]
+    assert "per_model_config.layer" not in submissions[2]
 
 
-def test_cross_temporal_pipeline_validates_every_config_before_submission(
-    tmp_path: Path,
-):
+def test_final_results_submits_cross_dataset_jobs_after_all_fmri_jobs(tmp_path: Path):
     result, submissions = _run_make(
         tmp_path,
-        "CROSS_TEMPORAL_MODELS=gpt2 missing-model",
-        target="cross-temporal-pipeline",
+        "final-results",
+        "SIGNIFICANCE_CHECK=true",
     )
 
-    assert result.returncode != 0
-    assert "Missing cross-temporal pipeline config" in result.stderr
-    assert submissions == []
+    assert result.returncode == 0, result.stderr
+    assert len(submissions) == 49
+    assert all('cross_condition' not in item for item in submissions)
+    assert all(Path(item.split('--config ', 1)[1].split()[0]).is_file() for item in submissions)
+    assert any("random-gpt2/cross_model_layer.yml" in item for item in submissions)
+    assert not any("random-gpt2-xl" in item for item in submissions)
+    fmri_ids = [3, 8, 13, 18, 23, 28, 33]
+    dependency = "--dependency=afterok:" + ":".join(map(str, fmri_ids))
+    assert all(dependency in item for item in submissions[-14:])
+
+
+def test_final_rrr_configs_use_one_equivalent_significance_union():
+    expected = {
+        ("gpt2", (0, 3, 6, 9, 12)),
+        ("gpt2-xl-batch", (0, 12, 24, 36, 48)),
+        ("gpt-j-6b", (0, 7, 14, 21, 28)),
+        ("roberta-large", (0, 6, 12, 18, 24)),
+        ("llama3-8b", (0, 8, 16, 24, 32)),
+        ("random-gpt2", (0, 3, 6, 9, 12)),
+        ("glove-300", (None,)),
+    }
+
+    def signature(selection):
+        assert selection["mode"] == "cross-model-layer"
+        return {
+            (
+                artifact["model"],
+                tuple(
+                    artifact["layer"]
+                    if isinstance(artifact["layer"], list)
+                    else [artifact["layer"]]
+                ),
+            )
+            for artifact in selection["artifacts"]
+        }
+
+    models = [
+        "gpt2", "gpt2-xl", "gpt-j-6b", "roberta-large", "llama3-8b",
+        "random-gpt2", "glove",
+    ]
+    configs = []
+    for model in models:
+        configs.extend([
+            REPO_ROOT / "configs/rrr" / model / "cross_model_layer.yml",
+            REPO_ROOT / "configs/rrr" / model / "leave_one_subject_out.yml",
+            REPO_ROOT / "configs/brain_treebank/cars_2/rrr" / model
+            / "cross_model_layer.yml",
+            REPO_ROOT / "configs/brain_treebank/cars_2/rrr" / model
+            / "leave_one_subject_out.yml",
+            REPO_ROOT / "configs/fmri/within_fmri_cross_model_layer"
+            / f"{model}.yml",
+            REPO_ROOT / "configs/fmri/leave_one_subject_out" / f"{model}.yml",
+        ])
+        for target in ("podcast", "cars-2"):
+            path = (
+                REPO_ROOT / "configs/cross_dataset" / target / "from_fmri"
+                / f"{model}.yml"
+            )
+            payload = yaml.safe_load(path.read_text())
+            assert signature(payload["significance_selection"]) == expected
+            assert signature(
+                payload["rrr_source"]["significance_selection"]
+            ) == expected
+
+    for model in models:
+        for target, source in (
+            ("podcast", "cars-2"),
+            ("cars-2", "podcast"),
+            ("fmri", "podcast"),
+            ("fmri", "cars-2"),
+        ):
+            path = (
+                REPO_ROOT / "configs/cross_dataset" / target / f"from_{source}"
+                / f"{model}.yml"
+            )
+            payload = yaml.safe_load(path.read_text())
+            assert payload["rrr_source"]["mode"] == "full_fit"
+            assert signature(payload["significance_selection"]) == expected
+            assert signature(
+                payload["rrr_source"]["significance_selection"]
+            ) == expected
+
+    for path in configs:
+        text = path.read_text()
+        assert "random-gpt2-xl" not in text
+        assert signature(yaml.safe_load(text)["significance_selection"]) == expected
+
+
+def test_full_fit_configs_cover_primary_models_and_significance_union():
+    expected_models = {
+        "gpt2", "gpt2-xl", "gpt-j-6b", "roberta-large", "llama3-8b",
+        "random-gpt2", "glove",
+    }
+    roots = (
+        REPO_ROOT / "configs/rrr",
+        REPO_ROOT / "configs/brain_treebank/cars_2/rrr",
+    )
+
+    for root in roots:
+        assert {
+            path.parent.name for path in root.glob("*/full_fit.yml")
+        } == expected_models
+        paths = (root / model / "full_fit.yml" for model in expected_models)
+        for path in paths:
+            payload = yaml.safe_load(path.read_text())
+            assert payload["mode"] == "full_fit"
+            assert payload["significance_selection"]["mode"] == "cross-model-layer"

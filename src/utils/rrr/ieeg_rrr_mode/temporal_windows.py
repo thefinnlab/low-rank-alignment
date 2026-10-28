@@ -8,8 +8,8 @@ from src.core.config import RRRConfig
 from src.utils.rrr.inputs import _get_decomposition_inputs
 from src.utils.shared.encoding import build_per_fold_baselines
 
-from .common import (_reference_encoding_results, _rrr_output_resume_plan,
-                     _run_rrr_for_unit, _temporal_window_target_mask)
+from .common import (_reference_encoding_results, _run_rrr_for_unit,
+                     _temporal_window_target_mask)
 
 
 def run_temporal_windows(
@@ -31,8 +31,29 @@ def run_temporal_windows(
     resume_plans = {}
     for window in config.temporal_windows:
         unit = UnitSelector(method="rrr", temporal_window=window.name)
-        plan = _rrr_output_resume_plan(artifact, unit, config, n_folds)
-        resume_plans[window.name] = plan
+        rrr_plan = artifact.resume_plan(
+            unit=unit, ranks=config.rank_grid, folds=range(n_folds),
+            refresh=config.refresh, require_target_factors=config.save_b_matrices,
+            required_metric_keys={
+                "nr_orth_corr", "nr_orth_r2_per_target",
+            } | ({"nr_orth_best_alphas"} if config.log_alphas else set()) | (
+                {"null_aug_corr_per_target", "null_aug_r2_per_target"}
+                if config.run_null_augmented else set()
+            ),
+        )
+        pca_plan = (
+            artifact.resume_plan(
+                unit=UnitSelector(method="pca", temporal_window=window.name),
+                ranks=config.rank_grid, folds=range(n_folds), refresh=config.refresh,
+            )
+            if config.run_pca_baseline else None
+        )
+        folds_to_build = set(rrr_plan["folds_to_build"])
+        if pca_plan is not None:
+            folds_to_build |= pca_plan["folds_to_build"]
+        resume_plans[window.name] = {
+            "rrr": rrr_plan, "pca": pca_plan, "folds_to_build": folds_to_build,
+        }
 
     prepared = _get_decomposition_inputs(
         subject_ids,
@@ -106,10 +127,14 @@ def run_temporal_windows(
             per_fold_baselines=per_fold_baselines,
             config=config,
             sig_mask_flat=sig_mask,
-            ranks_by_fold=plan["rrr_ranks_by_fold"],
-            completed_pairs=plan["rrr_completed_pairs"],
-            pca_ranks_by_fold=plan["pca_ranks_by_fold"],
-            pca_completed_pairs=plan["pca_completed_pairs"],
+            ranks_by_fold=plan["rrr"]["ranks_by_fold"],
+            completed_pairs=plan["rrr"]["completed_pairs"],
+            pca_ranks_by_fold=(
+                plan["pca"]["ranks_by_fold"] if plan["pca"] else None
+            ),
+            pca_completed_pairs=(
+                plan["pca"]["completed_pairs"] if plan["pca"] else None
+            ),
         )
         units = {"rrr": unit}
         if config.run_pca_baseline:

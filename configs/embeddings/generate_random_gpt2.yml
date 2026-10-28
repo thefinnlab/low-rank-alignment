@@ -1,0 +1,24 @@
+hf_model_id: model_cache/models/gpt2
+tokenizer_name_or_path: model_cache/models/gpt2
+output_name: random-gpt2
+data_root: data/
+context_window: 1023
+dataset: deep-fmri
+stride: 512
+layers:
+- 0
+- 3
+- 6
+- 9
+- 12
+pooling: mean
+attention_mode: auto
+dtype: float32
+output_dtype: float32
+device: cuda
+batch_size: 1
+local_files_only: true
+add_prefix_space: true
+random_init_model: true
+random_init_seed: 42
+refresh: true

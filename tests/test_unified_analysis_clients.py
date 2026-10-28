@@ -8,7 +8,8 @@ from scripts.run_rrr import UnitSelector
 from scripts.run_significance import Artifact as SignificanceArtifact
 from scripts.run_significance import Config as SignificanceClientConfig
 from src.core.config import FMRICrossDatasetRRRConfig, FMRISignificanceConfig
-from src.core.config import RRRConfig, SignificanceConfig
+from src.core.config import EncodingConfig, RRRConfig, SignificanceConfig
+from src.core.registry import DatasetContext
 from src.utils.shared.config import dict_to_dataclass
 
 
@@ -28,6 +29,29 @@ def test_significance_config_dispatches_dataset_and_rejects_legacy_shape():
         dict_to_dataclass({"encoding": {}}, SignificanceClientConfig)
 
 
+def test_brain_treebank_laplacian_separates_downstream_artifact_variants(tmp_path):
+    context = DatasetContext(
+        dataset="brain_treebank",
+        stimulus_id="cars-2",
+        stimulus_label="cars-2",
+        rereference="laplacian",
+    )
+    encoding = EncodingConfig(
+        dataset="brain_treebank",
+        per_dataset_config={"movie": "cars-2", "rereference": "laplacian"},
+    )
+
+    significance = SignificanceArtifact.from_ieeg_config(
+        SignificanceConfig(encoding=encoding, results_root=str(tmp_path)), context
+    )
+    rrr = RRRArtifact.from_ieeg_config(
+        RRRConfig(encoding=encoding, results_root=str(tmp_path)), context
+    )
+
+    assert significance.variant == "rereference-laplacian"
+    assert rrr.variant_extras["rereference"] == "laplacian"
+
+
 def test_rrr_internal_mode_and_generic_source_translation():
     ieeg = RRRClientConfig(
         significance_selection={
@@ -36,6 +60,17 @@ def test_rrr_internal_mode_and_generic_source_translation():
     ).selected_config()
     assert isinstance(ieeg, RRRConfig)
     assert ieeg.mode.value == "cross_subject"
+    assert ieeg.subspace_aggregation is None
+
+    within_fmri = RRRClientConfig(
+        dataset="deep-fmri", mode="internal", ieeg=None,
+        significance_selection={
+            "mode": "within-layer",
+            "reference_artifact": {"dataset": "deep-fmri"},
+        },
+        fmri={"data": {"subjects": ["UTS01"]}},
+    ).selected_config()
+    assert within_fmri.subspace_aggregation == "prediction_weighted"
 
     fmri = RRRClientConfig(
         dataset="deep-fmri", mode="cross_dataset", ieeg=None,
@@ -49,6 +84,156 @@ def test_rrr_internal_mode_and_generic_source_translation():
     assert isinstance(fmri, FMRICrossDatasetRRRConfig)
     assert fmri.source_mode == "cross_dataset"
     assert fmri.ieeg_rrr_source["dataset"] == "podcast"
+    assert fmri.subspace_aggregation is None
+    artifact = RRRArtifact.from_fmri_config(fmri)
+    assert artifact.variant_extras == {
+        "input_scaling": "pooled-training-stories-v1",
+        "transfer_scaling": "source-then-target-reduced-pre-fir-v1",
+    }
+
+
+def test_rrr_multiview_uses_synthetic_model_identity():
+    selected = RRRClientConfig(
+        mode="multi_view",
+        multi_view_name="language-model-multiview",
+        significance_selection={
+            "mode": "within-layer",
+            "reference_artifact": {"dataset": "podcast"},
+        },
+        views=[{
+            "name": "gpt2_l0",
+            "rank": 64,
+            "source": {
+                "mode": "internal", "dataset": "podcast",
+                "model": "gpt2", "layer": 0,
+            },
+        }],
+        ieeg={"encoding": {}},
+    ).selected_config()
+    context = DatasetContext(
+        dataset="podcast", stimulus_id="podcast", stimulus_label="podcast"
+    )
+
+    artifact = RRRArtifact.from_ieeg_config(selected, context)
+
+    assert artifact.identity == {
+        "script": "run_rrr",
+        "mode": "multi_view",
+        "dataset": "podcast",
+        "offset": 0,
+        "model": "language-model-multiview",
+        "layer": None,
+    }
+    assert artifact.variant.startswith("significance-within-layer-")
+    assert "source" not in artifact.variant
+
+
+def test_rrr_fmri_multiview_uses_synthetic_model_identity():
+    selected = RRRClientConfig(
+        dataset="deep-fmri",
+        mode="multi_view",
+        multi_view_name="language-model-multiview",
+        significance_selection={
+            "mode": "within-layer",
+            "reference_artifact": {"dataset": "deep-fmri"},
+        },
+        views=[{
+            "name": "gpt2_l0",
+            "rank": 64,
+            "source": {
+                "mode": "internal", "dataset": "deep-fmri",
+                "model": "gpt2", "layer": 0,
+            },
+        }],
+        ieeg=None,
+        fmri={"data": {"subjects": ["UTS01"]}},
+    ).selected_config()
+
+    artifact = RRRArtifact.from_fmri_config(selected)
+
+    assert artifact.identity == {
+        "script": "run_rrr",
+        "mode": "multi_view",
+        "dataset": "deep-fmri",
+        "offset": 0,
+        "model": "language-model-multiview",
+        "layer": None,
+    }
+    assert artifact.variant_extras["multiview-fir"] == "view-delay-v1"
+
+
+def test_rrr_fmri_leave_one_subject_out_translation():
+    selected = RRRClientConfig(
+        dataset="deep-fmri",
+        mode="leave_one_subject_out",
+        ieeg=None,
+        significance_selection={
+            "mode": "within-layer",
+            "reference_artifact": {"dataset": "deep-fmri"},
+        },
+        fmri={"data": {"subjects": ["UTS01", "UTS02"]}},
+    ).selected_config()
+
+    assert isinstance(selected, FMRICrossDatasetRRRConfig)
+    assert selected.source_mode == "leave_one_subject_out"
+    assert selected.subspace_aggregation == "prediction_weighted"
+
+    artifact = RRRArtifact.from_fmri_config(selected)
+    assert artifact.identity["mode"] == "leave_one_subject_out"
+    assert artifact.variant_extras == {
+        "input_scaling": "pooled-training-stories-v1",
+        "loso_contract": "orthogonal-held-out-fmri-v1"
+    }
+
+
+def test_rrr_fmri_rejects_removed_rank_design_prefetch_option():
+    config = RRRClientConfig(
+        dataset="deep-fmri",
+        mode="internal",
+        ieeg=None,
+        fmri={
+            "data": {"subjects": ["UTS01"]},
+            "prefetch_rank_designs": True,
+        },
+    )
+
+    with pytest.raises(ValueError, match="prefetch_rank_designs"):
+        config.selected_config()
+
+
+def test_rrr_generic_source_preserves_rereference_selector():
+    selected = RRRClientConfig(
+        mode="cross_dataset",
+        significance_selection={
+            "mode": "within-layer",
+            "reference_artifact": {"dataset": "podcast"},
+        },
+        rrr_source={
+            "dataset": "brain-treebank-cars-2",
+            "mode": "internal",
+            "rereference": "laplacian",
+        },
+        ieeg={"encoding": {}},
+    ).selected_config()
+
+    assert selected.ieeg_rrr_source["rereference"] == "laplacian"
+
+
+def test_rrr_fmri_source_defaults_to_prediction_weighted():
+    selected = RRRClientConfig(
+        mode="cross_dataset",
+        significance_selection={
+            "mode": "within-layer",
+            "reference_artifact": {"dataset": "podcast"},
+        },
+        rrr_source={"dataset": "deep-fmri", "mode": "internal"},
+        ieeg={"encoding": {}},
+    ).selected_config()
+
+    assert selected.subspace_aggregation is None
+    assert selected.fmri_rrr_source["subspace_aggregation"] == (
+        "prediction_weighted"
+    )
 
 
 def test_rrr_cross_temporal_mode_translates_generic_source():

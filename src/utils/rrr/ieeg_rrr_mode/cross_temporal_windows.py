@@ -6,6 +6,7 @@ import pandas as pd
 from scripts.run_rrr import Artifact, UnitSelector
 from src.utils.rrr.inputs import _get_decomposition_inputs
 from src.utils.shared.encoding import build_per_fold_baselines
+from src.utils.rrr.evaluation import standardize_embeddings_with_baseline
 
 from .common import _reference_encoding_results, _temporal_window_target_mask
 from .cross_dataset_helpers import (_load_cross_temporal_A_by_fold,
@@ -63,7 +64,13 @@ def run_cross_temporal_windows(config, enc, artifact, significance, subject_ids,
                                 target_temporal_window=target_window)
             plan = artifact.resume_plan(unit=unit, ranks=config.rank_grid,
                                         folds=range(n_folds), refresh=config.refresh,
-                                        require_input_factors=False)
+                                        require_input_factors=False,
+                                        required_metric_keys=(
+                                            {"nr_orth_corr", "nr_orth_r2_per_target"}
+                                            | ({"nr_orth_best_alphas"}
+                                               if config.log_alphas else set())
+                                            if method == "rrr" else None
+                                        ))
             artifact.save_target_manifest(unit=unit, target_manifest=manifest,
                                           overwrite=config.refresh)
             per_fold_baselines = build_per_fold_baselines(
@@ -81,12 +88,18 @@ def run_cross_temporal_windows(config, enc, artifact, significance, subject_ids,
                 folds_to_build=plan["folds_to_build"])
             A_by_rank = _load_cross_temporal_A_by_fold(
                 source, method, source_window, config.rank_grid, n_folds)
+            X_standardized = [
+                standardize_embeddings_with_baseline(X_raw, baseline)
+                for baseline in per_fold_baselines
+            ]
             _run_cross_dataset_subspace_for_unit(
-                artifact=artifact, unit=unit, A_by_rank=A_by_rank, X_raw=X_raw,
+                artifact=artifact, unit=unit, A_by_rank=A_by_rank,
+                X_raw=X_standardized,
                 test_idxs=prepared.test_idxs, per_fold_baselines=per_fold_baselines,
                 config=config, primary_label="pca" if method == "pca" else "nr",
                 sig_mask_flat=sig_mask, ranks_by_fold=plan["ranks_by_fold"],
-                completed_pairs=plan["completed_pairs"])
+                completed_pairs=plan["completed_pairs"],
+                evaluate_orthonormalized=method == "rrr")
             summary = artifact.load_summary(unit=unit).copy()
             summary["source_window"], summary["target_window"] = source_window, target_window
             summary["method"] = method

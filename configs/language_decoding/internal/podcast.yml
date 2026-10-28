@@ -1,12 +1,17 @@
-dataset: podcast
+target_dataset: podcast
+num_folds: 5
+label_offsets: [-1, 0, 1]
 device: auto
 refresh: false
 
 tasks:
+  - intensity_rms
+  - word_in_previous_5
+  - prior_word_count
+  - distance_from_previous_occurrence
+  - speaker_identity
   - surprisal
   - standardized_entropy
-  - self_surprisal
-  - self_entropy
   - word_zipf_frequency
   - word_length
   - content_word
@@ -26,30 +31,13 @@ tasks:
   - iu_onset
   - iu_end
   - iu_length
+  - age_of_acquisition
+  - word_prevalence
+  - semantic_diversity
+  - sensorimotor_strength
+  - association_entropy
+  - sense_count
+  - is_named_entity
 
 task_data:
   language_features: processed_data/language_features/podcast/podcast/tokens.tsv
-
-self_surprisal_root: processed_data/language_features/self_surprisal
-self_surprisal_dataset: podcast
-self_surprisal_stimulus: podcast
-
-models:
-  gpt-j-6b:
-    rrr_config: configs/rrr/gpt-j-6b/cross_subject.yml
-    result_template: results/gpt-j-6b_layer{layer}_offset0
-  gpt2-xl-batch:
-    rrr_config: configs/rrr/gpt2-xl/cross_subject.yml
-    result_template: results/gpt2-xl-batch_layer{layer}_offset0
-  llama3-8b:
-    rrr_config: configs/rrr/llama3-8b/cross_subject.yml
-    result_template: results/llama3-8b_layer{layer}_offset0
-  roberta-large:
-    rrr_config: configs/rrr/roberta-large/cross_subject.yml
-    result_template: results/roberta-large_layer{layer}_offset0
-  random-gpt2-xl:
-    rrr_config: configs/rrr/random-gpt2-xl/cross_subject.yml
-    result_template: results/random-gpt2-xl_layer{layer}_offset0
-  gpt2:
-    rrr_config: configs/rrr/gpt2/cross_subject.yml
-    result_template: results/gpt2_layer{layer}_offset0

@@ -3,6 +3,7 @@ data_root: data/brain-treebank
 dataset: brain_treebank
 per_dataset_config:
   movie: cars-2
+  rereference: laplacian
 context_window: 1023
 stride: 512
 layers:

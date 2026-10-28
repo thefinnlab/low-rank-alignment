@@ -1,0 +1,9 @@
+target_dataset: cars-2
+num_folds: 5
+label_offsets: [-1, 0, 1]
+source_dataset: podcast
+device: auto
+refresh: false
+tasks: &cars_tasks [native_speaker, surprisal, standardized_entropy, word_zipf_frequency, word_length, content_word, part_of_speech, sentence_position, sentence_onset, sentence_end, word_duration, pre_word_pause, post_word_pause, concreteness, dependency_depth, dependency_length, word_in_previous_5, prior_word_count, distance_from_previous_occurrence, native_pitch, native_intensity_rms]
+task_data:
+  language_features: processed_data/language_features/brain_treebank/cars-2/tokens.tsv

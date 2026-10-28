@@ -1,0 +1,500 @@
+dataset: brain_treebank
+mode: multi_view
+multi_view_name: language-model-multiview
+results_root: results
+plot: true
+refresh: true
+rank_grid:
+- 1
+- 2
+- 4
+- 8
+- 16
+- 32
+- 64
+- 128
+- 256
+- 512
+- 1024
+- 1984
+significance_selection:
+  mode: cross-model-layer
+  reference_artifact:
+    mode: sig_lags
+    dataset: brain-treebank-cars-2
+    offset: 0
+    model: gpt2-xl-batch
+    layer: 24
+    variant: rereference-laplacian
+  artifacts: &cars_2_significance_artifacts
+  - mode: sig_lags
+    dataset: brain-treebank-cars-2
+    offset: 0
+    model: gpt2
+    layer: [0, 3, 6, 9, 12]
+    variant: rereference-laplacian
+  - mode: sig_lags
+    dataset: brain-treebank-cars-2
+    offset: 0
+    model: gpt2-xl-batch
+    layer: [0, 12, 24, 36, 48]
+    variant: rereference-laplacian
+  - mode: sig_lags
+    dataset: brain-treebank-cars-2
+    offset: 0
+    model: gpt-j-6b
+    layer: [0, 7, 14, 21, 28]
+    variant: rereference-laplacian
+  - mode: sig_lags
+    dataset: brain-treebank-cars-2
+    offset: 0
+    model: roberta-large
+    layer: [0, 6, 12, 18, 24]
+    variant: rereference-laplacian
+  - mode: sig_lags
+    dataset: brain-treebank-cars-2
+    offset: 0
+    model: llama3-8b
+    layer: [0, 8, 16, 24, 32]
+    variant: rereference-laplacian
+  - mode: sig_lags
+    dataset: brain-treebank-cars-2
+    offset: 0
+    model: random-gpt2
+    layer: [0, 3, 6, 9, 12]
+    variant: rereference-laplacian
+  - mode: sig_lags
+    dataset: brain-treebank-cars-2
+    offset: 0
+    model: glove-300
+    layer: null
+    variant: rereference-laplacian
+subspace_aggregation: extrinsic
+views:
+- name: cars_2_gpt2_l0
+  rank: 64
+  source:
+    mode: internal
+    dataset: brain-treebank-cars-2
+    rereference: laplacian
+    offset: 0
+    model: gpt2
+    layer: 0
+    significance_selection:
+      mode: cross-model-layer
+      reference_artifact: {mode: sig_lags, dataset: brain-treebank-cars-2, offset: 0, model: gpt2, layer: 0, variant: rereference-laplacian}
+      artifacts: *cars_2_significance_artifacts
+- name: cars_2_gpt2_l3
+  rank: 64
+  source:
+    mode: internal
+    dataset: brain-treebank-cars-2
+    rereference: laplacian
+    offset: 0
+    model: gpt2
+    layer: 3
+    significance_selection:
+      mode: cross-model-layer
+      reference_artifact: {mode: sig_lags, dataset: brain-treebank-cars-2, offset: 0, model: gpt2, layer: 3, variant: rereference-laplacian}
+      artifacts: *cars_2_significance_artifacts
+- name: cars_2_gpt2_l6
+  rank: 64
+  source:
+    mode: internal
+    dataset: brain-treebank-cars-2
+    rereference: laplacian
+    offset: 0
+    model: gpt2
+    layer: 6
+    significance_selection:
+      mode: cross-model-layer
+      reference_artifact: {mode: sig_lags, dataset: brain-treebank-cars-2, offset: 0, model: gpt2, layer: 6, variant: rereference-laplacian}
+      artifacts: *cars_2_significance_artifacts
+- name: cars_2_gpt2_l9
+  rank: 64
+  source:
+    mode: internal
+    dataset: brain-treebank-cars-2
+    rereference: laplacian
+    offset: 0
+    model: gpt2
+    layer: 9
+    significance_selection:
+      mode: cross-model-layer
+      reference_artifact: {mode: sig_lags, dataset: brain-treebank-cars-2, offset: 0, model: gpt2, layer: 9, variant: rereference-laplacian}
+      artifacts: *cars_2_significance_artifacts
+- name: cars_2_gpt2_l12
+  rank: 64
+  source:
+    mode: internal
+    dataset: brain-treebank-cars-2
+    rereference: laplacian
+    offset: 0
+    model: gpt2
+    layer: 12
+    significance_selection:
+      mode: cross-model-layer
+      reference_artifact: {mode: sig_lags, dataset: brain-treebank-cars-2, offset: 0, model: gpt2, layer: 12, variant: rereference-laplacian}
+      artifacts: *cars_2_significance_artifacts
+- name: cars_2_gpt2xl_l0
+  rank: 64
+  source:
+    mode: internal
+    dataset: brain-treebank-cars-2
+    rereference: laplacian
+    offset: 0
+    model: gpt2-xl-batch
+    layer: 0
+    significance_selection:
+      mode: cross-model-layer
+      reference_artifact: {mode: sig_lags, dataset: brain-treebank-cars-2, offset: 0, model: gpt2-xl-batch, layer: 0, variant: rereference-laplacian}
+      artifacts: *cars_2_significance_artifacts
+- name: cars_2_gpt2xl_l12
+  rank: 64
+  source:
+    mode: internal
+    dataset: brain-treebank-cars-2
+    rereference: laplacian
+    offset: 0
+    model: gpt2-xl-batch
+    layer: 12
+    significance_selection:
+      mode: cross-model-layer
+      reference_artifact: {mode: sig_lags, dataset: brain-treebank-cars-2, offset: 0, model: gpt2-xl-batch, layer: 12, variant: rereference-laplacian}
+      artifacts: *cars_2_significance_artifacts
+- name: cars_2_gpt2xl_l24
+  rank: 64
+  source:
+    mode: internal
+    dataset: brain-treebank-cars-2
+    rereference: laplacian
+    offset: 0
+    model: gpt2-xl-batch
+    layer: 24
+    significance_selection:
+      mode: cross-model-layer
+      reference_artifact: {mode: sig_lags, dataset: brain-treebank-cars-2, offset: 0, model: gpt2-xl-batch, layer: 24, variant: rereference-laplacian}
+      artifacts: *cars_2_significance_artifacts
+- name: cars_2_gpt2xl_l36
+  rank: 64
+  source:
+    mode: internal
+    dataset: brain-treebank-cars-2
+    rereference: laplacian
+    offset: 0
+    model: gpt2-xl-batch
+    layer: 36
+    significance_selection:
+      mode: cross-model-layer
+      reference_artifact: {mode: sig_lags, dataset: brain-treebank-cars-2, offset: 0, model: gpt2-xl-batch, layer: 36, variant: rereference-laplacian}
+      artifacts: *cars_2_significance_artifacts
+- name: cars_2_gpt2xl_l48
+  rank: 64
+  source:
+    mode: internal
+    dataset: brain-treebank-cars-2
+    rereference: laplacian
+    offset: 0
+    model: gpt2-xl-batch
+    layer: 48
+    significance_selection:
+      mode: cross-model-layer
+      reference_artifact: {mode: sig_lags, dataset: brain-treebank-cars-2, offset: 0, model: gpt2-xl-batch, layer: 48, variant: rereference-laplacian}
+      artifacts: *cars_2_significance_artifacts
+- name: cars_2_gptj6b_l0
+  rank: 64
+  source:
+    mode: internal
+    dataset: brain-treebank-cars-2
+    rereference: laplacian
+    offset: 0
+    model: gpt-j-6b
+    layer: 0
+    significance_selection:
+      mode: cross-model-layer
+      reference_artifact: {mode: sig_lags, dataset: brain-treebank-cars-2, offset: 0, model: gpt-j-6b, layer: 0, variant: rereference-laplacian}
+      artifacts: *cars_2_significance_artifacts
+- name: cars_2_gptj6b_l7
+  rank: 64
+  source:
+    mode: internal
+    dataset: brain-treebank-cars-2
+    rereference: laplacian
+    offset: 0
+    model: gpt-j-6b
+    layer: 7
+    significance_selection:
+      mode: cross-model-layer
+      reference_artifact: {mode: sig_lags, dataset: brain-treebank-cars-2, offset: 0, model: gpt-j-6b, layer: 7, variant: rereference-laplacian}
+      artifacts: *cars_2_significance_artifacts
+- name: cars_2_gptj6b_l14
+  rank: 64
+  source:
+    mode: internal
+    dataset: brain-treebank-cars-2
+    rereference: laplacian
+    offset: 0
+    model: gpt-j-6b
+    layer: 14
+    significance_selection:
+      mode: cross-model-layer
+      reference_artifact: {mode: sig_lags, dataset: brain-treebank-cars-2, offset: 0, model: gpt-j-6b, layer: 14, variant: rereference-laplacian}
+      artifacts: *cars_2_significance_artifacts
+- name: cars_2_gptj6b_l21
+  rank: 64
+  source:
+    mode: internal
+    dataset: brain-treebank-cars-2
+    rereference: laplacian
+    offset: 0
+    model: gpt-j-6b
+    layer: 21
+    significance_selection:
+      mode: cross-model-layer
+      reference_artifact: {mode: sig_lags, dataset: brain-treebank-cars-2, offset: 0, model: gpt-j-6b, layer: 21, variant: rereference-laplacian}
+      artifacts: *cars_2_significance_artifacts
+- name: cars_2_gptj6b_l28
+  rank: 64
+  source:
+    mode: internal
+    dataset: brain-treebank-cars-2
+    rereference: laplacian
+    offset: 0
+    model: gpt-j-6b
+    layer: 28
+    significance_selection:
+      mode: cross-model-layer
+      reference_artifact: {mode: sig_lags, dataset: brain-treebank-cars-2, offset: 0, model: gpt-j-6b, layer: 28, variant: rereference-laplacian}
+      artifacts: *cars_2_significance_artifacts
+- name: cars_2_roberta_large_l0
+  rank: 64
+  source:
+    mode: internal
+    dataset: brain-treebank-cars-2
+    rereference: laplacian
+    offset: 0
+    model: roberta-large
+    layer: 0
+    significance_selection:
+      mode: cross-model-layer
+      reference_artifact: {mode: sig_lags, dataset: brain-treebank-cars-2, offset: 0, model: roberta-large, layer: 0, variant: rereference-laplacian}
+      artifacts: *cars_2_significance_artifacts
+- name: cars_2_roberta_large_l6
+  rank: 64
+  source:
+    mode: internal
+    dataset: brain-treebank-cars-2
+    rereference: laplacian
+    offset: 0
+    model: roberta-large
+    layer: 6
+    significance_selection:
+      mode: cross-model-layer
+      reference_artifact: {mode: sig_lags, dataset: brain-treebank-cars-2, offset: 0, model: roberta-large, layer: 6, variant: rereference-laplacian}
+      artifacts: *cars_2_significance_artifacts
+- name: cars_2_roberta_large_l12
+  rank: 64
+  source:
+    mode: internal
+    dataset: brain-treebank-cars-2
+    rereference: laplacian
+    offset: 0
+    model: roberta-large
+    layer: 12
+    significance_selection:
+      mode: cross-model-layer
+      reference_artifact: {mode: sig_lags, dataset: brain-treebank-cars-2, offset: 0, model: roberta-large, layer: 12, variant: rereference-laplacian}
+      artifacts: *cars_2_significance_artifacts
+- name: cars_2_roberta_large_l18
+  rank: 64
+  source:
+    mode: internal
+    dataset: brain-treebank-cars-2
+    rereference: laplacian
+    offset: 0
+    model: roberta-large
+    layer: 18
+    significance_selection:
+      mode: cross-model-layer
+      reference_artifact: {mode: sig_lags, dataset: brain-treebank-cars-2, offset: 0, model: roberta-large, layer: 18, variant: rereference-laplacian}
+      artifacts: *cars_2_significance_artifacts
+- name: cars_2_roberta_large_l24
+  rank: 64
+  source:
+    mode: internal
+    dataset: brain-treebank-cars-2
+    rereference: laplacian
+    offset: 0
+    model: roberta-large
+    layer: 24
+    significance_selection:
+      mode: cross-model-layer
+      reference_artifact: {mode: sig_lags, dataset: brain-treebank-cars-2, offset: 0, model: roberta-large, layer: 24, variant: rereference-laplacian}
+      artifacts: *cars_2_significance_artifacts
+- name: cars_2_llama3_8b_l0
+  rank: 64
+  source:
+    mode: internal
+    dataset: brain-treebank-cars-2
+    rereference: laplacian
+    offset: 0
+    model: llama3-8b
+    layer: 0
+    significance_selection:
+      mode: cross-model-layer
+      reference_artifact: {mode: sig_lags, dataset: brain-treebank-cars-2, offset: 0, model: llama3-8b, layer: 0, variant: rereference-laplacian}
+      artifacts: *cars_2_significance_artifacts
+- name: cars_2_llama3_8b_l8
+  rank: 64
+  source:
+    mode: internal
+    dataset: brain-treebank-cars-2
+    rereference: laplacian
+    offset: 0
+    model: llama3-8b
+    layer: 8
+    significance_selection:
+      mode: cross-model-layer
+      reference_artifact: {mode: sig_lags, dataset: brain-treebank-cars-2, offset: 0, model: llama3-8b, layer: 8, variant: rereference-laplacian}
+      artifacts: *cars_2_significance_artifacts
+- name: cars_2_llama3_8b_l16
+  rank: 64
+  source:
+    mode: internal
+    dataset: brain-treebank-cars-2
+    rereference: laplacian
+    offset: 0
+    model: llama3-8b
+    layer: 16
+    significance_selection:
+      mode: cross-model-layer
+      reference_artifact: {mode: sig_lags, dataset: brain-treebank-cars-2, offset: 0, model: llama3-8b, layer: 16, variant: rereference-laplacian}
+      artifacts: *cars_2_significance_artifacts
+- name: cars_2_llama3_8b_l24
+  rank: 64
+  source:
+    mode: internal
+    dataset: brain-treebank-cars-2
+    rereference: laplacian
+    offset: 0
+    model: llama3-8b
+    layer: 24
+    significance_selection:
+      mode: cross-model-layer
+      reference_artifact: {mode: sig_lags, dataset: brain-treebank-cars-2, offset: 0, model: llama3-8b, layer: 24, variant: rereference-laplacian}
+      artifacts: *cars_2_significance_artifacts
+- name: cars_2_llama3_8b_l32
+  rank: 64
+  source:
+    mode: internal
+    dataset: brain-treebank-cars-2
+    rereference: laplacian
+    offset: 0
+    model: llama3-8b
+    layer: 32
+    significance_selection:
+      mode: cross-model-layer
+      reference_artifact: {mode: sig_lags, dataset: brain-treebank-cars-2, offset: 0, model: llama3-8b, layer: 32, variant: rereference-laplacian}
+      artifacts: *cars_2_significance_artifacts
+- name: cars_2_random_gpt2_l0
+  rank: 64
+  source:
+    mode: internal
+    dataset: brain-treebank-cars-2
+    rereference: laplacian
+    offset: 0
+    model: random-gpt2
+    layer: 0
+    significance_selection:
+      mode: cross-model-layer
+      reference_artifact: {mode: sig_lags, dataset: brain-treebank-cars-2, offset: 0, model: random-gpt2, layer: 0, variant: rereference-laplacian}
+      artifacts: *cars_2_significance_artifacts
+- name: cars_2_random_gpt2_l3
+  rank: 64
+  source:
+    mode: internal
+    dataset: brain-treebank-cars-2
+    rereference: laplacian
+    offset: 0
+    model: random-gpt2
+    layer: 3
+    significance_selection:
+      mode: cross-model-layer
+      reference_artifact: {mode: sig_lags, dataset: brain-treebank-cars-2, offset: 0, model: random-gpt2, layer: 3, variant: rereference-laplacian}
+      artifacts: *cars_2_significance_artifacts
+- name: cars_2_random_gpt2_l6
+  rank: 64
+  source:
+    mode: internal
+    dataset: brain-treebank-cars-2
+    rereference: laplacian
+    offset: 0
+    model: random-gpt2
+    layer: 6
+    significance_selection:
+      mode: cross-model-layer
+      reference_artifact: {mode: sig_lags, dataset: brain-treebank-cars-2, offset: 0, model: random-gpt2, layer: 6, variant: rereference-laplacian}
+      artifacts: *cars_2_significance_artifacts
+- name: cars_2_random_gpt2_l9
+  rank: 64
+  source:
+    mode: internal
+    dataset: brain-treebank-cars-2
+    rereference: laplacian
+    offset: 0
+    model: random-gpt2
+    layer: 9
+    significance_selection:
+      mode: cross-model-layer
+      reference_artifact: {mode: sig_lags, dataset: brain-treebank-cars-2, offset: 0, model: random-gpt2, layer: 9, variant: rereference-laplacian}
+      artifacts: *cars_2_significance_artifacts
+- name: cars_2_random_gpt2_l12
+  rank: 64
+  source:
+    mode: internal
+    dataset: brain-treebank-cars-2
+    rereference: laplacian
+    offset: 0
+    model: random-gpt2
+    layer: 12
+    significance_selection:
+      mode: cross-model-layer
+      reference_artifact: {mode: sig_lags, dataset: brain-treebank-cars-2, offset: 0, model: random-gpt2, layer: 12, variant: rereference-laplacian}
+      artifacts: *cars_2_significance_artifacts
+- name: cars_2_glove_300_lnone
+  rank: 64
+  source:
+    mode: internal
+    dataset: brain-treebank-cars-2
+    rereference: laplacian
+    offset: 0
+    model: glove-300
+    layer: null
+    significance_selection:
+      mode: cross-model-layer
+      reference_artifact: {mode: sig_lags, dataset: brain-treebank-cars-2, offset: 0, model: glove-300, layer: null, variant: rereference-laplacian}
+      artifacts: *cars_2_significance_artifacts
+ieeg:
+  encoding:
+    data_root: data/brain-treebank
+    model: transformer
+    offset: 0
+    subjects: [3, 7, 10]
+    per_model_config:
+      model_dir: gpt2-xl-batch
+      layer: 24
+    per_dataset_config:
+      movie: cars-2
+      rereference: laplacian
+    shared_word_selection: true
+    num_folds: 5
+  banded_ridge_alphas: null
+  banded_ridge_solver_params:
+    n_iter: 500
+    random_state: 43
+  save_rrr_corr_per_target: true
+  save_b_matrices: true
+  run_pca_baseline: false
+  run_null_augmented: false
+fmri: null
+

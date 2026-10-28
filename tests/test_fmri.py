@@ -63,6 +63,66 @@ def test_load_story_embeddings_pools_words_from_hdf5(tmp_path):
     np.testing.assert_allclose(result["story"], [[2.0, 4.0], [8.0, 10.0]])
 
 
+def test_load_story_embeddings_supports_glove(monkeypatch):
+    frame = pd.DataFrame({
+        "word_idx": [0, 1], "word": ["one", "two"],
+        "start": [0.0, 1.0], "end": [0.5, 1.5],
+    })
+    monkeypatch.setattr(
+        fmri, "load_story_word_data",
+        lambda root, stories: ({"story": frame}, {}),
+    )
+    monkeypatch.setattr(
+        "src.utils.shared.embeddings.get_glove_embeddings",
+        lambda root, words, dim: (np.ones((2, dim), dtype=np.float32), words),
+    )
+
+    result = fmri.load_story_embeddings(
+        "unused", "glove-300", ["story"], None,
+        fmri_repo_root="fmri", glove_data_root="data",
+    )
+
+    assert result["story"].shape == (2, 300)
+
+
+def test_load_story_embeddings_zero_masks_glove_oov_words(tmp_path, monkeypatch):
+    story_dir = tmp_path / "model" / "story"
+    story_dir.mkdir(parents=True)
+    pd.DataFrame({"word_idx": [0, 1, 2]}).to_csv(
+        story_dir / "transcript.tsv", sep="\t", index=False
+    )
+    token_values = np.arange(6, dtype=np.float32).reshape(3, 2) + 1
+    with h5py.File(story_dir / "features.hdf5", "w") as handle:
+        handle.create_dataset("layer-2", data=token_values)
+    frame = pd.DataFrame({
+        "word_idx": [0, 1, 2], "word": ["one", "oov", "three"],
+        "start": [0.0, 1.0, 2.0], "end": [0.5, 1.5, 2.5],
+    })
+    monkeypatch.setattr(
+        fmri, "load_story_word_data",
+        lambda root, stories: ({"story": frame}, {}),
+    )
+
+    def fake_glove(root, words, dim):
+        covered = words.copy()
+        covered["in_glove"] = [True, False, True]
+        return np.ones((3, dim), dtype=np.float32), covered
+
+    monkeypatch.setattr(
+        "src.utils.shared.embeddings.get_glove_embeddings", fake_glove
+    )
+
+    result = fmri.load_story_embeddings(
+        str(tmp_path), "model", ["story"], layer=2,
+        fmri_repo_root="fmri", glove_data_root="data",
+        limit_to_glove=True, glove_dim=300,
+    )
+
+    np.testing.assert_array_equal(
+        result["story"], [[1.0, 2.0], [0.0, 0.0], [5.0, 6.0]]
+    )
+
+
 def test_finite_response_voxel_masks_require_complete_stories(tmp_path):
     base = (
         tmp_path
@@ -151,7 +211,7 @@ def test_prepare_zero_pads_delays_at_each_story_boundary(monkeypatch):
     np.testing.assert_array_equal(prepared.stimulus[[0, 3]], 0)
 
 
-def test_cached_tr_alignment_projects_like_legacy_linear_resampling(monkeypatch):
+def test_cached_tr_alignment_standardizes_before_projection(monkeypatch):
     frame = pd.DataFrame(
         {
             "word_idx": np.arange(12),
@@ -178,16 +238,76 @@ def test_cached_tr_alignment_projects_like_legacy_linear_resampling(monkeypatch)
 
     aligned = fmri.align_fmri_stimuli("unused", ["story"], embeddings, trim=0)
     cached = fmri.build_fmri_stimulus(aligned, ["story"], ndelays=2, basis=basis)
-    legacy = fmri.prepare_fmri_data(
-        "unused",
-        ["story"],
-        {"story": embeddings["story"] @ basis},
-        trim=0,
-        ndelays=2,
+    standardized = fmri._zscore_columns(aligned.stories["story"]).astype(np.float32)
+    expected_pre_fir = np.asarray(standardized @ basis, dtype=np.float32)
+
+    np.testing.assert_allclose(cached.pre_fir_stimulus, expected_pre_fir)
+    np.testing.assert_allclose(
+        cached.stimulus,
+        fmri.make_delayed(expected_pre_fir, ndelays=2),
     )
 
-    np.testing.assert_allclose(cached.pre_fir_stimulus, legacy.pre_fir_stimulus)
-    np.testing.assert_allclose(cached.stimulus, legacy.stimulus)
+
+def test_full_rank_orthonormal_projection_preserves_fmri_design():
+    rng = np.random.default_rng(4)
+    first = rng.normal(size=(19, 5)) * np.array([1.0, 3.0, 0.2, 7.0, 2.0])
+    second = rng.normal(size=(23, 5)) * np.array([4.0, 0.5, 8.0, 1.5, 0.1])
+    basis, _ = np.linalg.qr(rng.normal(size=(5, 5)))
+    aligned = fmri.AlignedFMRIStimuli(stories={"first": first, "second": second})
+
+    full = fmri.build_fmri_stimulus(
+        aligned, ["first", "second"], ndelays=3
+    )
+    projected = fmri.build_fmri_stimulus(
+        aligned, ["first", "second"], ndelays=3, basis=basis
+    )
+
+    np.testing.assert_allclose(
+        projected.pre_fir_stimulus,
+        full.pre_fir_stimulus @ basis,
+        rtol=1e-5,
+        atol=1e-6,
+    )
+    expected_fir = np.hstack(
+        [full.stimulus[:, start : start + 5] @ basis for start in range(0, 15, 5)]
+    )
+    np.testing.assert_allclose(projected.stimulus, expected_fir, rtol=1e-5, atol=1e-6)
+
+
+def test_pooled_embedding_scaler_weights_training_rows_and_excludes_test_story():
+    aligned = fmri.AlignedFMRIStimuli(stories={
+        "short": np.array([[0.0, 2.0], [2.0, 2.0]], dtype=np.float32),
+        "long": np.array(
+            [[4.0, 2.0], [6.0, 2.0], [8.0, 2.0], [10.0, 2.0]],
+            dtype=np.float32,
+        ),
+        "test": np.full((20, 2), 1000.0, dtype=np.float32),
+    })
+
+    scaler = fmri.fit_pooled_embedding_scaler(aligned, ["short", "long"])
+    pooled = np.vstack([aligned.stories["short"], aligned.stories["long"]])
+
+    np.testing.assert_allclose(scaler["mean"], pooled.mean(axis=0))
+    np.testing.assert_allclose(scaler["scale"][0], pooled[:, 0].std())
+    assert scaler["scale"][1] == 1.0
+    transformed = np.vstack([
+        fmri.apply_embedding_scaler(aligned.stories[name], scaler)
+        for name in ("short", "long")
+    ])
+    np.testing.assert_allclose(transformed.mean(axis=0), 0.0, atol=1e-6)
+    np.testing.assert_allclose(transformed[:, 0].std(), 1.0, atol=1e-6)
+
+
+def test_pooled_embedding_scaler_preserves_small_variance_around_large_mean():
+    values = 1e10 + np.array(
+        [[-3.0, 2.0], [-1.0, -2.0], [1.0, 2.0], [3.0, -2.0]],
+        dtype=np.float64,
+    )
+    aligned = fmri.AlignedFMRIStimuli(stories={"train": values})
+
+    scaler = fmri.fit_pooled_embedding_scaler(aligned, ["train"])
+
+    np.testing.assert_allclose(scaler["scale"], values.std(axis=0), rtol=1e-6)
 
 
 def test_load_responses_reads_selected_voxels_in_subject_order(tmp_path):
@@ -293,7 +413,10 @@ def test_within_fmri_bases_save_fir_blocks_rank_bases_and_pre_fir_pca(
 
     def fake_fit_dense_rrr(*args, **kwargs):
         fit_kwargs.update(kwargs)
-        return {"A_dense": fir_a}
+        return {
+            "A_dense": fir_a,
+            "singular_values": np.array([7.0], dtype=np.float32),
+        }
 
     monkeypatch.setattr(
         runner,
@@ -302,7 +425,7 @@ def test_within_fmri_bases_save_fir_blocks_rank_bases_and_pre_fir_pca(
     )
     config = SimpleNamespace(
         rank_grid=[1],
-        subspace_aggregation="unnormalized",
+        subspace_aggregation="factor_weighted",
         rrr_svd_on_cpu=True,
         rrr_use_low_rank_svd=True,
         rrr_low_rank_svd_seed=17,
@@ -322,6 +445,7 @@ def test_within_fmri_bases_save_fir_blocks_rank_bases_and_pre_fir_pca(
     )
 
     np.testing.assert_array_equal(factors["full_fir"], fir_a)
+    np.testing.assert_array_equal(factors["prediction_singular_values"], [7.0])
     assert len(factors["delay_blocks"]) == 2
     assert abs(float(bases["rrr"][1][:, 0] @ np.array([1.0, 0.0, 0.0]))) > 0.999
     assert abs(float(bases["pca"][1][:, 0] @ np.array([1.0, 0.0, 0.0]))) > 0.999
@@ -329,6 +453,67 @@ def test_within_fmri_bases_save_fir_blocks_rank_bases_and_pre_fir_pca(
     assert fit_kwargs["use_low_rank_svd"] is True
     assert fit_kwargs["low_rank_svd_seed"] == 17
     assert fit_kwargs["return_b"] is False
+
+
+def test_within_fmri_prediction_weighted_basis_uses_prediction_singular_values(
+    monkeypatch,
+):
+    from src.utils.rrr import rrr_fmri as runner
+
+    prepared = fmri.PreparedFMRI(
+        stimulus=np.zeros((8, 6), dtype=np.float32),
+        pre_fir_stimulus=np.eye(8, 3, dtype=np.float32),
+        responses=np.zeros((8, 3), dtype=np.float32),
+        story_slices={"story": slice(0, 8)},
+    )
+    fir_a = np.array(
+        [
+            [100.0, 0.0],
+            [0.0, 0.0],
+            [0.0, 1000.0],
+            [0.0, 0.0],
+            [100.0, 0.0],
+            [0.0, 1000.0],
+        ],
+        dtype=np.float32,
+    )
+    monkeypatch.setattr(
+        runner,
+        "fit_dense_rrr",
+        lambda *args, **kwargs: {
+            "A_dense": fir_a,
+            "singular_values": np.array([10.0, 1.0], dtype=np.float32),
+        },
+    )
+    config = SimpleNamespace(
+        rank_grid=[2],
+        subspace_aggregation="prediction_weighted",
+        rrr_svd_on_cpu=False,
+        rrr_use_low_rank_svd=False,
+        rrr_low_rank_svd_seed=0,
+        rrr_save_b_matrix=False,
+        pca_svd_device="cpu",
+        fmri=SimpleNamespace(ndelays=2),
+    )
+    ridge_fit = runner.FinalRidgeFit(
+        test_prediction=np.zeros((2, 3), dtype=np.float32),
+        train_prediction=np.zeros((8, 3), dtype=np.float32),
+        coefficients=np.zeros((6, 3), dtype=np.float32),
+        best_alphas=np.ones(3),
+        alpha_grid=np.ones(1),
+    )
+
+    bases, _ = runner._fit_within_fmri_bases(
+        prepared, ridge_fit, ambient_dim=3, config=config
+    )
+
+    basis = bases["rrr"][2]
+    np.testing.assert_allclose(basis.T @ basis, np.eye(2), atol=1e-6)
+    np.testing.assert_allclose(
+        basis @ basis.T,
+        np.diag([1.0, 1.0, 0.0]),
+        atol=1e-6,
+    )
 
 
 def test_final_ridge_skips_unused_train_prediction_and_coefficients(
@@ -404,8 +589,17 @@ def test_cross_dataset_completed_resume_skips_embeddings_and_responses(
         pd.DataFrame({"subject": ["UTS01"], "target_id": [0],
                       "target_kind": ["voxel"], "significant": [True]}),
     )
-    source = IEEGArtifact(model="gpt2-xl", layer=24,
-                          results_root=results_root).begin(config={"rrr": 1})
+    source_selection = {
+        "mode": "within-layer",
+        "reference_artifact": {
+            "mode": "sig_lags", "dataset": "podcast", "offset": 0,
+            "model": "gpt2-xl", "layer": 24,
+        },
+    }
+    source = IEEGArtifact(
+        model="gpt2-xl", layer=24, results_root=results_root,
+        significance_selection=source_selection,
+    ).begin(config={"rrr": 1, "significance_selection": source_selection})
     source.save_factors(unit=UnitSelector(method="rrr"), fold=0,
                         input_factors=np.ones((2, 1), dtype=np.float32))
     config = FMRICrossDatasetRRRConfig(
@@ -421,9 +615,11 @@ def test_cross_dataset_completed_resume_skips_embeddings_and_responses(
                 "variant": sig.variant,
             }
         ),
-        ieeg_rrr_source={"mode": "internal", "dataset": "podcast",
-                         "offset": 0, "model": "gpt2-xl", "layer": 24,
-                         "variant": source.variant},
+        ieeg_rrr_source={
+            "mode": "internal", "dataset": "podcast", "offset": 0,
+            "model": "gpt2-xl", "layer": 24,
+            "significance_selection": source_selection,
+        },
         source_mode="cross_dataset",
         rank_grid=[1],
     )
@@ -434,8 +630,11 @@ def test_cross_dataset_completed_resume_skips_embeddings_and_responses(
             AssertionError("completed resume should not load embeddings")
         ),
     )
-    target = IEEGArtifact.from_fmri_config(config).begin(
-        config=config, upstreams=[sig.identity_record(), source.identity_record()]
+    target = IEEGArtifact.from_fmri_config(config)
+    target.begin(
+        config=config,
+        upstreams=[sig.identity_record(), source.identity_record()],
+        variant_extras=target.variant_extras,
     )
     target.save_field("full_metrics", {
         "corr_per_target": np.array([0.25]), "r2_per_target": np.array([0.1]),
@@ -445,7 +644,6 @@ def test_cross_dataset_completed_resume_skips_embeddings_and_responses(
         "corr_per_target": np.array([0.2]), "r2_per_target": np.array([0.05]),
         "best_alphas": np.array([1.0]),
     })
-
     result = runner.run_fmri(config)
 
     results = result.load_field("mean_results")

@@ -374,6 +374,7 @@ def plot_rrr_rank_results(
         "rrr": "#1e40af",  # dark blue — raw RRR
         "nr": "#3b82f6",  # blue — NR ridge (primary in RRR run)
         "pca": "#3b82f6",  # blue — PCA (primary in PCA run)
+        "orth": "#ea580c",  # orange — ridge on QR-orthonormalized A
         "complement": "#8b5cf6",  # purple
         "arbitrary": "#78716c",  # gray
         "comp_joint": "#10b981",  # green — NR+complement joint
@@ -383,6 +384,7 @@ def plot_rrr_rank_results(
     }
 
     primary_color = _colors.get(primary_label, "#3b82f6")
+    orth_color = _colors["orth"]
     comp_joint_col = f"{primary_label}_complement_joint_corr"
     comp_joint_ridge_col = f"{primary_label}_complement_joint_ridge_corr"
     arb_joint_col = f"{primary_label}_arbitrary_joint_corr"
@@ -441,12 +443,25 @@ def plot_rrr_rank_results(
 
     ax_corr = axes[0, 0]
     primary_corr_col = f"{primary_label}_corr"
+    orth_corr_col = f"{primary_label}_orth_corr"
+    has_orth = orth_corr_col in summary_df.columns
+    corr_fold_col = (
+        primary_corr_col if primary_corr_col in grid_df.columns else orth_corr_col
+    )
     _fold_traces(ax_corr, primary_corr_col, primary_color)
+    _fold_traces(ax_corr, orth_corr_col, orth_color)
     _mean_line(
         ax_corr, "full_corr", summary_df, _colors["full"], "full (ceiling)", ls="--"
     )
     _mean_line(ax_corr, "rrr_corr", summary_df, _colors["rrr"], "rrr (raw)", mk="^")
-    _mean_line(ax_corr, primary_corr_col, summary_df, primary_color, primary_label)
+    _mean_line(
+        ax_corr, primary_corr_col, summary_df, primary_color,
+        f"{primary_label} (raw A)" if has_orth else primary_label,
+    )
+    _mean_line(
+        ax_corr, orth_corr_col, summary_df, orth_color,
+        f"{primary_label} (QR A)", ls="--", mk="s",
+    )
     _mean_line(
         ax_corr,
         "complement_corr",
@@ -503,22 +518,30 @@ def plot_rrr_rank_results(
 
     ax_corr_folds = axes[0, 1]
     _fold_traces(ax_corr_folds, primary_corr_col, primary_color)
+    _fold_traces(ax_corr_folds, orth_corr_col, orth_color)
     _mean_line(
-        ax_corr_folds, primary_corr_col, summary_df, primary_color, primary_label
+        ax_corr_folds, primary_corr_col, summary_df, primary_color,
+        f"{primary_label} (raw A)" if has_orth else primary_label,
+    )
+    _mean_line(
+        ax_corr_folds, orth_corr_col, summary_df, orth_color,
+        f"{primary_label} (QR A)", ls="--", mk="s",
     )
     _panel_finish(
         ax_corr_folds,
         "Rank k",
         "Correlation",
-        f"{title}\n(per-fold: {primary_label}_corr)",
+        f"{title}\n(per-fold: {corr_fold_col})",
         hline=0,
     )
 
-    _heatmap(axes[0, 2], primary_corr_col, "Blues", f"{primary_label}_corr")
+    _heatmap(axes[0, 2], corr_fold_col, "Blues", corr_fold_col)
 
     # ===== Row 1: R² vs rank =====
 
     primary_r2_col = f"{primary_label}_r2"
+    orth_r2_col = f"{primary_label}_orth_r2"
+    r2_fold_col = primary_r2_col if primary_r2_col in grid_df.columns else orth_r2_col
     comp_joint_r2_col = f"{primary_label}_complement_joint_r2"
     comp_joint_ridge_r2_col = f"{primary_label}_complement_joint_ridge_r2"
     arb_joint_r2_col = f"{primary_label}_arbitrary_joint_r2"
@@ -526,9 +549,17 @@ def plot_rrr_rank_results(
 
     ax_r2 = axes[1, 0]
     _fold_traces(ax_r2, primary_r2_col, primary_color)
+    _fold_traces(ax_r2, orth_r2_col, orth_color)
     _mean_line(ax_r2, "full_r2", summary_df, _colors["full"], "full (ceiling)", ls="--")
     _mean_line(ax_r2, "rrr_r2", summary_df, _colors["rrr"], "rrr (raw)", mk="^")
-    _mean_line(ax_r2, primary_r2_col, summary_df, primary_color, primary_label)
+    _mean_line(
+        ax_r2, primary_r2_col, summary_df, primary_color,
+        f"{primary_label} (raw A)" if has_orth else primary_label,
+    )
+    _mean_line(
+        ax_r2, orth_r2_col, summary_df, orth_color,
+        f"{primary_label} (QR A)", ls="--", mk="s",
+    )
     _mean_line(
         ax_r2, "complement_r2", summary_df, _colors["complement"], "complement", ls="--"
     )
@@ -578,12 +609,20 @@ def plot_rrr_rank_results(
 
     ax_r2_folds = axes[1, 1]
     _fold_traces(ax_r2_folds, primary_r2_col, primary_color)
-    _mean_line(ax_r2_folds, primary_r2_col, summary_df, primary_color, primary_label)
+    _fold_traces(ax_r2_folds, orth_r2_col, orth_color)
+    _mean_line(
+        ax_r2_folds, primary_r2_col, summary_df, primary_color,
+        f"{primary_label} (raw A)" if has_orth else primary_label,
+    )
+    _mean_line(
+        ax_r2_folds, orth_r2_col, summary_df, orth_color,
+        f"{primary_label} (QR A)", ls="--", mk="s",
+    )
     _panel_finish(
-        ax_r2_folds, "Rank k", "R²", f"{title}\n(per-fold: {primary_label}_r2)", hline=0
+        ax_r2_folds, "Rank k", "R²", f"{title}\n(per-fold: {r2_fold_col})", hline=0
     )
 
-    _heatmap(axes[1, 2], primary_r2_col, "Blues", f"{primary_label}_r2")
+    _heatmap(axes[1, 2], r2_fold_col, "Blues", r2_fold_col)
 
     next_row = 2
 
